@@ -1,0 +1,5 @@
+# Worker runtime dependencies (M0). The worker shares core config/logging from
+# packages/ and only needs Redis for the broker placeholder.
+pydantic==2.13.5
+pydantic-settings==2.15.0
+redis==8.1.0

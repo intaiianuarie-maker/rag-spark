@@ -1,0 +1,140 @@
+# Knowledge OS — local development stack.
+#
+#   docker compose up -d --build
+#
+# Starts: web (Next.js), api (FastAPI), worker, postgres, redis, qdrant, minio.
+# All settings have defaults; copy .env.example to .env to override.
+
+name: knowledge-os
+
+x-backend-env: &backend-env
+  APP_ENV: ${APP_ENV:-local}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  LOG_JSON: ${LOG_JSON:-true}
+  DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knowledge}:${POSTGRES_PASSWORD:-knowledge}@postgres:5432/${POSTGRES_DB:-knowledge}
+  REDIS_URL: redis://redis:6379/0
+  QDRANT_URL: http://qdrant:6333
+  MINIO_ENDPOINT: http://minio:9000
+  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
+  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
+  MINIO_BUCKET: ${MINIO_BUCKET:-knowledge-os}
+  READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
+
+services:
+  postgres:
+    image: postgres:16.15-alpine3.23
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-knowledge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knowledge}
+      POSTGRES_DB: ${POSTGRES_DB:-knowledge}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-knowledge} -d ${POSTGRES_DB:-knowledge}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  redis:
+    image: redis:7.4.11-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.2
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    volumes:
+      - qdrantdata:/qdrant/storage
+
+  minio:
+    # NOTE: MinIO's official Docker Hub/Quay images were withdrawn in 2026 and
+    # MinIO reached EOL. This digest is a MinIO repackage so the skeleton boots;
+    # override MINIO_IMAGE with your own trusted, pinned S3-compatible image.
+    # See infrastructure/docker/README.md and handoffs/M0-003-code1.md.
+    image: ${MINIO_IMAGE:-elestio/minio@sha256:25348a257f1ece1b192f25f6cd9854618fa86422ac87b494b5d4e629c556d4bd}
+    command: ["server", "/data", "--console-address", ":9001"]
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+    ports:
+      - "${MINIO_PORT:-9000}:9000"
+      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    environment:
+      <<: *backend-env
+      MIGRATIONS_ON_BOOT: ${MIGRATIONS_ON_BOOT:-true}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      qdrant:
+        condition: service_started
+      minio:
+        condition: service_healthy
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./packages:/app/packages
+    command:
+      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+
+  worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    environment:
+      <<: *backend-env
+    depends_on:
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./apps/worker:/app/apps/worker
+      - ./packages:/app/packages
+
+  web:
+    # Frontend shell owned by code2 (apps/web). Uses the app's production
+    # Dockerfile (Next.js standalone output). API_BASE_URL is a server-side var
+    # read by the /api/health proxy route, so the browser stays same-origin.
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    environment:
+      API_BASE_URL: http://api:8000
+      NEXT_TELEMETRY_DISABLED: "1"
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  redisdata:
+  qdrantdata:
+  miniodata:

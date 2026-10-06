@@ -1,0 +1,84 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend:
+    name: backend (lint, typecheck, tests)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install backend dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Ruff lint
+        run: ruff check .
+
+      - name: Mypy typecheck
+        run: mypy
+
+      - name: Vendor SDK import guard (must stay inside adapters/)
+        run: |
+          if grep -rnE "^[[:space:]]*(import|from)[[:space:]]+(qdrant_client|redis|psycopg|psycopg2|minio|boto3|pypdf|pdfplumber|docx|bs4|llama_index|haystack|openai|sentence_transformers|transformers|httpx)" --include='*.py' apps packages \
+             | grep -vE "/adapters/"; then
+            echo "::error::Vendor SDK imported outside an adapters/ package"
+            exit 1
+          fi
+          echo "Vendor isolation OK"
+
+      - name: Pytest (unit + boot integration)
+        env:
+          MIGRATIONS_ON_BOOT: "false"
+          LOG_JSON: "false"
+        run: pytest -q
+
+  worker-import:
+    name: worker import check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install worker dependencies
+        run: pip install -r apps/worker/requirements.txt
+      - name: Import worker entrypoint
+        env:
+          PYTHONPATH: "packages:apps/worker"
+        run: python -c "import worker.main; import worker.adapters.redis_broker"
+
+  frontend:
+    name: frontend (lint, build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+      - name: Check web app present
+        id: web
+        run: echo "present=$([ -f apps/web/package.json ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+      - name: Install
+        if: steps.web.outputs.present == 'yes'
+        working-directory: apps/web
+        run: npm ci
+      - name: Lint
+        if: steps.web.outputs.present == 'yes'
+        working-directory: apps/web
+        run: npm run lint
+      - name: Build
+        if: steps.web.outputs.present == 'yes'
+        working-directory: apps/web
+        run: npm run build

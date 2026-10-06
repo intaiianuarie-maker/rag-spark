@@ -1,0 +1,67 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 7 0 R 9 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold /Encoding /WinAnsiEncoding >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 6 0 R >>
+endobj
+6 0 obj
+<< /Length 284 >>
+stream
+BT /F2 15 Tf 72 720 Td (Knowledge OS Parser Fixture) Tj ET
+BT /F1 11 Tf 72 690 Td (1. Introduction) Tj ET
+BT /F1 11 Tf 72 674 Td (This document exercises page preservation for hybrid retrieval) Tj ET
+BT /F1 11 Tf 72 658 Td (and citations in the Knowledge OS ingestion pipeline.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 8 0 R >>
+endobj
+8 0 obj
+<< /Length 310 >>
+stream
+BT /F2 15 Tf 72 720 Td (2. Metodologie) Tj ET
+BT /F1 11 Tf 72 690 Td (Buna ziua, acesta este un document de testare pentru pagini.) Tj ET
+BT /F1 11 Tf 72 674 Td (Ol·, este È um documento de teste para p·ginas.) Tj ET
+BT /F1 11 Tf 72 658 Td (Section tracking keeps each paragraph attached to its heading.) Tj ET
+endstream
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R /F2 4 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 224 >>
+stream
+BT /F2 15 Tf 72 720 Td (3. Concluzii) Tj ET
+BT /F1 11 Tf 72 690 Td (Conclusion paragraph on page three with section tracking.) Tj ET
+BT /F1 11 Tf 72 674 Td (Every element below must keep its page number after parsing.) Tj ET
+endstream
+endobj
+xref
+0 11
+0000000000 65535 f 
+0000000015 00000 n 
+0000000064 00000 n 
+0000000133 00000 n 
+0000000230 00000 n 
+0000000332 00000 n 
+0000000468 00000 n 
+0000000803 00000 n 
+0000000939 00000 n 
+0000001300 00000 n 
+0000001437 00000 n 
+trailer
+<< /Size 11 /Root 1 0 R >>
+startxref
+1713
+%%EOF

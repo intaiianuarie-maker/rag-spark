@@ -1,0 +1,47 @@
+# Compose fragment — web service (TASK-M0-003, frontend split).
+#
+# STATUS: SUPERSEDED — code1 has already integrated the web service into the
+# root docker-compose.yml (build context ./apps/web, Dockerfile, env
+# API_BASE_URL=http://api:8000, WEB_PORT default 3000). Kept only as a record
+# of the code2 coordination offer; do not merge again.
+
+# Owner: code2 (frontend sections). code1 merges this into the root
+# `docker-compose.yml` together with the backend/data services
+# (api, worker, postgres, redis, qdrant, minio) per the M0-003 split.
+
+services:
+  web:
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+    image: knowledge-os-web:0.1.0
+    # Server-side origin of the FastAPI backend as seen from this container.
+    # The browser only ever calls the web app itself (same-origin /api/health
+    # proxy), so no ports of the API are required in the browser.
+    environment:
+      API_BASE_URL: http://api:8000
+      NODE_ENV: production
+    ports:
+      - "3000:3000"
+    depends_on:
+      api:
+        # NOTE (code1): switch to service_healthy if the api service defines a
+        # healthcheck (task requirement 2); service_started is the safe floor.
+        condition: service_started
+    restart: unless-stopped
+
+  # Optional local-dev override (compose -f base -f override):
+  #
+  # services:
+  #   web:
+  #     image: node:22-alpine
+  #     working_dir: /app
+  #     command: sh -c "npm --prefix /app install && npm --prefix /app run dev"
+  #     volumes:
+  #       - ./apps/web:/app
+  #     environment:
+  #       API_BASE_URL: http://host.docker.internal:8000
+  #     ports:
+  #       - "3000:3000"
+  #     extra_hosts:
+  #       - "host.docker.internal:host-gateway"

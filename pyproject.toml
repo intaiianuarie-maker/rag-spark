@@ -1,0 +1,42 @@
+# Root tooling configuration for the Knowledge OS monorepo.
+#
+# M0-003 skeleton: backend packages live under `packages/` and services under
+# `apps/`. They are imported via PYTHONPATH (see docker-compose.yml / Makefile)
+# instead of being installed as distributions, keeping the skeleton minimal.
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+pythonpath = ["packages", "apps/api", "."]
+asyncio_mode = "auto"
+addopts = "-ra --strict-markers"
+markers = [
+    "unit: unit tests that must run without external services",
+    "integration: boot/integration tests that may use compose services when available",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+extend-exclude = ["apps/web", ".venv", "build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC", "RUF"]
+ignore = [
+    "B008", # FastAPI uses function calls (Depends/Query) as defaults
+]
+
+[tool.ruff.lint.per-file-ignores]
+"apps/api/alembic/versions/*.py" = ["E501", "F401"]
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "packages:apps/api:apps/worker"
+files = ["packages", "apps/api/app", "apps/worker/worker"]
+ignore_missing_imports = true
+check_untyped_defs = true
+no_implicit_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unreachable = true
+exclude = ["apps/web", "apps/api/alembic/versions"]
