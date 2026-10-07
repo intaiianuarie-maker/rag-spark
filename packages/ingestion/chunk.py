@@ -182,3 +182,12 @@ def _make_chunk(
         element_types=list(dict.fromkeys(group["types"])),
         metadata=metadata,
     )
+
+
+# --- public seams for the LlamaIndex adapter (rag-fork-solution TASK-M2-002) ---
+# Additive aliases only: the built-in chunker above keeps its exact behavior;
+# the adapter reuses our heading-aware sectioning and chunk assembly so both
+# backends emit the identical Chunk contract.
+
+sections_from_elements = _sections
+make_chunk = _make_chunk

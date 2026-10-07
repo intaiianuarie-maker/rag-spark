@@ -18,8 +18,15 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
+from ingestion.adapters.llamaindex_chunker import LlamaIndexUnavailableError
+from ingestion.adapters.llamaindex_chunker import (
+    backend_name as llamaindex_backend_name,
+)
+from ingestion.adapters.llamaindex_chunker import (
+    chunk_document as llamaindex_chunk_document,
+)
 from ingestion.adapters.registry import parser_for_mime
-from ingestion.chunk import chunk_document
+from ingestion.chunk import ChunkResult, chunk_document
 from ingestion.dedup import supersede_other_versions
 from ingestion.interfaces import DocumentElement, ParsedDocument
 from ingestion.normalize import MAX_DOCUMENT_BYTES, IngestionError
@@ -62,6 +69,39 @@ def _log_stage(job: IngestionJob, stage: str) -> None:
         "ingest_stage",
         extra={"event": "ingest_stage", "job_id": str(job.id), "stage": stage},
     )
+
+
+# Chunking backend selection (rag-fork-solution TASK-M2-002): LlamaIndex
+# sentence splitter by default, built-in whitespace chunker on
+# CHUNKING_BACKEND=builtin. Default falls back to the built-in chunker with a
+# loud warning when llama-index-core is missing from the image, so ingestion
+# never hard-fails on an optional dependency.
+CHUNKING_BACKEND = os.environ.get("CHUNKING_BACKEND", "llamaindex").strip().lower()
+
+
+def resolved_chunking_backend() -> str:
+    """Backend identifier actually in use (recorded in stage logs + debugger)."""
+    if CHUNKING_BACKEND == "builtin":
+        return "builtin-whitespace"
+    try:
+        import llama_index.core  # noqa: F401  - availability probe only
+    except ImportError:
+        return "builtin-whitespace"
+    return llamaindex_backend_name()
+
+
+def _chunk(parsed: ParsedDocument, *, filename: str | None) -> ChunkResult:
+    """Chunk with the selected backend (both emit the identical Chunk model)."""
+    if CHUNKING_BACKEND == "builtin":
+        return chunk_document(parsed, filename=filename)
+    try:
+        return llamaindex_chunk_document(parsed, filename=filename)
+    except LlamaIndexUnavailableError as exc:
+        logger.warning(
+            "chunking_backend_fallback",
+            extra={"event": "chunking_backend_fallback", "reason": str(exc)},
+        )
+        return chunk_document(parsed, filename=filename)
 
 
 @dataclass
@@ -141,11 +181,17 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     await session.commit()
     stages.append(JobStage.CHUNKING.value)
     _log_stage(job, JobStage.CHUNKING.value)
+    logger.info(
+        "chunking_backend",
+        extra={
+            "event": "chunking_backend",
+            "requested": CHUNKING_BACKEND,
+            "resolved": resolved_chunking_backend(),
+        },
+    )
 
     try:
-        result = chunk_document(
-            parsed, filename=document.source_filename if document else None
-        )
+        result = _chunk(parsed, filename=document.source_filename if document else None)
     except Exception as exc:
         raise IngestPipelineError(
             "chunk_failed", f"{type(exc).__name__}: {exc}", retryable=True
