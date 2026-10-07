@@ -19,6 +19,7 @@ x-backend-env: &backend-env
   MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
   MINIO_BUCKET: ${MINIO_BUCKET:-knowledge-os}
   READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
 
 services:
   postgres:
@@ -87,7 +88,7 @@ services:
     environment:
       <<: *backend-env
       MIGRATIONS_ON_BOOT: ${MIGRATIONS_ON_BOOT:-true}
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000}
+      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
     ports:
       - "${API_PORT:-8000}:8000"
     depends_on:
@@ -127,9 +128,12 @@ services:
       dockerfile: Dockerfile
     environment:
       API_BASE_URL: http://api:8000
+      COOKIE_SECURE: ${COOKIE_SECURE:-false}
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
-      - "${WEB_PORT:-3000}:3000"
+      # Host default 3001: :3000 is a common dev port and is frequently
+      # occupied in this workspace; WEB_PORT stays overridable per host.
+      - "${WEB_PORT:-3001}:3000"
     depends_on:
       - api
 

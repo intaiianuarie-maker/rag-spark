@@ -25,7 +25,7 @@ No fabricated content above — exact pins live in `package.json` /
 npm install
 # optional: point at a running API (default http://localhost:8000)
 # export API_BASE_URL=http://localhost:8000
-npm run dev            # http://localhost:3000
+npm run dev            # http://localhost:3001 (dev script pins the port)
 ```
 
 Verification scripts:
@@ -112,7 +112,7 @@ as-is. If code1's shape differs, only `src/lib/health.ts` needs a review round.
 
 ## Monorepo README section (to be lifted by code1)
 
-> ### Web UI (apps/web, port 3000)
+> ### Web UI (apps/web, port 3001)
 >
 > Next.js 16 shell with a live status page that renders backend `/health`.
 > Run with `docker compose up` (service `web`, build context `./apps/web`) or

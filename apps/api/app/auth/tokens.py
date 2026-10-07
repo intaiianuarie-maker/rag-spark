@@ -47,6 +47,7 @@ def _encode(
     *,
     jti: str | None = None,
     family_id: str | None = None,
+    session_id: str | None = None,
 ) -> IssuedToken:
     settings = get_auth_settings()
     now = datetime.now(UTC)
@@ -63,19 +64,27 @@ def _encode(
     }
     if family_id is not None:
         payload["fid"] = family_id
+    if session_id is not None:
+        payload["sid"] = session_id
     token = jwt.encode(payload, settings.jwt_secret, algorithm=settings.jwt_algorithm)
     return IssuedToken(
         token=token, jti=token_jti, expires_at=expires_at, expires_in=ttl_seconds
     )
 
 
-def issue_access_token(user_id: str) -> IssuedToken:
+def issue_access_token(user_id: str, *, session_id: str | None = None) -> IssuedToken:
     settings = get_auth_settings()
-    return _encode(user_id, ACCESS_TOKEN_TYPE, settings.access_token_ttl_seconds)
+    return _encode(
+        user_id, ACCESS_TOKEN_TYPE, settings.access_token_ttl_seconds, session_id=session_id
+    )
 
 
 def issue_refresh_token(
-    user_id: str, family_id: str, *, jti: str | None = None
+    user_id: str,
+    family_id: str,
+    *,
+    jti: str | None = None,
+    session_id: str | None = None,
 ) -> IssuedToken:
     settings = get_auth_settings()
     return _encode(
@@ -84,6 +93,7 @@ def issue_refresh_token(
         settings.refresh_token_ttl_seconds,
         jti=jti,
         family_id=family_id,
+        session_id=session_id,
     )
 
 

@@ -48,7 +48,7 @@ Services and ports:
 
 | Service  | URL / port | Notes |
 |---|---|---|
-| web      | http://localhost:3000 | Next.js status page calling `/health` |
+| web      | http://localhost:3001 | Next.js status page calling `/health` |
 | api      | http://localhost:8000 | `GET /health`, `/ready`, `/version` |
 | postgres | localhost:5432 | metadata + lexical FTS |
 | redis    | localhost:6379 | worker broker |
@@ -80,7 +80,7 @@ All settings are environment-driven (see `.env.example`). Key variables:
 | `QDRANT_URL` | `http://localhost:6333` | Qdrant HTTP |
 | `MINIO_ENDPOINT` / `MINIO_ACCESS_KEY` / `MINIO_SECRET_KEY` | local defaults | S3 originals |
 | `MIGRATIONS_ON_BOOT` | `true` | Run `alembic upgrade head` at API start (non-fatal) |
-| `CORS_ORIGINS` | `http://localhost:3000` | Comma-separated allowed origins |
+| `CORS_ORIGINS` | `http://localhost:3001` | Comma-separated allowed origins |
 | `MINIO_IMAGE` | pinned MinIO repackage | See monitoring note below |
 
 ## Database migrations

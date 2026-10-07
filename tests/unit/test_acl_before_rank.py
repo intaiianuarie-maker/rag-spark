@@ -155,13 +155,21 @@ async def test_scope_predicates_and_principal_roles() -> None:
     assert ACLScope(user_id="u1").is_empty, "no workspaces and no public flag = empty scope"
     assert not scope.is_empty
 
+    # v1 assumption (code1 M0-004 review, Minor 3): `include_public` is NOT
+    # translated into `SearchFilter`, which carries `workspace_ids` only. So the
+    # *predicate* below says "allowed" while the retrieval path (stores, and the
+    # reference orchestrator) fails closed with zero results — correct for v1,
+    # where no public documents exist. M3 must either thread `include_public`
+    # through `SearchFilter` (and honour it in stores) or drop the field from
+    # `ACLScope`; either way it is a contract change to be reflected in
+    # `packages/retrieval/contract_tests.py`, not a silent behaviour change.
     public = ACLScope(user_id="u1", include_public=True)
     assert public.allows_workspace("ws-anything")
 
     principal = Principal(
         user_id="u1",
         is_authenticated=True,
-        workspace_roles={"ws-a": Role.VIEWER, "ws-b": Role.MEMBER},
+        workspace_roles={"ws-a": Role.VIEWER, "ws-b": Role.EDITOR},
     )
     assert principal.can_read("ws-a") and principal.can_read("ws-b")
     assert not principal.can_write("ws-a"), "viewer must not have write access"

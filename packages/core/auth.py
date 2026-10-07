@@ -16,32 +16,36 @@ from pydantic import BaseModel, Field
 
 
 class Role(StrEnum):
-    """Workspace membership role."""
+    """Workspace membership role (canonical: owner > admin > editor > viewer)."""
 
     OWNER = "owner"
     ADMIN = "admin"
-    MEMBER = "member"
+    EDITOR = "editor"
     VIEWER = "viewer"
 
 
 class Principal(BaseModel):
-    """Authenticated caller identity (NOT implemented in M0)."""
+    """Authenticated caller identity (roles populated from memberships in M1)."""
 
     user_id: str
     email: str | None = None
     is_authenticated: bool = False
     workspace_roles: dict[str, Role] = Field(default_factory=dict)
+    #: Set when the caller authenticated with a workspace API key (M1-001c).
+    key_id: str | None = None
+    #: False for a revoked/expired key or session; `can()` denies everything.
+    is_active: bool = True
 
     def role_in(self, workspace_id: str) -> Role | None:
         return self.workspace_roles.get(workspace_id)
 
     def can_read(self, workspace_id: str) -> bool:
         role = self.role_in(workspace_id)
-        return role is not None and role in {Role.OWNER, Role.ADMIN, Role.MEMBER, Role.VIEWER}
+        return role is not None and role in {Role.OWNER, Role.ADMIN, Role.EDITOR, Role.VIEWER}
 
     def can_write(self, workspace_id: str) -> bool:
         role = self.role_in(workspace_id)
-        return role is not None and role in {Role.OWNER, Role.ADMIN, Role.MEMBER}
+        return role is not None and role in {Role.OWNER, Role.ADMIN, Role.EDITOR}
 
 
 class ACLScope(BaseModel):

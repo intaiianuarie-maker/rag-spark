@@ -53,4 +53,10 @@ async def test_real_postgres_fts_adapter_satisfies_contract_when_implemented() -
     try:
         await check_lexical_store_contract(store)
     finally:
-        await store.close()
+        # Caller-owned lifecycle, tolerant of the interface difference: the
+        # `LexicalStore` ABC has no `close()` (only `VectorStore` does), so a
+        # generic `await store.close()` would AttributeError for M3 adapters
+        # that follow the ABC exactly.
+        close = getattr(store, "close", None)
+        if callable(close):
+            await close()

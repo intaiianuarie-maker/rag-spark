@@ -96,7 +96,7 @@ class Workspace:
             user_id=f"user-{self.id}",
             email=f"{self.id}@example.invalid",
             is_authenticated=True,
-            workspace_roles={self.id: Role.MEMBER},
+            workspace_roles={self.id: Role.EDITOR},
         )
 
 

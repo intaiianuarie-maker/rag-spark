@@ -1,5 +1,6 @@
 # Knowledge OS — local developer tasks.
-# Backend-owned targets (M0-003 code1). Run `make help` for the list.
+# Backend-owned targets (M0-003 code1; web-rebuild added by code2, boss micro-task).
+# Run `make help` for the list.
 
 SHELL := /bin/bash
 COMPOSE ?= docker compose
@@ -10,7 +11,7 @@ WORKER_PATH := apps/worker
 
 .DEFAULT_GOAL := help
 
-.PHONY: help up down logs ps build rebuild restart migrate revision shell-api shell-db lint fmt typecheck test test-unit test-integration api-dev worker-dev clean
+.PHONY: help up down logs ps build rebuild web-rebuild restart migrate revision shell-api shell-db lint fmt typecheck test test-unit test-integration api-dev worker-dev clean
 
 help: ## Show available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
@@ -32,6 +33,10 @@ build: ## Build api/worker images
 
 rebuild: ## Rebuild api/worker and restart
 	$(COMPOSE) up -d --build api worker
+
+web-rebuild: ## Rebuild the web image and restart it (WEB_PORT=3001 make web-rebuild when :3000 is taken)
+	$(COMPOSE) build web
+	$(COMPOSE) up -d web
 
 restart: ## Restart api and worker
 	$(COMPOSE) restart api worker

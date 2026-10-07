@@ -14,6 +14,18 @@ Locked invariants (see `docs/rag/retrieval-spec.md`, R-004, citation-spec):
 2. An empty workspace scope returns nothing (fail closed).
 3. Provenance (document/version/chunk/page/section) survives every hop.
 4. Fusion is deterministic and order-independent.
+5. **Lifecycle belongs to the caller**: these checkers never close a store, so a
+   caller that closes in `finally` cannot double-close (code1 review Minor 1).
+
+**v1 assumption — `ACLScope.include_public`.** `SearchFilter` carries
+`workspace_ids` only, and the harness's reference orchestrator translates an
+`ACLScope` into exactly that list, so `include_public` is *not* propagated
+today. v1 has no public documents: a public-only scope therefore fails closed
+(zero results) rather than silently ranking everything. When M3 introduces
+public visibility it must either thread `include_public` through
+`SearchFilter` and have stores honour it, or drop the field from `ACLScope` —
+either way that is a contract change to be reflected here, not a silent
+behaviour change (code1 review Minor 3).
 """
 
 from __future__ import annotations
@@ -64,7 +76,12 @@ async def check_vector_store_contract(
     collection: str = CONTRACT_COLLECTION,
     dimension: int = CONTRACT_DIMENSION,
 ) -> None:
-    """insert / search / filter-by-workspace / delete round-trip shape."""
+    """insert / search / filter-by-workspace / delete round-trip shape.
+
+    Lifecycle is owned by the *caller* (construct → check → close in
+    ``finally``); this checker deliberately never closes ``store``, so a real
+    adapter cannot be double-closed.
+    """
     await store.ensure_collection(collection=collection, dimension=dimension)
 
     base = [1.0] + [0.0] * (dimension - 1)
@@ -146,6 +163,9 @@ async def check_vector_store_contract(
     if await store.search(
         collection=collection, vector=list(base), top_k=5, query_filter=_scope()
     ):
+        # Fail closed (R-004). v1 assumption: `SearchFilter` has no
+        # `include_public` field yet, so this is also the behaviour a
+        # public-only ACLScope produces — see the module docstring.
         _fail("empty workspace scope must return nothing (fail closed, R-004)")
 
     if await store.search(
@@ -190,7 +210,7 @@ async def check_vector_store_contract(
         store.ensure_collection(collection=collection, dimension=0),
         "VectorStore.ensure_collection with dimension=0",
     )
-    await store.close()
+    # No `close()` here: the caller owns the store lifecycle (see docstring).
 
 
 async def check_lexical_store_contract(store: LexicalStore) -> None:

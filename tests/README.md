@@ -150,6 +150,21 @@ need weights or keys. Those tasks run the same checkers in their own task.
 6. **Manifest is the citation contract** — `expected_elements.json` pins
    page/section/language per fixture; changing an expectation to make a red
    parser pass is a reviewable change, not a silent fix.
+7. **Lifecycle is the caller's** — `check_vector_store_contract` never closes
+   the store it is handed (construct → check → close in `finally`); the lexical
+   caller uses `getattr(store, "close", None)` because the `LexicalStore` ABC
+   has no `close()`.
+
+### v1 assumption — `ACLScope.include_public` (code1 review Minor 3)
+
+`SearchFilter` carries `workspace_ids` only, so `include_public` is **not**
+propagated to stores. v1 has no public documents: a public-only scope must fail
+closed (zero results) instead of ranking everything. M3 either threads
+`include_public` through `SearchFilter` and honours it in the adapters, or drops
+the field from `ACLScope` — recorded in
+`packages/retrieval/contract_tests.py` (module docstring) and
+`tests/unit/test_acl_before_rank.py`. A dedicated public-scope test is deferred
+to M3, when the field decision exists to test.
 
 ## Security placeholders (`xfail(strict=False)`)
 

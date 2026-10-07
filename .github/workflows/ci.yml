@@ -35,6 +35,15 @@ jobs:
           fi
           echo "Vendor isolation OK"
 
+      - name: Authorization guard (role checks only in app/authz/)
+        run: |
+          if grep -rnE "if[^\n]*\.role[[:space:]]*(==|!=|in[[:space:]])" --include='*.py' apps/api/app \
+             | grep -vE "app/authz/"; then
+            echo "::error::role check outside app/authz/ — use authz.can()/require()"
+            exit 1
+          fi
+          echo "Authorization isolation OK"
+
       - name: Pytest (unit + boot integration)
         env:
           MIGRATIONS_ON_BOOT: "false"
@@ -78,6 +87,10 @@ jobs:
         if: steps.web.outputs.present == 'yes'
         working-directory: apps/web
         run: npm run lint
+      - name: Test (vitest)
+        if: steps.web.outputs.present == 'yes'
+        working-directory: apps/web
+        run: npm run test
       - name: Build
         if: steps.web.outputs.present == 'yes'
         working-directory: apps/web

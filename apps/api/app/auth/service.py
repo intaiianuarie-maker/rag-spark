@@ -22,6 +22,7 @@ from app.auth.config import get_auth_settings
 from app.auth.models import User
 from app.auth.passwords import hash_password, verify_password
 from app.auth.schemas import TokenPair
+from app.auth.sessions import create_session, revoke_session, session_is_active
 from app.auth.tokens import (
     REFRESH_TOKEN_TYPE,
     AuthTokenError,
@@ -137,8 +138,16 @@ class AuthService:
             await self._best_effort_revoke(family_id)
             raise self._token_error(AuthTokenError("invalid_token"))
 
-        new_refresh = issue_refresh_token(user_id, family_id)
-        access = issue_access_token(user_id)
+        try:
+            session_active = await session_is_active(family_id)
+        except store.AuthStoreUnavailable as exc:
+            raise self._unavailable() from exc
+        if not session_active:
+            await self._best_effort_revoke(family_id)
+            raise self._token_error(AuthTokenError("invalid_token"))
+
+        new_refresh = issue_refresh_token(user_id, family_id, session_id=family_id)
+        access = issue_access_token(user_id, session_id=family_id)
         try:
             await store.rotate_refresh_token(
                 jti,
@@ -172,15 +181,17 @@ class AuthService:
             return
         try:
             await store.revoke_family(family_id)
+            await revoke_session(family_id)
         except store.AuthStoreUnavailable as exc:
             raise self._unavailable() from exc
 
     # ---- internals -------------------------------------------------------
 
     async def _issue_pair(self, user_id: str, family_id: str) -> TokenPair:
-        access = issue_access_token(user_id)
-        refresh = issue_refresh_token(user_id, family_id)
+        access = issue_access_token(user_id, session_id=family_id)
+        refresh = issue_refresh_token(user_id, family_id, session_id=family_id)
         try:
+            await create_session(family_id, user_id)
             await store.store_refresh_token(
                 refresh.jti,
                 user_id,

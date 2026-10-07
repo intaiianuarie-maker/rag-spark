@@ -24,8 +24,16 @@ QDRANT_FACTORY = "create_vector_store"
 
 
 async def test_fake_vector_store_satisfies_contract() -> None:
-    """insert / search / filter-by-workspace / delete round-trip (fake impl)."""
-    await check_vector_store_contract(FakeVectorStore(dimension=4))
+    """insert / search / filter-by-workspace / delete round-trip (fake impl).
+
+    Models the lifecycle ownership the checker documents: the test constructs
+    the store and closes it; the checker only exercises it.
+    """
+    store = FakeVectorStore(dimension=4)
+    try:
+        await check_vector_store_contract(store)
+    finally:
+        await store.close()
 
 
 async def test_real_qdrant_adapter_satisfies_contract_when_implemented() -> None:
@@ -55,4 +63,6 @@ async def test_real_qdrant_adapter_satisfies_contract_when_implemented() -> None
     try:
         await check_vector_store_contract(store, collection=f"{CONTRACT_COLLECTION}-m004")
     finally:
+        # Sole close: the checker no longer closes the store (code1 review
+        # Minor 1 — lifecycle ownership is the caller's).
         await store.close()
