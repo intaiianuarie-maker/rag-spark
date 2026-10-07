@@ -17,7 +17,9 @@ charset-normalizer==3.5.2
 lingua-language-detector==2.2.0
 
 # Docling parser adapter (TASK-M2-001, MIT) — local-first parsing
-docling==2.134.0
+# rtree is required by DocumentConverter but not in docling's base deps;
+# use the torch-free slim variant: docling metapackage pulls torch/CUDA (~1.5GB)
+docling-slim[convert-core,format-pdf-docling]==2.134.0
 rtree==1.4.1
 
 # Chunking (rag-fork-solution TASK-M2-002): LlamaIndex sentence splitter, MIT.

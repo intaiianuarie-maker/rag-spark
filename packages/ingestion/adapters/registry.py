@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from ..interfaces import DocumentParser
 from .csv import CsvParser
+from .docling import DoclingParser
 from .docx import DocxParser
 from .html import HtmlParser
 from .markdown import MarkdownParser
@@ -23,13 +24,16 @@ _PARSERS: tuple[DocumentParser, ...] = (
     MarkdownParser(),
     CsvParser(),
     TextParser(),
+    DoclingParser(),
 )
 
-PARSER_REGISTRY: dict[str, DocumentParser] = {
-    mime_type: parser
-    for parser in _PARSERS
-    for mime_type in parser.supported_mime_types
-}
+# Preserve first-wins for existing mimes so docling does not override
+# the PD-001 selected parsers; docling is available via direct import
+# and as fallback for unclaimed mimes.
+PARSER_REGISTRY: dict[str, DocumentParser] = {}
+for _parser in _PARSERS:
+    for _mime in _parser.supported_mime_types:
+        PARSER_REGISTRY.setdefault(_mime, _parser)
 
 
 def parser_for_mime(mime_type: str | None) -> DocumentParser | None:

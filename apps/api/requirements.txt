@@ -35,3 +35,9 @@ charset-normalizer==3.5.2
 
 # Language detection (PD-001, M2-001b). Restricted to RO/PT/EN at runtime.
 lingua-language-detector==2.2.0
+
+# Docling parser adapter (TASK-M2-001, MIT) — local-first parsing
+# rtree is required by DocumentConverter but not in docling's base deps;
+# use the torch-free slim variant: docling metapackage pulls torch/CUDA (~1.5GB)
+docling-slim[convert-core,format-pdf-docling]==2.134.0
+rtree==1.4.1

@@ -6,3 +6,13 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 ruff==0.16.10
 mypy==2.4.0
+
+# Chunking (TASK-M2-002): the LlamaIndex sentence splitter is a worker-only
+# runtime dep (pinned in apps/worker/requirements.txt), but tests/unit/
+# test_llamaindex_chunker.py exercises it in-process, so the test venv needs it.
+llama-index-core==0.14.25
+
+# Docling parser adapter (TASK-M2-001) — torch-free variant for test env
+# (mirrors apps/api+worker pins; docling metapackage would pull torch/CUDA)
+docling-slim[convert-core,format-pdf-docling]==2.134.0
+rtree==1.4.1
