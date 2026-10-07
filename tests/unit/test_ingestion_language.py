@@ -10,6 +10,19 @@ import pytest
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 
+# Loud precondition (authorized micro, boss 2026-10-07): language tagging needs the
+# lingua pin from apps/api/requirements.txt (M2-001b). Without it `detect_language`
+# returns None for non-diacritic inputs and these tests fail with a confusing
+# `assert None == 'pt'` — a missing dependency must SKIP with the reason instead.
+# (This exact artifact was A/B-proved in handoffs/M2-001b-test1.md.)
+pytest.importorskip(
+    "lingua",
+    reason=(
+        "lingua-language-detector==2.2.0 is required by the M2-001b language tests "
+        "(pin in apps/api/requirements.txt) — install with `pip install -r requirements-dev.txt`"
+    ),
+)
+
 from ingestion.adapters.txt import PARSER as TXT
 from ingestion.chunk import chunk_document
 from ingestion.interfaces import DocumentElement, ElementType, ParsedDocument

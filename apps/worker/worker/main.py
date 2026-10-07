@@ -12,6 +12,7 @@ import signal
 
 from core.config import get_settings
 from core.logging import configure_logging
+from jobs.ingest_worker import run_worker
 
 from worker.adapters.redis_broker import RedisBroker
 
@@ -33,8 +34,7 @@ async def run() -> None:
     else:
         logger.warning("worker_redis_unavailable", extra={"event": "worker_redis_unavailable"})
 
-    # Required M0 log line.
-    logger.info("no jobs registered (M0)")
+    logger.info("ingest jobs registered (M2-001c)")
 
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -44,9 +44,12 @@ async def run() -> None:
         except NotImplementedError:  # pragma: no cover - non-POSIX platforms
             pass
 
+    worker_task = asyncio.create_task(run_worker(stop))
     try:
         await stop.wait()
     finally:
+        stop.set()
+        await worker_task
         await broker.close()
         logger.info("worker_stopped", extra={"event": "worker_stopped"})
 

@@ -7,7 +7,7 @@
 [tool.pytest.ini_options]
 minversion = "8.0"
 testpaths = ["tests"]
-pythonpath = ["packages", "apps/api", "."]
+pythonpath = ["packages", "apps/api", "apps/worker", "."]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
 markers = [
@@ -32,7 +32,7 @@ ignore = [
 [tool.mypy]
 python_version = "3.12"
 mypy_path = "packages:apps/api:apps/worker"
-files = ["packages", "apps/api/app", "apps/worker/worker"]
+files = ["packages", "apps/api/app", "apps/worker/worker", "apps/worker/jobs"]
 ignore_missing_imports = true
 check_untyped_defs = true
 no_implicit_optional = true

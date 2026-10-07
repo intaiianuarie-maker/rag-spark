@@ -8,6 +8,7 @@ last-owner invariant, and mutates. Route handlers contain no role checks.
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from core.auth import Principal, Role
 from sqlalchemy import func, select
@@ -80,6 +81,49 @@ class WorkspaceService:
         return [
             (workspace, principal.workspace_roles[str(workspace.id)])
             for workspace in workspaces
+        ]
+
+    async def list_members(
+        self, principal: Principal, workspace_id: uuid.UUID
+    ) -> list[tuple[uuid.UUID, str, Role, MembershipStatus]]:
+        """M1-001f roster: every membership incl. invited, with the user email."""
+        workspace = await self._get_workspace(workspace_id)
+        require(principal, Action.WORKSPACE_READ, _resource(workspace.id))
+        statement = (
+            select(Membership, User)
+            .join(User, User.id == Membership.user_id)
+            .where(Membership.workspace_id == workspace.id)
+            .order_by(Membership.created_at, Membership.user_id)
+        )
+        rows = (await self._session.execute(statement)).all()
+        return [
+            (
+                membership.user_id,
+                user.email,
+                Role(membership.role),
+                MembershipStatus(membership.status),
+            )
+            for membership, user in rows
+        ]
+
+    async def list_invitations(
+        self, principal: Principal
+    ) -> list[tuple[uuid.UUID, str, Role, datetime]]:
+        """M1-001f: the caller's own pending invitations only."""
+        user_id = _user_uuid(principal)
+        statement = (
+            select(Membership, Workspace)
+            .join(Workspace, Workspace.id == Membership.workspace_id)
+            .where(
+                Membership.user_id == user_id,
+                Membership.status == MembershipStatus.INVITED.value,
+            )
+            .order_by(Membership.created_at, Membership.workspace_id)
+        )
+        rows = (await self._session.execute(statement)).all()
+        return [
+            (membership.workspace_id, workspace.name, Role(membership.role), membership.created_at)
+            for membership, workspace in rows
         ]
 
     async def get_workspace(

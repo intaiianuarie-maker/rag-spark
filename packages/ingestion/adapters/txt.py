@@ -29,7 +29,7 @@ class TextParser(DocumentParser):
     ) -> ParsedDocument:
         validate_input(data, mime_type, SUPPORTED_MIME_TYPES)
         try:
-            text = decode_text(data)
+            text = decode_text(data, (metadata or {}).get("charset"))
             elements = _paragraph_elements(text)
         except ParseError:
             raise

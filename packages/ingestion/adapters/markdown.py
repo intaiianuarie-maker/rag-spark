@@ -11,7 +11,7 @@ from typing import Any
 from markdown_it import MarkdownIt
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, clean_text, make_element, validate_input
+from ..normalize import ParseError, clean_text, decode_text, make_element, validate_input
 
 SUPPORTED_MIME_TYPES = frozenset({"text/markdown", "text/x-markdown"})
 _parser = MarkdownIt("commonmark")
@@ -30,7 +30,8 @@ class MarkdownParser(DocumentParser):
     ) -> ParsedDocument:
         validate_input(data, mime_type, SUPPORTED_MIME_TYPES)
         try:
-            text = data.decode("utf-8")
+            charset = (metadata or {}).get("charset")
+            text = decode_text(data, charset) if charset else data.decode("utf-8")
             elements = _elements(_parser.parse(text))
         except UnicodeDecodeError as exc:
             raise ParseError(f"markdown is not valid UTF-8: {exc}") from exc

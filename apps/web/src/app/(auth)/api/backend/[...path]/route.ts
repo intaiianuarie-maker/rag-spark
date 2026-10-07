@@ -79,11 +79,17 @@ export async function forward(
   }
 
   const text = await upstream.text();
+
+  // Bodiless statuses must be forwarded with a null body — constructing a
+  // Response with `body: ""` and status 204 throws
+  // "TypeError: Invalid response status code 204" (test1 M1-002b report R1).
+  const responseBody = [204, 205, 304].includes(upstream.status) ? null : text;
+
   const responseHeaders = new Headers();
   responseHeaders.set("cache-control", "no-store");
   const contentType = upstream.headers.get("content-type");
-  if (contentType) responseHeaders.set("content-type", contentType);
-  return new Response(text, { status: upstream.status, headers: responseHeaders });
+  if (contentType && responseBody !== null) responseHeaders.set("content-type", contentType);
+  return new Response(responseBody, { status: upstream.status, headers: responseHeaders });
 }
 
 export async function GET(

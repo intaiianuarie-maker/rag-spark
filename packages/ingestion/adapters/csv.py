@@ -30,7 +30,7 @@ class CsvParser(DocumentParser):
     ) -> ParsedDocument:
         validate_input(data, mime_type, SUPPORTED_MIME_TYPES)
         try:
-            text = decode_text(data)
+            text = decode_text(data, (metadata or {}).get("charset"))
             reader = csv.DictReader(StringIO(text))
             elements = _row_elements(reader)
         except ParseError:

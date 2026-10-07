@@ -1,5 +1,17 @@
-# Worker runtime dependencies (M0). The worker shares core config/logging from
-# packages/ and only needs Redis for the broker placeholder.
+# Worker runtime dependencies (M2-001c). The worker now runs the ingestion
+# pipeline: DB persistence + the full PD-001 parser/language stack.
 pydantic==2.13.5
 pydantic-settings==2.15.0
 redis==8.1.0
+sqlalchemy[asyncio]==2.1.3
+psycopg[binary]==3.3.6
+
+# PD-001 parsers + language detection (shared packages/ingestion).
+pypdf==6.19.0
+pdfplumber==0.11.10
+python-docx==1.2.0
+beautifulsoup4==4.15.0
+lxml==6.1.3
+markdown-it-py==4.2.0
+charset-normalizer==3.5.2
+lingua-language-detector==2.2.0

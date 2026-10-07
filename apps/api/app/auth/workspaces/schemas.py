@@ -62,6 +62,24 @@ class MemberPublic(BaseModel):
     created_at: datetime
 
 
+class MemberRosterItem(BaseModel):
+    """Frozen M1-001f roster item (exactly the four contract fields)."""
+
+    user_id: str
+    email: str
+    role: Role
+    status: MembershipStatus
+
+
+class InvitationItem(BaseModel):
+    """Frozen M1-001f pending-invitation item."""
+
+    workspace_id: str
+    workspace_name: str
+    role: Role
+    invited_at: datetime
+
+
 class WorkspaceErrorBody(BaseModel):
     error: str
     message: str

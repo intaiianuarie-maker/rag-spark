@@ -130,11 +130,12 @@ def test_openapi_endpoint_surface(repo_root: Path) -> None:
     expected = {
         "/v1/workspaces": {"get", "post"},
         "/v1/workspaces/{workspace_id}": {"get", "patch"},
-        "/v1/workspaces/{workspace_id}/members": {"post"},
+        "/v1/workspaces/{workspace_id}/members": {"get", "post"},
         "/v1/workspaces/{workspace_id}/members/accept": {"post"},
         "/v1/workspaces/{workspace_id}/members/{user_id}": {"patch", "delete"},
         "/v1/workspaces/{workspace_id}/keys": {"get", "post"},
         "/v1/workspaces/{workspace_id}/keys/{key_id}": {"delete"},
+        "/v1/me/invitations": {"get"},
     }
     for path, methods in expected.items():
         assert path in spec["paths"], f"missing endpoint {path}"

@@ -20,6 +20,7 @@ from app.auth.workspaces.schemas import (
     MemberInviteRequest,
     MemberPublic,
     MemberRoleUpdateRequest,
+    MemberRosterItem,
     WorkspaceCreateRequest,
     WorkspaceErrorBody,
     WorkspacePublic,
@@ -144,6 +145,28 @@ async def rename_workspace(
     except ApiError as exc:
         raise _http_error(exc) from exc
     return _workspace_public(workspace, role)
+
+
+@router.get(
+    "/{workspace_id}/members",
+    response_model=list[MemberRosterItem],
+    responses=_ERROR_RESPONSES,
+    summary="List workspace members, including invited (M1-001f frozen contract)",
+)
+async def list_members(
+    workspace_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+    session: AsyncSession = Depends(get_session),
+) -> list[MemberRosterItem]:
+    service = WorkspaceService(session)
+    try:
+        members = await service.list_members(principal, workspace_id)
+    except ApiError as exc:
+        raise _http_error(exc) from exc
+    return [
+        MemberRosterItem(user_id=str(user_id), email=email, role=role, status=status)
+        for user_id, email, role, status in members
+    ]
 
 
 @router.post(

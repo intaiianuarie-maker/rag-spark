@@ -78,8 +78,18 @@ def clean_text(text: str) -> str:
     return " ".join(text.split())
 
 
-def decode_text(data: bytes) -> str:
-    """Decode text bytes as UTF-8, falling back to charset-normalizer detection."""
+def decode_text(data: bytes, charset: str | None = None) -> str:
+    """Decode text bytes.
+
+    A caller-supplied ``charset`` (the source-charset hint from a connector or
+    upload form) wins over detection: Central-European codepages tie with each
+    other under heuristic detection and produce mojibake (M2-001c ruling).
+    """
+    if charset:
+        try:
+            return data.decode(charset)
+        except (LookupError, UnicodeDecodeError) as exc:
+            raise ParseError(f"failed to decode using charset {charset!r}: {exc}") from exc
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:

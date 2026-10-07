@@ -16,6 +16,9 @@ psycopg[binary]==3.3.6
 redis==8.1.0
 httpx==0.28.1
 
+# Multipart form uploads (M2-001c document upload endpoint).
+python-multipart==0.0.32
+
 # Auth (M1-001a): argon2 password hashing + JWT tokens.
 argon2-cffi==25.1.0
 PyJWT==2.15.1

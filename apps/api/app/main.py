@@ -17,8 +17,10 @@ from app.auth.adapters.redis_store import close_redis
 from app.auth.errors import register_auth_exception_handlers
 from app.auth.keys_router import router as keys_router
 from app.auth.router import router as auth_router
+from app.auth.workspaces.invitations import router as invitations_router
 from app.auth.workspaces.router import router as workspaces_router
 from app.db import dispose_engine, run_migrations
+from app.documents.upload import router as documents_router
 
 logger = logging.getLogger("knowledge_os.api")
 
@@ -83,7 +85,9 @@ def create_app() -> FastAPI:
     app.include_router(system_router)
     app.include_router(auth_router)
     app.include_router(workspaces_router)
+    app.include_router(invitations_router)
     app.include_router(keys_router)
+    app.include_router(documents_router)
     register_auth_exception_handlers(app)
     return app
 
