@@ -82,7 +82,7 @@ tests/
 ├── fixtures/
 │   ├── harness_fakes.py            # fakes for every interface + reference RRF + reference orchestrator
 │   ├── service_probe.py            # tcp_open / require_service (skip with an actionable message)
-│   ├── pd001/                      # the six PD-001 parser fixtures (see fixtures/pd001/README.md)
+│   ├── pd001/                      # PD-001 fixtures: 6 required + 4 TXT (see pd001/README.md)
 │   │   ├── expected_elements.json  # element/page/section/language expectations per fixture
 │   │   ├── _generate.py            # stdlib-only authoring script (regenerate: python3 _generate.py)
 │   │   ├── pdf_text_multipage.pdf  pdf_table.pdf  docx_headings_table.docx

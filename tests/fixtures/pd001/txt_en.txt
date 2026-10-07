@@ -1,0 +1,8 @@
+Knowledge OS Text Fixture
+
+This plain text document exercises the TXT parser and language tagging for the
+ingestion pipeline. Hybrid retrieval and citations depend on deterministic
+chunking and a correct language tag.
+
+A second paragraph keeps the fixture multi-paragraph so the chunker has real
+section content to work with.

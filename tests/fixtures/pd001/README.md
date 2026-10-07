@@ -1,10 +1,11 @@
 # PD-001 Parser Fixtures
 
-Six fixtures, one per required source type (`tasks/M0/TASK-M0-004.md` requirement 2;
-fixture plan from `decisions/PD-001-v1-parser-stack.md`). They are **test data
-only** — nothing here parses anything. `expected_elements.json` is the
-expectation side of the contract that `tests/contracts/test_document_parser_contract.py`
-asserts.
+PD-001 fixtures: the **six required** ones (TASK-M0-004 requirement 2; fixture
+plan from `decisions/PD-001-v1-parser-stack.md`) **plus four TXT fixtures**
+(wired into the manifest during the M2-001a TEST stage — see provenance under
+the table). They are **test data only** — nothing here parses anything.
+`expected_elements.json` is the expectation side of the contract that
+`tests/contracts/test_document_parser_contract.py` asserts.
 
 | File | Format | Covers | Page/section expectations |
 |---|---|---|---|
@@ -14,6 +15,25 @@ asserts.
 | `html_article_nav.html` | HTML | `<nav>`/`<footer>`/`<script>` boilerplate + `<article>` | section from `<h2>`; boilerplate excluded |
 | `markdown_structure.md` | Markdown | H1/H2, RO/PT sections, list, fenced code, link | section from `##`; code stays a CODE element |
 | `csv_multilingual.csv` | CSV | header, quoted commas, rows in RO/PT/EN | `metadata.language` per row (`ro`/`pt`/`en`) |
+| `txt_en.txt` | TXT (UTF-8) | paragraphs, EN | flat text: blank-line paragraphs (no page/section) |
+| `txt_ro.txt` | TXT (UTF-8) | paragraphs, full RO diacritics | UTF-8 decode must preserve ș/ț/ă/â/î |
+| `txt_pt.txt` | TXT (UTF-8) | paragraphs, PT accents | UTF-8 decode must preserve á/é/ç/ã/õ |
+| `txt_cp1252.txt` | TXT (**Windows-1252**) | charset detection — **not** valid UTF-8 | byte `0x83` (glyph `ƒ`) is cp1252-only, so detection is deterministic |
+
+TXT provenance: `txt_en/ro/pt` were created by code1 with the M2-001b
+language-tagging work (2026-10-07 06:57) and wired into the manifest by test1
+during the M2-001a TEST stage; `txt_cp1252.txt` was added by test1 for the
+encoding-detection contract (code2's M2-001a review Minor #3).
+
+### Why `txt_cp1252.txt` carries byte `0x83`
+
+M2-001a test-stage finding: charset-normalizer **ties** short Western texts
+between `cp1250` and `cp1252` (coherence 0.6 vs 0.6) and its tie-break picked
+**cp1250**, silently mapping `ã → ă` (`acentuação` decoded as `acentuaçăo`).
+One byte that Central-European codepages cannot decode (`0x83` = the cp1252
+glyph `ƒ`) makes detection deterministic: best = `cp1252`, accents intact.
+`test_cp1252_txt_fixture_is_intentionally_not_utf8` pins the encoding so the
+fixture can never be quietly re-saved as UTF-8.
 
 ## Reading the manifest
 
@@ -72,5 +92,10 @@ FIXTURE_VALIDATION_OK
 
 - The PDF fixtures use WinAnsi-safe text; a diacritic-heavy RO PDF needs a
   Unicode font path (M2 decision, revisit with the parser adapter).
-- `TXT` (PD-001 format family) is not part of the required six; add it with a
-  manifest entry when M2 lands the text parser.
+- ~~`TXT` (PD-001 format family) is not part of the required six~~ — **resolved
+  in the M2-001a TEST stage**: four TXT fixtures are present and manifest-wired
+  (`txt_en/ro/pt` UTF-8 trio + `txt_cp1252` encoding variant); the six
+  *required* ids in TASK-M0-004 are unchanged.
+- Charset detection for non-UTF-8 `text/plain` is heuristic (see the `0x83`
+  note above): M2-001c ingestion should consider a charset hint from connector
+  metadata when a source declares one, rather than trusting detection alone.

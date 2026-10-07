@@ -29,3 +29,6 @@ beautifulsoup4==4.15.0
 lxml==6.1.3
 markdown-it-py==4.2.0
 charset-normalizer==3.5.2
+
+# Language detection (PD-001, M2-001b). Restricted to RO/PT/EN at runtime.
+lingua-language-detector==2.2.0

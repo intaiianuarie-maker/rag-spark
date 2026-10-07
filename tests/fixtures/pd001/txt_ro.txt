@@ -1,0 +1,6 @@
+Document text în limba română
+
+Acesta este un document text simplu pentru testarea parserului și a detectării
+limbii. Recuperarea hibridă și citările depind de fragmentare deterministă.
+
+Căutarea în limba română trebuie să păstreze diacriticele precum ă, â, î, ș și ț.

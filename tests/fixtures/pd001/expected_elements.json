@@ -23,16 +23,57 @@
       "page_count": 3,
       "expect_page_preserved": true,
       "expect_section_preserved": true,
-      "raw_contains": ["%PDF-1.4", "Knowledge OS Parser Fixture", "2. Metodologie", "3. Concluzii"],
+      "raw_contains": [
+        "%PDF-1.4",
+        "Knowledge OS Parser Fixture",
+        "2. Metodologie",
+        "3. Concluzii"
+      ],
       "expected_elements": [
-        {"type": "title", "text_contains": "Knowledge OS Parser Fixture", "page": 1},
-        {"type": "heading", "text_contains": "1. Introduction", "page": 1},
-        {"type": "text", "text_contains": "page preservation", "page": 1, "section_contains": "Introduction"},
-        {"type": "heading", "text_contains": "2. Metodologie", "page": 2},
-        {"type": "text", "text_contains": "Buna ziua", "page": 2, "section_contains": "Metodologie"},
-        {"type": "text", "text_contains": "Olá, este é um documento", "page": 2, "section_contains": "Metodologie"},
-        {"type": "heading", "text_contains": "3. Concluzii", "page": 3},
-        {"type": "text", "text_contains": "page three", "page": 3, "section_contains": "Concluzii"}
+        {
+          "type": "title",
+          "text_contains": "Knowledge OS Parser Fixture",
+          "page": 1
+        },
+        {
+          "type": "heading",
+          "text_contains": "1. Introduction",
+          "page": 1
+        },
+        {
+          "type": "text",
+          "text_contains": "page preservation",
+          "page": 1,
+          "section_contains": "Introduction"
+        },
+        {
+          "type": "heading",
+          "text_contains": "2. Metodologie",
+          "page": 2
+        },
+        {
+          "type": "text",
+          "text_contains": "Buna ziua",
+          "page": 2,
+          "section_contains": "Metodologie"
+        },
+        {
+          "type": "text",
+          "text_contains": "Olá, este é um documento",
+          "page": 2,
+          "section_contains": "Metodologie"
+        },
+        {
+          "type": "heading",
+          "text_contains": "3. Concluzii",
+          "page": 3
+        },
+        {
+          "type": "text",
+          "text_contains": "page three",
+          "page": 3,
+          "section_contains": "Concluzii"
+        }
       ]
     },
     {
@@ -45,14 +86,45 @@
       "page_count": 2,
       "expect_page_preserved": true,
       "expect_section_preserved": true,
-      "raw_contains": ["%PDF-1.4", "Quarterly Numbers", "Revenue", "Half-year Notes"],
+      "raw_contains": [
+        "%PDF-1.4",
+        "Quarterly Numbers",
+        "Revenue",
+        "Half-year Notes"
+      ],
       "expected_elements": [
-        {"type": "heading", "text_contains": "Quarterly Numbers", "page": 1},
-        {"type": "table", "text_contains": "Revenue", "page": 1, "section_contains": "Quarterly Numbers"},
-        {"type": "table", "text_contains": "1450", "page": 1},
-        {"type": "heading", "text_contains": "Half-year Notes", "page": 2},
-        {"type": "table", "text_contains": "Q3", "page": 2, "section_contains": "Half-year Notes"},
-        {"type": "table", "text_contains": "1625", "page": 2}
+        {
+          "type": "heading",
+          "text_contains": "Quarterly Numbers",
+          "page": 1
+        },
+        {
+          "type": "table",
+          "text_contains": "Revenue",
+          "page": 1,
+          "section_contains": "Quarterly Numbers"
+        },
+        {
+          "type": "table",
+          "text_contains": "1450",
+          "page": 1
+        },
+        {
+          "type": "heading",
+          "text_contains": "Half-year Notes",
+          "page": 2
+        },
+        {
+          "type": "table",
+          "text_contains": "Q3",
+          "page": 2,
+          "section_contains": "Half-year Notes"
+        },
+        {
+          "type": "table",
+          "text_contains": "1625",
+          "page": 2
+        }
       ],
       "notes": "Tables must stay TABLE elements with their cells; flattening a table into one text blob fails the type/section assertions."
     },
@@ -67,16 +139,49 @@
       "expect_page_preserved": false,
       "expect_page_note": "DOCX has no page map; section must still be preserved from heading styles",
       "expect_section_preserved": true,
-      "raw_contains": ["Knowledge OS DOCX Fixture", "Date lunare", "Secção mensal"],
+      "raw_contains": [
+        "Knowledge OS DOCX Fixture",
+        "Date lunare",
+        "Secção mensal"
+      ],
       "expected_elements": [
-        {"type": "title", "text_contains": "Knowledge OS DOCX Fixture"},
-        {"type": "text", "text_contains": "hybrid retrieval and citations"},
-        {"type": "heading", "text_contains": "Date lunare", "section_contains": "Date lunare"},
-        {"type": "text", "text_contains": "Acesta este un paragraf în limba română", "section_contains": "Date lunare"},
-        {"type": "heading", "text_contains": "Secção mensal", "section_contains": "Secção mensal"},
-        {"type": "text", "text_contains": "Este é um parágrafo em português", "section_contains": "Secção mensal"},
-        {"type": "table", "text_contains": "Revenue", "section_contains": "Secção mensal"},
-        {"type": "text", "text_contains": "Closing paragraph after the table."}
+        {
+          "type": "title",
+          "text_contains": "Knowledge OS DOCX Fixture"
+        },
+        {
+          "type": "text",
+          "text_contains": "hybrid retrieval and citations"
+        },
+        {
+          "type": "heading",
+          "text_contains": "Date lunare",
+          "section_contains": "Date lunare"
+        },
+        {
+          "type": "text",
+          "text_contains": "Acesta este un paragraf în limba română",
+          "section_contains": "Date lunare"
+        },
+        {
+          "type": "heading",
+          "text_contains": "Secção mensal",
+          "section_contains": "Secção mensal"
+        },
+        {
+          "type": "text",
+          "text_contains": "Este é um parágrafo em português",
+          "section_contains": "Secção mensal"
+        },
+        {
+          "type": "table",
+          "text_contains": "Revenue",
+          "section_contains": "Secção mensal"
+        },
+        {
+          "type": "text",
+          "text_contains": "Closing paragraph after the table."
+        }
       ]
     },
     {
@@ -89,17 +194,50 @@
       "page_count": null,
       "expect_page_preserved": false,
       "expect_section_preserved": true,
-      "raw_contains": ["<article>", "<nav", "<h2>Secțiunea în română</h2>"],
-      "excluded_text": ["Cookie policy", "Copyright 2026", "analyticsQueue"],
+      "raw_contains": [
+        "<article>",
+        "<nav",
+        "<h2>Secțiunea în română</h2>"
+      ],
+      "excluded_text": [
+        "Cookie policy",
+        "Copyright 2026",
+        "analyticsQueue"
+      ],
       "excluded_text_note": "nav/footer/script boilerplate must be stripped by the parser (RAGFlow-style structured parsing)",
       "expected_elements": [
-        {"type": "title", "text_contains": "Knowledge OS HTML Fixture"},
-        {"type": "text", "text_contains": "boilerplate stripping"},
-        {"type": "heading", "text_contains": "Secțiunea în română", "section_contains": "Secțiunea în română"},
-        {"type": "text", "text_contains": "Acesta este un paragraf în limba română", "section_contains": "Secțiunea în română"},
-        {"type": "heading", "text_contains": "Secção em português", "section_contains": "Secção em português"},
-        {"type": "text", "text_contains": "Este é um parágrafo em português", "section_contains": "Secção em português"},
-        {"type": "list", "text_contains": "primul element din listă"}
+        {
+          "type": "title",
+          "text_contains": "Knowledge OS HTML Fixture"
+        },
+        {
+          "type": "text",
+          "text_contains": "boilerplate stripping"
+        },
+        {
+          "type": "heading",
+          "text_contains": "Secțiunea în română",
+          "section_contains": "Secțiunea în română"
+        },
+        {
+          "type": "text",
+          "text_contains": "Acesta este un paragraf în limba română",
+          "section_contains": "Secțiunea în română"
+        },
+        {
+          "type": "heading",
+          "text_contains": "Secção em português",
+          "section_contains": "Secção em português"
+        },
+        {
+          "type": "text",
+          "text_contains": "Este é um parágrafo em português",
+          "section_contains": "Secção em português"
+        },
+        {
+          "type": "list",
+          "text_contains": "primul element din listă"
+        }
       ]
     },
     {
@@ -112,17 +250,52 @@
       "page_count": null,
       "expect_page_preserved": false,
       "expect_section_preserved": true,
-      "raw_contains": ["# Knowledge OS Markdown Fixture", "## Secțiunea în română", "```python"],
+      "raw_contains": [
+        "# Knowledge OS Markdown Fixture",
+        "## Secțiunea în română",
+        "```python"
+      ],
       "expected_elements": [
-        {"type": "title", "text_contains": "Knowledge OS Markdown Fixture"},
-        {"type": "text", "text_contains": "hybrid retrieval and citations"},
-        {"type": "heading", "text_contains": "Secțiunea în română", "section_contains": "Secțiunea în română"},
-        {"type": "text", "text_contains": "instrumente de căutare", "section_contains": "Secțiunea în română"},
-        {"type": "heading", "text_contains": "Secção em português", "section_contains": "Secção em português"},
-        {"type": "text", "text_contains": "recuperação de informação", "section_contains": "Secção em português"},
-        {"type": "list", "text_contains": "primul element din listă"},
-        {"type": "code", "text_contains": "def fuse"},
-        {"type": "text", "text_contains": "Trailing paragraph with a link"}
+        {
+          "type": "title",
+          "text_contains": "Knowledge OS Markdown Fixture"
+        },
+        {
+          "type": "text",
+          "text_contains": "hybrid retrieval and citations"
+        },
+        {
+          "type": "heading",
+          "text_contains": "Secțiunea în română",
+          "section_contains": "Secțiunea în română"
+        },
+        {
+          "type": "text",
+          "text_contains": "instrumente de căutare",
+          "section_contains": "Secțiunea în română"
+        },
+        {
+          "type": "heading",
+          "text_contains": "Secção em português",
+          "section_contains": "Secção em português"
+        },
+        {
+          "type": "text",
+          "text_contains": "recuperação de informação",
+          "section_contains": "Secção em português"
+        },
+        {
+          "type": "list",
+          "text_contains": "primul element din listă"
+        },
+        {
+          "type": "code",
+          "text_contains": "def fuse"
+        },
+        {
+          "type": "text",
+          "text_contains": "Trailing paragraph with a link"
+        }
       ]
     },
     {
@@ -136,20 +309,169 @@
       "expect_page_preserved": false,
       "expect_section_preserved": false,
       "expect_section_note": "flat tabular source: language tags per row are the citation-relevant metadata",
-      "raw_contains": ["id,title,body,lang", "Raport lunar, cu virgule", "Relatório mensal"],
+      "raw_contains": [
+        "id,title,body,lang",
+        "Raport lunar, cu virgule",
+        "Relatório mensal"
+      ],
       "expected_elements": [
-        {"type": "table", "text_contains": "Bună ziua, acesta este un raport", "metadata_contains": {"language": "ro"}},
-        {"type": "table", "text_contains": "Olá, este é um relatório", "metadata_contains": {"language": "pt"}},
-        {"type": "table", "text_contains": "Hello, this is a monthly report", "metadata_contains": {"language": "en"}},
-        {"type": "table", "text_contains": "Ana are, mere, și pere", "metadata_contains": {"language": "ro"}}
+        {
+          "type": "table",
+          "text_contains": "Bună ziua, acesta este un raport",
+          "metadata_contains": {
+            "language": "ro"
+          }
+        },
+        {
+          "type": "table",
+          "text_contains": "Olá, este é um relatório",
+          "metadata_contains": {
+            "language": "pt"
+          }
+        },
+        {
+          "type": "table",
+          "text_contains": "Hello, this is a monthly report",
+          "metadata_contains": {
+            "language": "en"
+          }
+        },
+        {
+          "type": "table",
+          "text_contains": "Ana are, mere, și pere",
+          "metadata_contains": {
+            "language": "ro"
+          }
+        }
       ],
       "multilingual_rows": [
-        {"row": 1, "language": "ro"},
-        {"row": 2, "language": "pt"},
-        {"row": 3, "language": "en"},
-        {"row": 4, "language": "ro"}
+        {
+          "row": 1,
+          "language": "ro"
+        },
+        {
+          "row": 2,
+          "language": "pt"
+        },
+        {
+          "row": 3,
+          "language": "en"
+        },
+        {
+          "row": 4,
+          "language": "ro"
+        }
       ],
       "notes": "Row 1/4 carry quoted commas; the header row is a column definition, not data."
+    },
+    {
+      "id": "txt_en",
+      "file": "txt_en.txt",
+      "format": "txt",
+      "mime_type": "text/plain",
+      "parser_module": "ingestion.adapters.txt",
+      "language": "en",
+      "page_count": null,
+      "expect_page_preserved": false,
+      "expect_page_note": "TXT has no page map; paragraphs become TEXT elements",
+      "expect_section_preserved": false,
+      "expect_section_note": "flat text: structure comes from blank-line paragraphs",
+      "raw_contains": [
+        "Knowledge OS Text Fixture"
+      ],
+      "expected_elements": [
+        {
+          "type": "text",
+          "text_contains": "exercises the TXT parser"
+        },
+        {
+          "type": "text",
+          "text_contains": "A second paragraph keeps the fixture"
+        }
+      ]
+    },
+    {
+      "id": "txt_ro",
+      "file": "txt_ro.txt",
+      "format": "txt",
+      "mime_type": "text/plain",
+      "parser_module": "ingestion.adapters.txt",
+      "language": "ro",
+      "page_count": null,
+      "expect_page_preserved": false,
+      "expect_page_note": "TXT has no page map; paragraphs become TEXT elements",
+      "expect_section_preserved": false,
+      "expect_section_note": "flat text: structure comes from blank-line paragraphs",
+      "raw_contains": [
+        "Document text"
+      ],
+      "expected_elements": [
+        {
+          "type": "text",
+          "text_contains": "un document text simplu"
+        },
+        {
+          "type": "text",
+          "text_contains": "Căutarea în limba română"
+        }
+      ]
+    },
+    {
+      "id": "txt_pt",
+      "file": "txt_pt.txt",
+      "format": "txt",
+      "mime_type": "text/plain",
+      "parser_module": "ingestion.adapters.txt",
+      "language": "pt",
+      "page_count": null,
+      "expect_page_preserved": false,
+      "expect_page_note": "TXT has no page map; paragraphs become TEXT elements",
+      "expect_section_preserved": false,
+      "expect_section_note": "flat text: structure comes from blank-line paragraphs",
+      "raw_contains": [
+        "Documento de texto"
+      ],
+      "expected_elements": [
+        {
+          "type": "text",
+          "text_contains": "documento de texto simples"
+        },
+        {
+          "type": "text",
+          "text_contains": "recuperação de informação"
+        }
+      ]
+    },
+    {
+      "id": "txt_cp1252",
+      "file": "txt_cp1252.txt",
+      "format": "txt",
+      "mime_type": "text/plain",
+      "parser_module": "ingestion.adapters.txt",
+      "language": "pt",
+      "page_count": null,
+      "expect_page_preserved": false,
+      "expect_page_note": "TXT has no page map; file is Windows-1252 encoded (NOT utf-8) on purpose",
+      "expect_section_preserved": false,
+      "expect_section_note": "flat text: structure comes from blank-line paragraphs",
+      "raw_contains": [
+        "Documento de texto",
+        "linhas em branco"
+      ],
+      "expected_elements": [
+        {
+          "type": "text",
+          "text_contains": "acentuação portuguesa"
+        },
+        {
+          "type": "text",
+          "text_contains": "detecção de codificação correta"
+        },
+        {
+          "type": "text",
+          "text_contains": "glifo ƒ exclusivo do Windows-1252"
+        }
+      ]
     }
   ]
 }

@@ -1,0 +1,7 @@
+Documento de texto em português (codificação Windows-1252).
+
+Este parágrafo verifica a acentuação portuguesa: á, é, í, ó, ú, ç, ã, õ.
+O segundo parágrafo separa os elementos TEXT por linhas em branco.
+
+O último parágrafo confirma a detecção de codificação correta e inclui o
+glifo ƒ exclusivo do Windows-1252, que a Europa Central não decifra.

@@ -98,7 +98,12 @@ def test_harness_inventory_matches_the_task_requirements(repo_root: Path) -> Non
     assert not missing, f"harness files missing: {missing}"
 
 
-def test_six_pd001_fixture_files_are_present(repo_root: Path) -> None:
+def test_pd001_fixture_files_are_present(repo_root: Path) -> None:
+    """The six TASK-M0-004 fixtures **plus** the TXT set (M2-001a) must exist.
+
+    The TXT quartet: `txt_en`/`txt_ro`/`txt_pt` (UTF-8 trio) + `txt_cp1252`
+    (non-UTF-8 encoding-detection variant) — all wired into the manifest.
+    """
     pd001 = repo_root / "tests" / "fixtures" / "pd001"
     expected = {
         "pdf_text_multipage.pdf",
@@ -107,11 +112,15 @@ def test_six_pd001_fixture_files_are_present(repo_root: Path) -> None:
         "html_article_nav.html",
         "markdown_structure.md",
         "csv_multilingual.csv",
+        "txt_en.txt",
+        "txt_ro.txt",
+        "txt_pt.txt",
+        "txt_cp1252.txt",
     }
     present = {
         path.name
         for path in pd001.iterdir()
-        if path.is_file() and path.suffix in {".pdf", ".docx", ".html", ".md", ".csv"}
+        if path.is_file() and path.suffix in {".pdf", ".docx", ".html", ".md", ".csv", ".txt"}
     }
     assert expected <= present, f"missing PD-001 fixtures: {sorted(expected - present)}"
 

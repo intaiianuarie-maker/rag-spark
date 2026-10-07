@@ -45,7 +45,21 @@ REQUIRED_FIXTURE_IDS = frozenset(
     }
 )
 ELEMENT_TYPES = frozenset(member.value for member in ElementType)
-RAW_FORMATS = {"pdf", "docx", "html", "md", "csv"}
+RAW_FORMATS = {"pdf", "docx", "html", "md", "csv", "txt"}
+
+#: Every manifest fixture gets a fake-parser contract run; the six
+#: REQUIRED_FIXTURE_IDS additionally gate the "structure" acceptance check.
+_ALL_FIXTURE_IDS = sorted(
+    entry["id"]
+    for entry in json.loads(
+        (
+            Path(__file__).resolve().parents[1]
+            / "fixtures"
+            / "pd001"
+            / "expected_elements.json"
+        ).read_text(encoding="utf-8")
+    )["fixtures"]
+)
 
 
 def load_manifest(fixtures_dir: Path) -> dict:
@@ -209,12 +223,29 @@ def test_utf8_fixtures_keep_diacritics(fixtures_dir: Path) -> None:
     assert "Secțiunea în română" in md and "recuperação de informação" in md
 
 
+def test_cp1252_txt_fixture_is_intentionally_not_utf8(fixtures_dir: Path) -> None:
+    """Pins the encoding-detection fixture (charset-normalizer path).
+
+    `txt_cp1252.txt` must stay Windows-1252 encoded — if it were ever re-saved
+    as UTF-8 the charset-detection contract would silently stop being exercised
+    (code2 M2-001a review, Minor #3 / charset placement note). It contains
+    byte `0x83` ("ƒ" in cp1252), which Central-European codepages reject, so
+    detection is deterministic instead of the cp1250 tie-break that maps
+    ã -> ă (observed live; see the M2-001a test report).
+    """
+    raw = (fixtures_dir / "pd001" / "txt_cp1252.txt").read_bytes()
+    with pytest.raises(UnicodeDecodeError):
+        raw.decode("utf-8")
+    decoded = raw.decode("cp1252")
+    assert "acentuação portuguesa" in decoded and "glifo ƒ exclusivo" in decoded
+
+
 # --------------------------------------------------------------------------------------
 # 2. Interface (fake parser, all six fixtures)
 # --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("fixture_id", sorted(REQUIRED_FIXTURE_IDS))
+@pytest.mark.parametrize("fixture_id", _ALL_FIXTURE_IDS)
 async def test_fake_parser_satisfies_contract(fixtures_dir: Path, fixture_id: str) -> None:
     fixture = next(f for f in load_fixtures(fixtures_dir) if f.fixture_id == fixture_id)
     parser = FakeDocumentParser(_canned_elements(fixture))

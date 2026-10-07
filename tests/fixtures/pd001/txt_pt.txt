@@ -1,0 +1,7 @@
+Documento de texto em português
+
+Este é um documento de texto simples para testar o analisador e a deteção de
+idioma. A recuperação de informação e as citações dependem de fragmentação
+determinística.
+
+Uma segunda secção mantém o ficheiro com vários parágrafos para o fragmentador.
