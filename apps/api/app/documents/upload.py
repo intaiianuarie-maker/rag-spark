@@ -36,6 +36,11 @@ router = APIRouter(
     prefix="/v1/workspaces/{workspace_id}/documents", tags=["documents"]
 )
 
+# TASK-M2-003 freed `/documents/{id}` for the frozen document-detail read, so the
+# pre-existing job poll (M2-001c) moved one level up: `/jobs/{job_id}`. Same
+# handler/response; only the path changed.
+jobs_router = APIRouter(prefix="/v1/workspaces/{workspace_id}/jobs", tags=["ingestion"])
+
 
 class JobAccepted(BaseModel):
     job_id: str
@@ -261,7 +266,7 @@ async def upload_document(
     )
 
 
-@router.get(
+@jobs_router.get(
     "/{job_id}",
     response_model=JobStatusResponse,
     summary="Poll an ingestion job's status/stage",

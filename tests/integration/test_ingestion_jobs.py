@@ -88,7 +88,7 @@ def _upload(
 
 def _job_status(client, token: str, workspace_id: str, job_id: str) -> dict:
     response = client.get(
-        f"/v1/workspaces/{workspace_id}/documents/{job_id}", headers=_auth(token)
+        f"/v1/workspaces/{workspace_id}/jobs/{job_id}", headers=_auth(token)
     )
     assert response.status_code == 200, response.text
     return response.json()

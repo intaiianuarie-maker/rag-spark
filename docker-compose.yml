@@ -20,6 +20,8 @@ x-backend-env: &backend-env
   MINIO_BUCKET: ${MINIO_BUCKET:-knowledge-os}
   READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+  # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
+  CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
 
 services:
   postgres:
