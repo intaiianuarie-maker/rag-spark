@@ -68,6 +68,11 @@ class Document(Base):
     source_filename: Mapped[str | None] = mapped_column(String(512), nullable=True)
     mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     language: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    #: M2-001d: latest version pointer + soft-delete tombstone.
+    current_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), nullable=True
+    )
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -101,6 +106,10 @@ class DocumentVersion(Base):
     charset: Mapped[str | None] = mapped_column(String(64), nullable=True)
     #: Interim original bytes (moves to MinIO behind a ref in M2-001d/PD-005).
     content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    #: M2-001d: set when a newer version supersedes this one (chunks removed).
+    superseded_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )

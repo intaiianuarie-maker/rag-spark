@@ -20,6 +20,7 @@ from datetime import UTC, datetime
 
 from ingestion.adapters.registry import parser_for_mime
 from ingestion.chunk import chunk_document
+from ingestion.dedup import supersede_other_versions
 from ingestion.interfaces import DocumentElement, ParsedDocument
 from ingestion.normalize import MAX_DOCUMENT_BYTES, IngestionError
 from ingestion.persistence import (
@@ -53,6 +54,14 @@ class IngestPipelineError(Exception):
         self.code = code
         self.message = message
         self.retryable = retryable
+
+
+def _log_stage(job: IngestionJob, stage: str) -> None:
+    """Micro #5: emit a greppable stage token for each transition."""
+    logger.info(
+        "ingest_stage",
+        extra={"event": "ingest_stage", "job_id": str(job.id), "stage": stage},
+    )
 
 
 @dataclass
@@ -94,6 +103,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     job.error_message = None
     await session.commit()
     stages = [JobStage.PARSING.value]
+    _log_stage(job, JobStage.PARSING.value)
 
     if not content:
         raise IngestPipelineError("empty_document", "empty document", retryable=False)
@@ -130,6 +140,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     job.stage = JobStage.CHUNKING.value
     await session.commit()
     stages.append(JobStage.CHUNKING.value)
+    _log_stage(job, JobStage.CHUNKING.value)
 
     try:
         result = chunk_document(
@@ -161,6 +172,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             )
         )
     if document is not None:
+        await supersede_other_versions(session, document.id, version.id)
         document.language = result.language
         if document.title is None:
             document.title = result.metadata.title
@@ -170,16 +182,19 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     job.stage = JobStage.EMBEDDING.value
     await session.commit()
     stages.append(JobStage.EMBEDDING.value)
+    _log_stage(job, JobStage.EMBEDDING.value)
 
     job.stage = JobStage.INDEXING.value
     await session.commit()
     stages.append(JobStage.INDEXING.value)
+    _log_stage(job, JobStage.INDEXING.value)
 
     job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value
     job.finished_at = datetime.now(UTC)
     await session.commit()
     stages.append(JobStage.READY.value)
+    _log_stage(job, JobStage.READY.value)
 
     logger.info(
         "ingest_job_ready",

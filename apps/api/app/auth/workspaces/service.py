@@ -147,6 +147,7 @@ class WorkspaceService:
         self, principal: Principal, workspace_id: uuid.UUID, email: str, role: Role
     ) -> tuple[Membership, User]:
         workspace = await self._get_workspace(workspace_id)
+        await self._lock_workspace(workspace.id)
         require(principal, Action.WORKSPACE_MANAGE, _resource(workspace.id))
         ensure_owner_can_manage_owner(
             principal.workspace_roles[str(workspace.id)], role
@@ -177,6 +178,7 @@ class WorkspaceService:
         self, principal: Principal, workspace_id: uuid.UUID
     ) -> tuple[Membership, User]:
         workspace = await self._get_workspace(workspace_id)
+        await self._lock_workspace(workspace.id)
         user_id = _user_uuid(principal)
         membership = await self._get_membership(workspace.id, user_id)
         if membership is None:

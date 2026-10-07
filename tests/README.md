@@ -121,10 +121,10 @@ and future adapter tests call the same code:
 Real-adapter tests **skip loudly** today and pick up the same checker when the
 adapter lands. The module must expose a zero-argument factory:
 
-| Interface | Expected module | Expected factory |
+| Interface | Expected module (first importable candidate wins) | Expected factory |
 |---|---|---|
-| `VectorStore` (Qdrant) | `retrieval.adapters.qdrant` | `create_vector_store() -> VectorStore` |
-| `LexicalStore` (Postgres FTS) | `retrieval.adapters.postgres_fts` | `create_lexical_store() -> LexicalStore` |
+| `VectorStore` (Qdrant) | `retrieval.adapters.qdrant_store` (rag-fork plan) · `retrieval.adapters.qdrant` (legacy name) | `create_vector_store() -> VectorStore` |
+| `LexicalStore` (Postgres FTS) | `retrieval.adapters.pg_fts` (rag-fork plan) · `retrieval.adapters.postgres_fts` (legacy name) | `create_lexical_store() -> LexicalStore` |
 | `DocumentParser` (PD-001) | `ingestion.adapters.<id>` from `expected_elements.json` | `PARSER: DocumentParser` **or** `create_parser() -> DocumentParser` |
 
 Missing module → skip with the module name; present module with the wrong entry
@@ -136,7 +136,10 @@ need weights or keys. Those tasks run the same checkers in their own task.
 ## Contract decisions locked by this harness (for the reviewer)
 
 1. **Fail closed on empty scope** — a `SearchFilter`/`ACLScope` with no
-   workspaces returns nothing (`R-004`).
+   workspaces returns nothing (`R-004`). Confirmed by boss ruling 2026-10-07
+   on test1's G0 flag (recorded in `rag-fork-solution/TASKS.md` TASK-M3-004:
+   "Empty/unscoped scope returns `[]` … never raise" — the old *unscoped-call
+   raises* ticket text is superseded).
 2. **Filter before ranking** — the workspace scope must travel *with* the
    retriever call; rank-then-filter loses every in-scope row when foreign rows
    outrank them (`tests/unit/test_acl_before_rank.py` proves it).

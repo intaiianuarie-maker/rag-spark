@@ -11,10 +11,11 @@ from __future__ import annotations
 import codecs
 import hashlib
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 
 from core.auth import Principal
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from ingestion.dedup import find_document_by_filename, latest_job_for_version, latest_version
 from ingestion.normalize import MAX_DOCUMENT_BYTES
 from ingestion.persistence import (
     Document,
@@ -94,6 +95,25 @@ async def _read_limited(upload: UploadFile, limit: int) -> bytes:
     return b"".join(chunks)
 
 
+async def _enqueue_or_fail(session: AsyncSession, job: IngestionJob) -> None:
+    """Enqueue a queued job; mark it failed and 503 if the queue is unreachable."""
+    try:
+        await enqueue(str(job.id))
+    except IngestQueueUnavailable as exc:
+        job.status = JobStatus.FAILED.value
+        job.stage = JobStage.FAILED.value
+        job.error_code = "queue_unavailable"
+        job.error_message = "ingestion queue unavailable"
+        await session.commit()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "queue_unavailable",
+                "message": "Ingestion queue is unavailable; try again shortly.",
+            },
+        ) from exc
+
+
 @router.post(
     "",
     status_code=status.HTTP_202_ACCEPTED,
@@ -138,18 +158,78 @@ async def upload_document(
         )
 
     checksum = hashlib.sha256(data).hexdigest()
-    document = Document(
-        workspace_id=workspace_id,
-        title=_clamp(title) or _clamp(file.filename),
-        source_filename=_clamp(file.filename),
-        mime_type=file.content_type,
-    )
-    session.add(document)
-    await session.flush()
+    filename = _clamp(file.filename)
+    existing = await find_document_by_filename(session, workspace_id, filename)
+
+    if existing is not None:
+        latest = await latest_version(session, existing.id)
+        if latest is not None and latest.checksum == checksum:
+            latest_job = await latest_job_for_version(session, latest.id)
+            if latest_job is not None and latest_job.status in {
+                JobStatus.QUEUED.value,
+                JobStatus.RUNNING.value,
+            }:
+                # In-flight: report the existing job honestly; do not stack one.
+                return JobAccepted(
+                    job_id=str(latest_job.id),
+                    document_id=str(existing.id),
+                    version_id=str(latest.id),
+                    status=latest_job.status,
+                )
+            if latest_job is None or latest_job.status != JobStatus.READY.value:
+                # Previous attempt failed (or never ran): re-parse the same version
+                # rather than reporting a dishonest `ready` with zero chunks.
+                job = IngestionJob(
+                    workspace_id=workspace_id,
+                    document_id=existing.id,
+                    document_version_id=latest.id,
+                    status=JobStatus.QUEUED.value,
+                    stage=JobStage.QUEUED.value,
+                )
+                session.add(job)
+                await session.commit()
+                await session.refresh(job)
+                await _enqueue_or_fail(session, job)
+                return JobAccepted(
+                    job_id=str(job.id),
+                    document_id=str(existing.id),
+                    version_id=str(latest.id),
+                    status=job.status,
+                )
+            # Only reuse a version whose ingestion actually reached `ready`.
+            job = IngestionJob(
+                workspace_id=workspace_id,
+                document_id=existing.id,
+                document_version_id=latest.id,
+                status=JobStatus.READY.value,
+                stage=JobStage.READY.value,
+                finished_at=datetime.now(UTC),
+            )
+            session.add(job)
+            await session.commit()
+            await session.refresh(job)
+            return JobAccepted(
+                job_id=str(job.id),
+                document_id=str(existing.id),
+                version_id=str(latest.id),
+                status=job.status,
+            )
+        document = existing
+        version_number = (latest.version_number if latest else 0) + 1
+    else:
+        document = Document(
+            workspace_id=workspace_id,
+            title=_clamp(title) or filename,
+            source_filename=filename,
+            mime_type=file.content_type,
+        )
+        session.add(document)
+        await session.flush()
+        version_number = 1
 
     version = DocumentVersion(
         document_id=document.id,
-        version_number=1,
+        version_number=version_number,
         checksum=checksum,
         size_bytes=len(data),
         mime_type=file.content_type,
@@ -158,6 +238,7 @@ async def upload_document(
     )
     session.add(version)
     await session.flush()
+    document.current_version_id = version.id
 
     job = IngestionJob(
         workspace_id=workspace_id,
@@ -170,21 +251,7 @@ async def upload_document(
     await session.commit()
     await session.refresh(job)
 
-    try:
-        await enqueue(str(job.id))
-    except IngestQueueUnavailable as exc:
-        job.status = JobStatus.FAILED.value
-        job.stage = JobStage.FAILED.value
-        job.error_code = "queue_unavailable"
-        job.error_message = "ingestion queue unavailable"
-        await session.commit()
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail={
-                "error": "queue_unavailable",
-                "message": "Ingestion queue is unavailable; try again shortly.",
-            },
-        ) from exc
+    await _enqueue_or_fail(session, job)
 
     return JobAccepted(
         job_id=str(job.id),
