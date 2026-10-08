@@ -25,6 +25,11 @@ rtree==1.4.1
 # Retrieval — Qdrant hybrid (TASK-M3-001, Apache-2.0)
 qdrant-client==1.19.1
 
+# Retrieval HTTP adapters (TASK-M3-002/M3-004): infinity /embeddings + /rerank.
+# Already pinned in apps/api/requirements.txt; the worker needs it too once
+# retrieval is wired into ingestion/query (carried M3-002 gap, closed here).
+httpx==0.28.1
+
 # Chunking (rag-fork-solution TASK-M2-002): LlamaIndex sentence splitter, MIT.
 # Only llama-index-core (not the umbrella package) — our adapter injects our own
 # deterministic tokenizer/sentence splitter, so no model data is resolved at runtime.

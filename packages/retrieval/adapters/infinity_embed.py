@@ -40,7 +40,7 @@ from ..interfaces import EmbeddingProvider
 #: infinity's OpenAI-compatible embeddings route.
 EMBEDDINGS_PATH = "/embeddings"
 
-DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_BASE_URL = "http://localhost:7997"
 DEFAULT_MODEL = "BAAI/bge-m3"
 DEFAULT_DIMENSION = 1024
 #: Records the served model identity; operators pin the exact HuggingFace commit
