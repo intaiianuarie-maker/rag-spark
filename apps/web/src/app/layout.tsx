@@ -43,9 +43,8 @@ export default function RootLayout({ children }: { children: ReactNode }) {
               </Link>
               <div className="flex items-center gap-3">
                 <nav aria-label="Primary" className="hidden text-sm text-neutral-500 sm:block dark:text-neutral-400">
-                  {/* Placeholder shell nav; Ask/Search arrive in M4 (TASK plan). */}
-                  <span className="px-2">Ask</span>
-                  <span className="px-2">Search</span>
+                  <Link href="/ask" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Ask</Link>
+                  <Link href="/search" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Search</Link>
                 </nav>
                 <WorkspaceSwitcher />
               </div>
