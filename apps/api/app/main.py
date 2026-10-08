@@ -25,6 +25,7 @@ from app.documents.delete import router as documents_delete_router
 from app.documents.reads import router as knowledge_reads_router
 from app.documents.upload import jobs_router as jobs_router
 from app.documents.upload import router as documents_router
+from app.eval.router import router as eval_router
 from app.search.search import router as search_router
 
 logger = logging.getLogger("knowledge_os.api")
@@ -98,6 +99,7 @@ def create_app() -> FastAPI:
     app.include_router(knowledge_reads_router)
     app.include_router(ask_router)
     app.include_router(search_router)
+    app.include_router(eval_router)
     register_auth_exception_handlers(app)
     return app
 
