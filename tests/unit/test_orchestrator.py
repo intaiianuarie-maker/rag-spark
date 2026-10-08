@@ -415,3 +415,76 @@ async def test_rerank_out_of_scope_item_is_dropped() -> None:
     assert items, "in-scope reranked items must survive"
     assert all(item.workspace_id == "ws-a" for item in items)
     assert all(item.chunk_id != "b-1" for item in items)
+
+
+# --- M5-002a round-3: single-leg degrade + ACL-narrowing (task_0012) ---------
+
+
+class _BrokenDense(FakeVectorStore):
+    async def search(self, *, collection, vector, top_k, query_filter):
+        raise RuntimeError("dense down")
+
+
+async def test_semantic_mode_degrades_to_empty_on_dense_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """SEMANTIC leg degrades like the hybrid fan-out (no 500 on store fail)."""
+    from retrieval.interfaces import RetrievalMode
+
+    _enable_orchestrator_logger(monkeypatch)
+    dense = _BrokenDense(dimension=DIMENSION)
+    lexical = FakeLexicalStore()
+    await lexical.index(records=_records())
+    orchestrator = HybridRetrievalOrchestrator(
+        dense=dense,
+        embedding=FakeEmbeddingProvider(),
+        lexical=lexical,
+        collection=COLLECTION,
+    )
+    with caplog.at_level("WARNING"):
+        items = await orchestrator.retrieve(
+            query="hybrid retrieval",
+            acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+            mode=RetrievalMode.SEMANTIC,
+        )
+    assert items == []
+    assert "retrieval_leg_failed" in caplog.text
+
+
+async def test_keyword_mode_degrades_to_empty_on_lexical_failure(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """KEYWORD leg degrades like the hybrid fan-out (no 500 on store fail)."""
+    from retrieval.interfaces import RetrievalMode
+
+    _enable_orchestrator_logger(monkeypatch)
+    dense = FakeVectorStore(dimension=DIMENSION)
+    await dense.ensure_collection(collection=COLLECTION, dimension=DIMENSION)
+    await dense.upsert(collection=COLLECTION, records=_records())
+    orchestrator = HybridRetrievalOrchestrator(
+        dense=dense,
+        embedding=FakeEmbeddingProvider(),
+        lexical=_BrokenLexical(),
+        collection=COLLECTION,
+    )
+    with caplog.at_level("WARNING"):
+        items = await orchestrator.retrieve(
+            query="hybrid retrieval",
+            acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+            mode=RetrievalMode.KEYWORD,
+        )
+    assert items == []
+    assert "retrieval_leg_failed" in caplog.text
+
+
+async def test_extra_filter_cannot_widen_workspace_scope() -> None:
+    """Caller filter narrows inside the ACL scope; scope stays authoritative."""
+    orchestrator, dense, _ = await _orchestrator()
+    await orchestrator.retrieve(
+        query="hybrid retrieval",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+        extra_filter=SearchFilter(workspace_ids=["ws-b"], language="en"),
+    )
+    sent = dense.search_calls[-1]
+    assert sent.workspace_ids == ["ws-a"]
+    assert sent.language == "en"

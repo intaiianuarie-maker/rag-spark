@@ -48,6 +48,7 @@ from .interfaces import (
     LexicalStore,
     Reranker,
     RetrievalMethod,
+    RetrievalMode,
     RetrievalOrchestrator,
     RetrievedItem,
     SearchFilter,
@@ -193,6 +194,8 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         *,
         query: str,
         acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        extra_filter: SearchFilter | None = None,
         dense_top_k: int = DEFAULT_DENSE_TOP_K,
         lexical_top_k: int = DEFAULT_LEXICAL_TOP_K,
         fusion_top_k: int = DEFAULT_FUSION_TOP_K,
@@ -210,13 +213,48 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
 
         allowed = set(acl_scope.workspace_ids)
         query_filter = SearchFilter(workspace_ids=list(acl_scope.workspace_ids))
-        dense_items, sparse_items, lexical_items = await self._fan_out(
-            query,
-            query_filter,
-            dense_top_k=dense_top_k,
-            sparse_top_k=sparse_top_k,
-            lexical_top_k=lexical_top_k,
-        )
+        if extra_filter is not None:
+            if extra_filter.language:
+                query_filter.language = extra_filter.language
+            for _k, _v in (extra_filter.metadata or {}).items():
+                query_filter.metadata[_k] = _v
+            if extra_filter.document_ids:
+                query_filter.document_ids = list(extra_filter.document_ids)
+        # Mode selector: keyword = lexical-only (M3-003 FTS), semantic = dense-only
+        # (M3-001 Qdrant), hybrid = default (existing RRF fusion, unchanged).
+        dense_items: list[RetrievedItem] = []
+        sparse_items: list[RetrievedItem] = []
+        lexical_items: list[RetrievedItem] = []
+        if mode == RetrievalMode.HYBRID:
+            dense_items, sparse_items, lexical_items = await self._fan_out(
+                query,
+                query_filter,
+                dense_top_k=dense_top_k,
+                sparse_top_k=sparse_top_k,
+                lexical_top_k=lexical_top_k,
+            )
+        elif mode == RetrievalMode.SEMANTIC:
+            # Degrade like the hybrid fan-out: a dense/embedding failure
+            # yields [] for that mode instead of a 500 (fail-closed rule).
+            try:
+                dense_items = await self._dense_leg(query, dense_top_k, query_filter)
+            except Exception as exc:
+                logger.warning(
+                    "retrieval_leg_failed",
+                    extra={"event": "retrieval_leg_failed", "leg": "dense", "error": str(exc)},
+                )
+                dense_items = []
+        elif mode == RetrievalMode.KEYWORD:
+            try:
+                lexical_items = await self.lexical.search(
+                    query=query, top_k=lexical_top_k, query_filter=query_filter
+                )
+            except Exception as exc:
+                logger.warning(
+                    "retrieval_leg_failed",
+                    extra={"event": "retrieval_leg_failed", "leg": "lexical", "error": str(exc)},
+                )
+                lexical_items = []
 
         # Defense in depth: never rank/fuse an out-of-scope row even if a store
         # ignored its filter (R-004). Provenance-poor rows are dropped too.

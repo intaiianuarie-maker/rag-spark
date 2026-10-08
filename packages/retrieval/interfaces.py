@@ -42,6 +42,12 @@ class RetrievalMethod(StrEnum):
     RERANKED = "reranked"
 
 
+class RetrievalMode(StrEnum):
+    KEYWORD = "keyword"
+    SEMANTIC = "semantic"
+    HYBRID = "hybrid"
+
+
 class SearchFilter(BaseModel):
     """Hard metadata filter applied by stores *before* ranking.
 
@@ -216,7 +222,10 @@ class RetrievalOrchestrator(ABC):
         *,
         query: str,
         acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        extra_filter: SearchFilter | None = None,
         dense_top_k: int = DEFAULT_DENSE_TOP_K,
+        sparse_top_k: int = DEFAULT_LEXICAL_TOP_K,
         lexical_top_k: int = DEFAULT_LEXICAL_TOP_K,
         fusion_top_k: int = DEFAULT_FUSION_TOP_K,
         rerank_top_k: int = DEFAULT_RERANK_TOP_K,
