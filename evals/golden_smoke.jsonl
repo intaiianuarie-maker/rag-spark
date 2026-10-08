@@ -1,0 +1,5 @@
+{"question": "What is the termination notice period?", "expected_answer": "30 days", "expected_sources": ["doc-en"], "tags": ["en"]}
+{"question": "Care este perioada de preaviz?", "expected_answer": "", "expected_sources": ["doc-ro"], "tags": ["ro"]}
+{"question": "Qual e o periodo de aviso previo?", "expected_answer": "", "expected_sources": ["doc-pt"], "tags": ["pt"]}
+{"question": "What is the Q3 net revenue?", "expected_answer": "42", "expected_sources": ["doc-table"], "tags": ["table"]}
+{"question": "Which two firms merged in 2019?", "expected_answer": "Acme and Globex", "expected_sources": ["doc-a", "doc-b"], "tags": ["multi"]}
