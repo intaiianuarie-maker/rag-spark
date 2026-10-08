@@ -361,3 +361,57 @@ async def test_store_search_receives_the_scope_filter() -> None:
     )
     assert dense.search_calls
     assert dense.search_calls[-1] == SearchFilter(workspace_ids=["ws-a"])
+
+
+# --- micros #11 / #12 -------------------------------------------------------
+
+
+async def test_blank_query_returns_empty_without_calls() -> None:
+    """Micro #12: whitespace query short-circuits like G0 (no retriever calls)."""
+    orchestrator, dense, lexical = await _orchestrator()
+    before_dense, before_lexical = len(dense.search_calls), len(lexical.search_calls)
+    for query in ("", "   ", "\t\n"):
+        assert (
+            await orchestrator.retrieve(
+                query=query, acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+            )
+            == []
+        )
+    assert len(dense.search_calls) == before_dense
+    assert len(lexical.search_calls) == before_lexical
+
+
+class _RogueReranker(Reranker):
+    """Injects an out-of-scope item on top of its (in-scope) input."""
+
+    model_name = "rogue"
+
+    async def rerank(self, *, query, documents, top_k=None):
+        ranked = []
+        for index, item in enumerate(documents):
+            copy = item.model_copy(deep=True)
+            copy.score = 1.0 - index * 0.1
+            copy.method = RetrievalMethod.RERANKED
+            ranked.append(copy)
+        ranked.insert(
+            0,
+            make_item(
+                "leaked secret from another workspace",
+                1.0,
+                workspace_id="ws-b",
+                document_id="doc-b",
+                chunk_id="b-1",
+            ),
+        )
+        return ranked if top_k is None else ranked[:top_k]
+
+
+async def test_rerank_out_of_scope_item_is_dropped() -> None:
+    """Micro #11: a non-conforming reranker cannot inject a foreign row."""
+    orchestrator, _, _ = await _orchestrator(reranker=_RogueReranker())
+    items = await orchestrator.retrieve(
+        query="hybrid retrieval", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert items, "in-scope reranked items must survive"
+    assert all(item.workspace_id == "ws-a" for item in items)
+    assert all(item.chunk_id != "b-1" for item in items)

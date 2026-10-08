@@ -203,6 +203,10 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         # G0: empty/unscoped scope fails closed, before any retriever call.
         if acl_scope.is_empty:
             return []
+        # Micro #12: a blank/whitespace query can match nothing; return early
+        # (no retriever/embedding calls). Matches the PG FTS store guard.
+        if not query.strip():
+            return []
 
         allowed = set(acl_scope.workspace_ids)
         query_filter = SearchFilter(workspace_ids=list(acl_scope.workspace_ids))
@@ -269,6 +273,18 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 if reranked:
                     prepared: list[RetrievedItem] = []
                     for item in reranked:
+                        # Micro #11: defensive re-filter AFTER rerank. A reranker
+                        # must return a subset of its input; a non-conforming one
+                        # cannot inject an out-of-scope or provenance-poor row.
+                        if not self._in_scope(item, allowed, public):
+                            logger.warning(
+                                "rerank_out_of_scope_dropped",
+                                extra={
+                                    "event": "rerank_out_of_scope_dropped",
+                                    "workspace_id": item.workspace_id,
+                                },
+                            )
+                            continue
                         copy = item.model_copy(deep=True)
                         rerank_score = float(copy.score)
                         scores = dict(copy.scores)
