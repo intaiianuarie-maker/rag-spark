@@ -13,6 +13,7 @@ from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.health import router as system_router
+from app.ask.router import router as ask_router
 from app.auth.adapters.redis_store import close_redis
 from app.auth.errors import register_auth_exception_handlers
 from app.auth.keys_router import router as keys_router
@@ -94,6 +95,7 @@ def create_app() -> FastAPI:
     app.include_router(documents_delete_router)
     app.include_router(jobs_router)
     app.include_router(knowledge_reads_router)
+    app.include_router(ask_router)
     register_auth_exception_handlers(app)
     return app
 
