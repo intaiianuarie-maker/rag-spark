@@ -1,6 +1,7 @@
 "use client";
 
 import type { SearchResultItem } from "../contracts";
+import { TracePanel } from "./trace-view";
 
 /**
  * Source-inspection panel: opens the exact passage for a selected result
@@ -67,6 +68,14 @@ export function ResultDetail({
             Score
           </span>
           <p className="font-mono text-xs">{item.score.toFixed(4)}</p>
+        </div>
+        <div>
+          <span className="text-xs uppercase tracking-wider text-neutral-400">
+            Retrieval trace
+          </span>
+          <div className="mt-1">
+            <TracePanel scores={item.scores} />
+          </div>
         </div>
         <div>
           <span className="text-xs uppercase tracking-wider text-neutral-400">
