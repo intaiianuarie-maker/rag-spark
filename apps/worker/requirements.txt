@@ -22,6 +22,9 @@ lingua-language-detector==2.2.0
 docling-slim[convert-core,format-pdf-docling]==2.134.0
 rtree==1.4.1
 
+# Retrieval — Qdrant hybrid (TASK-M3-001, Apache-2.0)
+qdrant-client==1.19.1
+
 # Chunking (rag-fork-solution TASK-M2-002): LlamaIndex sentence splitter, MIT.
 # Only llama-index-core (not the umbrella package) — our adapter injects our own
 # deterministic tokenizer/sentence splitter, so no model data is resolved at runtime.

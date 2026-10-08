@@ -16,3 +16,6 @@ llama-index-core==0.14.25
 # (mirrors apps/api+worker pins; docling metapackage would pull torch/CUDA)
 docling-slim[convert-core,format-pdf-docling]==2.134.0
 rtree==1.4.1
+
+# Retrieval — Qdrant hybrid (TASK-M3-001, Apache-2.0)
+qdrant-client==1.19.1
