@@ -19,3 +19,4 @@ rtree==1.4.1
 
 # Retrieval — Qdrant hybrid (TASK-M3-001, Apache-2.0)
 qdrant-client==1.19.1
+boto3==1.40.54

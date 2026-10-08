@@ -34,3 +34,4 @@ httpx==0.28.1
 # Only llama-index-core (not the umbrella package) — our adapter injects our own
 # deterministic tokenizer/sentence splitter, so no model data is resolved at runtime.
 llama-index-core==0.14.25
+boto3==1.40.54

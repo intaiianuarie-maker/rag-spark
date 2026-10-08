@@ -44,3 +44,8 @@ rtree==1.4.1
 
 # Retrieval — Qdrant hybrid (TASK-M3-001, Apache-2.0)
 qdrant-client==1.19.1
+
+# Answer engine (TASK-M4-002): /ask runs the hybrid orchestrator in-process, so
+# the API image needs the retrieval clients too (qdrant-client above; httpx for
+# infinity; sqlalchemy for PG FTS already present).
+boto3==1.40.54

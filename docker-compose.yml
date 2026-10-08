@@ -2,7 +2,7 @@
 #
 #   docker compose up -d --build
 #
-# Starts: web (Next.js), api (FastAPI), worker, postgres, redis, qdrant, minio.
+# Starts: web (Next.js), api (FastAPI), worker, postgres, redis, qdrant, seaweedfs (optional, PD-005).
 # All settings have defaults; copy .env.example to .env to override.
 
 name: knowledge-os
@@ -14,10 +14,18 @@ x-backend-env: &backend-env
   DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-knowledge}:${POSTGRES_PASSWORD:-knowledge}@postgres:5432/${POSTGRES_DB:-knowledge}
   REDIS_URL: redis://redis:6379/0
   QDRANT_URL: http://qdrant:6333
-  MINIO_ENDPOINT: http://minio:9000
-  MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-  MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin}
-  MINIO_BUCKET: ${MINIO_BUCKET:-knowledge-os}
+  S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-http://seaweedfs:8333}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY:-admin}
+  S3_SECRET_KEY: ${S3_SECRET_KEY:-admin}
+  S3_BUCKET: ${S3_BUCKET:-knowledge-os}
+  # PD-005 (2026-10-08): object storage is SeaweedFS (Apache-2.0), NOT MinIO.
+  # The AGPLv3 MinIO community repackage is retired; compose now provides
+  # SeaweedFS (optional external service) only. Adapter-only S3 access uses
+  # S3 access (`packages/storage/adapters/seaweedfs_s3.py`, boto3 SDK permitted inside adapters/, zero SDK outside).
+  # One-command backend swap: set SEAWEEDFS_ENDPOINT and override adapter endpoint.
+  SEAWEEDFS_ENDPOINT: ${SEAWEEDFS_ENDPOINT:-http://seaweedfs:8333}
+  SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-admin}
+  SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-admin}
   READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
   # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
@@ -62,26 +70,20 @@ services:
     volumes:
       - qdrantdata:/qdrant/storage
 
-  minio:
-    # NOTE: MinIO's official Docker Hub/Quay images were withdrawn in 2026 and
-    # MinIO reached EOL. This digest is a MinIO repackage so the skeleton boots;
-    # override MINIO_IMAGE with your own trusted, pinned S3-compatible image.
-    # See infrastructure/docker/README.md and handoffs/M0-003-code1.md.
-    image: ${MINIO_IMAGE:-elestio/minio@sha256:25348a257f1ece1b192f25f6cd9854618fa86422ac87b494b5d4e629c556d4bd}
-    command: ["server", "/data", "--console-address", ":9001"]
+  seaweedfs:
+    # PD-005 (2026-10-08): object storage is SeaweedFS (Apache-2.0), NOT MinIO.
+    # Optional external service; adapter-only S3 access via boto3 behind seam.
+    # Image unmodified; one-command backend swap = change endpoint URL.
+    image: chrislusf/seaweedfs:3.82
+    command: ["server", "-dir=/data", "-s3"]
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin}
+      SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-admin}
+      SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-admin}
     ports:
-      - "${MINIO_PORT:-9000}:9000"
-      - "${MINIO_CONSOLE_PORT:-9001}:9001"
+      - "${SEAWEEDFS_PORT:-8333}:8333"
     volumes:
-      - miniodata:/data
-    healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9000/minio/health/live"]
-      interval: 5s
-      timeout: 5s
-      retries: 12
+      - weedfsdata:/data
+    restart: unless-stopped
 
   api:
     build:
@@ -101,8 +103,8 @@ services:
         condition: service_healthy
       qdrant:
         condition: service_started
-      minio:
-        condition: service_healthy
+      seaweedfs:
+        condition: service_started
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages
@@ -145,4 +147,4 @@ volumes:
   pgdata:
   redisdata:
   qdrantdata:
-  miniodata:
+  weedfsdata:
