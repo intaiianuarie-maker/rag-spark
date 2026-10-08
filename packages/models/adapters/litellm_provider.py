@@ -40,6 +40,23 @@ def _to_openai_messages(msgs: list[ChatMessage]) -> list[dict[str, Any]]:
     return out
 
 
+def _trim_metadata(data: dict[str, Any]) -> dict[str, Any]:
+    """Trim the gateway body to what the RAG debugger needs (review Minor #2).
+
+    The full response body is large and mostly redundant with the typed fields
+    already on :class:`GenerationResult`; shipping it verbatim bloated every
+    result. Keep only the identifying fields.
+    """
+    return {
+        "raw": {
+            "id": data.get("id"),
+            "created": data.get("created"),
+            "model": data.get("model"),
+            "system_fingerprint": data.get("system_fingerprint"),
+        }
+    }
+
+
 class LiteLLMProvider(LLMProvider):
     """LiteLLM gateway — OpenAI-compatible chat completions."""
 
@@ -56,7 +73,10 @@ class LiteLLMProvider(LLMProvider):
         self.base_url = (base_url or os.environ.get("LITELLM_URL") or DEFAULT_BASE_URL).rstrip("/")
         self.api_key = api_key or os.environ.get("LITELLM_API_KEY")
         self.timeout = timeout
+        #: Injected in tests; otherwise one client is created lazily and reused
+        #: (review Minor #1 — no per-call client churn).
         self._client = client
+        self._owns_client = client is None
 
     def _headers(self) -> dict[str, str]:
         h: dict[str, str] = {"content-type": "application/json"}
@@ -64,10 +84,16 @@ class LiteLLMProvider(LLMProvider):
             h["authorization"] = f"Bearer {self.api_key}"
         return h
 
-    def _client_for_request(self) -> httpx.AsyncClient:
-        if self._client is not None:
-            return self._client
-        return httpx.AsyncClient(timeout=self.timeout, headers=self._headers())
+    def _http(self) -> httpx.AsyncClient:
+        if self._client is None:
+            self._client = httpx.AsyncClient(timeout=self.timeout, headers=self._headers())
+        return self._client
+
+    async def aclose(self) -> None:
+        """Close the internally-owned client (injected clients are left alone)."""
+        if self._client is not None and self._owns_client:
+            await self._client.aclose()
+            self._client = None
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         if not request.model.strip():
@@ -84,8 +110,7 @@ class LiteLLMProvider(LLMProvider):
         if request.stop:
             payload["stop"] = request.stop
 
-        should_close = self._client is None
-        client = self._client_for_request()
+        client = self._http()
         try:
             resp = await client.post(
                 f"{self.base_url}/chat/completions",
@@ -101,9 +126,6 @@ class LiteLLMProvider(LLMProvider):
             ) from e
         except Exception as e:
             raise LLMProviderError(f"LiteLLM request failed: {e}") from e
-        finally:
-            if should_close:
-                await client.aclose()
 
         try:
             choice = (data.get("choices") or [{}])[0]
@@ -116,7 +138,7 @@ class LiteLLMProvider(LLMProvider):
                 finish_reason=choice.get("finish_reason"),
                 prompt_tokens=usage.get("prompt_tokens"),
                 completion_tokens=usage.get("completion_tokens"),
-                metadata={"raw": data},
+                metadata=_trim_metadata(data),
             )
         except Exception as e:
             raise LLMProviderError(f"LiteLLM response parse failed: {e}") from e
@@ -136,13 +158,7 @@ class LiteLLMProvider(LLMProvider):
         if request.stop:
             payload["stop"] = request.stop
 
-        should_close = self._client is None
-        if not should_close:
-            client = self._client_for_request()
-        else:
-            client = httpx.AsyncClient(
-                timeout=self.timeout, headers=self._headers()
-            )
+        client = self._http()
         try:
             async with client.stream(
                 "POST",
@@ -172,9 +188,6 @@ class LiteLLMProvider(LLMProvider):
             raise
         except Exception as e:
             raise LLMProviderError(f"LiteLLM stream failed: {e}") from e
-        finally:
-            if should_close:
-                await client.aclose()
 
 
 def create_llm_provider(**kwargs: Any) -> LLMProvider:
