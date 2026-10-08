@@ -13,6 +13,7 @@ addopts = "-ra --strict-markers"
 markers = [
     "unit: unit tests that must run without external services",
     "integration: boot/integration tests that may use compose services when available",
+    "contract: contract tests that pin adapter/interface shape (no services)",
 ]
 
 [tool.ruff]
