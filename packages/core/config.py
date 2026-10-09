@@ -51,8 +51,8 @@ class Settings(BaseSettings):
     # --- Qdrant (dense vectors; PD-002) ---
     qdrant_url: str = "http://localhost:6333"
 
-    # --- MinIO / S3 (document originals) ---
-    minio_endpoint: str = "http://localhost:9000"
+    # --- MinIO / SeaweedFS S3 (document originals; PD-005) ---
+    minio_endpoint: str = "http://localhost:8333"
     minio_access_key: str = "minioadmin"
     minio_secret_key: str = "minioadmin"
     minio_bucket: str = "knowledge-os"

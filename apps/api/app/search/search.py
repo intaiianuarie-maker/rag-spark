@@ -212,3 +212,23 @@ async def search(
         ],
         mode=body.mode.value,
     )
+
+
+class LegacySearchRequest(SearchRequest):
+    workspace_id: uuid.UUID
+
+
+legacy_router = APIRouter(prefix="/v1", tags=["search"])
+
+
+@legacy_router.post(
+    "/search",
+    response_model=SearchResponse,
+    summary="Search workspace chunks (legacy route alias)",
+)
+async def legacy_search(
+    body: LegacySearchRequest,
+    principal: Principal = Depends(get_principal),
+) -> SearchResponse:
+    return await search(workspace_id=body.workspace_id, body=body, principal=principal)
+

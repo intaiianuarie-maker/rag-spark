@@ -24,14 +24,19 @@ async def probe(
     url = endpoint + "/minio/health/live"
     try:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
-            response = await client.get(url)
+            try:
+                response = await client.get(url)
+            except Exception:
+                response = None
+            if response is None or response.status_code != 200:
+                response = await client.get(endpoint + "/")
         latency = (time.perf_counter() - start) * 1000
-        reachable = response.status_code == 200
+        reachable = response.status_code in {200, 403, 405}
         return DependencyStatus(
             name=name,
             reachable=reachable,
             latency_ms=round(latency, 2),
-            detail=f"GET /minio/health/live -> {response.status_code}",
+            detail=f"GET {response.url.path} -> {response.status_code}",
         )
     except Exception as exc:
         latency = (time.perf_counter() - start) * 1000
