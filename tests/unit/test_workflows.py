@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 
 import pytest
 from models.interfaces import GenerationRequest, GenerationResult, LLMProvider
-from workflows import (
+from workflow_engine import (
     NodeType,
     Workflow,
     WorkflowEdge,
