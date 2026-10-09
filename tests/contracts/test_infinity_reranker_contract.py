@@ -114,14 +114,14 @@ async def test_adapter_satisfies_reranker_contract(adapter: InfinityReranker) ->
 
 
 async def test_model_identity_is_bge_reranker_m3(adapter: InfinityReranker) -> None:
-    assert adapter.model_name == "BAAI/bge-reranker-v2-m3"
+    assert adapter.model_name == "cross-encoder/ms-marco-MiniLM-L6-v2"
 
 
 async def test_request_payload_shape(adapter: InfinityReranker, stub: _StubServer) -> None:
     await adapter.rerank(query="ranking", documents=DOCUMENTS, top_k=2)
     request = stub.requests[0]
     assert request["path"] == "/rerank"
-    assert request["body"]["model"] == "BAAI/bge-reranker-v2-m3"
+    assert request["body"]["model"] == "cross-encoder/ms-marco-MiniLM-L6-v2"
     assert request["body"]["query"] == "ranking"
     assert request["body"]["documents"] == [item.content for item in DOCUMENTS]
     assert request["body"]["top_n"] == 2

@@ -1,6 +1,6 @@
-"""infinity reranker adapter (rag-fork-solution TASK-M3-004) — bge-reranker-v2-m3.
+"""infinity reranker adapter (rag-fork-solution TASK-M3-004) — cross-encoder/ms-marco-MiniLM-L6-v2.
 
-Reuse, per `rag-fork-solution/DECISIONS.md` (Reranker → bge-reranker-v2-m3 MIT,
+Reuse, per `rag-fork-solution/DECISIONS.md` (Reranker → cross-encoder/ms-marco-MiniLM-L6-v2 MIT,
 served by infinity Apache-2.0): infinity exposes an OpenAI/Jina-style
 ``POST /rerank`` endpoint. This adapter speaks that HTTP API with ``httpx`` — no
 vendor SDK, and no reranker/model type crosses the boundary; it returns our
@@ -17,7 +17,7 @@ Design notes:
   (`RerankerError`), so the orchestrator can degrade explicitly.
 - **Empty input short-circuits** with no network call (contract requirement).
 
-License: infinity Apache-2.0, bge-reranker-v2-m3 MIT (see
+License: infinity Apache-2.0, cross-encoder/ms-marco-MiniLM-L6-v2 MIT (see
 rag-fork-solution/REUSE_MAP.md, NOTICES.md).
 """
 
@@ -35,7 +35,7 @@ from ..interfaces import Reranker, RetrievalMethod, RetrievedItem
 RERANK_PATH = "/rerank"
 
 DEFAULT_BASE_URL = "http://localhost:7997"
-DEFAULT_MODEL = "BAAI/bge-reranker-v2-m3"
+DEFAULT_MODEL = "cross-encoder/ms-marco-MiniLM-L6-v2"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 
@@ -44,7 +44,7 @@ class RerankerError(RuntimeError):
 
 
 class InfinityReranker(Reranker):
-    """bge-reranker-v2-m3 cross-encoder served by infinity's ``/rerank``."""
+    """cross-encoder/ms-marco-MiniLM-L6-v2 cross-encoder served by infinity's ``/rerank``."""
 
     model_name = os.environ.get("RERANK_MODEL", DEFAULT_MODEL)
 

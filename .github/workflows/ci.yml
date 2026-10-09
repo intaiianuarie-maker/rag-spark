@@ -65,6 +65,14 @@ jobs:
         env:
           PYTHONPATH: "packages:apps/worker"
         run: python -c "import worker.main; import worker.adapters.redis_broker"
+  model-origin-guard:
+    name: Model origin guard (policy PD-005 v3)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Model origin allowlist gate
+        run: bash scripts/model_origin_guard.sh
 
   frontend:
     name: frontend (lint, build)

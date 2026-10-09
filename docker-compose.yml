@@ -143,6 +143,17 @@ services:
     depends_on:
       - api
 
+
+  infinity-rerank:
+    image: michaelf34/infinity:latest
+    restart: unless-stopped
+    environment:
+      INFERENCE_MODEL: cross-encoder/ms-marco-MiniLM-L6-v2
+      INFERENCE_ENGINE: onnx
+      PORT: "7997"
+    ports:
+      - "7997:7997"
+
 volumes:
   pgdata:
   redisdata:
