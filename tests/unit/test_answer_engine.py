@@ -548,6 +548,76 @@ async def test_engine_abstains_on_negation_contradiction() -> None:
     assert "launch is approved" not in result.answer.lower()
 
 
+# --- v1-rereview Q5 P1 (rerereview): context negation / conditionals / partial numbers ---
+# Bare substring matching still fails when the claim clause appears verbatim
+# *inside* a negated / conditional / partial-numeric sentence. The
+# sentence-aware grounder must abstain in all three, while still grounding the
+# exact value in a clean sentence.
+
+@pytest.mark.parametrize(
+    "src,claim",
+    [
+        # clause-level negation: "It is false that X" still contains "X" verbatim
+        ("It is false that the launch is approved.", "The launch is approved."),
+        # conditional: the antecedent "X" is not asserted as fact
+        ("If the launch is approved, notify Alice.", "The launch is approved."),
+        # partial numeric: "900" is a sub-value of "1900" (token-boundary guard)
+        ("The budget is 1900 dollars.", "900 dollars."),
+    ],
+)
+async def test_verify_claims_abstains_on_contextual_unsupported(src: str, claim: str) -> None:
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    verified, citations = await verify_claims(
+        [Claim(text=claim, chunk_ids=["c-1"])], items,
+        allowed_workspace_ids={"ws-a"}, claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [] and citations == []
+
+
+@pytest.mark.parametrize(
+    "src,claim",
+    [
+        ("It is false that the launch is approved.", "The launch is approved."),
+        ("If the launch is approved, notify Alice.", "The launch is approved."),
+        ("The budget is 1900 dollars.", "900 dollars."),
+    ],
+)
+async def test_engine_abstains_on_contextual_unsupported(src: str, claim: str) -> None:
+    """End-to-end: a verbatim-but-negated/conditional/partial-numeric claim citing
+    a real in-scope chunk must NOT yield ANSWERED/HIGH; the false claim is not echoed."""
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert claim.lower() not in result.answer.lower()
+
+
+async def test_engine_grounds_exact_value_not_partial_numeric() -> None:
+    """Precision control: the exact value '100 dollars' in a clean sentence is
+    grounded HIGH (word-boundary match, no negation/conditional), proving the
+    partial-numeric guard is not blunt."""
+    items = [make_item("The budget is 100 dollars.", 0.9, chunk_id="c-1")]
+    claim = "The budget is 100 dollars."
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    assert result.citations[0].grounding_score == 1.0
+
+
 # --- v1-rereview Q5 P2: cross-language translation is NOT supported by v1 ---
 # Extractive grounding requires the claim text to be a substring of the chunk.
 # A translation's text is in a different language, so it can never be a substring
