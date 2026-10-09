@@ -40,12 +40,15 @@ class RetrievalMethod(StrEnum):
     LEXICAL = "lexical"
     FUSED = "fused"
     RERANKED = "reranked"
+    GRAPH = "graph"
 
 
 class RetrievalMode(StrEnum):
     KEYWORD = "keyword"
     SEMANTIC = "semantic"
     HYBRID = "hybrid"
+    GRAPH = "graph"
+    HYBRID_GRAPH = "hybrid_graph"
 
 
 class SearchFilter(BaseModel):

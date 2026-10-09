@@ -34,7 +34,7 @@ import asyncio
 import logging
 import math
 from collections.abc import Sequence
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 from core.auth import ACLScope
 
@@ -118,6 +118,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         reranker: Reranker | None = None,
         rerank_enabled: bool = True,
         rrf_k: int = RRF_K,
+        graph: Any | None = None,
     ) -> None:
         self.dense = dense
         self.embedding = embedding
@@ -127,6 +128,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         self.reranker = reranker
         self.rerank_enabled = rerank_enabled
         self.rrf_k = rrf_k
+        self.graph = graph
 
     # --- fan-out ----------------------------------------------------------
 
@@ -179,6 +181,25 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 out.append(list(result))
         return out[0], out[1], out[2]
 
+    async def _graph_leg(
+        self, query: str, workspace_ids: Sequence[str]
+    ) -> list[RetrievedItem]:
+        if self.graph is None:
+            return []
+        items: list[RetrievedItem] = []
+        for ws_id in workspace_ids:
+            try:
+                local_res = await self.graph.local_search(workspace_id=ws_id, query=query)
+                items.extend(self.graph.to_retrieved_items(local_res, workspace_id=ws_id))
+                global_res = await self.graph.global_search(workspace_id=ws_id, query=query)
+                items.extend(self.graph.to_retrieved_items(global_res, workspace_id=ws_id))
+            except Exception as exc:
+                logger.warning(
+                    "retrieval_leg_failed",
+                    extra={"event": "retrieval_leg_failed", "leg": "graph", "error": str(exc)},
+                )
+        return items
+
     # --- ACL --------------------------------------------------------------
 
     @staticmethod
@@ -221,10 +242,12 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             if extra_filter.document_ids:
                 query_filter.document_ids = list(extra_filter.document_ids)
         # Mode selector: keyword = lexical-only (M3-003 FTS), semantic = dense-only
-        # (M3-001 Qdrant), hybrid = default (existing RRF fusion, unchanged).
+        # (M3-001 Qdrant), hybrid = default (existing RRF fusion, unchanged),
+        # graph = graph-only, hybrid_graph = dense + lexical + graph fusion.
         dense_items: list[RetrievedItem] = []
         sparse_items: list[RetrievedItem] = []
         lexical_items: list[RetrievedItem] = []
+        graph_items: list[RetrievedItem] = []
         if mode == RetrievalMode.HYBRID:
             dense_items, sparse_items, lexical_items = await self._fan_out(
                 query,
@@ -233,6 +256,17 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 sparse_top_k=sparse_top_k,
                 lexical_top_k=lexical_top_k,
             )
+        elif mode == RetrievalMode.HYBRID_GRAPH:
+            dense_items, sparse_items, lexical_items = await self._fan_out(
+                query,
+                query_filter,
+                dense_top_k=dense_top_k,
+                sparse_top_k=sparse_top_k,
+                lexical_top_k=lexical_top_k,
+            )
+            graph_items = await self._graph_leg(query, acl_scope.workspace_ids)
+        elif mode == RetrievalMode.GRAPH:
+            graph_items = await self._graph_leg(query, acl_scope.workspace_ids)
         elif mode == RetrievalMode.SEMANTIC:
             # Degrade like the hybrid fan-out: a dense/embedding failure
             # yields [] for that mode instead of a 500 (fail-closed rule).
@@ -263,6 +297,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             "dense": [i for i in dense_items if self._in_scope(i, allowed, public)],
             "sparse": [i for i in sparse_items if self._in_scope(i, allowed, public)],
             "lexical": [i for i in lexical_items if self._in_scope(i, allowed, public)],
+            "graph": [i for i in graph_items if self._in_scope(i, allowed, public)],
         }
 
         # Raw per-leg scores for the trace (item key -> {leg: score}). A leg that
@@ -270,7 +305,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         trace: dict[str, dict[str, float]] = {}
         by_key: dict[str, RetrievedItem] = {}
         rankings: list[list[str]] = []
-        for leg_name in ("dense", "sparse", "lexical"):
+        for leg_name in ("dense", "sparse", "lexical", "graph"):
             items = legs[leg_name]
             if not items:
                 continue

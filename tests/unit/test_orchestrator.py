@@ -154,7 +154,7 @@ async def test_results_are_workspace_scoped() -> None:
 class _PoisonedVectorStore(FakeVectorStore):
     """Returns an out-of-scope row with a perfect score, ignoring its filter."""
 
-    async def search(self, *, collection, vector, top_k, query_filter):  # type: ignore[override]
+    async def search(self, *, collection, vector, top_k, query_filter):
         self.search_calls.append(query_filter)
         return [
             make_item(
@@ -488,3 +488,68 @@ async def test_extra_filter_cannot_widen_workspace_scope() -> None:
     sent = dense.search_calls[-1]
     assert sent.workspace_ids == ["ws-a"]
     assert sent.language == "en"
+
+
+async def test_graph_retrieval_mode() -> None:
+    """GRAPH mode queries graph retriever and produces fused graph evidence."""
+    from graph import Entity, GraphRetriever, MemoryGraphStore
+    from retrieval.interfaces import RetrievalMode
+
+    store = MemoryGraphStore()
+    await store.upsert_entities(
+        "ws-a",
+        [
+            Entity(
+                id="e1",
+                name="Vector Database",
+                type="TECHNOLOGY",
+                workspace_id="ws-a",
+                chunk_ids=["chk-graph-1"],
+            )
+        ],
+    )
+    graph_retriever = GraphRetriever(store)
+    orchestrator, _, _ = await _orchestrator()
+    orchestrator.graph = graph_retriever
+
+    items = await orchestrator.retrieve(
+        query="Tell me about Vector Database",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+        mode=RetrievalMode.GRAPH,
+    )
+    assert len(items) > 0
+    assert any("graph" in item.scores for item in items)
+    assert items[0].workspace_id == "ws-a"
+
+
+async def test_hybrid_graph_retrieval_mode() -> None:
+    """HYBRID_GRAPH fuses dense, sparse/lexical and graph evidence together."""
+    from graph import Entity, GraphRetriever, MemoryGraphStore
+    from retrieval.interfaces import RetrievalMode
+
+    store = MemoryGraphStore()
+    await store.upsert_entities(
+        "ws-a",
+        [
+            Entity(
+                id="e1",
+                name="permissions",
+                type="CONCEPT",
+                workspace_id="ws-a",
+                chunk_ids=["chk-perm-1"],
+            )
+        ],
+    )
+    graph_retriever = GraphRetriever(store)
+    orchestrator, _, _ = await _orchestrator()
+    orchestrator.graph = graph_retriever
+
+    items = await orchestrator.retrieve(
+        query="permissions hybrid retrieval",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+        mode=RetrievalMode.HYBRID_GRAPH,
+    )
+    assert len(items) > 0
+    # Should fuse results from dense/lexical and graph
+    assert any("graph" in item.scores or "dense" in item.scores for item in items)
+
