@@ -52,7 +52,7 @@ export default function AskPage() {
         setStreaming(false);
       }
     },
-    [active?.id, selectedModel],
+    [active, selectedModel],
   );
 
   const citations = answer?.citations ?? [];

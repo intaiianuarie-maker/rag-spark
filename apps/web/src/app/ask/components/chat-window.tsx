@@ -8,7 +8,7 @@ export function ChatWindow({
   streaming,
   messages,
   citations,
-  claimCitations,
+  claimCitations: _claimCitations,
   onSend,
   onOpenSource,
 }: {
