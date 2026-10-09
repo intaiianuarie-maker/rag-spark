@@ -5,9 +5,13 @@ skeleton: a runnable stack with stable adapter boundaries for the PD-001/PD-002
 selected components. **No real parsing, embedding, reranking or LLM wiring yet**
 — interfaces and stubs only.
 
-Reuse-first: see `../knowledge-os-reuse-first-starter/docs/reuse/REUSE_STRATEGY.md`.
-We own the product API, ACL model, retrieval orchestration, provenance/citations
-and UI; we reuse FastAPI, Next.js, PostgreSQL, Redis, Qdrant and MinIO.
+> **OPERATIVE PLAN & CONTROLLING SPECIFICATION:**
+> The authoritative plan adopted by the team on October 7–8, 2026 is defined in:
+> - [`OPERATIVE_PLAN.md`](./OPERATIVE_PLAN.md)
+> - [`../rag-fork-solution/PLAN.md`](../rag-fork-solution/PLAN.md) & [`../rag-fork-solution/TASKS.md`](../rag-fork-solution/TASKS.md)
+> All agents (boss, coders, reviewers, testers) must strictly consult `rag-fork-solution/` for milestone and task definitions.
+
+Reuse-first: see `../knowledge-os-reuse-first-starter/docs/reuse/REUSE_STRATEGY.md` and `../rag-fork-solution/REUSE_MAP.md`.
 
 ## Repository layout
 
