@@ -81,6 +81,8 @@ async def test_acceptance_1_golden_path_grounded_answer_with_real_citation() -> 
     result = await engine.answer(query="What does Antigravity provide?", acl_scope=scope)
 
     assert "zero local latency" in result.answer
+    assert result.status == "answered"
+    assert result.confidence.level == "high"
     assert len(result.claims) == 1
     assert result.claims[0].chunk_ids == ["chunk-golden-1"]
     assert len(result.citations) == 1
@@ -171,9 +173,12 @@ async def test_acceptance_4_citation_integrity_fabricated_chunk_rejected() -> No
     scope = ACLScope(user_id="u1", workspace_ids=["ws-auth"])
     result = await engine.answer(query="Explain options", acl_scope=scope)
 
-    # Fabricated chunk must be completely stripped from citations
+    # Fabricated chunk must be completely stripped from citations and yield insufficient evidence
     assert len(result.citations) == 0
     assert len(result.claims) == 0
+    assert result.status == "insufficient_evidence"
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.confidence.level == "low"
 
 
 # --- Acceptance Probe #5: Multilingual Cross-Language Retrieval ---
@@ -201,5 +206,7 @@ async def test_acceptance_5_multilingual_cross_language_retrieval() -> None:
     result = await engine.answer(query="Ce tip de autentificare este acceptat?", acl_scope=scope)
 
     assert "autentificare" in result.answer.lower()
+    assert result.status == "answered"
+    assert result.confidence.level == "high"
     assert len(result.citations) == 1
     assert result.citations[0].chunk_id == "chunk-ro-1"

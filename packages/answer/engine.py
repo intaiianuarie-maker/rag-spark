@@ -25,6 +25,7 @@ import logging
 from dataclasses import dataclass, field
 
 from core.auth import ACLScope
+from core.logging import request_id_ctx
 from models.interfaces import (
     ChatMessage,
     GenerationRequest,
@@ -126,6 +127,8 @@ class AnswerEngine:
             )
         )
 
+        trace_id = request_id_ctx.get()
+
         if not items or is_refusal_phrase:
             return Answer(
                 answer=answer_text,
@@ -136,6 +139,7 @@ class AnswerEngine:
                     level=ConfidenceLevel.LOW,
                     basis="No relevant documents retrieved or model declared missing evidence",
                 ),
+                trace_id=trace_id,
                 claims=verified,
                 citations=citations,
             )
@@ -150,11 +154,27 @@ class AnswerEngine:
                     level=ConfidenceLevel.LOW,
                     basis="Zero verified claims survived citation integrity check",
                 ),
+                trace_id=trace_id,
                 claims=[],
                 citations=[],
             )
 
-        has_high_conf = citations and (len(verified) == len(claims))
+        if claims and len(verified) < len(claims):
+            return Answer(
+                answer=answer_text,
+                status=AnswerStatus.PARTIAL,
+                reason_code="PARTIAL_EVIDENCE",
+                reason=f"Only {len(verified)} of {len(claims)} claim(s) could be verified with valid citations.",
+                confidence=Confidence(
+                    level=ConfidenceLevel.MEDIUM,
+                    basis=f"Partial verification: {len(verified)}/{len(claims)} claim(s) supported",
+                ),
+                trace_id=trace_id,
+                claims=verified,
+                citations=citations,
+            )
+
+        has_high_conf = bool(citations) and (len(verified) == len(claims) if claims else False)
         confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         return Answer(
             answer=answer_text,
@@ -165,6 +185,7 @@ class AnswerEngine:
                 level=confidence_level,
                 basis=f"Answer grounded in {len(citations)} verified citation(s)",
             ),
+            trace_id=trace_id,
             claims=verified,
             citations=citations,
         )

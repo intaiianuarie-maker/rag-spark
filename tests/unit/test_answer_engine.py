@@ -257,3 +257,38 @@ async def test_engine_propagates_llm_error() -> None:
         await _engine(_Down()).answer(
             query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
         )
+
+
+async def test_engine_partial_claims_marks_partial_status() -> None:
+    # One valid claim (c-1), one invalid claim (c-fake)
+    llm = _FakeLLM(
+        '{"answer": "Some info verified, some unverified.", '
+        '"claims": ['
+        '  {"text": "Verified claim", "chunk_ids": ["c-1"]},'
+        '  {"text": "Unverified claim", "chunk_ids": ["c-fake"]}'
+        ']}'
+    )
+    result = await _engine(llm).answer(
+        query="test partial", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == "partial"
+    assert result.reason_code == "PARTIAL_EVIDENCE"
+    assert result.confidence.level == "medium"
+    assert len(result.claims) == 1
+    assert result.claims[0].text == "Verified claim"
+
+
+async def test_engine_trace_id_attached() -> None:
+    from core.logging import reset_request_id, set_request_id
+
+    token = set_request_id("trace-abc-123")
+    try:
+        llm = _FakeLLM(
+            '{"answer": "Answer text.", "claims": [{"text": "Claim", "chunk_ids": ["c-1"]}]}'
+        )
+        result = await _engine(llm).answer(
+            query="test trace", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+        )
+        assert result.trace_id == "trace-abc-123"
+    finally:
+        reset_request_id(token)

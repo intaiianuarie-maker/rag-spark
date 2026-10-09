@@ -130,6 +130,29 @@ async def purge_document(
     await session.commit()
 
     report: dict[str, bool] = {"postgres": True}
+    if not _STORE_PURGERS:
+        # Default lazy registration of real store purgers (TASK-Q3 / M3-001a)
+        try:
+            from retrieval.adapters.pg_fts import PostgresLexicalStore
+            from retrieval.adapters.qdrant_store import QdrantVectorStore
+            from retrieval.interfaces import SearchFilter
+
+            async def _purge_fts(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+                store = PostgresLexicalStore()
+                filt = SearchFilter(workspace_ids=[str(ws_id)], document_ids=[str(doc_id)])
+                await store.delete(query_filter=filt)
+
+            async def _purge_qdrant(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+                qdrant = QdrantVectorStore(collection="knowledge")
+                filt = SearchFilter(workspace_ids=[str(ws_id)], document_ids=[str(doc_id)])
+                await qdrant.delete(collection="knowledge", query_filter=filt)
+                await qdrant.close()
+
+            register_store_purger("fts", _purge_fts)
+            register_store_purger("qdrant", _purge_qdrant)
+        except Exception:
+            pass
+
     for name, purger in _STORE_PURGERS.items():
         try:
             await purger(workspace_id, document_id)

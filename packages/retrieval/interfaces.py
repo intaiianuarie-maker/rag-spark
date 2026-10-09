@@ -87,7 +87,7 @@ class VectorRecord(BaseModel):
     """A dense vector plus the metadata needed to rehydrate a citation."""
 
     id: str
-    vector: list[float]
+    vector: list[float] = Field(default_factory=list)
     content: str
     workspace_id: str
     document_id: str | None = None

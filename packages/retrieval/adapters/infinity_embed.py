@@ -141,13 +141,23 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
         vectors: list[list[float]] = []
         for item in ordered:
             embedding = item.get("embedding")
-            if not isinstance(embedding, list) or len(embedding) != self.dimension:
+            if not isinstance(embedding, list) or not embedding:
                 raise EmbeddingProviderError(
-                    "infinity /embeddings returned a vector with dimension "
-                    f"{len(embedding) if isinstance(embedding, list) else '?'}, "
-                    f"expected {self.dimension}"
+                    "infinity /embeddings returned an invalid embedding vector"
                 )
-            vectors.append([float(value) for value in embedding])
+            raw_vec = [float(value) for value in embedding]
+            if len(raw_vec) != self.dimension:
+                if os.environ.get("ALLOW_DIMENSION_ADAPTATION", "").lower() in ("1", "true", "yes"):
+                    if len(raw_vec) < self.dimension:
+                        raw_vec = raw_vec + [0.0] * (self.dimension - len(raw_vec))
+                    else:
+                        raw_vec = raw_vec[: self.dimension]
+                else:
+                    raise EmbeddingProviderError(
+                        f"infinity /embeddings returned {len(raw_vec)}-d vector, "
+                        f"expected {self.dimension}-d"
+                    )
+            vectors.append(raw_vec)
         return vectors
 
     # --- EmbeddingProvider ------------------------------------------------
