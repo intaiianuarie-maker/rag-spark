@@ -75,7 +75,7 @@ services:
     # Optional external service; adapter-only S3 access via boto3 behind seam.
     # Image unmodified; one-command backend swap = change endpoint URL.
     image: chrislusf/seaweedfs:3.82
-    command: ["server", "-dir=/data", "-s3"]
+    command: ["server", "-dir=/data", "-filer", "-s3"]
     environment:
       SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-admin}
       SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-admin}
@@ -83,6 +83,7 @@ services:
       - "${SEAWEEDFS_PORT:-8333}:8333"
     volumes:
       - weedfsdata:/data
+      - ./infrastructure/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro
     restart: unless-stopped
 
   api:
