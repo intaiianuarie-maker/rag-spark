@@ -180,6 +180,28 @@ async def test_acceptance_4_citation_integrity_fabricated_chunk_rejected() -> No
     assert result.reason_code == "CITATION_INVALID"
     assert result.confidence.level == "low"
 
+    # Sub-scenario (v1-rereview Q5): a claim citing a REAL, in-scope chunk that
+    # does NOT substantiate the claim must also be rejected. This is the
+    # "fabricated answer citing an accessible chunk" false-success case flagged
+    # by the release re-review.
+    ungrounded_llm = MockAcceptanceLLM(
+        response_text=(
+            '{"answer": "The capital of France is Paris.", '
+            '"claims": [{"text": "The capital of France is Paris.", '
+            '"chunk_ids": ["valid-chunk-1"]}]}'
+        )
+    )
+    ungrounded_engine = AnswerEngine(
+        orchestrator=orchestrator, llm=ungrounded_llm, model="gpt-4o-mini"
+    )
+    ungrounded_result = await ungrounded_engine.answer(
+        query="Explain options", acl_scope=scope
+    )
+    assert len(ungrounded_result.claims) == 0
+    assert len(ungrounded_result.citations) == 0
+    assert ungrounded_result.status == "insufficient_evidence"
+    assert ungrounded_result.reason_code == "CITATION_INVALID"
+
 
 # --- Acceptance Probe #5: Multilingual Cross-Language Retrieval ---
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import os
 from models.adapters.litellm_provider import LiteLLMProvider
 
 from .engine import AnswerEngine
+from .verification import LexicalGrounder
 
 #: Collection the hybrid orchestrator reads/writes (single v1 collection).
 DEFAULT_COLLECTION = "knowledge"
@@ -55,4 +56,6 @@ def build_answer_engine() -> AnswerEngine:
         orchestrator=create_orchestrator(),
         llm=LiteLLMProvider(),
         model=model,
+        # v1-rereview Q5: ground every citation semantically before trusting it.
+        claim_grounder=LexicalGrounder(),
     )

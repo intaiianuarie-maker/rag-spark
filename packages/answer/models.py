@@ -53,6 +53,10 @@ class Citation(BaseModel):
     #: or ``None`` when the span could not be located.
     span: tuple[int, int] | None = None
     workspace_id: str | None = None
+    #: Score in ``[0, 1]`` from the configured claim grounder indicating how
+    #: well the chunk substantiates the claim, or ``None`` when no grounder
+    #: scored the citation (legacy/existence-only verification).
+    grounding_score: float | None = None
 
 
 class Answer(BaseModel):

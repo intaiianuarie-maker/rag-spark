@@ -7,11 +7,13 @@ engine pipeline incl. the unparseable-output fallback.
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from answer.engine import AnswerEngine
-from answer.models import Answer, Claim
+from answer.models import Answer, AnswerStatus, Claim, ConfidenceLevel
 from answer.prompts import build_prompt, parse_model_output
-from answer.verification import verify_claims
+from answer.verification import LexicalGrounder, verify_claims
 from core.auth import ACLScope
 from harness_fakes import make_item
 from models.interfaces import (
@@ -204,13 +206,13 @@ def _engine(llm, items=None) -> AnswerEngine:
 async def test_engine_returns_verified_answer() -> None:
     llm = _FakeLLM(
         '{"answer": "Permissions are enforced.", '
-        '"claims": [{"text": "ACL is enforced", "chunk_ids": ["c-1", "c-2"]}]}'
+        '"claims": [{"text": "Alpha evidence about permissions", "chunk_ids": ["c-1", "c-2"]}]}'
     )
     result = await _engine(llm).answer(
         query="what governs access?", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
     )
     assert isinstance(result, Answer)
-    assert result.answer == "Permissions are enforced."
+    assert result.answer == "Alpha evidence about permissions"  # rendered from verified claim only
     # c-2 is out-of-scope -> stripped; claim survives with c-1 only
     assert result.claims[0].chunk_ids == ["c-1"]
     assert [c.chunk_id for c in result.citations] == ["c-1"]
@@ -220,12 +222,22 @@ async def test_engine_returns_verified_answer() -> None:
 
 
 async def test_engine_unparseable_output_falls_back() -> None:
-    llm = _FakeLLM("I cannot answer that.")
-    result = await _engine(llm).answer(
-        query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
-    )
-    assert result.answer == "I cannot answer that."
-    assert result.claims == [] and result.citations == []
+    from core.logging import reset_request_id, set_request_id
+
+    token = set_request_id("trace-fallback-111")
+    try:
+        llm = _FakeLLM("I cannot answer that.")
+        result = await _engine(llm).answer(
+            query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+        )
+        # Raw prose must not be echoed as a factual answer; engine abstains.
+        assert result.answer == "I cannot answer this question based on the provided documents."
+        assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+        assert result.reason_code == "PARSE_FALLBACK"
+        assert result.trace_id == "trace-fallback-111"
+        assert result.claims == [] and result.citations == []
+    finally:
+        reset_request_id(token)
 
 
 async def test_engine_refuses_when_all_claims_rejected() -> None:
@@ -264,7 +276,7 @@ async def test_engine_partial_claims_marks_partial_status() -> None:
     llm = _FakeLLM(
         '{"answer": "Some info verified, some unverified.", '
         '"claims": ['
-        '  {"text": "Verified claim", "chunk_ids": ["c-1"]},'
+        '  {"text": "Alpha evidence", "chunk_ids": ["c-1"]},'
         '  {"text": "Unverified claim", "chunk_ids": ["c-fake"]}'
         ']}'
     )
@@ -275,8 +287,80 @@ async def test_engine_partial_claims_marks_partial_status() -> None:
     assert result.reason_code == "PARTIAL_EVIDENCE"
     assert result.confidence.level == "medium"
     assert len(result.claims) == 1
-    assert result.claims[0].text == "Verified claim"
+    assert result.claims[0].text == "Alpha evidence"
+    # Answer must be composed solely of verified claim text — unsupported
+    # model prose is dropped, not echoed.
+    assert result.answer == "Alpha evidence"
 
+
+async def test_engine_empty_claims_not_answered() -> None:
+    """Valid JSON with answer text but an empty claims list must abstain."""
+    llm = _FakeLLM('{"answer": "The capital of France is Paris.", "claims": []}')
+    result = await _engine(llm).answer(
+        query="what is the capital?", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "NO_CLAIMS"
+    assert result.answer == "I cannot answer this question based on the provided documents."
+    assert result.claims == [] and result.citations == []
+
+
+async def test_engine_malformed_prose_abstains() -> None:
+    """Raw prose (not JSON, not a refusal phrase) must not be echoed as fact."""
+    llm = _FakeLLM("The meeting is scheduled for Thursday the 12th of never.")
+    result = await _engine(llm).answer(
+        query="when is the meeting?", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "PARSE_FALLBACK"
+    assert result.answer == "I cannot answer this question based on the provided documents."
+    assert result.claims == [] and result.citations == []
+
+
+async def test_engine_no_retrieved_items_abstains() -> None:
+    """With zero retrieved items, even valid claims cannot be verified → abstain."""
+    llm = _FakeLLM(
+        '{"answer": "The deadline is Friday.", '
+        '"claims": [{"text": "Deadline is Friday", "chunk_ids": ["c-1"]}]}'
+    )
+    result = await _engine(llm, items=[]).answer(
+        query="when is the deadline?", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "EVIDENCE_MISSING"
+    assert result.claims == [] and result.citations == []
+
+
+async def test_engine_trace_id_in_parse_fallback() -> None:
+    """trace_id must be attached even when model output is unparseable."""
+    from core.logging import reset_request_id, set_request_id
+
+    token = set_request_id("trace-parse-fallback-789")
+    try:
+        llm = _FakeLLM("not even json")
+        result = await _engine(llm).answer(
+            query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+        )
+        assert result.trace_id == "trace-parse-fallback-789"
+        assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    finally:
+        reset_request_id(token)
+
+
+async def test_engine_trace_id_in_no_claims_abstain() -> None:
+    """trace_id must be attached when model returns empty claims."""
+    from core.logging import reset_request_id, set_request_id
+
+    token = set_request_id("trace-no-claims-456")
+    try:
+        llm = _FakeLLM('{"answer": "Some fact.", "claims": []}')
+        result = await _engine(llm).answer(
+            query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+        )
+        assert result.trace_id == "trace-no-claims-456"
+        assert result.reason_code == "NO_CLAIMS"
+    finally:
+        reset_request_id(token)
 
 async def test_engine_trace_id_attached() -> None:
     from core.logging import reset_request_id, set_request_id
@@ -292,3 +376,114 @@ async def test_engine_trace_id_attached() -> None:
         assert result.trace_id == "trace-abc-123"
     finally:
         reset_request_id(token)
+
+
+# --- reviewer regression: unsupported prose never returned (Codex re-review) --
+
+
+@pytest.mark.parametrize("case", ["no_evidence", "all_claims_valid", "refusal_phrase"])
+async def test_unsupported_prose_never_returned(case: str) -> None:
+    """Every raw-prose return path must be replaced by abstention or verified
+    claim text — never the model's ungrounded ``answer`` field."""
+    unsupported = "Unsupported deadline is Friday."
+    payload: dict[str, object] = {"answer": unsupported, "claims": []}
+    kwargs: dict[str, object] = {}
+
+    if case == "no_evidence":
+        # Zero retrieved items: must not echo the unsupported answer.
+        kwargs["items"] = []
+    elif case == "all_claims_valid":
+        # Model gives one valid claim (c-1) but unrelated unsupported answer.
+        payload["claims"] = [{"text": "Alpha evidence about permissions", "chunk_ids": ["c-1"]}]
+    else:
+        # Answer starts with a refusal phrase but still embeds unsupported prose.
+        payload["answer"] = "Insufficient information. " + unsupported
+
+    result = await _engine(_FakeLLM(json.dumps(payload)), **kwargs).answer(
+        query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert unsupported not in result.answer
+
+
+# --- v1-rereview Q5: semantic claim grounding + honest confidence ---
+
+
+async def test_verify_claims_grounding_rejects_unsubstantiated_citation() -> None:
+    """A claim citing a real, in-scope chunk that does NOT support it is dropped."""
+    items = _items()
+    grounder = LexicalGrounder()
+    claims = [Claim(text="The capital of France is Paris.", chunk_ids=["c-1"])]
+    verified, citations = await verify_claims(
+        claims,
+        items,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=grounder,
+    )
+    assert verified == []
+    assert citations == []
+
+
+async def test_verify_claims_grounding_accepts_substantiated_citation() -> None:
+    """A claim substantiated by the chunk survives with a grounding score."""
+    items = _items()
+    grounder = LexicalGrounder()
+    claims = [Claim(text="Alpha evidence about permissions", chunk_ids=["c-1"])]
+    verified, citations = await verify_claims(
+        claims,
+        items,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=grounder,
+    )
+    assert len(verified) == 1 and verified[0].chunk_ids == ["c-1"]
+    assert len(citations) == 1
+    assert citations[0].chunk_id == "c-1"
+    assert citations[0].grounding_score is not None
+    assert citations[0].grounding_score >= grounder.threshold
+
+
+async def test_verify_claims_no_grounder_keeps_legacy_behavior() -> None:
+    """With no grounder, existence+scope only — unsubstantiated claims survive."""
+    items = _items()
+    claims = [Claim(text="The capital of France is Paris.", chunk_ids=["c-1"])]
+    verified, citations = await verify_claims(
+        claims, items, allowed_workspace_ids={"ws-a"}
+    )
+    assert len(verified) == 1 and verified[0].chunk_ids == ["c-1"]
+    assert len(citations) == 1
+    assert citations[0].grounding_score is None
+
+
+async def test_engine_rejects_ungrounded_claim_citing_real_chunk() -> None:
+    """Re-review scenario: a real, in-scope citation that does not support the
+    claim must NOT yield ANSWERED/HIGH — it is rejected as insufficient."""
+    llm = _FakeLLM(
+        '{"answer": "The capital of France is Paris.", '
+        '"claims": [{"text": "The capital of France is Paris.", "chunk_ids": ["c-1"]}]}'
+    )
+    result = await _engine(llm).answer(
+        query="what is the capital of france?",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    # The unsupported / fabricated answer text must not be echoed to the user.
+    assert "paris" not in result.answer.lower()
+
+
+async def test_engine_grounds_real_claim_high_confidence() -> None:
+    """A claim substantiated by its cited chunk yields ANSWERED with HIGH conf."""
+    llm = _FakeLLM(
+        '{"answer": "Alpha evidence about permissions.", '
+        '"claims": [{"text": "Alpha evidence about permissions", "chunk_ids": ["c-1"]}]}'
+    )
+    result = await _engine(llm).answer(
+        query="what is the evidence?",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    assert result.citations[0].grounding_score is not None
+    assert result.citations[0].grounding_score >= 0.8
