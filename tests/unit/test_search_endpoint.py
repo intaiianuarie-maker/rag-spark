@@ -213,3 +213,27 @@ def test_search_empty_query_rejected(monkeypatch) -> None:
     response = client.post(f"/v1/workspaces/{WS_ID}/search", json={"query": ""})
     assert response.status_code == 422
     assert not orch.calls
+
+
+def test_search_graph_and_hybrid_graph_modes_accepted(monkeypatch) -> None:
+    orch = _FakeOrchestrator([_item(chunk_id="g-1", metadata={"is_graph": True})])
+    client = _client(monkeypatch, orch)
+
+    # Test GRAPH mode
+    res_graph = client.post(
+        f"/v1/workspaces/{WS_ID}/search",
+        json={"query": "knowledge graph entity", "mode": "graph"},
+    )
+    assert res_graph.status_code == 200, res_graph.text
+    assert res_graph.json()["mode"] == "graph"
+    assert orch.calls[-1]["mode"] == "graph"
+
+    # Test HYBRID_GRAPH mode
+    res_hybrid_graph = client.post(
+        f"/v1/workspaces/{WS_ID}/search",
+        json={"query": "hybrid graph context", "mode": "hybrid_graph"},
+    )
+    assert res_hybrid_graph.status_code == 200, res_hybrid_graph.text
+    assert res_hybrid_graph.json()["mode"] == "hybrid_graph"
+    assert orch.calls[-1]["mode"] == "hybrid_graph"
+
