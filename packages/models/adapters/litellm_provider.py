@@ -70,7 +70,12 @@ class LiteLLMProvider(LLMProvider):
         timeout: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
     ) -> None:
-        self.base_url = (base_url or os.environ.get("LITELLM_URL") or DEFAULT_BASE_URL).rstrip("/")
+        default_url = (
+            "https://openrouter.ai/api/v1"
+            if os.environ.get("OPENROUTER_API_KEY")
+            else DEFAULT_BASE_URL
+        )
+        self.base_url = (base_url or os.environ.get("LITELLM_URL") or default_url).rstrip("/")
         self.api_key = (
             api_key
             or os.environ.get("LITELLM_API_KEY")

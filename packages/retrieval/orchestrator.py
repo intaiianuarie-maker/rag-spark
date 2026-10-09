@@ -173,7 +173,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         for name, result in zip(names, legs, strict=True):
             if isinstance(result, BaseException):
                 logger.warning(
-                    "retrieval_leg_failed",
+                    f"retrieval_leg_failed: leg={name} error={result}",
                     extra={"event": "retrieval_leg_failed", "leg": name, "error": str(result)},
                 )
                 out.append([])

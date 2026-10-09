@@ -1,0 +1,2 @@
+{"id":"en-001","language":"en","question":"What is the termination notice period?","fixture":"sample-contract-en.txt","expected_source":"sample-contract-en.txt","expected_answer_contains":["30 days"],"tags":["citation","contract"]}
+{"id":"en-002","language":"en","question":"Who is the supplier?","fixture":"sample-contract-en.txt","expected_source":"sample-contract-en.txt","expected_answer_contains":["ACME Supplies"],"tags":["retrieval","entity"]}
