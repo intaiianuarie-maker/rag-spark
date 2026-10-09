@@ -59,8 +59,9 @@ class GitConnector(Connector):
 
         env = dict(os.environ)
         env.setdefault("GIT_TERMINAL_PROMPT", "0")  # never block on auth
+        cmd = ["git", "-C", repo, *args] if repo else ["git", *args]
         proc = subprocess.run(
-            ["git", *args, repo],
+            cmd,
             check=True,
             capture_output=True,
             env=env,

@@ -53,9 +53,16 @@ async def ask(
     except ApiError as exc:
         raise _http_error(exc) from exc
 
+    from models.router_config import WorkspaceModelConfig, route
+
+    config = WorkspaceModelConfig(
+        workspace_id=str(workspace_id),
+        override_model=body.model,
+    )
+    resolved_model = route("general", config)
+
     engine: AnswerEngine = build_answer_engine()
-    if body.model:
-        engine.model = body.model
+    engine.model = resolved_model
 
     try:
         return await engine.answer(

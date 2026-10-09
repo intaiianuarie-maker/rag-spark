@@ -198,10 +198,13 @@ class PostgresLexicalStore(LexicalStore):
             if query_filter is not None:
                 if not query_filter.workspace_ids:
                     return 0
-                result = await session.execute(
-                    text("DELETE FROM lexical_docs WHERE workspace_id = ANY(:wss)"),
-                    {"wss": query_filter.workspace_ids},
-                )
+                clauses = ["workspace_id = ANY(:wss)"]
+                params: dict[str, Any] = {"wss": list(query_filter.workspace_ids)}
+                if query_filter.document_ids:
+                    clauses.append("document_id = ANY(:dids)")
+                    params["dids"] = list(query_filter.document_ids)
+                stmt = f"DELETE FROM lexical_docs WHERE {' AND '.join(clauses)}"
+                result = await session.execute(text(stmt), params)
                 await session.commit()
                 return int(result.rowcount or 0)  # type: ignore[attr-defined]
             return 0

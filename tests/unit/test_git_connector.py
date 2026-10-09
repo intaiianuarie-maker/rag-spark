@@ -145,3 +145,40 @@ def test_create_connector_resolves_git(config: ConnectorConfig) -> None:
     conn = create_connector(config)
     assert isinstance(conn, GitConnector)
     assert conn.kind is ConnectorKind.GIT
+
+
+@pytest.mark.asyncio
+async def test_git_connector_real_local_repository(tmp_path) -> None:
+    import asyncio
+    import subprocess
+
+    repo_dir = tmp_path / "test_repo"
+    repo_dir.mkdir()
+
+    def _setup():
+        subprocess.run(["git", "init", str(repo_dir)], check=True, capture_output=True)
+        subprocess.run(["git", "-C", str(repo_dir), "config", "user.name", "Test"], check=True)
+        subprocess.run(
+            ["git", "-C", str(repo_dir), "config", "user.email", "test@test.local"], check=True
+        )
+        test_file = repo_dir / "sample.txt"
+        test_file.write_text("Hello from real git blob\n", encoding="utf-8")
+        subprocess.run(["git", "-C", str(repo_dir), "add", "sample.txt"], check=True)
+        subprocess.run(["git", "-C", str(repo_dir), "commit", "-m", "init"], check=True)
+
+    await asyncio.to_thread(_setup)
+
+    cfg = ConnectorConfig(
+        connector_id="c_real",
+        workspace_id="w_real",
+        kind=ConnectorKind.GIT,
+        settings={"repo": str(repo_dir), "ref": "HEAD"},
+    )
+    conn = GitConnector()  # Uses real git subprocess runner
+    discovery = await conn.discover(cfg)
+    assert len(discovery.items) == 1
+    assert discovery.items[0].name == "sample.txt"
+
+    content = await conn.fetch(cfg, discovery.items[0])
+    assert content == b"Hello from real git blob\n"
+

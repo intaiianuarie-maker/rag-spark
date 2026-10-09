@@ -228,6 +228,19 @@ async def test_engine_unparseable_output_falls_back() -> None:
     assert result.claims == [] and result.citations == []
 
 
+async def test_engine_refuses_when_all_claims_rejected() -> None:
+    llm = _FakeLLM(
+        '{"answer": "Fabricated fact 999 days.", '
+        '"claims": [{"text": "Fabricated fact", "chunk_ids": ["hallucinated-chunk-999"]}]}'
+    )
+    result = await _engine(llm).answer(
+        query="notice period?", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.answer == "I cannot answer this question based on the provided documents."
+    assert result.claims == []
+    assert result.citations == []
+
+
 async def test_engine_propagates_llm_error() -> None:
     from models.adapters.litellm_provider import LLMProviderError
 

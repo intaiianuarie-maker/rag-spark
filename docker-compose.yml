@@ -40,7 +40,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knowledge}
       POSTGRES_DB: ${POSTGRES_DB:-knowledge}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -54,7 +54,7 @@ services:
     image: redis:7.4.11-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
-      - "${REDIS_PORT:-6379}:6379"
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
     healthcheck:
@@ -66,8 +66,8 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.19.2
     ports:
-      - "${QDRANT_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
       - qdrantdata:/qdrant/storage
 
@@ -81,7 +81,7 @@ services:
       SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-admin}
       SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-admin}
     ports:
-      - "${SEAWEEDFS_PORT:-8333}:8333"
+      - "127.0.0.1:${SEAWEEDFS_PORT:-8333}:8333"
     volumes:
       - weedfsdata:/data
       - ./infrastructure/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro

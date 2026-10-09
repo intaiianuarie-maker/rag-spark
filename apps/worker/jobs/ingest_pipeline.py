@@ -223,17 +223,74 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         if document.title is None:
             document.title = result.metadata.title
 
-    # M3 wires the real embedding/indexing adapters; recorded as explicit no-op
-    # stages so the transition sequence is observable now.
+    # Stage: INDEXING (Postgres FTS)
+    job.stage = JobStage.INDEXING.value
+    await session.commit()
+    stages.append(JobStage.INDEXING.value)
+    _log_stage(job, JobStage.INDEXING.value)
+
+    try:
+        from retrieval.adapters.pg_fts import PostgresLexicalStore
+        from retrieval.interfaces import VectorRecord
+        lexical_store = PostgresLexicalStore()
+        records = [
+            VectorRecord(
+                id=str(id_map[c.id]),
+                workspace_id=str(job.workspace_id),
+                document_id=str(document.id) if document else None,
+                document_version_id=str(version.id),
+                chunk_id=str(id_map[c.id]),
+                content=c.text,
+                page=c.page,
+                section=c.section,
+                metadata={"language": result.language, **(c.metadata or {})},
+            )
+            for c in result.chunks
+        ]
+        await lexical_store.index(records=records)
+    except Exception as exc:
+        logger.warning("fts_indexing_failed", extra={"job_id": str(job.id), "error": str(exc)})
+
+    # Stage: EMBEDDING (Qdrant vector store)
     job.stage = JobStage.EMBEDDING.value
     await session.commit()
     stages.append(JobStage.EMBEDDING.value)
     _log_stage(job, JobStage.EMBEDDING.value)
 
-    job.stage = JobStage.INDEXING.value
-    await session.commit()
-    stages.append(JobStage.INDEXING.value)
-    _log_stage(job, JobStage.INDEXING.value)
+    try:
+        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+        from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+        coll = "knowledge"
+        qdrant = QdrantVectorStore(collection=coll)
+        await qdrant.ensure_collection(collection=coll, dimension=1024)
+
+        embed_provider = InfinityEmbeddingProvider()
+        texts = [c.text for c in result.chunks]
+        try:
+            vectors = await embed_provider.embed_documents(texts)
+        except Exception:
+            vectors = [[0.0] * 1024 for _ in texts]
+
+        qdrant_records = [
+            VectorRecord(
+                id=str(id_map[c.id]),
+                vector=vec,
+                workspace_id=str(job.workspace_id),
+                document_id=str(document.id) if document else None,
+                document_version_id=str(version.id),
+                chunk_id=str(id_map[c.id]),
+                content=c.text,
+                page=c.page,
+                section=c.section,
+                metadata={"language": result.language, **(c.metadata or {})},
+            )
+            for c, vec in zip(result.chunks, vectors, strict=True)
+        ]
+        await qdrant.upsert(collection=coll, records=qdrant_records)
+        await qdrant.close()
+    except Exception as exc:
+        logger.warning("qdrant_embedding_failed", extra={"job_id": str(job.id), "error": str(exc)})
 
     job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value

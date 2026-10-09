@@ -97,6 +97,12 @@ class AnswerEngine:
         verified, citations = await verify_claims(
             claims, items, chunk_lookup=self.chunk_lookup, allowed_workspace_ids=allowed
         )
+        if claims and not verified:
+            return Answer(
+                answer="I cannot answer this question based on the provided documents.",
+                claims=[],
+                citations=[],
+            )
         return Answer(
             answer=parsed["answer"].strip(),
             claims=verified,
