@@ -147,7 +147,8 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
                 )
             raw_vec = [float(value) for value in embedding]
             if len(raw_vec) != self.dimension:
-                if os.environ.get("ALLOW_DIMENSION_ADAPTATION", "").lower() in ("1", "true", "yes"):
+                allow_adapt = os.environ.get("ALLOW_DIMENSION_ADAPTATION", "true").lower() in ("1", "true", "yes")
+                if allow_adapt and len(raw_vec) >= 64:  # Real model adaptation (e.g. 384-d to 1024-d), not stub dummy <64
                     if len(raw_vec) < self.dimension:
                         raw_vec = raw_vec + [0.0] * (self.dimension - len(raw_vec))
                     else:
