@@ -1,0 +1,156 @@
+"""GraphRetriever — Local and Global GraphRAG (Sections 23 and 24).
+
+Implements:
+1. Local Graph Retrieval: query -> entity match -> 1/2-hop subgraph traversal
+   -> supporting source chunk provenance.
+2. Global Graph Retrieval: query -> community cluster summaries.
+3. Conversion to `RetrievedItem`s so the RAG answer engine and citation verifier
+   can verify claims against graph-derived evidence.
+"""
+
+from __future__ import annotations
+
+import re
+
+from retrieval.interfaces import RetrievalMethod, RetrievedItem
+
+from .interfaces import Entity, GraphSearchResult, GraphStore
+
+
+class GraphRetriever:
+    """Retrieves subgraph paths and community summaries with source chunk provenance."""
+
+    def __init__(self, store: GraphStore) -> None:
+        self._store = store
+
+    async def local_search(
+        self,
+        workspace_id: str,
+        query: str,
+        depth: int = 1,
+        max_entities: int = 5,
+    ) -> GraphSearchResult:
+        """Local graph retrieval: find entities mentioned in query, traverse neighbors."""
+        tokens = [t.lower() for t in re.findall(r"\w+", query) if len(t) > 2]
+        seed_entities: list[Entity] = []
+
+        # Find seed entities
+        for token in tokens:
+            matches = await self._store.find_entities_by_name(workspace_id, token)
+            for m in matches:
+                if m.id not in [e.id for e in seed_entities]:
+                    seed_entities.append(m)
+                    if len(seed_entities) >= max_entities:
+                        break
+            if len(seed_entities) >= max_entities:
+                break
+
+        if not seed_entities:
+            return GraphSearchResult()
+
+        seed_ids = [e.id for e in seed_entities]
+        subgraph_entities, subgraph_rels = await self._store.get_subgraph(
+            workspace_id, seed_ids, depth=depth
+        )
+
+        evidence_chunk_ids: set[str] = set()
+        for ent in subgraph_entities:
+            evidence_chunk_ids.update(ent.chunk_ids)
+        for rel in subgraph_rels:
+            evidence_chunk_ids.update(rel.chunk_ids)
+
+        # Generate summary description of extracted knowledge graph subgraph
+        rel_descriptions = [
+            f"{r.source_entity_id} -[{r.type}]-> {r.target_entity_id}: {r.description}"
+            if r.description
+            else f"{r.source_entity_id} -[{r.type}]-> {r.target_entity_id}"
+            for r in subgraph_rels
+        ]
+        ent_descriptions = [f"{e.name} ({e.type})" for e in subgraph_entities]
+
+        summary = (
+            f"Entities: {', '.join(ent_descriptions)}. "
+            f"Relationships: {'; '.join(rel_descriptions)}"
+        )
+
+        return GraphSearchResult(
+            entities=subgraph_entities,
+            relationships=subgraph_rels,
+            evidence_chunk_ids=sorted(evidence_chunk_ids),
+            summary=summary,
+            score=1.0,
+        )
+
+    async def global_search(
+        self,
+        workspace_id: str,
+        query: str,
+    ) -> GraphSearchResult:
+        """Global graph retrieval: matches query terms against community summaries."""
+        communities = await self._store.get_communities(workspace_id)
+        if not communities:
+            return GraphSearchResult()
+
+        tokens = set(re.findall(r"\w+", query.lower()))
+        matched_comms = []
+        evidence_chunks: set[str] = set()
+
+        for comm in communities:
+            comm_text = f"{comm.title} {comm.summary}".lower()
+            overlap = sum(1 for t in tokens if t in comm_text)
+            if overlap > 0:
+                matched_comms.append(comm)
+                for eid in comm.entity_ids:
+                    ent = await self._store.get_entity(workspace_id, eid)
+                    if ent:
+                        evidence_chunks.update(ent.chunk_ids)
+
+        summary_parts = [f"[{c.title}] {c.summary}" for c in matched_comms]
+        return GraphSearchResult(
+            communities=matched_comms,
+            evidence_chunk_ids=sorted(evidence_chunks),
+            summary="\n\n".join(summary_parts),
+            score=0.9,
+        )
+
+    def to_retrieved_items(
+        self,
+        result: GraphSearchResult,
+        workspace_id: str,
+    ) -> list[RetrievedItem]:
+        """Convert a GraphSearchResult into standard RetrievedItems with chunk provenance."""
+        items: list[RetrievedItem] = []
+        if not result.summary and not result.entities:
+            return items
+
+        # Build context passage from graph
+        passage = f"[Knowledge Graph Context]\n{result.summary}"
+        # Primary item carrying chunk IDs for citation resolution
+        for chunk_id in result.evidence_chunk_ids:
+            items.append(
+                RetrievedItem(
+                    content=passage,
+                    score=result.score,
+                    method=RetrievalMethod.FUSED,
+                    workspace_id=workspace_id,
+                    chunk_id=chunk_id,
+                    metadata={
+                        "is_graph": True,
+                        "entities_count": len(result.entities),
+                        "relationships_count": len(result.relationships),
+                    },
+                )
+            )
+
+        if not items and result.summary:
+            items.append(
+                RetrievedItem(
+                    content=passage,
+                    score=result.score,
+                    method=RetrievalMethod.FUSED,
+                    workspace_id=workspace_id,
+                    metadata={"is_graph": True},
+                )
+            )
+
+        return items
