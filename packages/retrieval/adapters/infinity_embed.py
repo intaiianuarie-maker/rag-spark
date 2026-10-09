@@ -65,6 +65,7 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
         self,
         *,
         base_url: str | None = None,
+        api_key: str | None = None,
         query_prefix: str = "",
         document_prefix: str = "",
         batch_size: int | None = None,
@@ -73,6 +74,7 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
     ) -> None:
         resolved_url = base_url or os.environ.get("INFINITY_URL") or DEFAULT_BASE_URL
         self.base_url = resolved_url.rstrip("/")
+        self.api_key = api_key or os.environ.get("INFINITY_API_KEY")
         self.query_prefix = query_prefix
         self.document_prefix = document_prefix
         self.batch_size = int(
@@ -89,7 +91,10 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
 
     def _http(self) -> httpx.AsyncClient:
         if self._client is None:
-            self._client = httpx.AsyncClient(timeout=self.timeout)
+            headers = {"content-type": "application/json"}
+            if self.api_key:
+                headers["authorization"] = f"Bearer {self.api_key}"
+            self._client = httpx.AsyncClient(timeout=self.timeout, headers=headers)
         return self._client
 
     async def aclose(self) -> None:

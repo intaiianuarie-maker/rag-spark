@@ -71,7 +71,12 @@ class LiteLLMProvider(LLMProvider):
         client: httpx.AsyncClient | None = None,
     ) -> None:
         self.base_url = (base_url or os.environ.get("LITELLM_URL") or DEFAULT_BASE_URL).rstrip("/")
-        self.api_key = api_key or os.environ.get("LITELLM_API_KEY")
+        self.api_key = (
+            api_key
+            or os.environ.get("LITELLM_API_KEY")
+            or (os.environ.get("OPENROUTER_API_KEY") if "openrouter.ai" in self.base_url else None)
+            or (os.environ.get("DEEPSEEK_API_KEY") if "deepseek.com" in self.base_url else None)
+        )
         self.timeout = timeout
         #: Injected in tests; otherwise one client is created lazily and reused
         #: (review Minor #1 — no per-call client churn).
