@@ -249,7 +249,12 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         ]
         await lexical_store.index(records=records)
     except Exception as exc:
-        logger.warning("fts_indexing_failed", extra={"job_id": str(job.id), "error": str(exc)})
+        logger.error("fts_indexing_failed", extra={"job_id": str(job.id), "error": str(exc)})
+        raise IngestPipelineError(
+            "fts_indexing_failed",
+            f"Postgres FTS indexing failed: {exc}",
+            retryable=True,
+        ) from exc
 
     # Stage: EMBEDDING (Qdrant vector store)
     job.stage = JobStage.EMBEDDING.value
@@ -267,10 +272,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
 
         embed_provider = InfinityEmbeddingProvider()
         texts = [c.text for c in result.chunks]
-        try:
-            vectors = await embed_provider.embed_documents(texts)
-        except Exception:
-            vectors = [[0.0] * 1024 for _ in texts]
+        vectors = await embed_provider.embed_documents(texts)
 
         qdrant_records = [
             VectorRecord(
@@ -290,7 +292,12 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         await qdrant.upsert(collection=coll, records=qdrant_records)
         await qdrant.close()
     except Exception as exc:
-        logger.warning("qdrant_embedding_failed", extra={"job_id": str(job.id), "error": str(exc)})
+        logger.error("qdrant_embedding_failed", extra={"job_id": str(job.id), "error": str(exc)})
+        raise IngestPipelineError(
+            "qdrant_indexing_failed",
+            f"Embedding and vector store indexing failed: {exc}",
+            retryable=True,
+        ) from exc
 
     job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value
