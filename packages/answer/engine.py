@@ -16,14 +16,19 @@ Guarantees:
   :mod:`answer.verification`). When no claims survive verification — or the
   model produced no claims at all — the engine abstains with an
   ``INSUFFICIENT_EVIDENCE`` answer rather than echoing unverified prose.
-- **Semantic grounding**: a claim is cited only when its cited chunk
-  *substantiates* the claim text (default :class:`~answer.verification.LexicalGrounder`;
-  swap a :class:`~answer.verification.ClaimGrounder` for semantic scoring).
-  Confidence is honest: ``HIGH`` is granted only when every surviving claim is
-  grounded — never on a real-but-unrelated citation.
 - **Grounded rendering**: for partially-verified answers, only the text of
   verified claims is returned; unsupported sentences from the model are
   discarded.
+- **Conservative extractive grounding** (v1 interim): a claim is cited only
+  when its text appears **verbatim** in the cited chunk
+  (:class:`~answer.verification.ExtractiveGrounder`, default). This rejects
+  negation-stripping, entity/role swap and value/date changes that a
+  token-overlap scorer cannot see, and never grants ``HIGH`` on paraphrase it
+  cannot verify. Confidence is honest: ``HIGH`` is granted only when every
+  surviving claim is grounded. **Limitation**: cross-language translation is
+  *not* supported by this interim mode (a translation's text is not a substring
+  of a source in another language); that is the separate multilingual release
+  gate.
 - **Typed failures**: an LLM provider error propagates as the provider's typed
   error so the route can map it (503); unparseable or claimless model output
   abstains with ``INSUFFICIENT_EVIDENCE`` rather than returning raw prose.
@@ -50,7 +55,7 @@ from retrieval.interfaces import (
 from .interfaces import ChunkLookup
 from .models import Answer, AnswerStatus, Claim, Confidence, ConfidenceLevel
 from .prompts import SYSTEM_PROMPT, build_prompt, parse_model_output
-from .verification import ClaimGrounder, LexicalGrounder, verify_claims
+from .verification import ClaimGrounder, ExtractiveGrounder, verify_claims
 
 logger = logging.getLogger("knowledge_os.answer")
 
@@ -72,10 +77,12 @@ class AnswerEngine:
     max_tokens: int | None = None
     extra: dict = field(default_factory=dict)
     #: Optional claim-substantiation gate wired in by default
-    #: (:class:`~answer.verification.LexicalGrounder`) so that a citation is
-    #: real *and* supports the claim. Pass ``claim_grounder=None`` to restore the
-    #: legacy existence+scope-only contract.
-    claim_grounder: ClaimGrounder | None = field(default_factory=LexicalGrounder)
+    #: (:class:`~answer.verification.ExtractiveGrounder`, conservative v1
+    #: verbatim-substring check) so a citation is real *and* supports the
+    #: claim. ``HIGH`` confidence is granted only when every surviving claim is
+    #: grounded. Pass ``claim_grounder=None`` to restore the legacy
+    #: existence+scope-only contract.
+    claim_grounder: ClaimGrounder | None = field(default_factory=ExtractiveGrounder)
 
     async def answer(self, *, query: str, acl_scope: ACLScope) -> Answer:
         """Retrieve, generate, parse and verify a grounded answer."""

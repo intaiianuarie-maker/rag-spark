@@ -13,7 +13,7 @@ import pytest
 from answer.engine import AnswerEngine
 from answer.models import Answer, AnswerStatus, Claim, ConfidenceLevel
 from answer.prompts import build_prompt, parse_model_output
-from answer.verification import LexicalGrounder, verify_claims
+from answer.verification import ExtractiveGrounder, verify_claims
 from core.auth import ACLScope
 from harness_fakes import make_item
 from models.interfaces import (
@@ -411,7 +411,7 @@ async def test_unsupported_prose_never_returned(case: str) -> None:
 async def test_verify_claims_grounding_rejects_unsubstantiated_citation() -> None:
     """A claim citing a real, in-scope chunk that does NOT support it is dropped."""
     items = _items()
-    grounder = LexicalGrounder()
+    grounder = ExtractiveGrounder()
     claims = [Claim(text="The capital of France is Paris.", chunk_ids=["c-1"])]
     verified, citations = await verify_claims(
         claims,
@@ -426,7 +426,7 @@ async def test_verify_claims_grounding_rejects_unsubstantiated_citation() -> Non
 async def test_verify_claims_grounding_accepts_substantiated_citation() -> None:
     """A claim substantiated by the chunk survives with a grounding score."""
     items = _items()
-    grounder = LexicalGrounder()
+    grounder = ExtractiveGrounder()
     claims = [Claim(text="Alpha evidence about permissions", chunk_ids=["c-1"])]
     verified, citations = await verify_claims(
         claims,
@@ -438,7 +438,7 @@ async def test_verify_claims_grounding_accepts_substantiated_citation() -> None:
     assert len(citations) == 1
     assert citations[0].chunk_id == "c-1"
     assert citations[0].grounding_score is not None
-    assert citations[0].grounding_score >= grounder.threshold
+    assert citations[0].grounding_score == 1.0
 
 
 async def test_verify_claims_no_grounder_keeps_legacy_behavior() -> None:
@@ -487,3 +487,101 @@ async def test_engine_grounds_real_claim_high_confidence() -> None:
     assert len(result.citations) == 1
     assert result.citations[0].grounding_score is not None
     assert result.citations[0].grounding_score >= 0.8
+
+
+# --- v1-rereview Q5 P1: token-overlap cannot separate support from contradictions ---
+
+
+async def test_verify_claims_extractive_rejects_negation_reversal() -> None:
+    """'The launch is approved.' is NOT a substring of 'The launch is not approved.'
+    Token-overlap would score this 1.0; verbatim extractive grounding rejects it."""
+    items = [make_item("The launch is not approved.", 0.9, chunk_id="c-con")]
+    claims = [Claim(text="The launch is approved.", chunk_ids=["c-con"])]
+    verified, citations = await verify_claims(
+        claims, items, allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [] and citations == []
+
+
+async def test_verify_claims_extractive_rejects_entity_role_swap() -> None:
+    """'Bob paid Alice.' is a token-identical reorder of 'Alice paid Bob.' —
+    rejected by verbatim containment, accepted by token overlap."""
+    items = [make_item("Alice paid Bob.", 0.9, chunk_id="c-swap")]
+    claims = [Claim(text="Bob paid Alice.", chunk_ids=["c-swap"])]
+    verified, citations = await verify_claims(
+        claims, items, allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [] and citations == []
+
+
+async def test_verify_claims_extractive_rejects_quantity_change() -> None:
+    """'...900 dollars.' shares 8/9 tokens with '...100 dollars.' but is not a
+    substring; the changed value (the entire point) is missed by token overlap."""
+    src = "The approved budget for the project is 100 dollars."
+    claim = "The approved budget for the project is 900 dollars."
+    items = [make_item(src, 0.9, chunk_id="c-budget")]
+    verified, citations = await verify_claims(
+        [Claim(text=claim, chunk_ids=["c-budget"])], items,
+        allowed_workspace_ids={"ws-a"}, claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [] and citations == []
+
+
+async def test_engine_abstains_on_negation_contradiction() -> None:
+    """End-to-end: a real, in-scope chunk whose text contradicts the claim must
+    NOT yield ANSWERED/HIGH, and the false claim must not be echoed."""
+    items = [make_item("The launch is not approved.", 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        '{"answer": "The launch is approved.", '
+        '"claims": [{"text": "The launch is approved.", "chunk_ids": ["c-1"]}]}'
+    )
+    result = await _engine(llm, items=items).answer(
+        query="is the launch approved?",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert "launch is approved" not in result.answer.lower()
+
+
+# --- v1-rereview Q5 P2: cross-language translation is NOT supported by v1 ---
+# Extractive grounding requires the claim text to be a substring of the chunk.
+# A translation's text is in a different language, so it can never be a substring
+# of the source. The engine therefore correctly abstains instead of granting a
+# false HIGH. This is a DISCLOSED v1 INTERIM LIMITATION: the multilingual
+# (EN/RO/PT) cross-language release gate is NOT met by this mode.
+
+
+@pytest.mark.parametrize(
+    "translation",
+    [
+        "Capitala Franței este Paris.",  # correct RO translation
+        "A capital da França é Paris.",  # correct PT translation
+        "Capitala României este Paris.",  # incorrect RO (Bucharest, not France)
+    ],
+)
+async def test_engine_cross_language_translation_abstains(translation: str) -> None:
+    items = [make_item("The capital of France is Paris.", 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps(
+            {
+                "answer": translation,
+                "claims": [{"text": translation, "chunk_ids": ["c-1"]}],
+            }
+        )
+    )
+    result = await _engine(llm, items=items).answer(
+        query="care este capitala?",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    # The unverifiable translation must not be echoed to the user as fact.
+    assert translation.lower() not in result.answer.lower()
+

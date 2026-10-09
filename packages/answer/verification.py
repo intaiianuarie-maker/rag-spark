@@ -2,9 +2,9 @@
 
 A claim's ``chunk_id`` is valid only if it resolves to a chunk that **exists**,
 is **inside the caller's workspace scope**, and **substantiates the claim**.
-The first two are existence/scope checks; the third is **semantic grounding** —
-the claim's text must be supported by the chunk the model actually saw in
-context. An optional :class:`~answer.interfaces.ChunkLookup` adds a store-backed
+The first two are existence/scope checks; the third is **grounding** — the
+claim's text must be supported by the chunk the model actually saw in context.
+An optional :class:`~answer.interfaces.ChunkLookup` adds a store-backed
 existence check for ids that were not in the retrieved top-k.
 
 When a :class:`ClaimGrounder` is configured (the engine wires one by default),
@@ -15,13 +15,25 @@ retrieved context) cannot be grounded — there is no chunk content to score —
 so they are dropped when a grounder is configured, keeping the verified set
 strictly to chunks that were retrieved *and* support the claim.
 
+**v1 interim strategy — conservative extractive grounding.** The default
+:class:`ExtractiveGrounder` considers a claim grounded only when its text
+appears **verbatim** (case-insensitive, contiguous substring) in the chunk.
+This is deliberately strict: it rejects the support-vs-contradiction failures
+that a token-overlap scorer cannot see (negation removal, entity/role swap,
+quantity or date changes — these share most tokens with the contradicting
+source), and it never grants HIGH confidence on paraphrase it cannot verify.
+Because a translation's claim text is *not* a substring of a source in a
+different language, cross-language answers are **not** accepted as grounded by
+this interim mode; that is the separate multilingual release gate. A future
+semantic (embedding) grounder can replace this behind the unchanged
+:class:`ClaimGrounder` interface.
+
 No citation is ever fabricated: an invalid id is dropped, and a claim left with
 no valid ids is dropped from the output.
 """
 
 from __future__ import annotations
 
-import re
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
@@ -57,11 +69,6 @@ def _citation(
     )
 
 
-def _token_set(text: str) -> set[str]:
-    """Lowercase alphanumeric word tokens (unicode-aware for RO/PT/EN)."""
-    return set(re.findall(r"\w+", text.lower()))
-
-
 @runtime_checkable
 class ClaimGrounder(Protocol):
     """Decides whether a claim is substantiated by a chunk's content.
@@ -69,9 +76,9 @@ class ClaimGrounder(Protocol):
     ``score`` returns a float in ``[0, 1]`` (``1`` = fully grounded). A citation
     is accepted only when ``score(claim_text, chunk_content) >= threshold``.
 
-    Implementations are product glue: v1 default is :class:`LexicalGrounder`
-    (token-overlap); a future semantic (embedding) grounder can replace it behind
-    this same interface without touching :func:`verify_claims`.
+    Implementations are product glue: v1 default is :class:`ExtractiveGrounder`
+    (verbatim-substring check); a future semantic (embedding) grounder can
+    replace it behind this same interface without touching :func:`verify_claims`.
     """
 
     threshold: float
@@ -81,25 +88,34 @@ class ClaimGrounder(Protocol):
         ...
 
 
-class LexicalGrounder:
-    """Default v1 grounder: a claim is grounded when enough of its tokens
-    appear in the chunk. Token-overlap recall with a configurable threshold;
-    no network and no heavy model, so it is deterministic and unit-testable.
+class ExtractiveGrounder:
+    """Default v1 grounder (interim, conservative).
+
+    A claim is grounded **only** when its text appears verbatim — case-insensitive
+    and contiguous — inside the chunk's content. This is an intentional
+    limitation of the v1 extractive mode: it cannot validate paraphrase or
+    translation, so such claims are *not* grounded (they abstain at
+    ``INSUFFICIENT_EVIDENCE`` rather than risk a false ``HIGH``).
+
+    Token-overlap scoring is *not* used for the decision, because it cannot
+    distinguish support from contradiction: negation removal, entity/role swap
+    and quantity/date changes all share most tokens with the contradicting
+    source (see ``v1-rereview.md`` P1). Verbatim containment rejects all of
+    those. Cross-language claims are likewise rejected (a translation's text is
+    not a substring of a source in another language); that is the separate
+    multilingual release gate, not a v1 extractive limitation.
     """
 
     threshold: float
 
-    def __init__(self, threshold: float = 0.8) -> None:
+    def __init__(self, threshold: float = 1.0) -> None:
         self.threshold = threshold
 
     def score(self, claim_text: str, chunk_content: str) -> float:
-        claim_tokens = _token_set(claim_text)
-        if not claim_tokens:
+        claim = claim_text.strip()
+        if not claim:
             return 0.0
-        chunk_tokens = _token_set(chunk_content)
-        if not chunk_tokens:
-            return 0.0
-        return len(claim_tokens & chunk_tokens) / len(claim_tokens)
+        return 1.0 if claim.casefold() in chunk_content.casefold() else 0.0
 
 
 async def verify_claims(

@@ -10,6 +10,8 @@ Covers:
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from answer.engine import AnswerEngine
 from core.auth import ACLScope
@@ -68,11 +70,20 @@ async def test_acceptance_1_golden_path_grounded_answer_with_real_citation() -> 
     )
     orchestrator = MockAcceptanceOrchestrator([evidence_item])
 
-    # LLM emits valid structured JSON format per prompt contract
-    llm_output = (
-        '{"answer": "Antigravity supports agent pairing with zero local latency.", '
-        '"claims": [{"text": "Antigravity supports agent pairing with zero local latency.", '
-        '"chunk_ids": ["chunk-golden-1"]}]}'
+    # LLM emits valid structured JSON format per prompt contract.
+    # Claim text is a verbatim chunk extract so the conservative v1
+    # extractive grounder (claim must be a substring of the chunk)
+    # can validate it as supported.
+    llm_output = json.dumps(
+        {
+            "answer": "Antigravity provides automated agent pairing with zero local latency.",
+            "claims": [
+                {
+                    "text": "Antigravity provides automated agent pairing with zero local latency.",
+                    "chunk_ids": ["chunk-golden-1"],
+                }
+            ],
+        }
     )
     llm = MockAcceptanceLLM(response_text=llm_output)
     engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="gpt-4o-mini")
@@ -218,8 +229,8 @@ async def test_acceptance_5_multilingual_cross_language_retrieval() -> None:
     orchestrator = MockAcceptanceOrchestrator([ro_item])
 
     llm_output = (
-        '{"answer": "Platforma acceptă autentificare pe bază de roluri.", '
-        '"claims": [{"text": "Autentificare pe bază de roluri", "chunk_ids": ["chunk-ro-1"]}]}'
+        '{"answer": "Platforma accepta autentificarea pe bază de roluri.", '
+        '"claims": [{"text": "Autentificarea pe bază de roluri", "chunk_ids": ["chunk-ro-1"]}]}'
     )
     llm = MockAcceptanceLLM(response_text=llm_output)
     engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="gpt-4o-mini")
@@ -232,3 +243,51 @@ async def test_acceptance_5_multilingual_cross_language_retrieval() -> None:
     assert result.confidence.level == "high"
     assert len(result.citations) == 1
     assert result.citations[0].chunk_id == "chunk-ro-1"
+
+
+# --- Acceptance Probe #6: Cross-Language Translation LIMITATION (v1 interim) ---
+# v1 extractive grounding requires the claim text to be a verbatim substring of
+# the source chunk. A translation lives in a different language, so it can never
+# be a substring of the source -> the engine abstains INSUFFICIENT_EVIDENCE
+# instead of granting a false HIGH. This is a DISCLOSED v1 INTERIM LIMITATION:
+# the multilingual (EN/RO/PT) cross-language release gate is NOT met by this
+# mode; closing it requires multilingual semantic support (separate card).
+@pytest.mark.asyncio
+async def test_acceptance_6_cross_language_translation_abstains() -> None:
+    en_item = RetrievedItem(
+        content="The capital of France is Paris.",
+        score=0.95,
+        method=RetrievalMethod.DENSE,
+        workspace_id="ws-multi",
+        document_id="doc-en-1",
+        chunk_id="chunk-en-1",
+        metadata={"language": "en"},
+    )
+    orchestrator = MockAcceptanceOrchestrator([en_item])
+    scope = ACLScope(user_id="u1", workspace_ids=["ws-multi"])
+
+    for claim in [
+        "Capitala Franței este Paris.",  # correct RO translation
+        "A capital da França é Paris.",  # correct PT translation
+        "Capitala României este Paris.",  # incorrect RO (Bucharest, not France)
+    ]:
+        llm = MockAcceptanceLLM(
+            response_text=json.dumps(
+                {
+                    "answer": claim,
+                    "claims": [{"text": claim, "chunk_ids": ["chunk-en-1"]}],
+                }
+            )
+        )
+        engine = AnswerEngine(
+            orchestrator=orchestrator, llm=llm, model="gpt-4o-mini"
+        )
+        result = await engine.answer(
+            query="Care este capitala Franței?", acl_scope=scope
+        )
+        assert result.status == "insufficient_evidence"
+        assert result.reason_code == "CITATION_INVALID"
+        assert len(result.claims) == 0 and len(result.citations) == 0
+        assert result.confidence.level == "low"
+        # The unverifiable translation must not be surfaced as fact.
+        assert claim.lower() not in result.answer.lower()
