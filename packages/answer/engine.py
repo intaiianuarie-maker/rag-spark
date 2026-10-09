@@ -37,7 +37,7 @@ from retrieval.interfaces import (
 )
 
 from .interfaces import ChunkLookup
-from .models import Answer, Claim
+from .models import Answer, AnswerStatus, Claim, Confidence, ConfidenceLevel
 from .prompts import SYSTEM_PROMPT, build_prompt, parse_model_output
 from .verification import verify_claims
 
@@ -88,7 +88,21 @@ class AnswerEngine:
                 "answer_parse_fallback",
                 extra={"event": "answer_parse_fallback", "error": str(exc)},
             )
-            return Answer(answer=result.text.strip(), claims=[], citations=[])
+            return Answer(
+                answer=result.text.strip(),
+                status=AnswerStatus.PARTIAL,
+                reason_code="PARSE_FALLBACK",
+                reason=(
+                    "Model response could not be parsed into structured claims; "
+                    "raw response preserved."
+                ),
+                confidence=Confidence(
+                    level=ConfidenceLevel.LOW,
+                    basis="Unstructured model generation",
+                ),
+                claims=[],
+                citations=[],
+            )
 
         claims = [Claim(text=c["text"], chunk_ids=c["chunk_ids"]) for c in parsed["claims"]]
         allowed: set[str] | None = set(acl_scope.workspace_ids)
@@ -97,14 +111,60 @@ class AnswerEngine:
         verified, citations = await verify_claims(
             claims, items, chunk_lookup=self.chunk_lookup, allowed_workspace_ids=allowed
         )
+
+        answer_text = parsed["answer"].strip()
+        lower_ans = answer_text.lower()
+        is_refusal_phrase = any(
+            phrase in lower_ans
+            for phrase in (
+                "does not contain",
+                "cannot answer",
+                "nu conține",
+                "não contém",
+                "insufficient information",
+                "not enough information",
+            )
+        )
+
+        if not items or is_refusal_phrase:
+            return Answer(
+                answer=answer_text,
+                status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                reason_code="EVIDENCE_MISSING",
+                reason="Accessible sources do not contain sufficient evidence to answer.",
+                confidence=Confidence(
+                    level=ConfidenceLevel.LOW,
+                    basis="No relevant documents retrieved or model declared missing evidence",
+                ),
+                claims=verified,
+                citations=citations,
+            )
+
         if claims and not verified:
             return Answer(
                 answer="I cannot answer this question based on the provided documents.",
+                status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                reason_code="CITATION_INVALID",
+                reason="Generated claims lacked valid citations in accessible documents.",
+                confidence=Confidence(
+                    level=ConfidenceLevel.LOW,
+                    basis="Zero verified claims survived citation integrity check",
+                ),
                 claims=[],
                 citations=[],
             )
+
+        has_high_conf = citations and (len(verified) == len(claims))
+        confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         return Answer(
-            answer=parsed["answer"].strip(),
+            answer=answer_text,
+            status=AnswerStatus.ANSWERED,
+            reason_code=None,
+            reason=None,
+            confidence=Confidence(
+                level=confidence_level,
+                basis=f"Answer grounded in {len(citations)} verified citation(s)",
+            ),
             claims=verified,
             citations=citations,
         )

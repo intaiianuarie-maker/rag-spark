@@ -9,7 +9,7 @@ PASSWORD = "Correct-Horse-Battery-9"
 def main():
     email = f"live-test-{uuid.uuid4().hex[:8]}@example.com"
     print(f"[1] Registering user {email}...")
-    with httpx.Client(base_url=API_BASE, timeout=30.0) as client:
+    with httpx.Client(base_url=API_BASE, timeout=60.0) as client:
         r = client.post("/auth/register", json={"email": email, "password": PASSWORD})
         assert r.status_code == 201, f"Register failed: {r.status_code} {r.text}"
 
@@ -47,12 +47,16 @@ def main():
         print("[6] Testing Ask endpoint via OpenRouter cloud...")
         r = client.post(
             f"/v1/workspaces/{ws_id}/ask",
-            json={"query": "What permissions are configured?", "model": "nvidia/nemotron-3.5-lightning:free"},
+            json={"query": "What permissions are configured?", "model": "openai/gpt-4o-mini"},
             headers=auth_headers,
         )
         print(f"Ask response status: {r.status_code}")
         print(f"Ask response body: {r.text}")
         assert r.status_code in {200, 503}, f"Unexpected status: {r.status_code}"
+        if r.status_code == 200:
+            data = r.json()
+            assert "status" in data, f"Missing status in answer: {data}"
+            print(f"Verified Answer status={data.get('status')}, reason_code={data.get('reason_code')}")
 
     print("ALL LIVE TESTS COMPLETED SUCCESSFULLY!")
 

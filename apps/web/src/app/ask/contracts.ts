@@ -17,8 +17,20 @@ export type Claim = {
   chunk_ids: string[];
 };
 
+export type Confidence = {
+  level: "high" | "medium" | "low" | "unavailable";
+  basis: string;
+  probability?: number | null;
+};
+
 export type AnswerPayload = {
   answer: string;
+  status: "answered" | "partial" | "insufficient_evidence" | "clarification_needed" | "unavailable";
+  reason_code?: string | null;
+  reason?: string | null;
+  confidence?: Confidence;
+  limitations?: string[];
+  trace_id?: string | null;
   claims: Claim[];
   citations: Citation[];
 };

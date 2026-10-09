@@ -8,7 +8,30 @@ section, span).
 
 from __future__ import annotations
 
+from enum import StrEnum
+
 from pydantic import BaseModel, Field
+
+
+class AnswerStatus(StrEnum):
+    ANSWERED = "answered"
+    PARTIAL = "partial"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+    CLARIFICATION_NEEDED = "clarification_needed"
+    UNAVAILABLE = "unavailable"
+
+
+class ConfidenceLevel(StrEnum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+    UNAVAILABLE = "unavailable"
+
+
+class Confidence(BaseModel):
+    level: ConfidenceLevel = ConfidenceLevel.MEDIUM
+    basis: str = ""
+    probability: float | None = None
 
 
 class Claim(BaseModel):
@@ -33,8 +56,15 @@ class Citation(BaseModel):
 
 
 class Answer(BaseModel):
-    """Final answer: text + verified claims + citations."""
+    """Final answer: text + verified claims + citations + honest quality/reliability metadata."""
 
     answer: str
+    status: AnswerStatus = AnswerStatus.ANSWERED
+    reason_code: str | None = None
+    reason: str | None = None
+    confidence: Confidence = Field(default_factory=Confidence)
+    limitations: list[str] = Field(default_factory=list)
+    trace_id: str | None = None
     claims: list[Claim] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+
