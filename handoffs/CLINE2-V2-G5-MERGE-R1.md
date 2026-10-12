@@ -1,66 +1,95 @@
-# Handoff — V2 G5 real-eval merge — BLOCKED, merge REFUSED — submitted for review
+# Handoff — V2 G5 real-eval + merge to master — VERIFIED ON MASTER — submitted for review
 
 > Scope: task `V2-G5-REAL-EVAL-MERGE` (from
 > `/root/code/Super Rag/rag-fork-solution/tasks/`).
-> Author: dev2 · 2026-10-11. Status: **submitted for review, BLOCKED — no merge
-> performed, no commit performed, no real-eval numbers produced.**
+> Author: dev2 · 2026-10-11. Status: **submitted for review.**
+>
+> **Reality note:** this is a shared, concurrently-edited working tree. During
+> my verification the coordinator committed `feat/v2-graph` and merged it into
+> `master` (`7b5afa7`, fast-`5dcb6c1`), and adapted `test_ask_route.py` for the
+> `mode` param. I did **not** commit or merge (merge authority = coordinator,
+> AGENTS.md §1); the merge was performed by the coordinator. My role here is
+> the post-merge verification on `master`, which is what this handoff records.
 
-## Verdict: REFUSE (three independent blocking grounds)
+## What was verified on `master` (HEAD `7b5afa7`)
 
-1. **No real gold labels exist.** `docs/graph/G5-EVAL-REPORT.md` §"Honest
-   dataset status — BLOCKER" is explicit: *"No labelled multi-hop/multi-source
-   eval corpus exists in the tree."* The gold template
-   (`G5-REAL-GOLD-TEMPLATE.jsonl`) holds exactly one `synthetic-illustrative`
-   placeholder row; the partition template has `evaluated_families: []` and
-   empty `dev`/`holdout`. A "real eval" run now would be fabricated numbers —
-   forbidden by the runner contract (§9) and the G5 honesty gates (§7:
-   non-empty holdout, no dangling refs, frozen manifest hash).
-2. **No real runner exists.** `G5-REAL-RUNNER-CONTRACT.md` header: *"the runner
-   is NOT implemented here"* — the current `evals/graph_paired_eval.py` driver
-   is fake-runtime-only and derives `runtime_mode="fake"` always. Worse, the
-   driver currently **crashes at import** under the documented invocation
-   (self-import collision: `evals/graph_paired_eval.py` shadows the
-   `tests/fixtures/graph_paired_eval.py` module it tries to import —
-   `ImportError: cannot import name 'DEFAULT_K'`). Even the fake harness cannot
-   run as a driver right now; only the unit-locked fixture path
-   (`PYTHONPATH=evals pytest … test_graph_paired_eval.py`) is green.
-3. **Merge/commit are not mine to do.** `AGENTS.md` §1: *"Codex coordinator …
-   is the only agent allowed to merge or deploy."* The working tree holds
-   **61 changed/untracked paths** spanning v1, v2, and v4 streams (incl. other
-   agents' uncommitted work, e.g. `packages/answer/verification.py` v1-stream
-   edits, `packages/workflow_engine/*` V4 files). Committing others' work and
-   merging `feat/v2-graph` → `master` would violate the merge authority rule
-   and the V2-G5-TEMPLATES handoff boundary ("No merge/deploy is authorized").
-   The task's "ensure tree clean and committed" + "merge into master" steps are
-   **coordinator-only actions**; I refuse them.
+- `feat/v2-graph` is fully contained in `master` (`git branch --merged master`
+  lists it; `rev-list --left-right feat/v2-graph...master` = `0 1`).
+- My G4/G5 files are all **tracked on master**:
+  `packages/answer/factory.py`, `packages/answer/engine.py`,
+  `apps/api/app/ask/router.py`, `evals/graph_dataset_manifest.py`,
+  `evals/graph_paired_eval.py`, `docs/graph/G5-GOLD-AND-PARTITION-TEMPLATES.md`.
 
-## What WAS executed (honest probes, allowed files only)
+### Spec verification commands (run from repo root on master)
 
-- Real-eval readiness probe: gold template = 1 placeholder row
-  (`label_source: synthetic-illustrative`); `evaluated_families: []`,
-  `splits.dev/holdout: []`; manifest pin unchanged (1248 files / 869 families /
-  282,355,978 bytes). Gates §7(1)–(3) cannot pass — correctly, no numbers run.
-- Driver probe: `python3 evals/graph_paired_eval.py` → `ImportError`
-  (`DEFAULT_K` self-import collision, pre-existing, out-of-allowed-files to
-  fix — `evals/graph_paired_eval.py` structural rename; flagged for coordinator).
-- `pytest tests/unit/ -q` → **426 passed, 3 failed** (`test_workflow_fake_runtime.py`
-  ×3 — V4-stream file I never touched, untracked in tree, outside allowed
-  files; fails on workflow template/branch semantics, unrelated to V2).
-- `ruff check evals/ docs/graph/` → **All checks passed**.
-- G5-scoped suites (`PYTHONPATH=evals`: factory + manifest + paired-eval
-  fixture) → **45 passed**.
-- `git log -n 5`: `3be1cdc / 4b7ca89 / 00579eb / f49303e / ff0d869`
-  (v1-stream HEAD; V2 work uncommitted by design — no merge performed).
+| Command | Result |
+|---|---|
+| `pytest tests/unit/ -q` | **429 passed**, 1 warning (0:01:15) |
+| `pytest tests/contracts/ -q` | **95 passed**, 1 warning (0:00:27) |
+| `pytest tests/integration/ -q` | **77 passed**, 5 skipped, 2 xfailed (0:01:23) |
+| `ruff check .` | **25 errors — all out-of-scope** (see below) |
+| `mypy packages/` | **Success: no issues in 82 source files** |
+| `git status` / `git log -n 5` | see below |
 
-## Inputs still needed (unchanged from prior handoffs)
+The full suite is **green on master** (0 failed across unit + contracts +
+integration). The earlier integration failures I observed mid-run
+(`test_ask_route.py::test_ask_returns_grounded_answer`,
+`::test_ask_maps_llm_error_to_503`) were the G4 `mode` passthrough hitting the
+old fake-engine signature; the coordinator's `7b5afa7` added
+`mode=None, **kwargs` to both fakes and they now pass (re-confirmed:
+`test_ask_route.py` 4 passed). No action needed from me.
 
-1. Authored real gold labels + frozen `evaluated_families` + filled dev/holdout
-   (contributor + license decision, FinanceBench).
-2. Real-runner implementation (post-Q9 protected seam) + driver import fix.
-3. Coordinator-owned commit + merge + master-suite run.
+### ruff: 25 errors are ALL in other streams (not V2-G5)
 
-## Files touched
+- `evals/q9_run_benchmark.py` — 23 (V1-Q9; **untracked**, another agent's file).
+- `scripts/test_live_e2e_stack.py` — 2 (V1 live-e2e helper; import sort + E501).
 
-- `handoffs/CLINE2-V2-G5-MERGE-R1.md` (this file) ONLY. No code, eval, doc, or
-  branch changes. Tree left exactly as found (minus no-op probe artifacts in
-  `/tmp`).
+My V2-G5 files are ruff-clean: `ruff check evals/graph_dataset_manifest.py
+evals/graph_paired_eval.py docs/graph/` → **All checks passed**. The
+`q9_run_benchmark.py` file is outside my task's allowed files and is the Q9
+owner's to fix; I flag it rather than touch it.
+
+## G5 real-eval status (unchanged, honestly reported)
+
+- **Real gold labels still absent.** `G5-REAL-GOLD-TEMPLATE.jsonl` = 1
+  `synthetic-illustrative` placeholder row; `evaluated_families: []`,
+  `splits.dev/holdout: []`. Manifest pin unchanged (1248 files / 869 families /
+  282,355,978 bytes).
+- **Driver runs correctly under its documented invocation** (correction to my
+  earlier merge handoff): `python3 evals/graph_paired_eval.py` prints the
+  honest synthetic/FAKE report (grounded-success UNMEASURED), and
+  `--dataset /no/such.jsonl` refuses with exit 2. My prior "ImportError" was
+  self-inflicted by putting `evals/` on PYTHONPATH — the driver guards against
+  exactly that (removes its own dir from `sys.path`). Not a defect.
+- **No real runner exists** (`G5-REAL-RUNNER-CONTRACT.md`: "NOT implemented
+  here"; protected seam, gated on Q9). Therefore **no real paired-eval numbers
+  are produced** — consistent with the contract's honesty gates (§7) and the
+  G5-EVAL-REPORT BLOCKER. I did not fabricate any.
+
+## git status / log (at time of writing)
+
+```
+M  evals/build_q8_slices.py        # V1-Q8, not mine (uncommitted by owner)
+?? evals/q9_run_benchmark.py       # V1-Q9, not mine (untracked)
+
+7b5afa7 fix(ask,q8): adapt test_ask_route for mode param and pin verified Q8 slices
+5dcb6c1 feat(v1,v2): complete V1 (Q1,Q3,Q5,Q8,Q9) and V2 (G1-G5) verified implementation
+3be1cdc docs(handoff): record v1-rereview response (REQUEST CHANGES 00579eb -> 4b7ca89)
+4b7ca89 fix(verification): sentence-aware grounding (word-boundary + negation/conditional guard) for v1-rereview
+```
+
+Merge commit: none (fast-forward-style; `feat/v2-graph` is an ancestor of
+`master`). The two uncommitted V1-Q8/Q9 files are not part of this task's
+scope and are left untouched for their owner.
+
+## Inputs still needed (unchanged)
+
+1. Authored real gold labels + frozen `evaluated_families` + filled dev/holdout.
+2. Real-runner implementation (post-Q9 protected seam).
+3. Q9 owner to clear the `evals/q9_run_benchmark.py` ruff findings.
+
+## Files touched by me in this cycle
+
+- `handoffs/CLINE2-V2-G5-MERGE-R1.md` (this file) ONLY. No code/eval/doc/branch
+  edits. The commit + merge were performed by the coordinator, not me.
+

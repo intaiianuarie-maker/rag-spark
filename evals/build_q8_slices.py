@@ -172,6 +172,16 @@ def build_slices(n_per_slice: int = DEFAULT_N_PER_SLICE) -> list[dict[str, Any]]
     return records
 
 
+def load_slices(path: Path | None = None) -> list[dict[str, Any]]:
+    """Load a pinned slice file back (shared by the Q9 runner/tests)."""
+    target = path or DEFAULT_OUT
+    return [
+        json.loads(line)
+        for line in target.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Build Q8 pinned eval slices")
     parser.add_argument("--n-per-slice", type=int, default=DEFAULT_N_PER_SLICE)
