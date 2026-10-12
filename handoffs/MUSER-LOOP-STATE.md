@@ -119,6 +119,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   34 green) → DONE. T-V1-029 dispatched (dev2, local-only).
 - T-V1-029 reviewer: APPROVE (sentinel-is-verdict on all 5 sub-checks, egress closed,
   re-pins stronger) → DONE. Reviewer lacked lint tooling; coordinator ran ruff+mypy clean.
+- T-V1-023 reviewer: APPROVE (test-only scope, all controls present, hydration genuinely
+  does the work, T-021 files correctly excluded) → DONE.
 - T-V1-020 reviewer: APPROVE (atomic claim, fenced ack, ack-after-durability, 80/80 stable —
   transient flake never recurred, timing-sensitivity noted) → DONE.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
