@@ -1,4 +1,14 @@
-"""Worker loop + retry/failure policy for ingestion jobs (M2-001c)."""
+"""Worker loop + retry/failure policy for ingestion jobs (M2-001c).
+
+T-V1-026 (trace propagation): the queue carries the ``job_id``, and that id is
+the ingestion tracking ID. :func:`process_one` binds it to the structured-log
+correlation slot for the whole job, so every stage, every store call and every
+failure record written by this worker — including the terminal
+``error_code``/``error_message`` on the job row — carries the same id the
+``/jobs/{id}`` poll returns. Ingress → queue → worker → stores is therefore one
+joinable trace with no schema change (the job id already crosses every one of
+those boundaries).
+"""
 
 from __future__ import annotations
 
@@ -8,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 
 from core.errors import normalize_code
+from core.logging import request_id_ctx, set_request_id
 from ingestion.persistence import (
     IngestionJob,
     JobStage,
@@ -38,6 +49,7 @@ async def record_failure(
     #: registered as-is), so this changes no stored value today.
     job.error_code = normalize_code(exc.code)
     job.error_message = (exc.message or "")[:2000]
+    trace_id = request_id_ctx.get()
 
     if exc.retryable and job.attempts < job.max_attempts:
         job.status = JobStatus.QUEUED.value
@@ -53,6 +65,7 @@ async def record_failure(
                 "attempts": job.attempts,
                 "delay": delay,
                 "error": exc.code,
+                "trace_id": trace_id,
             },
         )
     else:
@@ -67,11 +80,16 @@ async def record_failure(
                 "job_id": str(job.id),
                 "attempts": job.attempts,
                 "error": exc.code,
+                "trace_id": trace_id,
             },
         )
 
 
 async def process_one(job_id: uuid.UUID) -> None:
+    # T-V1-026: bind the tracking ID for the whole job. The queue entry IS the
+    # job id, so this single binding is what joins ingress (the upload that
+    # created the job) to every worker stage and store write below it.
+    set_request_id(str(job_id))
     async with get_session_factory()() as session:
         try:
             await process_job(session, job_id)

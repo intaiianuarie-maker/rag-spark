@@ -9,6 +9,12 @@ interfaces.
 
 Carried from M4-001 acceptance: an `LLMProviderError` (gateway down) is
 surfaced as **503**, never 500.
+
+T-V1-026 (honest failure statuses): both failure legs of this route carry a
+``trace_id`` — the request's tracking ID — so a support ticket can be joined to
+the retrieval/generation log lines. A required retrieval leg being down is a
+**503** with the registered safe reason, exactly like the /search endpoint; a
+genuinely empty corpus is still a normal ``insufficient_evidence`` answer.
 """
 
 from __future__ import annotations
@@ -21,9 +27,10 @@ from dataclasses import replace
 
 from answer.engine import AnswerEngine
 from answer.factory import build_answer_engine
-from answer.models import Answer
+from answer.models import Answer, AnswerStatus
 from core.auth import ACLScope, Principal
-from core.errors import ReasonCode, error_detail
+from core.errors import ReasonCode, canonical_code, error_detail, spec_for
+from core.logging import request_id_ctx
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.adapters.litellm_provider import LLMProviderError
 from models.router_config import WorkspaceModelConfig, route
@@ -219,12 +226,14 @@ async def ask(
     engine.model = resolved_model
 
     try:
-        return await engine.answer(
+        answer = await engine.answer(
             query=body.query,
             acl_scope=ACLScope(user_id=principal.user_id, workspace_ids=[str(workspace_id)]),
             mode=body.mode,
         )
     except LLMProviderError as exc:
+        # T-V1-026: same tracking ID the engine's log line carries, so the
+        # operator can join the API response to the retrieval/generation trace.
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -232,6 +241,21 @@ async def ask(
                     ReasonCode.LLM_UNAVAILABLE,
                     "The model gateway is unavailable; try again shortly.",
                 ),
+                "trace_id": request_id_ctx.get(),
                 "cause": str(exc)[:300],
             },
         ) from exc
+
+    if answer.status == AnswerStatus.UNAVAILABLE:
+        # T-V1-026: a REQUIRED retrieval leg was down, so nothing was searched.
+        # That is a service failure, not an answer — the same 503 + registered
+        # safe reason + tracking ID the /search endpoint returns, so "no
+        # evidence" and "retrieval is down" stay distinguishable everywhere.
+        code = canonical_code(answer.reason_code or "") or ReasonCode.RETRIEVAL_UNAVAILABLE
+        spec = spec_for(code)
+        raise HTTPException(
+            status_code=(spec.http_status if spec else None) or status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={**error_detail(code, answer.reason), "trace_id": answer.trace_id},
+        )
+
+    return answer

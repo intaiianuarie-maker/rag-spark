@@ -16,6 +16,13 @@ Filters: ``type``/``source``/``collection`` ride in ``SearchFilter.metadata``
 against the ``created_at``/``updated_at``/``date`` metadata keys. A provided
 filter that matches nothing narrows (never widens): ACL scope is unchanged and
 filters only remove rows.
+
+T-V1-026 (honest failure statuses): the response now carries ``status`` /
+``reason_code`` / ``reason`` / ``trace_id``. An **empty corpus is still a 200
+with ``results: []`` and ``status: "ok"``**; a **required** retrieval leg
+failing (embeddings, Qdrant, Postgres FTS) is a **503** with the registered
+safe reason and the tracking ID, never an empty list. An optional leg (rerank)
+degrades to ``status: "degraded"`` with the results intact.
 """
 
 from __future__ import annotations
@@ -25,9 +32,12 @@ from datetime import date, datetime
 from typing import Any
 
 from core.auth import ACLScope, Principal
+from core.errors import ReasonCode, error_detail, spec_for
+from core.logging import request_id_ctx
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from retrieval.interfaces import RetrievalMode, SearchFilter
+from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retrieval_outcome
 
 from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
@@ -82,6 +92,16 @@ class SearchResultItem(BaseModel):
 class SearchResponse(BaseModel):
     results: list[SearchResultItem]
     mode: str
+    #: T-V1-026: honest per-run status. ``ok`` (results may still be empty —
+    #: an empty corpus is a fact, not a failure), ``degraded`` (an optional
+    #: capability such as the reranker was unavailable; results stand) or
+    #: ``unavailable`` (never here: a required leg failing returns 503 instead,
+    #: so "no results" and "search is down" cannot be confused). ``trace_id``
+    #: is the tracking ID for support; it is present on every response.
+    status: str = RetrievalStatus.OK.value
+    reason_code: str | None = None
+    reason: str | None = None
+    trace_id: str | None = None
 
 
 def build_search_filter(*, workspace_id: str, filters: SearchFilters) -> SearchFilter:
@@ -156,6 +176,24 @@ def _passes_post_filters(metadata: dict[str, Any], filters: SearchFilters) -> bo
     return True
 
 
+def _retrieval_outcome() -> RetrievalResult:
+    """Outcome of the ``retrieve()`` call this handler just made (T-V1-026).
+
+    ``pop_retrieval_outcome`` reads the context-local result published by
+    :class:`retrieval.orchestrator.HybridRetrievalOrchestrator` and clears it,
+    so a stale outcome can never be served to a later request. Test doubles and
+    orchestrators that predate this ticket publish nothing and get the healthy
+    default (``ok``), which keeps every existing fake working unchanged.
+    """
+    return pop_retrieval_outcome() or RetrievalResult(items=[])
+
+
+def _unavailable_status(reason_code: ReasonCode | None) -> int:
+    """Registered HTTP status for the failure, defaulting to 503 (retryable)."""
+    spec = spec_for(reason_code) if reason_code is not None else None
+    return spec.http_status if spec is not None and spec.http_status else 503
+
+
 @router.post(
     "/search",
     response_model=SearchResponse,
@@ -191,6 +229,23 @@ async def search(
         mode=body.mode,
         extra_filter=query_filter,
     )
+    # T-V1-026: read the honest outcome the orchestrator published for THIS
+    # call (context-local, so concurrent requests never read each other's).
+    # The items themselves always come from the call's return value, so an
+    # orchestrator that predates this ticket (or a test double) behaves
+    # exactly as before and simply reports a healthy ``ok``.
+    outcome = _retrieval_outcome()
+
+    if outcome.status is RetrievalStatus.UNAVAILABLE:
+        # A required leg failed: fail closed with the registered safe reason +
+        # the tracking ID. Never an empty 200 that reads as "no results".
+        raise HTTPException(
+            status_code=_unavailable_status(outcome.reason_code),
+            detail={
+                **error_detail(outcome.reason_code or ReasonCode.RETRIEVAL_UNAVAILABLE),
+                "trace_id": outcome.trace_id,
+            },
+        )
 
     narrowed = [item for item in results if _passes_post_filters(item.metadata, body.filters)]
 
@@ -211,6 +266,10 @@ async def search(
             for item in narrowed
         ],
         mode=body.mode.value,
+        status=outcome.status.value,
+        reason_code=outcome.reason_code.value if outcome.reason_code else None,
+        reason=outcome.reason or None,
+        trace_id=outcome.trace_id or request_id_ctx.get(),
     )
 
 

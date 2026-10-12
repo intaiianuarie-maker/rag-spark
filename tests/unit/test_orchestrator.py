@@ -12,6 +12,7 @@ import math
 
 import pytest
 from core.auth import ACLScope
+from core.errors import ReasonCode
 from harness_fakes import (
     FakeEmbeddingProvider,
     FakeLexicalStore,
@@ -25,6 +26,7 @@ from retrieval.contract_tests import check_rrf_determinism
 from retrieval.interfaces import Reranker, RetrievalMethod, SearchFilter
 from retrieval.orchestrator import (
     HybridRetrievalOrchestrator,
+    RetrievalStatus,
     reciprocal_rank_fusion,
     sort_fused,
 )
@@ -297,12 +299,19 @@ async def test_rerank_down_degrades_to_rrf(
     _enable_orchestrator_logger(monkeypatch)
     orchestrator, _, _ = await _orchestrator(reranker=_BrokenReranker())
     with caplog.at_level("WARNING"):
-        items = await orchestrator.retrieve(
+        result = await orchestrator.retrieve_result(
             query="hybrid retrieval", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
         )
-    assert items, "must still return RRF results"
-    assert all(item.method == RetrievalMethod.FUSED for item in items)
+    assert result.items, "must still return RRF results"
+    assert all(item.method == RetrievalMethod.FUSED for item in result.items)
     assert "rerank_fallback" in caplog.text
+    # T-V1-026: an OPTIONAL leg failing degrades, never blocks — and it is
+    # disclosed, not silent.
+    assert result.status is RetrievalStatus.DEGRADED
+    assert result.reason_code is ReasonCode.RERANK_UNAVAILABLE
+    assert result.reason
+    assert result.trace_id
+    assert [failure.leg for failure in result.legs_failed] == ["rerank"]
 
 
 # --- store degradation (C4) -------------------------------------------------
@@ -335,6 +344,15 @@ class _BrokenLexical(FakeLexicalStore):
 async def test_missing_leg_degrades(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
+    """T-V1-026: a FAILED leg is never a silent empty — the run is ``unavailable``.
+
+    The lexical store is REQUIRED for hybrid search (``DEPENDENCY_MATRIX``:
+    Postgres), so its failure fails the run closed and its items are
+    discarded, with the canonical reason + tracking ID attached. (This test
+    previously asserted the opposite — that the dense leg alone "must still
+    produce results" — which is exactly the silent-empty conversion T-V1-026
+    is dispatched to remove.)
+    """
     _enable_orchestrator_logger(monkeypatch)
     dense = FakeVectorStore(dimension=DIMENSION)
     await dense.ensure_collection(collection=COLLECTION, dimension=DIMENSION)
@@ -346,12 +364,19 @@ async def test_missing_leg_degrades(
         collection=COLLECTION,
     )
     with caplog.at_level("WARNING"):
-        items = await orchestrator.retrieve(
+        result = await orchestrator.retrieve_result(
             query="hybrid retrieval evidence",
             acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
         )
-    assert items, "dense leg alone must still produce results"
+    assert result.items == [], "a half-corpus answer must never be served as complete"
+    assert result.status is RetrievalStatus.UNAVAILABLE
+    assert result.reason_code is ReasonCode.RETRIEVAL_UNAVAILABLE
+    assert result.reason, "the safe user-facing reason must be populated"
+    assert result.trace_id, "every failure carries a tracking ID"
+    assert [failure.leg for failure in result.legs_failed] == ["lexical"]
     assert "retrieval_leg_failed" in caplog.text
+    # No prompt/secret content in the surfaced trace: type name only.
+    assert all("lexical down" not in failure.error_type for failure in result.legs_failed)
 
 
 async def test_store_search_receives_the_scope_filter() -> None:
@@ -428,7 +453,12 @@ class _BrokenDense(FakeVectorStore):
 async def test_semantic_mode_degrades_to_empty_on_dense_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """SEMANTIC leg degrades like the hybrid fan-out (no 500 on store fail)."""
+    """T-V1-026: SEMANTIC with a dead dense leg is ``unavailable``, not ``[]``.
+
+    Dense retrieval is REQUIRED for semantic search, so the run fails closed
+    with ``RETRIEVAL_UNAVAILABLE`` + a tracking ID instead of returning an
+    empty list that reads as "no results".
+    """
     from retrieval.interfaces import RetrievalMode
 
     _enable_orchestrator_logger(monkeypatch)
@@ -442,19 +472,22 @@ async def test_semantic_mode_degrades_to_empty_on_dense_failure(
         collection=COLLECTION,
     )
     with caplog.at_level("WARNING"):
-        items = await orchestrator.retrieve(
+        result = await orchestrator.retrieve_result(
             query="hybrid retrieval",
             acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
             mode=RetrievalMode.SEMANTIC,
         )
-    assert items == []
+    assert result.items == []
+    assert result.status is RetrievalStatus.UNAVAILABLE
+    assert result.reason_code is ReasonCode.RETRIEVAL_UNAVAILABLE
+    assert result.trace_id
     assert "retrieval_leg_failed" in caplog.text
 
 
 async def test_keyword_mode_degrades_to_empty_on_lexical_failure(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """KEYWORD leg degrades like the hybrid fan-out (no 500 on store fail)."""
+    """T-V1-026: KEYWORD with a dead lexical leg is ``unavailable``, not ``[]``."""
     from retrieval.interfaces import RetrievalMode
 
     _enable_orchestrator_logger(monkeypatch)
@@ -468,12 +501,15 @@ async def test_keyword_mode_degrades_to_empty_on_lexical_failure(
         collection=COLLECTION,
     )
     with caplog.at_level("WARNING"):
-        items = await orchestrator.retrieve(
+        result = await orchestrator.retrieve_result(
             query="hybrid retrieval",
             acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
             mode=RetrievalMode.KEYWORD,
         )
-    assert items == []
+    assert result.items == []
+    assert result.status is RetrievalStatus.UNAVAILABLE
+    assert result.reason_code is ReasonCode.RETRIEVAL_UNAVAILABLE
+    assert result.trace_id
     assert "retrieval_leg_failed" in caplog.text
 
 

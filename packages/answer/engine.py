@@ -32,6 +32,13 @@ Guarantees:
 - **Typed failures**: an LLM provider error propagates as the provider's typed
   error so the route can map it (503); unparseable or claimless model output
   abstains with ``INSUFFICIENT_EVIDENCE`` rather than returning raw prose.
+- **Honest leg statuses (T-V1-026)**: retrieval outcomes are read from the
+  orchestrator's context-local report, so a **required** retrieval leg failing
+  returns ``UNAVAILABLE`` with the registered safe reason and the tracking ID
+  — the model is never called on an unsearched corpus, and a down service is
+  never reported as "insufficient evidence". An **optional** leg (reranker)
+  downgrades a standing answer to ``DEGRADED`` with the degradation disclosed.
+  An **empty corpus is unchanged**: real abstention with ``EVIDENCE_MISSING``.
 """
 
 from __future__ import annotations
@@ -40,6 +47,7 @@ import logging
 from dataclasses import dataclass, field
 
 from core.auth import ACLScope
+from core.errors import ReasonCode
 from core.logging import request_id_ctx
 from models.interfaces import (
     ChatMessage,
@@ -52,6 +60,7 @@ from retrieval.interfaces import (
     RetrievalMode,
     RetrievalOrchestrator,
 )
+from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retrieval_outcome
 
 from .interfaces import ChunkLookup
 from .models import Answer, AnswerStatus, Claim, Confidence, ConfidenceLevel
@@ -102,6 +111,43 @@ class AnswerEngine:
             mode=mode,
             context_top_k=self.max_context_items,
         )
+        # T-V1-026: the orchestrator published the honest outcome of that call
+        # on a context-local slot (works through the hydration decorator and
+        # through test doubles, which publish nothing and read as healthy).
+        outcome: RetrievalResult | None = pop_retrieval_outcome()
+        trace_id = request_id_ctx.get() or (outcome.trace_id if outcome else None)
+
+        if outcome is not None and outcome.status is RetrievalStatus.UNAVAILABLE:
+            # A REQUIRED leg failed: the corpus was never searched, so
+            # "insufficient evidence" would be a lie. Fail closed with the
+            # registered safe reason + tracking ID and never call the model on
+            # an empty context.
+            reason_code = (
+                outcome.reason_code.value if outcome.reason_code is not None else None
+            )
+            logger.warning(
+                "retrieval_unavailable",
+                extra={
+                    "event": "retrieval_unavailable",
+                    "reason_code": reason_code,
+                    "trace_id": trace_id,
+                    "legs_failed": [failure.leg for failure in outcome.legs_failed],
+                },
+            )
+            return Answer(
+                answer="I cannot answer this question right now.",
+                status=AnswerStatus.UNAVAILABLE,
+                reason_code=reason_code,
+                reason=outcome.reason,
+                confidence=Confidence(
+                    level=ConfidenceLevel.LOW,
+                    basis="A required retrieval leg was unavailable; nothing was searched",
+                ),
+                trace_id=trace_id,
+                claims=[],
+                citations=[],
+            )
+
         prompt = build_prompt(query, items)
         request = GenerationRequest(
             model=self.model,
@@ -112,9 +158,21 @@ class AnswerEngine:
             temperature=self.temperature,
             max_tokens=self.max_tokens,
         )
-        result = await self.llm.generate(request)
-
-        trace_id = request_id_ctx.get()
+        try:
+            result = await self.llm.generate(request)
+        except Exception as exc:
+            # Generation leg: never swallow into an abstention. The typed
+            # provider error propagates so the route maps it to 503 with the
+            # same tracking ID this log line carries.
+            logger.warning(
+                "generation_leg_failed",
+                extra={
+                    "event": "generation_leg_failed",
+                    "error_type": type(exc).__name__,
+                    "trace_id": trace_id,
+                },
+            )
+            raise
 
         try:
             parsed = parse_model_output(result.text)
@@ -213,36 +271,71 @@ class AnswerEngine:
         if claims and len(verified) < len(claims):
             # Partial verification: render only from the verified claims.
             rendered_answer = " ".join(claim.text for claim in verified)
-            return Answer(
-                answer=rendered_answer,
-                status=AnswerStatus.PARTIAL,
-                reason_code="PARTIAL_EVIDENCE",
-                reason=(
-                    f"Only {len(verified)} of {len(claims)} "
-                    "claim(s) could be verified with valid citations."
+            return self._disclose(
+                Answer(
+                    answer=rendered_answer,
+                    status=AnswerStatus.PARTIAL,
+                    reason_code="PARTIAL_EVIDENCE",
+                    reason=(
+                        f"Only {len(verified)} of {len(claims)} "
+                        "claim(s) could be verified with valid citations."
+                    ),
+                    confidence=Confidence(
+                        level=ConfidenceLevel.MEDIUM,
+                        basis=(
+                            f"Partial verification: "
+                            f"{len(verified)}/{len(claims)} claim(s) supported"
+                        ),
+                    ),
+                    trace_id=trace_id,
+                    claims=verified,
+                    citations=citations,
                 ),
-                confidence=Confidence(
-                    level=ConfidenceLevel.MEDIUM,
-                    basis=f"Partial verification: {len(verified)}/{len(claims)} claim(s) supported",
-                ),
-                trace_id=trace_id,
-                claims=verified,
-                citations=citations,
+                outcome,
             )
 
         has_high_conf = bool(citations) and (len(verified) == len(claims) if claims else False)
         confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         rendered_answer = " ".join(claim.text for claim in verified)
-        return Answer(
-            answer=rendered_answer,
-            status=AnswerStatus.ANSWERED,
-            reason_code=None,
-            reason=None,
-            confidence=Confidence(
-                level=confidence_level,
-                basis=f"Answer grounded in {len(citations)} verified, substantiated citation(s)",
+        return self._disclose(
+            Answer(
+                answer=rendered_answer,
+                status=AnswerStatus.ANSWERED,
+                reason_code=None,
+                reason=None,
+                confidence=Confidence(
+                    level=confidence_level,
+                    basis=(
+                        f"Answer grounded in {len(citations)} "
+                        "verified, substantiated citation(s)"
+                    ),
+                ),
+                trace_id=trace_id,
+                claims=verified,
+                citations=citations,
             ),
-            trace_id=trace_id,
-            claims=verified,
-            citations=citations,
+            outcome,
+        )
+
+    @staticmethod
+    def _disclose(answer: Answer, outcome: RetrievalResult | None) -> Answer:
+        """Downgrade a standing answer to ``degraded`` when an OPTIONAL leg was down.
+
+        T-V1-026: the answer still stands, but the user must be told the
+        reranker (or another optional capability) was unavailable. The reason
+        code is kept inside the set registered for ``degraded``
+        (``RERANK_UNAVAILABLE`` / ``DEGRADED_RESULT``); per-leg codes such as
+        ``GRAPH_UNAVAILABLE`` remain observable on the retrieval side.
+        """
+        if outcome is None or outcome.status is not RetrievalStatus.DEGRADED:
+            return answer
+        code = outcome.reason_code
+        if code is None or code.value not in {"DEGRADED_RESULT", "RERANK_UNAVAILABLE"}:
+            code = ReasonCode.DEGRADED_RESULT
+        return answer.model_copy(
+            update={
+                "status": AnswerStatus.DEGRADED,
+                "reason_code": code.value,
+                "reason": outcome.reason,
+            }
         )

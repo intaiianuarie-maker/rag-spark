@@ -14,6 +14,17 @@ Guarantees (locked by `retrieval.contract_tests`):
 - **Fail closed, never raise (boss ruling 2026-10-07).** An empty/unscoped
   `ACLScope` returns ``[]`` without calling any retriever. Store/rerank
   failures degrade (that leg contributes nothing) instead of raising.
+- **Honest leg failure (T-V1-026).** A failing leg is never silently converted
+  into an empty one. Every ``retrieve()`` call publishes a
+  :class:`RetrievalResult` on :data:`retrieval_outcome_ctx` carrying a
+  :class:`RetrievalStatus` (``ok`` / ``degraded`` / ``unavailable``), the
+  canonical ``ReasonCode`` and a tracking ID. A **required** leg failing
+  (``REQUIRED_LEGS``) makes the whole result ``unavailable`` and its items are
+  **discarded** — a half-corpus answer presented as complete is the bug this
+  exists to kill — while an **optional** leg (``sparse``, ``graph``, ``rerank``)
+  degrades the result and keeps the items. An **empty corpus is not a
+  failure**: every leg running cleanly and returning nothing is ``ok`` with
+  ``items == []``.
 - **Deterministic fusion.** ``score(d) = Σ 1/(k + rank)`` accumulated with
   ``math.fsum`` (order-independent), tie-broken by id ascending.
 - **Trace rule (RAG debugger contract).** Every returned item always carries
@@ -34,9 +45,14 @@ import asyncio
 import logging
 import math
 from collections.abc import Sequence
+from contextvars import ContextVar
+from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import Any, Protocol, runtime_checkable
 
 from core.auth import ACLScope
+from core.errors import ReasonCode, spec_for
+from core.logging import new_request_id, request_id_ctx
 
 from .interfaces import (
     DEFAULT_CONTEXT_TOP_K,
@@ -64,6 +80,134 @@ RRF_K = 60
 #: ``graph`` appears when the optional graph retriever leg surfaced the item
 #: (see V2-GRAPH-PLAN G3/G4).
 TRACE_KEYS = ("dense", "sparse", "lexical", "graph", "rrf", "rerank")
+
+
+# --- T-V1-026: honest per-leg failure statuses ------------------------------
+
+
+class RetrievalStatus(StrEnum):
+    """Terminal status of ONE retrieval (shared by search, ask and the UI).
+
+    ``ok`` — every leg that ran succeeded; ``items`` may still be empty (an
+    empty corpus is a fact, not a failure).
+    ``degraded`` — the result stands, but an *optional* capability was
+    unavailable on the way (reranker, graph, sparse seam).
+    ``unavailable`` — a *required* leg for this mode failed, so ``items`` are
+    discarded: the caller must report a failure, never a silent empty list.
+    """
+
+    OK = "ok"
+    DEGRADED = "degraded"
+    UNAVAILABLE = "unavailable"
+
+
+@dataclass(frozen=True)
+class LegFailure:
+    """One failed leg, safe to surface.
+
+    ``error_type`` is the exception **class name only** — never ``str(exc)``,
+    which can carry hostnames, SQL or prompt fragments. The reason code is the
+    shared taxonomy member (``core.errors``), never a new literal.
+    """
+
+    leg: str
+    error_type: str
+    reason_code: ReasonCode
+
+    @property
+    def message(self) -> str:
+        """Registry-backed safe user-facing message for this leg."""
+        spec = spec_for(self.reason_code)
+        return spec.message if spec is not None else ""
+
+
+@dataclass(frozen=True)
+class RetrievalResult:
+    """Items plus the honest status of the run that produced them."""
+
+    items: list[RetrievedItem]
+    status: RetrievalStatus = RetrievalStatus.OK
+    reason_code: ReasonCode | None = None
+    trace_id: str = ""
+    legs_failed: tuple[LegFailure, ...] = field(default_factory=tuple)
+
+    @property
+    def reason(self) -> str:
+        """Safe user-facing reason (registry message); empty when healthy."""
+        if self.reason_code is None:
+            return ""
+        spec = spec_for(self.reason_code)
+        return spec.message if spec is not None else ""
+
+    @property
+    def degraded(self) -> bool:
+        return self.status is not RetrievalStatus.OK
+
+
+#: Reason code emitted per leg. Codes come from the T-V1-025 shared taxonomy;
+#: this module defines no code of its own (single-registry contract).
+LEG_REASON_CODES: dict[str, ReasonCode] = {
+    "embedding": ReasonCode.EMBED_UNAVAILABLE,
+    "dense": ReasonCode.RETRIEVAL_UNAVAILABLE,
+    "sparse": ReasonCode.DEGRADED_RESULT,
+    "lexical": ReasonCode.RETRIEVAL_UNAVAILABLE,
+    "graph": ReasonCode.GRAPH_UNAVAILABLE,
+    "rerank": ReasonCode.RERANK_UNAVAILABLE,
+}
+
+#: Legs that MUST succeed for each mode, grounded in ``DEPENDENCY_MATRIX``
+#: (``core.errors``): infinity embeddings and Qdrant/Postgres retrieval are
+#: REQUIRED for ``search``/``ask``. ``graph`` is optional everywhere (matrix
+#: OPTIONAL for search/ask) and ``sparse`` is the documented optional seam, so
+#: neither can fail a request closed. ``graph`` mode therefore has no required
+#: leg: it degrades, never fails.
+REQUIRED_LEGS: dict[str, tuple[str, ...]] = {
+    RetrievalMode.HYBRID.value: ("embedding", "dense", "lexical"),
+    RetrievalMode.HYBRID_GRAPH.value: ("embedding", "dense", "lexical"),
+    RetrievalMode.SEMANTIC.value: ("embedding", "dense"),
+    RetrievalMode.KEYWORD.value: ("lexical",),
+    RetrievalMode.GRAPH.value: (),
+}
+
+
+@dataclass
+class _LegReport:
+    """Per-call accumulator of leg failures (one per ``retrieve()`` call)."""
+
+    failures: list[LegFailure] = field(default_factory=list)
+
+    def record(self, leg: str, exc: BaseException, reason_code: ReasonCode) -> None:
+        self.failures.append(
+            LegFailure(leg=leg, error_type=type(exc).__name__, reason_code=reason_code)
+        )
+        logger.warning(
+            "retrieval_leg_failed",
+            extra={
+                "event": "retrieval_leg_failed",
+                "leg": leg,
+                "error_type": type(exc).__name__,
+                "reason_code": reason_code.value,
+            },
+        )
+
+    def failed(self, leg: str) -> bool:
+        return any(failure.leg == leg for failure in self.failures)
+
+
+#: The outcome of the most recent ``retrieve()`` on this task. Context-local
+#: (asyncio-safe) so a request, a worker job and a test each see only their own
+#: run. Consumed with :func:`pop_retrieval_outcome`, which resets it, so a
+#: stale outcome can never leak into a later call.
+retrieval_outcome_ctx: ContextVar[RetrievalResult | None] = ContextVar(
+    "retrieval_outcome", default=None
+)
+
+
+def pop_retrieval_outcome() -> RetrievalResult | None:
+    """Read **and clear** the outcome published by the last ``retrieve()``."""
+    outcome = retrieval_outcome_ctx.get()
+    retrieval_outcome_ctx.set(None)
+    return outcome
 
 
 @runtime_checkable
@@ -135,24 +279,72 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
     # --- fan-out ----------------------------------------------------------
 
     async def _dense_leg(
-        self, query: str, top_k: int, query_filter: SearchFilter
+        self,
+        query: str,
+        top_k: int,
+        query_filter: SearchFilter,
+        *,
+        report: _LegReport | None = None,
     ) -> list[RetrievedItem]:
-        vector = await self.embedding.embed_query(query)
-        return await self.dense.search(
-            collection=self.collection,
-            vector=vector,
-            top_k=top_k,
-            query_filter=query_filter,
-        )
+        """Embed the query, then search the dense store — two attributable legs.
+
+        The split is what lets a failure name the dependency that broke:
+        ``embed_query`` blowing up is an embeddings outage (``EMBED_UNAVAILABLE``),
+        the store blowing up is a retrieval outage (``RETRIEVAL_UNAVAILABLE``).
+        With no ``report`` the leg raises (legacy caller contract).
+        """
+        try:
+            vector = await self.embedding.embed_query(query)
+        except Exception as exc:
+            if report is None:
+                raise
+            report.record("embedding", exc, LEG_REASON_CODES["embedding"])
+            return []
+        try:
+            return await self.dense.search(
+                collection=self.collection,
+                vector=vector,
+                top_k=top_k,
+                query_filter=query_filter,
+            )
+        except Exception as exc:
+            if report is None:
+                raise
+            report.record("dense", exc, LEG_REASON_CODES["dense"])
+            return []
 
     async def _sparse_leg(
-        self, query: str, top_k: int, query_filter: SearchFilter
+        self,
+        query: str,
+        top_k: int,
+        query_filter: SearchFilter,
+        *,
+        report: _LegReport | None = None,
     ) -> list[RetrievedItem]:
         if self.sparse is None:
             return []
-        return await self.sparse.search(
-            query=query, top_k=top_k, query_filter=query_filter
-        )
+        if report is None:
+            return await self.sparse.search(
+                query=query, top_k=top_k, query_filter=query_filter
+            )
+        try:
+            return await self.sparse.search(
+                query=query, top_k=top_k, query_filter=query_filter
+            )
+        except Exception as exc:
+            report.record("sparse", exc, LEG_REASON_CODES["sparse"])
+            return []
+
+    async def _lexical_leg(
+        self, query: str, top_k: int, query_filter: SearchFilter, *, report: _LegReport
+    ) -> list[RetrievedItem]:
+        try:
+            return await self.lexical.search(
+                query=query, top_k=top_k, query_filter=query_filter
+            )
+        except Exception as exc:
+            report.record("lexical", exc, LEG_REASON_CODES["lexical"])
+            return []
 
     async def _fan_out(
         self,
@@ -162,29 +354,22 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         dense_top_k: int,
         sparse_top_k: int,
         lexical_top_k: int,
+        report: _LegReport,
     ) -> tuple[list[RetrievedItem], list[RetrievedItem], list[RetrievedItem]]:
-        """Run the three legs concurrently; a failing leg degrades to ``[]``."""
-        legs = await asyncio.gather(
-            self._dense_leg(query, dense_top_k, query_filter),
-            self._sparse_leg(query, sparse_top_k, query_filter),
-            self.lexical.search(query=query, top_k=lexical_top_k, query_filter=query_filter),
-            return_exceptions=True,
+        """Run the three legs concurrently; a failing leg records and yields ``[]``.
+
+        The failure is never silent: it lands on ``report`` (T-V1-026), which
+        decides whether it degrades the result or fails it closed.
+        """
+        dense_items, sparse_items, lexical_items = await asyncio.gather(
+            self._dense_leg(query, dense_top_k, query_filter, report=report),
+            self._sparse_leg(query, sparse_top_k, query_filter, report=report),
+            self._lexical_leg(query, lexical_top_k, query_filter, report=report),
         )
-        names = ("dense", "sparse", "lexical")
-        out: list[list[RetrievedItem]] = []
-        for name, result in zip(names, legs, strict=True):
-            if isinstance(result, BaseException):
-                logger.warning(
-                    f"retrieval_leg_failed: leg={name} error={result}",
-                    extra={"event": "retrieval_leg_failed", "leg": name, "error": str(result)},
-                )
-                out.append([])
-            else:
-                out.append(list(result))
-        return out[0], out[1], out[2]
+        return dense_items, sparse_items, lexical_items
 
     async def _graph_leg(
-        self, query: str, workspace_ids: Sequence[str]
+        self, query: str, workspace_ids: Sequence[str], *, report: _LegReport
     ) -> list[RetrievedItem]:
         if self.graph is None:
             return []
@@ -196,10 +381,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 global_res = await self.graph.global_search(workspace_id=ws_id, query=query)
                 items.extend(self.graph.to_retrieved_items(global_res, workspace_id=ws_id))
             except Exception as exc:
-                logger.warning(
-                    "retrieval_leg_failed",
-                    extra={"event": "retrieval_leg_failed", "leg": "graph", "error": str(exc)},
-                )
+                report.record("graph", exc, LEG_REASON_CODES["graph"])
         return items
 
     # --- ACL --------------------------------------------------------------
@@ -212,7 +394,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
 
     # --- pipeline ---------------------------------------------------------
 
-    async def retrieve(
+    async def retrieve_result(
         self,
         *,
         query: str,
@@ -225,14 +407,24 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         rerank_top_k: int = DEFAULT_RERANK_TOP_K,
         context_top_k: int = DEFAULT_CONTEXT_TOP_K,
         sparse_top_k: int = DEFAULT_LEXICAL_TOP_K,
-    ) -> list[RetrievedItem]:
+    ) -> RetrievalResult:
+        """Run the pipeline and report the honest outcome (T-V1-026).
+
+        Same retrieval as :meth:`retrieve`, plus the status, the canonical
+        reason code, the failed legs and a tracking ID. This is the method to
+        call when "no results" must be distinguishable from "search is down".
+        """
+        trace_id = request_id_ctx.get() or new_request_id()
+        report = _LegReport()
+
         # G0: empty/unscoped scope fails closed, before any retriever call.
+        # Not a failure: nothing was attempted.
         if acl_scope.is_empty:
-            return []
+            return RetrievalResult(items=[], trace_id=trace_id)
         # Micro #12: a blank/whitespace query can match nothing; return early
         # (no retriever/embedding calls). Matches the PG FTS store guard.
         if not query.strip():
-            return []
+            return RetrievalResult(items=[], trace_id=trace_id)
 
         allowed = set(acl_scope.workspace_ids)
         query_filter = SearchFilter(workspace_ids=list(acl_scope.workspace_ids))
@@ -250,47 +442,44 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         sparse_items: list[RetrievedItem] = []
         lexical_items: list[RetrievedItem] = []
         graph_items: list[RetrievedItem] = []
-        if mode == RetrievalMode.HYBRID:
+        if mode in (RetrievalMode.HYBRID, RetrievalMode.HYBRID_GRAPH):
             dense_items, sparse_items, lexical_items = await self._fan_out(
                 query,
                 query_filter,
                 dense_top_k=dense_top_k,
                 sparse_top_k=sparse_top_k,
                 lexical_top_k=lexical_top_k,
+                report=report,
             )
-        elif mode == RetrievalMode.HYBRID_GRAPH:
-            dense_items, sparse_items, lexical_items = await self._fan_out(
-                query,
-                query_filter,
-                dense_top_k=dense_top_k,
-                sparse_top_k=sparse_top_k,
-                lexical_top_k=lexical_top_k,
-            )
-            graph_items = await self._graph_leg(query, acl_scope.workspace_ids)
+            if mode == RetrievalMode.HYBRID_GRAPH:
+                graph_items = await self._graph_leg(
+                    query, acl_scope.workspace_ids, report=report
+                )
         elif mode == RetrievalMode.GRAPH:
-            graph_items = await self._graph_leg(query, acl_scope.workspace_ids)
+            graph_items = await self._graph_leg(query, acl_scope.workspace_ids, report=report)
         elif mode == RetrievalMode.SEMANTIC:
-            # Degrade like the hybrid fan-out: a dense/embedding failure
-            # yields [] for that mode instead of a 500 (fail-closed rule).
-            try:
-                dense_items = await self._dense_leg(query, dense_top_k, query_filter)
-            except Exception as exc:
-                logger.warning(
-                    "retrieval_leg_failed",
-                    extra={"event": "retrieval_leg_failed", "leg": "dense", "error": str(exc)},
-                )
-                dense_items = []
+            dense_items = await self._dense_leg(
+                query, dense_top_k, query_filter, report=report
+            )
         elif mode == RetrievalMode.KEYWORD:
-            try:
-                lexical_items = await self.lexical.search(
-                    query=query, top_k=lexical_top_k, query_filter=query_filter
-                )
-            except Exception as exc:
-                logger.warning(
-                    "retrieval_leg_failed",
-                    extra={"event": "retrieval_leg_failed", "leg": "lexical", "error": str(exc)},
-                )
-                lexical_items = []
+            lexical_items = await self._lexical_leg(
+                query, lexical_top_k, query_filter, report=report
+            )
+
+        # Required-leg verdict: a REQUIRED leg for this mode that failed fails
+        # the whole result closed, with its items discarded (never a silent
+        # empty list, never a half-corpus answer presented as complete).
+        required = REQUIRED_LEGS.get(mode.value, ())
+        blocking = [failure for failure in report.failures if failure.leg in required]
+        if blocking:
+            primary = blocking[0]
+            return RetrievalResult(
+                items=[],
+                status=RetrievalStatus.UNAVAILABLE,
+                reason_code=primary.reason_code,
+                trace_id=trace_id,
+                legs_failed=tuple(report.failures),
+            )
 
         # Defense in depth: never rank/fuse an out-of-scope row even if a store
         # ignored its filter (R-004). Provenance-poor rows are dropped too.
@@ -340,9 +529,14 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                     query=query, documents=fused_items, top_k=rerank_top_k
                 )
             except Exception as exc:  # degrade, never 500 silently
+                report.record("rerank", exc, LEG_REASON_CODES["rerank"])
                 logger.warning(
                     "rerank_fallback",
-                    extra={"event": "rerank_fallback", "error": str(exc)},
+                    extra={
+                        "event": "rerank_fallback",
+                        "error_type": type(exc).__name__,
+                        "trace_id": trace_id,
+                    },
                 )
             else:
                 if reranked:
@@ -379,4 +573,61 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             if rerank_used:
                 scores["rerank"] = float(item.score)
             item.scores = scores
-        return selected
+
+        # Optional-leg verdict: the items stand, the degradation is disclosed.
+        # The top-level code is the STATUS-level one (``RERANK_UNAVAILABLE`` or
+        # the generic ``DEGRADED_RESULT``) so it always satisfies
+        # ``ANSWER_STATUS_REASON_CODES[degraded]``; the per-leg codes
+        # (``GRAPH_UNAVAILABLE``, …) stay visible on ``legs_failed``.
+        status = RetrievalStatus.OK
+        reason_code: ReasonCode | None = None
+        if report.failures:
+            status = RetrievalStatus.DEGRADED
+            reason_code = (
+                LEG_REASON_CODES["rerank"]
+                if report.failed("rerank")
+                else ReasonCode.DEGRADED_RESULT
+            )
+        return RetrievalResult(
+            items=selected,
+            status=status,
+            reason_code=reason_code,
+            trace_id=trace_id,
+            legs_failed=tuple(report.failures),
+        )
+
+    async def retrieve(
+        self,
+        *,
+        query: str,
+        acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        extra_filter: SearchFilter | None = None,
+        dense_top_k: int = DEFAULT_DENSE_TOP_K,
+        lexical_top_k: int = DEFAULT_LEXICAL_TOP_K,
+        fusion_top_k: int = DEFAULT_FUSION_TOP_K,
+        rerank_top_k: int = DEFAULT_RERANK_TOP_K,
+        context_top_k: int = DEFAULT_CONTEXT_TOP_K,
+        sparse_top_k: int = DEFAULT_LEXICAL_TOP_K,
+    ) -> list[RetrievedItem]:
+        """Items only — the legacy contract, unchanged for existing callers.
+
+        T-V1-026: the honest outcome is **not** lost on this path. It is
+        published to :data:`retrieval_outcome_ctx`, which the answer engine and
+        the search route read with :func:`pop_retrieval_outcome`. Callers that
+        need the status directly should use :meth:`retrieve_result`.
+        """
+        result = await self.retrieve_result(
+            query=query,
+            acl_scope=acl_scope,
+            mode=mode,
+            extra_filter=extra_filter,
+            dense_top_k=dense_top_k,
+            lexical_top_k=lexical_top_k,
+            fusion_top_k=fusion_top_k,
+            rerank_top_k=rerank_top_k,
+            context_top_k=context_top_k,
+            sparse_top_k=sparse_top_k,
+        )
+        retrieval_outcome_ctx.set(result)
+        return result.items

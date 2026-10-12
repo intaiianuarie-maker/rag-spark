@@ -107,6 +107,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   Prose erratum: handoff says 57 codes, code has 54 — docs touch queued, no code impact.
 - T-V1-018 reviewer: APPROVE (pre-evidence gate proven, write path untouched, all 3 risks
   judged non-blocking) → DONE.
+- T-V1-019 reviewer: APPROVE (gates correct, commit-before-raise proven, tests adequate,
+  all risks non-blocking; 2 harmless undocumented moves noted) → DONE.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
