@@ -303,6 +303,165 @@ describe("snapping the refresh flow onto app calls", () => {
   });
 });
 
+/**
+ * Serialization boundary contract (T-V1-010 · RP-06/RP-07 · QF-06/QF-07).
+ * These pin the ONE object→wire decision in auth-client: objects encoded
+ * exactly once, FormData/binary passed through by reference, and zero
+ * "does this string already look like JSON?" sniffing.
+ */
+describe("serialization boundary (T-V1-010)", () => {
+  /** Fresh client + the calls its scripted fetcher recorded. */
+  function harness(respond: () => Response = () => jsonResponse({ ok: true })) {
+    const { fetcher, calls, refreshCalls } = scriptedFetcher([
+      { match: "/api/backend", respond },
+      { match: "/api/auth/refresh", respond: () => jsonResponse({ ok: true }, 200) },
+    ]);
+    const client = createAuthClient({ fetcher, navigate: () => {} });
+    const backendCalls = () => calls.filter((call) => call.url.includes("/api/backend"));
+    return { client, calls, backendCalls, refreshCalls };
+  }
+
+  function headerOf(init: RequestInit, name: string): string | null {
+    return new Headers(init.headers).get(name);
+  }
+
+  it("object-in → object-out: a plain object is JSON-encoded exactly once", async () => {
+    const { client, backendCalls } = harness();
+    const body = { query: "what is RP-06?", nested: { a: [1, 2] }, flag: true };
+    await client.authFetch("/v1/ask", { method: "POST", body });
+
+    const init = backendCalls()[0].init;
+    expect(typeof init.body).toBe("string"); // wire form is text, not a live object
+    const decoded: unknown = JSON.parse(init.body as string);
+    expect(decoded).toEqual(body); // object-in → object-out (lossless round trip)
+    expect(decoded).not.toBeTypeOf("string"); // exactly ONCE: double encoding parses back to a string
+    expect(headerOf(init, "content-type")).toBe("application/json");
+  });
+
+  it("FormData passes through untouched: same instance, no content-type added", async () => {
+    const { client, backendCalls } = harness();
+    const form = new FormData();
+    const file = new File([new Uint8Array([0x00, 0xff, 0xfe, 0x80])], "hostile.bin");
+    form.append("file", file);
+    form.append("workspace_id", "ws-1");
+
+    await client.authFetch("/v1/documents", { method: "POST", body: form });
+
+    const init = backendCalls()[0].init;
+    expect(init.body).toBe(form); // identity: not cloned, not stringified, not re-encoded
+    expect(headerOf(init, "content-type")).toBeNull(); // boundary=… stays runtime-generated
+    expect((init.body as FormData).get("workspace_id")).toBe("ws-1");
+    expect((init.body as FormData).get("file")).toBe(file); // multipart parts untouched
+  });
+
+  it("binary bodies (ArrayBuffer / TypedArray) pass through untouched", async () => {
+    const { client, backendCalls } = harness();
+    const buffer = new Uint8Array([0xde, 0xad, 0xbe, 0xef]).buffer;
+    const bytes = new Uint8Array([1, 2, 3]);
+
+    await client.authFetch("/v1/raw-a", { method: "POST", body: buffer });
+    await client.authFetch("/v1/raw-b", { method: "POST", body: bytes });
+
+    const [first, second] = backendCalls();
+    expect(first.init.body).toBe(buffer);
+    expect(second.init.body).toBe(bytes);
+    expect(headerOf(first.init, "content-type")).toBeNull();
+    expect(headerOf(second.init, "content-type")).toBeNull();
+    expect(Array.from(new Uint8Array(first.init.body as ArrayBuffer))).toEqual([
+      0xde, 0xad, 0xbe, 0xef,
+    ]);
+  });
+
+  it("no string sniffing: JSON-looking text is sent byte-identical", async () => {
+    const { client, backendCalls } = harness();
+    const preJson = '{"already":"json","n":1}';
+
+    await client.authFetch("/v1/a", { method: "POST", body: preJson });
+
+    const init = backendCalls()[0].init;
+    expect(init.body).toBe(preJson); // not re-quoted, not parsed-and-restringified
+    expect(headerOf(init, "content-type")).toBeNull(); // no guess about what the string means
+
+    const { client: secondClient, backendCalls: secondCalls } = harness();
+    await secondClient.authFetch("/v1/b", { method: "POST", body: "plain text" });
+    const plain = secondCalls()[0].init;
+    expect(plain.body).toBe("plain text"); // verbatim, not '"plain text"'
+    expect(headerOf(plain, "content-type")).toBeNull();
+  });
+
+  it("a JSON-looking string nested in an object stays data, encoded once", async () => {
+    const { client, backendCalls } = harness();
+    await client.authFetch("/v1/c", { method: "POST", body: { raw: '{"a":1}' } });
+
+    const init = backendCalls()[0].init;
+    expect(JSON.parse(init.body as string)).toEqual({ raw: '{"a":1}' });
+    expect(headerOf(init, "content-type")).toBe("application/json");
+  });
+
+  it("keeps a caller-supplied content-type instead of clobbering it", async () => {
+    const { client, backendCalls } = harness();
+    await client.authFetch("/v1/thing", {
+      method: "PATCH",
+      body: { name: "renamed" },
+      headers: { "Content-Type": "application/merge-patch+json" },
+    });
+
+    const init = backendCalls()[0].init;
+    expect(headerOf(init, "content-type")).toBe("application/merge-patch+json");
+    expect(JSON.parse(init.body as string)).toEqual({ name: "renamed" });
+  });
+
+  it("GET never carries a body (even if one is supplied)", async () => {
+    const { client, backendCalls } = harness();
+    await client.authFetch("/v1/thing", { method: "GET", body: { ignored: true } });
+    expect(backendCalls()[0].init.body).toBeUndefined();
+  });
+
+  it("re-sends the identical FormData body across the 401 → refresh → retry", async () => {
+    let status: 401 | 200 = 401;
+    const { client, backendCalls, refreshCalls } = harness(() => {
+      const current = status;
+      status = 200;
+      return current === 401 ? new Response(null, { status: 401 }) : jsonResponse({ ok: true });
+    });
+    const form = new FormData();
+    form.append("workspace_id", "ws-1");
+
+    const result = await client.authFetch("/v1/documents", { method: "POST", body: form });
+
+    expect(result).toEqual({ ok: true });
+    expect(refreshCalls()).toBe(1);
+    const attempts = backendCalls();
+    expect(attempts).toHaveLength(2);
+    expect(attempts[1].init.body).toBe(form); // same instance, still untouched
+    expect(headerOf(attempts[1].init, "content-type")).toBeNull();
+  });
+
+  it("login/register/logout go through the same boundary (no second decision)", async () => {
+    const { fetcher, calls } = scriptedFetcher([
+      { match: "/api/auth/login", respond: () => jsonResponse({ ok: true }) },
+    ]);
+    const client = createAuthClient({ fetcher, navigate: () => {} });
+    await client.login("user@example.com", "pw");
+
+    const call = calls.find((entry) => entry.url.includes("/api/auth/login"))!;
+    expect(typeof call.init.body).toBe("string");
+    const decoded: unknown = JSON.parse(call.init.body as string);
+    expect(decoded).toEqual({ email: "user@example.com", password: "pw" });
+    expect(decoded).not.toBeTypeOf("string"); // encoded once, through serializeBody
+    expect(headerOf(call.init, "content-type")).toBe("application/json");
+  });
+
+  it("preserves error handling on a body-carrying request (AuthApiError)", async () => {
+    const { client } = harness(() =>
+      jsonResponse({ detail: { error: "validation_error", message: "Bad input." } }, 422),
+    );
+    await expect(
+      drive(client.authFetch("/v1/missing", { method: "POST", body: { a: 1 } })),
+    ).rejects.toMatchObject({ name: "AuthApiError", status: 422, code: "validation_error" });
+  });
+});
+
 describe("sanitizeNextPath", () => {
   it.each([
     ["/workspaces", "/workspaces"],

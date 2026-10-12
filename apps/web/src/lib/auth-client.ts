@@ -12,6 +12,12 @@
  *    after re-login the page reissues its calls (resume via ?next), so no
  *    replay bookkeeping is needed inside the client.
  *
+ *  - serialization boundary (T-V1-010 · RP-06/RP-07 · QF-06/QF-07): this
+ *    module is the ONE place in apps/web that turns an `AuthFetchInit.body`
+ *    into bytes on the wire. Plain objects are JSON-stringified exactly once;
+ *    FormData/binary/URLSearchParams/strings pass through untouched. No string
+ *    sniffing anywhere — see the contract block above `authFetch`.
+ *
  * `createAuthClient` injects fetch/navigator/current-path for unit tests; the
  * default `auth` instance is what app code imports.
  */
@@ -90,6 +96,12 @@ export type AuthClientDeps = {
 
 export type AuthFetchInit = {
   method?: "GET" | "POST" | "PATCH" | "PUT" | "DELETE";
+  /**
+   * Request body. Passed as-is to the single serialization boundary in this
+   * file (T-V1-010): plain objects/arrays are JSON-stringified exactly once;
+   * `FormData`, `Blob`, buffers, `URLSearchParams`, streams and strings reach
+   * the wire untouched. Callers must NOT `JSON.stringify` here.
+   */
   body?: unknown;
   headers?: Record<string, string>;
   /**
@@ -100,6 +112,81 @@ export type AuthFetchInit = {
    */
   authMode?: "auto-redirect" | "strict";
 };
+
+/* ------------------------------------------------------------------ *
+ * SERIALIZATION BOUNDARY (T-V1-010) — contract
+ * ------------------------------------------------------------------ *
+ * `authFetch`'s `init.body` — and `authPost`'s login/register/logout body —
+ * reach the wire through exactly one decision, `serializeBody` below. Its
+ * rules, in order:
+ *
+ *   1. `undefined`         → no body, no header added.
+ *   2. Wire-ready BodyInit → forwarded BY REFERENCE, byte-for-byte:
+ *                            string, FormData (and File), Blob, ArrayBuffer,
+ *                            ArrayBufferView (TypedArray/DataView),
+ *                            URLSearchParams, ReadableStream. Nothing is
+ *                            decoded, cloned, re-encoded or inspected, and no
+ *                            `content-type` is added by us. The last part is
+ *                            load-bearing for `FormData`: a hand-written
+ *                            `content-type` would drop the runtime-generated
+ *                            `multipart/form-data; boundary=…` and break the
+ *                            request. A string is likewise sent verbatim —
+ *                            never parsed, never re-quoted.
+ *   3. Anything else (plain objects, arrays, numbers, booleans, null)
+ *                        → `JSON.stringify(body)` ONCE, plus
+ *                          `content-type: application/json`, unless the caller
+ *                          already supplied a content-type (their explicit
+ *                          media type wins; the body is still JSON text).
+ *
+ * Two hard rules this block exists to keep:
+ *   - heuristic branches: 0. Dispatch is on the runtime TYPE of the body
+ *     (rule 2's list), never on the CONTENT of a value. There is deliberately
+ *     no "does this string already look like JSON?" test: that guessing was
+ *     the double-serialization bug class (QF-06) this boundary closes.
+ *   - serialization decisions: 1. Callers (T-V1-008 ask, T-V1-009 search,
+ *     workspace/knowledge contracts) hand over plain objects and must never
+ *     `JSON.stringify` themselves.
+ *
+ * Values JSON cannot represent (functions, symbols) yield no body rather than
+ * the misleading text "undefined".
+ *
+ * Retry note: the single 401 → refresh → retry re-runs this preparation, so a
+ * JSON body is re-stringified (identical bytes) and a FormData/Blob/buffer
+ * body is re-sent as the very same instance. A one-shot `ReadableStream`
+ * cannot be replayed and is therefore not a good `authFetch` body.
+ * ------------------------------------------------------------------ */
+
+/** Body values `fetch` already understands: sent untouched, never sniffed. */
+function isWireReadyBody(body: unknown): body is BodyInit {
+  if (typeof body === "string") return true;
+  if (typeof FormData !== "undefined" && body instanceof FormData) return true;
+  if (typeof Blob !== "undefined" && body instanceof Blob) return true; // covers File
+  if (body instanceof URLSearchParams) return true;
+  if (body instanceof ArrayBuffer) return true;
+  if (ArrayBuffer.isView(body)) return true;
+  if (typeof ReadableStream !== "undefined" && body instanceof ReadableStream) return true;
+  return false;
+}
+
+/** Case-insensitive header lookup (callers may write `Content-Type`). */
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  const target = name.toLowerCase();
+  return Object.keys(headers).some((key) => key.toLowerCase() === target);
+}
+
+/**
+ * The single object→wire decision (rules 1–3 in the boundary contract).
+ * Mutates `headers` only in rule 3 and only when the caller left
+ * `content-type` unset.
+ */
+function serializeBody(body: unknown, headers: Record<string, string>): BodyInit | undefined {
+  if (body === undefined) return undefined; // rule 1
+  if (isWireReadyBody(body)) return body; // rule 2 — same reference, no header
+  const json = JSON.stringify(body); // rule 3 — exactly one stringify
+  if (json === undefined) return undefined; // not JSON-representable → no body
+  if (!hasHeader(headers, "content-type")) headers["content-type"] = "application/json";
+  return json;
+}
 
 export function createAuthClient(deps?: AuthClientDeps) {
   const fetcher = deps?.fetcher ?? fetch.bind(globalThis);
@@ -251,11 +338,15 @@ export function createAuthClient(deps?: AuthClientDeps) {
   }
 
   async function authPost(path: string, body: unknown): Promise<AuthResult> {
+    // Same boundary as `authFetch` (T-V1-010): this is the file's ONLY
+    // request-body serialization, not a second one.
+    const headers: Record<string, string> = { accept: "application/json" };
+    const requestBody = serializeBody(body ?? {}, headers);
     const response = await safeFetch(path, {
       method: "POST",
       cache: "no-store",
-      headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify(body ?? {}),
+      headers,
+      body: requestBody,
     });
     if (response.status === 200) return { ok: true };
     return { ok: false, failure: parseFailure(await readJson(response), response.status) };
@@ -277,6 +368,9 @@ export function createAuthClient(deps?: AuthClientDeps) {
    * App-API call through /api/backend/<path> with the Bearer cookie attached
    * server-side. Transparent refresh: one 401 → single-flight refresh → one
    * retry; refresh failure → redirect to /login?next=… (resume via ?next).
+   *
+   * Body handling: the only serialization decision in apps/web — see the
+   * "SERIALIZATION BOUNDARY" contract above `serializeBody` (T-V1-010).
    */
   async function authFetch<T = unknown>(path: string, init?: AuthFetchInit): Promise<T> {
     const method = init?.method ?? "GET";
@@ -287,11 +381,8 @@ export function createAuthClient(deps?: AuthClientDeps) {
         accept: "application/json",
         ...(init?.headers ?? {}),
       };
-      let requestBody: string | undefined;
-      if (method !== "GET" && init?.body !== undefined) {
-        headers["content-type"] = "application/json";
-        requestBody = JSON.stringify(init.body);
-      }
+      const requestBody =
+        method === "GET" ? undefined : serializeBody(init?.body, headers);
       return safeFetch(`/api/backend/${joined}`, {
         method,
         cache: "no-store",
