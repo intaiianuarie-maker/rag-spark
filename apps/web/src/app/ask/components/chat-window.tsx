@@ -166,13 +166,28 @@ function MessageMeta({ message }: { message: ChatMessage }) {
   );
 }
 
+/**
+ * Copy shown while the request the user sent has not been answered. It
+ * states the fact (an answer is pending) and nothing about how the answer
+ * will arrive.
+ */
+export const PENDING_LABEL = "Waiting for the answer…";
+
 export function ChatWindow({
-  streaming,
+  pending,
   messages,
   onSend,
   onOpenSource,
 }: {
-  streaming: boolean;
+  /**
+   * True while a request the user sent has not been answered yet.
+   *
+   * Named `pending` on purpose (T-V1-033): the backend computes the whole
+   * answer and the browser receives it in one response, so this flag must
+   * not be dressed up as a feature the transport does not have. It gates the
+   * input and shows `PENDING_LABEL` — that is the entire claim.
+   */
+  pending: boolean;
   messages: ChatMessage[];
   onSend: (text: string) => void;
   onOpenSource: (c: MessageCitation) => void;
@@ -214,9 +229,13 @@ export function ChatWindow({
               </div>
             </div>
           ))}
-          {streaming && (
-            <div className="rounded-xl bg-neutral-50 p-4 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400">
-              Thinking…
+          {pending && (
+            <div
+              className="rounded-xl bg-neutral-50 p-4 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400"
+              role="status"
+              aria-live="polite"
+            >
+              {PENDING_LABEL}
             </div>
           )}
         </div>
@@ -225,7 +244,7 @@ export function ChatWindow({
         <form
           onSubmit={(e) => {
             e.preventDefault();
-            if (!input.trim() || streaming) return;
+            if (!input.trim() || pending) return;
             onSend(input.trim());
             setInput("");
           }}
@@ -237,11 +256,11 @@ export function ChatWindow({
             onChange={(e) => setInput(e.target.value)}
             placeholder="Ask anything…"
             className="flex-1 rounded-lg border border-neutral-300 bg-white px-4 py-2.5 text-sm text-neutral-900 focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100"
-            disabled={streaming}
+            disabled={pending}
           />
           <button
             type="submit"
-            disabled={!input.trim() || streaming}
+            disabled={!input.trim() || pending}
             className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Send

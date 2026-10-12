@@ -19,11 +19,20 @@ import { ACCESS_COOKIE } from "@/app/(auth)/api/auth/_lib/cookies";
  *    `passage_unavailable` envelope instead of an opaque failure, so the UI
  *    can render a truthful "not available yet / not found / not authorized"
  *    state rather than borrowing another message's passage.
+ *  - when the caller also sends `document_id` (the citation's own document
+ *    ref), an upstream 404 on the chunk triggers ONE extra, read-only probe
+ *    of `GET /v1/workspaces/{ws}/documents/{document_id}` — an existing,
+ *    ACL-checked endpoint. A 404 there proves the source document is gone
+ *    from this workspace, and the route then answers the stronger
+ *    `source_deleted` code (T-V1-033) so the panel can say "deleted" instead
+ *    of the vaguer "unavailable". Any other probe outcome leaves the answer
+ *    at `passage_unavailable`: a deletion is never claimed without evidence.
  *
  * Deliberately a dedicated route rather than a generic proxy pass-through:
- * it validates the two required refs, normalizes the upstream body into one
+ * it validates the required refs, normalizes the upstream body into one
  * stable `passage` shape for the panel, and owns the honest error taxonomy
- * (`passage_unavailable`, `passage_malformed`, `backend_unreachable`).
+ * (`passage_unavailable`, `source_deleted`, `passage_malformed`,
+ * `backend_unreachable`).
  */
 
 /** Ceiling on the whole upstream exchange (headers AND body). */
@@ -33,17 +42,21 @@ export const PASSAGE_TIMEOUT_MS = 10_000;
 export const PASSAGE_UPSTREAM_SEGMENTS = "v1/workspaces" as const;
 
 export type PassageParams =
-  | { ok: true; workspaceId: string; chunkId: string }
+  | { ok: true; workspaceId: string; chunkId: string; documentId: string | null }
   | { ok: false; message: string };
 
 /**
- * Validate the two required refs. Deliberately length/charset checks only —
+ * Validate the required refs. Deliberately length/charset checks only —
  * the backend is the authority on uuid/chunk-id validity (and answers 404/422
  * honestly), while this keeps path injection (`/`, `..`) impossible here.
+ * `document_id` is optional: older citations may not carry one, and it is
+ * only ever used as a read-only deletion-probe ref — never as an
+ * authorization input.
  */
 export function readPassageParams(searchParams: URLSearchParams): PassageParams {
   const workspaceId = searchParams.get("workspace_id")?.trim() ?? "";
   const chunkId = searchParams.get("chunk_id")?.trim() ?? "";
+  const documentId = searchParams.get("document_id")?.trim() ?? "";
   if (!workspaceId || !chunkId) {
     return { ok: false, message: "Both workspace_id and chunk_id are required." };
   }
@@ -55,12 +68,14 @@ export function readPassageParams(searchParams: URLSearchParams): PassageParams 
   if (
     separator.test(workspaceId) ||
     separator.test(chunkId) ||
+    separator.test(documentId) ||
     traversal.test(workspaceId) ||
-    traversal.test(chunkId)
+    traversal.test(chunkId) ||
+    traversal.test(documentId)
   ) {
-    return { ok: false, message: "workspace_id/chunk_id contain invalid characters." };
+    return { ok: false, message: "workspace_id/chunk_id/document_id contain invalid characters." };
   }
-  return { ok: true, workspaceId, chunkId };
+  return { ok: true, workspaceId, chunkId, documentId: documentId === "" ? null : documentId };
 }
 
 /** Upstream canonical-passage URL (segments percent-encoded, never interpolated raw). */
@@ -70,6 +85,15 @@ export function buildPassageUpstreamUrl(
   chunkId: string,
 ): string {
   return `${base}/${PASSAGE_UPSTREAM_SEGMENTS}/${encodeURIComponent(workspaceId)}/chunks/${encodeURIComponent(chunkId)}`;
+}
+
+/** Upstream document-detail URL — used ONLY by the deletion probe below. */
+export function buildDocumentUpstreamUrl(
+  base: string,
+  workspaceId: string,
+  documentId: string,
+): string {
+  return `${base}/${PASSAGE_UPSTREAM_SEGMENTS}/${encodeURIComponent(workspaceId)}/documents/${encodeURIComponent(documentId)}`;
 }
 
 function errorResponse(status: number, code: string, message: string): Response {
@@ -140,10 +164,42 @@ export function normalizePassage(body: unknown): NormalizedPassage | null {
 }
 
 /**
+ * Did the citation's source document disappear from this workspace? Runs
+ * ONLY after the canonical read answered 404, and ONLY when the caller
+ * supplied `document_id`.
+ *
+ * True exclusively on a definitive upstream 404 from the existing,
+ * ACL-checked document-detail endpoint (soft-deleted, purged, or never in
+ * this workspace — all of which mean "not here any more"). Everything else
+ * (200 = still live, 401/403, 5xx, timeout, network failure) answers false,
+ * so `source_deleted` is never asserted without evidence and a backend
+ * outage can never be reported to the user as a deletion.
+ */
+async function documentIsGone(
+  base: string,
+  accessToken: string,
+  workspaceId: string,
+  documentId: string,
+  requestSignal: AbortSignal,
+): Promise<boolean> {
+  try {
+    const response = await fetch(buildDocumentUpstreamUrl(base, workspaceId, documentId), {
+      method: "GET",
+      headers: { accept: "application/json", authorization: `Bearer ${accessToken}` },
+      cache: "no-store",
+      signal: AbortSignal.any([AbortSignal.timeout(PASSAGE_TIMEOUT_MS), requestSignal]),
+    });
+    return response.status === 404;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Passage fetch: caller-authenticated, ACL-checked upstream, honestly mapped.
- * Returns 401 (no session), 400 (bad refs), 404 `passage_unavailable`,
- * 403 `forbidden`, 502 `backend_unreachable`/`passage_malformed`, or
- * 200 `{ok:true, passage}`.
+ * Returns 401 (no session), 400 (bad refs), 404 `source_deleted` or
+ * `passage_unavailable`, 403 `forbidden`, 502 `backend_unreachable`/
+ * `passage_malformed`, or 200 `{ok:true, passage}`.
  */
 export async function GET(request: Request): Promise<Response> {
   const params = readPassageParams(new URL(request.url).searchParams);
@@ -192,7 +248,27 @@ export async function GET(request: Request): Promise<Response> {
 
   if (status === 404) {
     // Explicit: either the canonical-source read is not deployed yet
-    // (T-V1-022 pending) or the chunk is missing/deleted/out of scope.
+    // (T-V1-022 pending) or the chunk is missing/deleted/out of scope. When
+    // the citation carried its document ref, prove which one it is before
+    // wording the answer: a deleted document gets the stronger
+    // `source_deleted` code (T-V1-033), anything else stays honest at
+    // `passage_unavailable`.
+    if (params.documentId !== null) {
+      const gone = await documentIsGone(
+        base,
+        accessToken,
+        params.workspaceId,
+        params.documentId,
+        request.signal,
+      );
+      if (gone) {
+        return errorResponse(
+          404,
+          "source_deleted",
+          "The document this source came from is no longer in this workspace, so the passage can no longer be read.",
+        );
+      }
+    }
     return errorResponse(
       404,
       "passage_unavailable",

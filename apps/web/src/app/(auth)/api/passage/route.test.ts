@@ -54,6 +54,8 @@ describe("readPassageParams", () => {
       ok: true,
       workspaceId: "ws-1",
       chunkId: "c-1",
+      // T-V1-033: optional deletion-probe ref, absent here.
+      documentId: null,
     });
     expect(readPassageParams(new URLSearchParams("workspace_id=../etc&chunk_id=c-1"))).toMatchObject({
       ok: false,

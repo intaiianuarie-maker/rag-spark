@@ -44,11 +44,29 @@ export type PassageView =
   | { state: "loading" }
   | { state: "ready"; text: string; origin: PassageOrigin; notice: string | null }
   | { state: "error"; code: string; message: string }
-  | { state: "empty"; notice: string | null };
+  | { state: "empty"; notice: string | null }
+  /**
+   * The document this citation came from is gone from the workspace
+   * (T-V1-033). Rendered as its own explicit state, never as a silent
+   * fallback to text from anywhere else. `embedded` is THIS citation's own
+   * recorded text, present only when the answer carried it.
+   */
+  | { state: "deleted"; message: string; embedded: string | null };
 
-/** Same-origin passage fetch; `chunk_id`/`workspace_id` are percent-encoded. */
-export function buildPassageUrl(workspaceId: string, chunkId: string): string {
+/** Route code emitted by `/api/passage` when the source document is deleted. */
+export const SOURCE_DELETED_CODE = "source_deleted";
+
+/** Same-origin passage fetch; refs are percent-encoded. `documentId` (optional)
+ * is forwarded so the route can tell "the source document was deleted" from
+ * "the canonical read is not available yet"; the fetcher argument keeps its
+ * original position so existing callers stay untouched. */
+export function buildPassageUrl(
+  workspaceId: string,
+  chunkId: string,
+  documentId?: string | null,
+): string {
   const params = new URLSearchParams({ workspace_id: workspaceId, chunk_id: chunkId });
+  if (documentId) params.set("document_id", documentId);
   return `/api/passage?${params.toString()}`;
 }
 
@@ -68,11 +86,12 @@ export async function requestPassage(
   workspaceId: string,
   chunkId: string,
   fetcher?: Fetcher,
+  documentId?: string | null,
 ): Promise<PassageResult> {
   const doFetch: Fetcher = fetcher ?? ((input, init) => globalThis.fetch(input, init));
   let response: Response;
   try {
-    response = await doFetch(buildPassageUrl(workspaceId, chunkId), {
+    response = await doFetch(buildPassageUrl(workspaceId, chunkId, documentId), {
       method: "GET",
       cache: "no-store",
       headers: { accept: "application/json" },
@@ -117,6 +136,10 @@ export async function requestPassage(
  * Turn a fetch result into what the panel renders, keeping the citation's OWN
  * answer-embedded text as the last resort:
  *
+ *  - `source_deleted` → an explicit DELETED state, first and unconditionally:
+ *    the panel says the document is gone instead of quietly showing text;
+ *    whatever is displayed next to that notice is THIS citation's own
+ *    recorded text, labeled as such;
  *  - canonical 200 with text → live canonical passage;
  *  - canonical 200 but empty, or fetch failed → the passage recorded with
  *    THIS citation, always labeled `answer_embedded` WITH the failure notice;
@@ -128,6 +151,10 @@ export function resolvePassage(result: PassageResult, citation: MessageCitation)
     typeof citation.content === "string" && citation.content.trim().length > 0
       ? citation.content
       : null;
+
+  if (!result.ok && result.code === SOURCE_DELETED_CODE) {
+    return { state: "deleted", message: result.message, embedded };
+  }
 
   if (result.ok) {
     if (result.text.trim().length > 0) {
@@ -224,7 +251,7 @@ export function SourcePanel({
     if (!citation || passageKey === null || scope === null || chunkId === null) return;
     let cancelled = false;
 
-    requestPassage(scope, chunkId)
+    requestPassage(scope, chunkId, undefined, citation.document_id)
       .then((result) => {
         if (!cancelled) setFetchState({ key: passageKey, result });
       })
@@ -317,6 +344,26 @@ export function SourcePanel({
             >
               Loading passage…
             </p>
+          )}
+
+          {view.state === "deleted" && (
+            <div
+              className="mt-1 space-y-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300"
+              role="alert"
+            >
+              <p className="font-medium">Source deleted</p>
+              <p className="text-xs">{view.message}</p>
+              {view.embedded !== null && (
+                <div className="space-y-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider opacity-80">
+                    Recorded with this answer (source no longer in the workspace)
+                  </p>
+                  <p className="whitespace-pre-wrap rounded-md bg-white/70 p-2 text-xs leading-relaxed dark:bg-black/20">
+                    {view.embedded}
+                  </p>
+                </div>
+              )}
+            </div>
           )}
 
           {view.state === "error" && (
