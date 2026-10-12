@@ -15,10 +15,12 @@ All 11 blockers closed and independently verified:
 - Fail-before-fix demonstrated for all 12 new tests (7 agent + 5 research) against pre-fix code
 - rew1's 10 invariant probes pass; security re-scan clean
 
-### Non-blocking follow-ups (from ledger, next slice)
-1. **research-engine ModelPolicy plumbing** — `engine.py` still hardcodes `model="gpt-4o-mini"` in `plan_research`/`synthesize_report` (rew1 B4 partially addressed for agents only).
-2. **Stale `run.error` after COMPLETED** — `run_enforced` can finish COMPLETED while `run.error` still holds the text of an earlier blocked step; clear or supersede it on terminal success.
-3. **Filter revoked/deleted ids from abstention `evidence_ids`** — the zero-verified-evidence path returns all evidence ids including revoked/deleted ones; exclude them from the abstention report's `evidence_ids`.
+### Non-blocking follow-ups (from ledger) — ✅ ALL ADDRESSED
+1. **research-engine ModelPolicy plumbing** — `ResearchModelPolicy` added (exported); `plan_research`/`synthesize_report` resolve models via `_resolve_model("planning"/"synthesis")` instead of hardcoding. Regression: `test_engine_uses_injected_model_policy`.
+2. **Stale `run.error` after COMPLETED** — `run_enforced` clears `run.error` on COMPLETED (both final-answer paths); the blocked step stays recorded in the trace. Regression: step-trace assertions in the 4 dispatch tests.
+3. **Filter revoked/deleted ids from abstention `evidence_ids`** — `synthesize_report` excludes revoked/deleted from the verified set *and* from abstention `evidence_ids`, noting the count in `unknowns`. Regression: `test_revoked_evidence_excluded_from_report`.
+
+**Final gate:** 47 passed; ruff clean; mypy clean (10 files).
 
 **Verdict:** REQUEST CHANGES (B1–B11). Full ledger: `handoffs/REW1-REVIEW-HANDOFF.md`.
 
