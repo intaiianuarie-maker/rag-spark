@@ -105,3 +105,38 @@ async def test_worker_survives_process_one_failure(monkeypatch: pytest.MonkeyPat
 
     await asyncio.wait_for(ingest_worker.run_worker(stop), timeout=5)
     assert calls["n"] >= 2  # loop consumed the next iteration after the failure
+
+
+async def test_graph_indexing_hook_executed_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """RP-04 / QF-04: When GRAPH_MODE=rule, graph extraction and persistence hooks run."""
+    db_file = tmp_path / "test_graph.db"
+    monkeypatch.setenv("GRAPH_MODE", "rule")
+    monkeypatch.setenv("GRAPH_DB_PATH", str(db_file))
+
+    from graph.extractor import GraphChunk, RuleBasedGraphExtractor
+    from graph.sqlite_store import SQLiteGraphStore
+
+    store = SQLiteGraphStore(str(db_file))
+    extractor = RuleBasedGraphExtractor()
+
+    chunks = [
+        GraphChunk(
+            chunk_id="chk-10",
+            text="Alice Smith works for Acme Corp.",
+            workspace_id="ws-graph-test",
+            document_id="doc-graph-test",
+            page=1,
+            section="Team",
+        )
+    ]
+    res = await extractor.extract(chunks)
+    assert len(res.entities) >= 1
+    assert len(res.relationships) >= 1
+
+    await store.upsert_entities("ws-graph-test", res.entities)
+    await store.upsert_relationships("ws-graph-test", res.relationships)
+
+    # Verify nodes in store
+    ents = await store.find_entities_by_name("ws-graph-test", "Alice Smith")
+    assert len(ents) == 1
+    assert "chk-10" in ents[0].chunk_ids

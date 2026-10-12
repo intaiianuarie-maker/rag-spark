@@ -105,6 +105,11 @@ def _flow(
     }
 
 
+def _component_names() -> list[str]:
+    """Sorted list of every allowlisted catalog component name."""
+    return sorted(spec.component for spec in LangflowAdapter.catalog().values())
+
+
 def _valid_flow() -> dict[str, Any]:
     """A minimal valid declarative flow: ChatInput -> ChatOutput."""
     nodes = [
@@ -1787,3 +1792,647 @@ class TestW23RoundTripExport:
         )
         with pytest.raises(ValueError):
             LangflowAdapter.export_definition(definition)
+
+
+# ---------------------------------------------------------------------------
+# W2-3 R2 regression: F-A edge scalar guards
+# ---------------------------------------------------------------------------
+
+
+class TestW23R2EdgeScalarGuards:
+    """F-A: edge-derived strings must be bounded by MAX_FIELD_CHARS."""
+
+    def test_oversized_edge_id_rejected(self) -> None:
+        nodes = [
+            _lf_node("lf-trigger", "ChatInput"),
+            _lf_node("lf-prompt", "Prompt", template={"template": "hi"}),
+        ]
+        edges = [
+            _lf_edge(
+                "e" + "x" * LangflowAdapter.MAX_FIELD_CHARS,
+                "lf-trigger",
+                "message",
+                "lf-prompt",
+                "template",
+            ),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "OVERSIZED_FIELD" in codes
+
+    def test_oversized_condition_value_rejected(self) -> None:
+        nodes = [
+            _lf_node("lf-cond", "ConditionalRouter"),
+            _lf_node("lf-out", "ChatOutput"),
+        ]
+        edges = [
+            _lf_edge(
+                "e1", "lf-cond", "message", "lf-out", "input_value",
+                data={"condition_value": "r" * (LangflowAdapter.MAX_FIELD_CHARS + 1)},
+            ),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "OVERSIZED_FIELD" in codes
+
+    def test_edge_id_at_limit_accepted(self) -> None:
+        """An edge id exactly at MAX_FIELD_CHARS must be accepted."""
+        edge_id = "e" + "x" * (LangflowAdapter.MAX_FIELD_CHARS - 1)
+        nodes = [
+            _lf_node("lf-trigger", "ChatInput"),
+            _lf_node("lf-prompt", "Prompt", template={"template": "hi"}),
+        ]
+        edges = [
+            _lf_edge(edge_id, "lf-trigger", "message", "lf-prompt", "template"),
+        ]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert result.edges[0].id == edge_id
+
+    def test_condition_value_at_limit_accepted(self) -> None:
+        """A route value exactly at MAX_FIELD_CHARS must be accepted."""
+        route = "r" * LangflowAdapter.MAX_FIELD_CHARS
+        nodes = [
+            _lf_node("lf-cond", "ConditionalRouter"),
+            _lf_node("lf-out", "ChatOutput"),
+        ]
+        edges = [
+            _lf_edge(
+                "e1", "lf-cond", "message", "lf-out", "input_value",
+                data={"condition_value": route},
+            ),
+        ]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert result.edges[0].condition_value == route
+
+    def test_oversized_rejection_scope_is_bounded(self) -> None:
+        """The structured rejection must not echo an unbounded id back."""
+        nodes = [
+            _lf_node("lf-trigger", "ChatInput"),
+            _lf_node("lf-prompt", "Prompt", template={"template": "hi"}),
+        ]
+        edges = [
+            _lf_edge(
+                "e" + "x" * LangflowAdapter.MAX_FIELD_CHARS,
+                "lf-trigger",
+                "message",
+                "lf-prompt",
+                "template",
+            ),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        for rejection in exc_info.value.rejections:
+            assert len(str(rejection.get("edge_id", ""))) <= 64
+
+
+# ---------------------------------------------------------------------------
+# W2-3 R2 regression: F-B port-aware export (round-trip for every component)
+# ---------------------------------------------------------------------------
+
+
+class TestW23R2PortAwareExport:
+    """F-B: every catalog component must round-trip hash-identically."""
+
+    def test_catalog_component_count(self) -> None:
+        assert len(_component_names()) == 15
+
+    @pytest.mark.parametrize("component", _component_names())
+    def test_single_component_round_trip(self, component: str) -> None:
+        """Import → export → re-import must preserve the content hash."""
+        node = _lf_node("lf-node", component, display_name=component)
+        flow = _flow([node], [])
+        revision = LangflowAdapter.import_revision(
+            flow, workflow_id="wf-1", workspace_id="ws-1"
+        )
+        exported = LangflowAdapter.export_revision(revision)
+        reimported = LangflowAdapter.import_revision(
+            exported, workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert reimported.content_hash == revision.content_hash, (
+            f"round-trip hash mismatch for {component}"
+        )
+
+    def test_parser_exports_as_parser_not_prompt(self) -> None:
+        """Parser has distinct ports and must not export as Prompt."""
+        node = _lf_node("lf-parser", "Parser", template={"input_value": "x"})
+        revision = LangflowAdapter.import_revision(
+            _flow([node], []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        exported = LangflowAdapter.export_definition(revision.spec)
+        assert exported["data"]["nodes"][0]["type"] == "parser"
+
+    def test_prompt_exports_as_prompt(self) -> None:
+        node = _lf_node("lf-prompt", "Prompt", template={"template": "hi"})
+        revision = LangflowAdapter.import_revision(
+            _flow([node], []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        exported = LangflowAdapter.export_definition(revision.spec)
+        assert exported["data"]["nodes"][0]["type"] == "prompt"
+
+    def test_parser_edge_round_trip(self) -> None:
+        """A Parser wired through an edge must round-trip (the R1 break)."""
+        nodes = [
+            _lf_node("lf-trigger", "ChatInput"),
+            _lf_node("lf-parser", "Parser", template={"input_value": "x"}),
+            _lf_node("lf-out", "ChatOutput"),
+        ]
+        edges = [
+            _lf_edge("e1", "lf-trigger", "message", "lf-parser", "input_value"),
+            _lf_edge("e2", "lf-parser", "message", "lf-out", "input_value"),
+        ]
+        revision = LangflowAdapter.import_revision(
+            _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        exported = LangflowAdapter.export_revision(revision)
+        reimported = LangflowAdapter.import_revision(
+            exported, workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert reimported.content_hash == revision.content_hash
+
+
+# ---------------------------------------------------------------------------
+# W2-3 R2 regression: F-C empty-string route rejection
+# ---------------------------------------------------------------------------
+
+
+class TestW23R2EmptyRouteRejection:
+    """F-C: empty-string routes must be rejected; False must survive."""
+
+    def test_empty_string_route_rejected(self) -> None:
+        nodes = [
+            _lf_node("lf-cond", "ConditionalRouter"),
+            _lf_node("lf-out", "ChatOutput"),
+        ]
+        edges = [
+            _lf_edge(
+                "e1", "lf-cond", "message", "lf-out", "input_value",
+                data={"condition_value": ""},
+            ),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "CONDITION_EDGE_NO_VALUE" in codes
+
+    def test_empty_handle_name_route_rejected(self) -> None:
+        """With no handle metadata at all, no route is derivable → rejected."""
+        nodes = [
+            _lf_node("lf-cond", "ConditionalRouter"),
+            _lf_node("lf-prompt", "Prompt", template={"template": "hi"}),
+        ]
+        edges = [{"id": "e1", "source": "lf-cond", "target": "lf-prompt"}]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "CONDITION_EDGE_NO_VALUE" in codes
+
+    def test_falsy_false_route_still_accepted(self) -> None:
+        """Falsy-but-meaningful False must remain a valid route value."""
+        nodes = [
+            _lf_node("lf-cond", "ConditionalRouter"),
+            _lf_node("lf-out", "ChatOutput"),
+        ]
+        edges = [
+            _lf_edge(
+                "e1", "lf-cond", "message", "lf-out", "input_value",
+                data={"condition_value": False},
+            ),
+        ]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert result.edges[0].condition_value is False
+
+
+# ---------------------------------------------------------------------------
+# W2-3 R3 regression: R3-1 node-id guard + R3-2 bounded error echoes
+# ---------------------------------------------------------------------------
+
+
+def _max_rejection_size(exc: LangflowImportError) -> int:
+    """Largest string length across every rejection value."""
+    return max(
+        len(str(value))
+        for rejection in exc.rejections
+        for value in rejection.values()
+        if isinstance(value, str)
+    )
+
+
+class TestW23R3NodeIdGuard:
+    """R3-1: node ids are bounded like every other definition scalar."""
+
+    def test_oversized_node_id_rejected(self) -> None:
+        huge = "n" * (LangflowAdapter.MAX_FIELD_CHARS + 1)
+        nodes = [_lf_node(huge, "ChatInput")]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "OVERSIZED_FIELD" in codes
+
+    def test_normal_node_id_unaffected(self) -> None:
+        nodes = [_lf_node("lf-trigger", "ChatInput")]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert result.nodes[0].id == "lf-trigger"
+
+    def test_node_id_at_limit_accepted(self) -> None:
+        node_id = "n" * LangflowAdapter.MAX_FIELD_CHARS
+        nodes = [_lf_node(node_id, "ChatInput")]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert result.nodes[0].id == node_id
+
+    def test_edge_referencing_oversized_node_id_rejected(self) -> None:
+        """An edge referencing an oversized id is rejected, not matched.
+
+        The id is not a declared node, so it fails as an unknown endpoint
+        (the oversized *reference* echo is bounded separately below).
+        """
+        huge = "n" * (LangflowAdapter.MAX_FIELD_CHARS + 1)
+        nodes = [_lf_node("lf-trigger", "ChatInput")]
+        edges = [
+            _lf_edge("e1", "lf-trigger", "message", huge, "input_value"),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "BAD_FLOW_FORMAT" in codes
+        # No node carries the oversized id, and the echo stays bounded.
+        assert _max_rejection_size(exc_info.value) <= 200
+
+
+class TestW23R3BoundedEchoes:
+    """R3-2: no unbounded user-controlled string in any rejection."""
+
+    def test_ghost_node_ref_echo_bounded(self) -> None:
+        ghost = "g" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [_lf_node("lf-trigger", "ChatInput")]
+        edges = [
+            _lf_edge("e1", "lf-trigger", "message", ghost, "input_value"),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 200
+
+    def test_unmatched_target_handle_echo_bounded(self) -> None:
+        handle = "h" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [
+            _lf_node("lf-trigger", "ChatInput"),
+            _lf_node("lf-llm", "ChatOpenAI", template={"input_value": "hi"}),
+        ]
+        edges = [
+            _lf_edge("e1", "lf-trigger", "message", "lf-llm", handle),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 200
+
+    def test_oversized_component_type_echo_bounded(self) -> None:
+        huge = "C" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [_lf_node("lf-x", huge)]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 400
+
+    def test_oversized_template_field_name_echo_bounded(self) -> None:
+        field = "f" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [
+            _lf_node(
+                "lf-prompt",
+                "Prompt",
+                template={field: {"value": "x" * (LangflowAdapter.MAX_FIELD_CHARS + 1)}},
+            ),
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 200
+
+    def test_duplicate_oversized_id_echo_bounded(self) -> None:
+        huge = "d" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [_lf_node(huge, "ChatInput"), _lf_node(huge, "ChatOutput")]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 200
+
+    def test_trunc_helper_bounds_values(self) -> None:
+        bounded = LangflowAdapter._trunc("x" * 500)
+        assert len(bounded) < 500
+        assert bounded.endswith("...(truncated)")
+        assert LangflowAdapter._trunc("short") == "short"
+
+
+# ---------------------------------------------------------------------------
+# W2-3 R4 regression: derived marker-set echoes bounded
+# ---------------------------------------------------------------------------
+
+
+class TestW23R4MarkerEchoBounded:
+    """R4: marker keys are bounded at insertion, so echoes stay small."""
+
+    def test_huge_marker_key_on_node_echo_bounded(self) -> None:
+        """A multi-megabyte marker key must not be echoed back at full size."""
+        huge_key = "code" + "x" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [_lf_node("lf-x", "Prompt", template={huge_key: "payload"})]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 200
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "CUSTOM_CODE_COMPONENT" in codes
+
+    def test_huge_marker_key_on_edge_echo_bounded(self) -> None:
+        """Same bound on the edge marker-scan path."""
+        huge_key = "code" + "x" * (LangflowAdapter.MAX_FIELD_CHARS * 2)
+        nodes = [
+            _lf_node("lf-trigger", "ChatInput"),
+            _lf_node("lf-out", "ChatOutput"),
+        ]
+        edge = _lf_edge("e1", "lf-trigger", "message", "lf-out", "input_value")
+        edge["data"][huge_key] = "payload"
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, [edge]), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        assert _max_rejection_size(exc_info.value) <= 200
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "CUSTOM_CODE_COMPONENT" in codes
+
+    def test_normal_marker_still_detected_untruncated(self) -> None:
+        """Ordinary marker keys keep their exact name in the report."""
+        nodes = [_lf_node("lf-x", "Prompt", template={"my_class": "payload"})]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        message = exc_info.value.rejections[0]["message"]
+        assert "myclass" in message
+
+
+# ---------------------------------------------------------------------------
+# Advisory B-1: config value-type + vetted-model validation
+# ---------------------------------------------------------------------------
+
+
+def _llm_template(**extra: Any) -> dict[str, Any]:
+    template: dict[str, Any] = {"input_value": {"value": "hi"}}
+    template.update(extra)
+    return template
+
+
+def _import_llm(template: dict[str, Any]):
+    nodes = [_lf_node("lf-llm", "ChatOpenAI", template=template)]
+    return LangflowAdapter.import_definition(
+        _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+    )
+
+
+class TestB1VettedModelValidation:
+    """B-1: model names must be vetted, not passed through inert."""
+
+    def test_vetted_model_accepted(self) -> None:
+        result = _import_llm(_llm_template(model_name={"value": "gpt-4o-mini"}))
+        assert result.nodes[0].config["model"] == "gpt-4o-mini"
+
+    def test_unvetted_model_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(
+                _llm_template(model_name={"value": "definitely-not-a-real-model"})
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "INVALID_CONFIG_VALUE" in codes
+
+    def test_unvetted_model_message_mentions_vetted(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(model_name={"value": "rogue-model"}))
+        messages = " ".join(r["message"] for r in exc_info.value.rejections)
+        assert "vetted" in messages
+
+    def test_vetted_model_list_is_exported(self) -> None:
+        from workflow_engine.adapters.langflow_adapter import VETTED_MODELS
+
+        assert "gpt-4o-mini" in VETTED_MODELS
+        assert isinstance(VETTED_MODELS, frozenset)
+
+
+class TestB1ConfigValueTypes:
+    """B-1: config values must match their declared type and range."""
+
+    def test_temperature_out_of_range_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(temperature={"value": 9.5}))
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "INVALID_CONFIG_VALUE" in codes
+
+    def test_temperature_string_rejected(self) -> None:
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(temperature={"value": "high"}))
+
+    def test_temperature_in_range_accepted(self) -> None:
+        result = _import_llm(_llm_template(temperature={"value": 0.7}))
+        assert result.nodes[0].config["temperature"] == 0.7
+
+    def test_temperature_boolean_rejected(self) -> None:
+        """bool is a subclass of int; a boolean is never a valid temperature."""
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(temperature={"value": True}))
+
+    def test_max_tokens_non_integer_rejected(self) -> None:
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(max_tokens={"value": 1.5}))
+
+    def test_max_tokens_zero_rejected(self) -> None:
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(max_tokens={"value": 0}))
+
+    def test_max_tokens_valid_accepted(self) -> None:
+        result = _import_llm(_llm_template(max_tokens={"value": 512}))
+        assert result.nodes[0].config["max_tokens"] == 512
+
+    def test_top_k_invalid_rejected(self) -> None:
+        nodes = [
+            _lf_node(
+                "lf-retr", "VectorRetriever", template={"top_k": {"value": -3}}
+            )
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "INVALID_CONFIG_VALUE" in codes
+
+    def test_collection_unsafe_identifier_rejected(self) -> None:
+        """Path traversal / shell-ish values cannot reach a name field."""
+        nodes = [
+            _lf_node(
+                "lf-retr",
+                "VectorRetriever",
+                template={"collection": {"value": "../../etc/passwd"}},
+            )
+        ]
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+            )
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "INVALID_CONFIG_VALUE" in codes
+
+    def test_collection_valid_accepted(self) -> None:
+        nodes = [
+            _lf_node(
+                "lf-retr",
+                "VectorRetriever",
+                template={"collection": {"value": "workspace_docs"}},
+            )
+        ]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        assert result.nodes[0].config["collection"] == "workspace_docs"
+
+    def test_stream_boolean_enforced(self) -> None:
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(stream={"value": "yes"}))
+        result = _import_llm(_llm_template(stream={"value": False}))
+        assert result.nodes[0].config["stream"] is False
+
+    def test_non_allowlisted_fields_not_validated(self) -> None:
+        """A-1 still holds: only allowlisted config fields are inspected."""
+        result = _import_llm(
+            _llm_template(api_key={"value": 12345}, weird={"value": object()})
+        )
+        assert "api_key" not in result.nodes[0].config
+
+    def test_rejection_includes_node_id(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(model_name={"value": "rogue"}))
+        assert any(r.get("node_id") == "lf-llm" for r in exc_info.value.rejections)
+
+    def test_rejection_echo_bounded(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(
+                _llm_template(model_name={"value": "m" * 5000})
+            )
+        assert _max_rejection_size(exc_info.value) <= 300
+
+    def test_validate_config_value_returns_reason(self) -> None:
+        assert LangflowAdapter._validate_config_value(
+            "temperature", 0.5
+        ) is None
+        reason = LangflowAdapter._validate_config_value("temperature", 5)
+        assert reason is not None and "temperature" in reason
+
+
+# ---------------------------------------------------------------------------
+# Advisory B-2: per-port descriptions
+# ---------------------------------------------------------------------------
+
+
+class TestB2PerPortDescriptions:
+    """B-2: PortSpec.description is port-specific, not the component blurb."""
+
+    def test_llm_ports_have_distinct_descriptions(self) -> None:
+        result = _import_llm(_llm_template())
+        node = result.nodes[0]
+        in_desc = [p.description for p in node.input_ports]
+        assert in_desc == [
+            "Prompt text sent to the model.",
+            "Optional system instructions.",
+        ]
+        assert len(set(in_desc)) == 2
+
+    def test_output_port_description_is_port_specific(self) -> None:
+        nodes = [
+            _lf_node(
+                "lf-retr", "VectorRetriever", template={"query": {"value": "q"}}
+            )
+        ]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        node = result.nodes[0]
+        assert node.input_ports[0].description == "Retrieval query string."
+        assert node.output_ports[0].description == (
+            "Retrieved chunks with provenance."
+        )
+
+    def test_port_description_differs_from_component_description(self) -> None:
+        result = _import_llm(_llm_template())
+        node = result.nodes[0]
+        assert node.description != node.input_ports[0].description
+
+    def test_every_catalog_port_has_description(self) -> None:
+        for spec in LangflowAdapter.catalog().values():
+            for port in list(spec.input_ports) + list(spec.output_ports):
+                assert port.description, f"{spec.component}.{port.name}"
+
+    def test_retriever_port_descriptions(self) -> None:
+        nodes = [
+            _lf_node(
+                "lf-retr", "VectorRetriever", template={"query": {"value": "q"}}
+            )
+        ]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        node = result.nodes[0]
+        assert node.input_ports[0].description == "Retrieval query string."
+        assert node.output_ports[0].description == (
+            "Retrieved chunks with provenance."
+        )
+
+    def test_condition_ports_descriptions(self) -> None:
+        nodes = [_lf_node("lf-cond", "ConditionalRouter")]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        node = result.nodes[0]
+        assert node.output_ports[0].description == (
+            "Boolean route-selection result."
+        )
+        assert node.output_ports[1].description == (
+            "Passthrough of the evaluated input value."
+        )
+
+    def test_output_node_port_descriptions(self) -> None:
+        nodes = [_lf_node("lf-out", "ChatOutput")]
+        result = LangflowAdapter.import_definition(
+            _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+        )
+        node = result.nodes[0]
+        assert node.input_ports[0].description == "Final answer value."
+        assert node.output_ports[0].description == "Workflow output value."

@@ -70,9 +70,7 @@ def _body_elements(root: Any) -> list[DocumentElement]:
                 [clean_text(cell.get_text(" ", strip=True)) for cell in row.find_all(["td", "th"])]
                 for row in element.find_all("tr")
             ]
-            table_text = " | ".join(
-                " ".join(cell for cell in row if cell) for row in rows if row
-            )
+            table_text = " | ".join(" ".join(cell for cell in row if cell) for row in rows if row)
             if table_text:
                 elements.append(make_element(ElementType.TABLE, table_text, section=section))
             continue

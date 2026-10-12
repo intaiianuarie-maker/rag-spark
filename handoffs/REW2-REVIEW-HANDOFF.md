@@ -15,6 +15,10 @@
 | R3 | W2-1 R3 — R3-1 (`_template_value` iterative + sentinel) & R3-2 (scan truncation rejects) fixed; 68 adapter tests; handoff R3 rewrite | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ✅ **ACCEPTED** | `REW2-V4-W2-1-R3.md` |
 | W2-2 R1 | W2-2 — declarative node translation (typed ports + allowlisted config); 92 adapter tests; handoff W2-2 section | 2026-10-12 (dev21 submission; branch `main`) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES (single fix)** | `REW2-V4-W2-2-R1.md` |
 | W2-2 R2 | W2-2 R2 — flow-name `OVERSIZED_FIELD` guard + 3 tests (95 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ✅ **ACCEPTED** | `REW2-V4-W2-2-R2.md` |
+| W2-3 R1 | W2-3 — edges + condition routing + round-trip export (1288-line adapter; 118 adapter tests) | 2026-10-12 (dev21 submission; branch `main`) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES** | `REW2-V4-W2-3-R1.md` |
+| W2-3 R2 | W2-3 R2 — edge guards + port-aware export + doc fix (145 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES (F-5 closure)** | `REW2-V4-W2-3-R2.md` |
+| W2-3 R3 | W2-3 R3 — node-id guard + `_trunc` echo sweep (155 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES (single line)** | `REW2-V4-W2-3-R3.md` |
+| W2-3 R4 | W2-3 R4 — marker-set truncation at insertion (158 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ✅ **ACCEPTED — W2 card complete** | `REW2-V4-W2-3-R4.md` |
 
 ### R1 scope audited
 - `packages/workflow_engine/adapters/langflow_adapter.py` (722 lines, rev 10:54)
@@ -158,7 +162,83 @@
 
 ---
 
+## W2-3 R1 — Independent test commands & outputs
+
+| Command | Output |
+|---|---|
+| Full explicit 5-file suite | **166 passed** (118 adapter + 48 pre-existing; dev21's claim reproduces) |
+| `ruff check packages/workflow_engine` / `mypy packages/workflow_engine` | **pass / pass (8 files)** |
+| W2-3 battery (~40 probes + follow-ups) | 0 crashes; validator ZERO-ERRORS + compile order verified; HTTP ValueError verified; findings below confirmed; W2-1/W2-2 regressions clean |
+
+## W2-3 R1 — Verdict & feedback sent to dev21
+
+**Verdict: REJECTED — REQUEST CHANGES.** Not forwarded to Antigravity. No production use of import/export until R2 lands.
+
+**Required fixes sent to dev21 (full report: `handoffs/REW2-V4-W2-3-R1.md`):**
+- [ ] F-A (F-5 class): length-guard edge `id` + string `condition_value` → `OVERSIZED_FIELD` (`edge_id` scope); +3 tests
+- [ ] F-B (correctness): port-aware `_component_for` so all 15 catalog components round-trip; Parser export→re-import currently FAILS; +15-component round-trip hash tests
+- [ ] F-C (docs + drive-by): correct "never silently remapped" claim (CONDITION-source exception); reject empty-string route (keep `False`); +test
+
+**Dev21 reply channel:** update `handoffs/DEV21-V4-HANDOFF.md`, resubmit as R2 to rew2 (`w4:p1E`).
+
+---
+
+## W2-3 R2 — Independent test commands & outputs
+
+| Command | Output |
+|---|---|
+| Full explicit 5-file suite | **193 passed** (145 adapter + 48 pre-existing; dev21's claim reproduces) |
+| `ruff check packages/workflow_engine` / `mypy packages/workflow_engine` | **pass / pass (8 files)** |
+| R2 batteries (~50 probes) | 0 crashes; F-A/F-B/F-C confirmed fixed (15/15 round-trip hash-equal incl. Parser; 64-char scope; empty-route/False semantics); 3 residuals below found |
+
+## W2-3 R2 — Verdict & feedback sent to dev21
+
+**Verdict: REJECTED — REQUEST CHANGES (F-5 closure batch).** Not forwarded to Antigravity.
+
+**Required fixes sent to dev21 (full report: `handoffs/REW2-V4-W2-3-R2.md`):**
+- [ ] R3-1: node-id length guard → `OVERSIZED_FIELD` (truncated scope); 5 MB node id currently ACCEPTED into `NodeSpec.id`/hash; +3 tests
+- [ ] R3-2: truncate ghost-ref + target-handle message echoes to 64 chars (5 MB messages confirmed); audit sweep of remaining echoes; +bounded-message tests
+
+**Dev21 reply channel:** update `handoffs/DEV21-V4-HANDOFF.md`, resubmit as R3 to rew2 (`w4:p1E`).
+
+---
+
+## W2-3 R3 — Independent test commands & outputs
+
+| Command | Output |
+|---|---|
+| Full explicit 5-file suite | **203 passed** (155 adapter + 48 pre-existing; claim reproduces) |
+| `ruff check packages/workflow_engine` / `mypy packages/workflow_engine` | **pass / pass (8 files)** |
+| R3 boundary battery (12 probes + full-file echo sweep) | R3-1 + all direct echoes verified bounded (37–176 chars); **2 derived marker echoes remain: 5,000,076 / 5,000,058 chars** |
+
+## W2-3 R3 — Verdict & feedback sent to dev21
+
+**Verdict: REJECTED — REQUEST CHANGES (one-line fix).** Not forwarded to Antigravity.
+
+**Required fix sent to dev21 (full report: `handoffs/REW2-V4-W2-3-R3.md`):**
+- [ ] W2-3-R3: `found.add(cls._trunc(normalized))` in `_find_code_markers` — `sorted(code_markers)`/`sorted(edge_markers)` still interpolate full untrusted keys (measured 5 MB rejections at lines 1147/579); +2 bounded-payload tests
+
+**Dev21 reply channel:** update `handoffs/DEV21-V4-HANDOFF.md`, resubmit as R4 to rew2 (`w4:p1E`).
+
+---
+
+## W2-3 R4 — Independent test commands & outputs
+
+| Command | Output |
+|---|---|
+| Full explicit 5-file suite | **206 passed** (158 adapter + 48 pre-existing; claim reproduces) |
+| `ruff check packages/workflow_engine` / `mypy packages/workflow_engine` | **pass / pass (8 files)** |
+| R3 residual probes re-run (exact measured vectors) | node echo **150 chars** (was 5,000,076); edge echo **132 chars** (was 5,000,058); `...(truncated)` suffix present |
+| Detection-semantics probes | `my_class`→`['myclass']` (79), `sourcecode` detected, `Code` rejected — truncation degrades nothing |
+| Regression sweep | edge-id/node-id guards, empty, dupes, Parser round-trip, happy-path LLM+edges — all correct |
+
+## W2-3 R4 — Verdict & coordinator notification
+
+**Verdict: ACCEPTED — W2-3 review gate passed; W2 card complete** (W2-1 R3 ✅, W2-2 R2 ✅, W2-3 R4 ✅). Full report: `handoffs/REW2-V4-W2-3-R4.md`. **Coordinator Antigravity notified** via appended entry in `handoffs/COORDINATOR-HANDOFF.md` §4. Advisories B-1/B-2/A-1 carried forward to the coordinator.
+
+---
+
 ## Ledger notes
 - R1 probe scripts were run read-only against the dev21 tree and deleted afterward; no repo files were modified by the reviewer except these two handoff documents.
 - Coordinator references: `handoffs/COORDINATOR-HANDOFF.md`, `handoffs/DEV21-V4-HANDOFF.md`.
-- Next expected entry: W2-3 slice review (dev21 starts only when coordinator schedules).
+- Next expected entry: none pending — W2 card fully accepted (W2-1 R3 / W2-2 R2 / W2-3 R4). Advisories B-1, B-2, A-1 carried to coordinator for any future W2 successor work.

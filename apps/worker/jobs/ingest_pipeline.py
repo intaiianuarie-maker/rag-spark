@@ -112,9 +112,7 @@ class PipelineResult:
     stages: list[str]
 
 
-def ensure_element_limit(
-    elements: list[DocumentElement], limit: int | None = None
-) -> None:
+def ensure_element_limit(elements: list[DocumentElement], limit: int | None = None) -> None:
     """Refuse a document that normalizes to more than ``limit`` elements."""
     effective = max_elements() if limit is None else limit
     if len(elements) > effective:
@@ -232,6 +230,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     try:
         from retrieval.adapters.pg_fts import PostgresLexicalStore
         from retrieval.interfaces import VectorRecord
+
         lexical_store = PostgresLexicalStore()
         records = [
             VectorRecord(
@@ -298,6 +297,53 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             f"Embedding and vector store indexing failed: {exc}",
             retryable=True,
         ) from exc
+
+    # Optional Graph Extraction & Indexing (V2 / RP-04 / QF-04)
+    graph_mode_val = os.environ.get("GRAPH_MODE", "off").strip().lower()
+    if graph_mode_val in ("rule", "llm"):
+        try:
+            from graph.extractor import GraphChunk, RuleBasedGraphExtractor
+            from graph.factory import graph_db_path
+            from graph.sqlite_store import SQLiteGraphStore
+
+            graph_store = SQLiteGraphStore(graph_db_path())
+            extractor = RuleBasedGraphExtractor()
+            graph_chunks = [
+                GraphChunk(
+                    chunk_id=str(id_map[c.id]),
+                    text=c.text,
+                    workspace_id=str(job.workspace_id),
+                    document_id=str(document.id) if document else None,
+                    page=c.page,
+                    section=c.section,
+                )
+                for c in result.chunks
+            ]
+            extraction_result = await extractor.extract(graph_chunks)
+            if extraction_result.entities:
+                await graph_store.upsert_entities(str(job.workspace_id), extraction_result.entities)
+            if extraction_result.relationships:
+                await graph_store.upsert_relationships(
+                    str(job.workspace_id), extraction_result.relationships
+                )
+            if extraction_result.communities:
+                await graph_store.upsert_communities(
+                    str(job.workspace_id), extraction_result.communities
+                )
+            logger.info(
+                "graph_extraction_indexed",
+                extra={
+                    "job_id": str(job.id),
+                    "entities": len(extraction_result.entities),
+                    "relationships": len(extraction_result.relationships),
+                    "communities": len(extraction_result.communities),
+                },
+            )
+        except Exception as exc:
+            logger.warning(
+                "graph_extraction_failed",
+                extra={"job_id": str(job.id), "error": str(exc)},
+            )
 
     job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value

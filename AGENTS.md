@@ -12,6 +12,9 @@
 
 ## 1. The Team Roles
 
+> **STANDING USER DIRECTIVE (2026-10-12):**
+> **All agents (dev11, dev21, rew1, rew2, jury, code1, code2, test1, coordinator) must direct all communications, questions, status reports, reviews, and handovers to `museR` from now on.**
+
 **Current user priorities:** dev1 (formerly v1) priority 1 is V1 product
 completion; dev2 (formerly v2) priority 1 is V2 product completion. V3/V4 are
 scheduled only after BOTH V1 and V2 are accepted complete by the coordinator.
@@ -22,7 +25,8 @@ code review and is the only agent allowed to merge or deploy. All implementation
 agents submit scoped code and verification evidence to the coordinator. They must
 not publish releases, trigger deployment pipelines, or restart production services.
 Role ownership alone is not authorization to deploy the current working tree;
-existing acceptance gates and release authorization still apply.
+existing acceptance gates and release authorization still apply. All team members
+coordinate through and communicate directly with `museR`.
 
 | Agent | Name / Pane | Role | Primary Responsibilities |
 |---|---|---|---|

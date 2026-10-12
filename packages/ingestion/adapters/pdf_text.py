@@ -77,9 +77,7 @@ def _page_elements(text: str, page_number: int) -> list[DocumentElement]:
                 make_element(ElementType.HEADING, line, page=page_number, section=section)
             )
             continue
-        elements.append(
-            make_element(ElementType.TEXT, line, page=page_number, section=section)
-        )
+        elements.append(make_element(ElementType.TEXT, line, page=page_number, section=section))
     return elements
 
 

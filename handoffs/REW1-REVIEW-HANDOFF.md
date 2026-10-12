@@ -61,10 +61,45 @@ for next slice): enforced run keeps a stale `run.error` from a BLOCKED step afte
 COMPLETED; abstention `evidence_ids` lists considered-but-unusable ids (citations stay empty —
 recommend filtering revoked/deleted ids there).
 
+## 0d. Round-4 verification — follow-up closure (2026-10-12, HEAD=`dd9ce11` on `main`)
+
+dev11 addressed all 3 non-blocking follow-ups from §0c after acceptance (commits
+`b36717a` docs, `f693338` mixed, `2328dfd` follow-ups, `dd9ce11` docs).
+
+| Follow-up | Verdict |
+|---|---|
+| 1. ModelPolicy plumbing | ✅ `ResearchModelPolicy` injected (`model_policy=` kwarg), drives planning + synthesis; unknown purpose raises; empty `planning_model` rejected — probes F1/F1b/F1c pass; `test_engine_uses_injected_model_policy` is genuine. Module-level default preserves prototype callers. |
+| 2. Stale `run.error` after COMPLETED | ✅ cleared on both completion paths (runtime.py:316, 362); durable step trace still records BLOCKED steps — probe F2 passes (completed + `error=None` + error step present); affected tests reworked to assert on the step trace, which is the correct audit surface. |
+| 3. Revoked/deleted ids in reports | ✅ revoked/deleted excluded from `verified`/`unverified`/abstention `evidence_ids` + reported in `unknowns`; a revoked-but-VERIFIED item can never become a SUPPORTED claim — probes F3/F3b pass; `test_revoked_evidence_excluded_from_report` genuine. |
+
+Gates re-run on `dd9ce11`: pytest (3 files) → **47 passed**; ruff clean; mypy clean.
+Security re-scan of scope: clean. Newly committed `packages/workflow_engine/` (Stream B):
+no `eval`/`exec`/`subprocess`/`pickle` exec surface (one `def compile(` method, not builtin).
+
+**Merge-hygiene flags for the coordinator (not blocking):**
+1. `f693338` mixes Stream A (`packages/research/engine.py` + research fixtures) with
+   Stream B (`workflow_engine/adapters/*`, langflow tests) in one root commit — dev11
+   flagged this themselves; stream separation in history would be cleaner but content
+   is intact.
+2. That commit also swept the untracked handoff ledgers (`REW1-REVIEW-HANDOFF.md`,
+   `REW2-REVIEW-HANDOFF.md`, `REW2-V4-*`) into history — acceptable (they belong in
+   the repo), but reviewers did not stage them.
+3. My working copy of this ledger has final §0d/§5 polish not yet in `f693338` —
+   commit it with the merge.
+
 ## VERDICT: ✅ **ACCEPTED** — forwarded to coordinator Antigravity for final merge
 
-**Automated gates are green. The review fails on security and invariant-enforcement grounds.**
-All 11 blockers below must be fixed and re-submitted before acceptance.
+> **Reading order:** §0 = round-2 verification, §0c = round-3 (final) verification.
+> **§1–§4 below are the ROUND-1 REJECTION record**, kept as audit history. Every
+> blocker in §3 has since been resolved (B1/B11 in §0, B2–B10 in §0c); §4's checklist
+> was completed by round 3. Live status: see §5.
+
+<details><summary>Round-1 verdict text (historical, 2026-10-12 ~10:50 CEST)</summary>
+
+**Automated gates were green. The review failed on security and invariant-enforcement grounds.**
+All 11 blockers below were fixed and re-submitted before acceptance.
+
+</details>
 
 ---
 
@@ -280,12 +315,20 @@ Before re-submitting, dev11 must demonstrate, with new tests that **fail before 
 - [ ] `pytest tests/unit/test_agents.py tests/unit/test_research.py tests/unit/test_research_contracts.py tests/unit/test_workflow_langflow_adapter.py -q` green
 - [ ] `ruff check packages/agents packages/research` and `mypy packages/agents packages/research` clean
 
-## 5. Status
+## 5. Status — final
 
 | Field | Value |
 |---|---|
-| Slice | A0-1 (agents) committed + A0-2 (research) uncommitted working tree |
+| Slice | A0-1 + A0-2 + A1 (agents & research), commits `3dbe8fb` → `d539f24` on `main` |
 | Received | 2026-10-12 ~10:38 CEST (audit delegated) |
-| Verdict | ❌ **REJECTED — REQUEST CHANGES** |
-| Feedback sent to | dev11 (`w4:p1A`) |
-| Forwarded to Antigravity | **No** — blocked pending fixes |
+| Final verdict | ✅ **ACCEPTED** (2026-10-12) — see §0c for evidence |
+| Feedback sent to | dev11 (`w4:p1A`) — rejected (§0), partial accept (§0c round 2), acceptance (round 3) |
+| Forwarded to Antigravity | **Yes** — ACCEPTANCE delivered to `w4:p19` with merge notes (duplicate `feat/v3-agents-research` copy, untouched Stream B files, §0c follow-ups) |
+
+### Review history
+
+| Round | Snapshot | Blockers closed | Verdict |
+|---|---|---|---|
+| 1 | `bc3c481` + uncommitted research | 0/11 — RCE, no enforcement, leakage, silent fallbacks, vacuous helpers | ❌ REJECTED (§1–§4) |
+| 2 | `5c899ec` | B1 ✅, B11 ✅ (B2–B10 deliberately deferred) | ❌ REJECTED-OPEN, scope narrowed (§0) |
+| 3 | `d539f24` | B2–B10 ✅ all | ✅ **ACCEPTED** (§0c) |

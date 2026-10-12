@@ -49,8 +49,7 @@ def split_text_by_tokens(text: str, max_tokens: int) -> list[str]:
     if not words:
         return []
     return [
-        " ".join(words[start : start + max_tokens])
-        for start in range(0, len(words), max_tokens)
+        " ".join(words[start : start + max_tokens]) for start in range(0, len(words), max_tokens)
     ]
 
 

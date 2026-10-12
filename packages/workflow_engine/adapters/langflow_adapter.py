@@ -40,6 +40,7 @@ Slice plan:
 
 from __future__ import annotations
 
+import re
 from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -68,11 +69,17 @@ from ..interfaces import (
 
 @dataclass(frozen=True)
 class _IOPort:
-    """Internal canonical port template (name, type, required)."""
+    """Internal canonical port template (name, type, required).
+
+    ``description`` is a port-specific human description (advisory B-2);
+    it is copied into ``PortSpec.description`` instead of the component
+    description, which describes the whole component.
+    """
 
     name: str
     type: str = PORT_TYPE_ANY
     required: bool = True
+    description: str = ""
 
 
 @dataclass(frozen=True)
@@ -105,7 +112,13 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.TRIGGER,
         display_name="Chat Input",
         input_ports=(),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        output_ports=(
+            _IOPort(
+                "message",
+                PORT_TYPE_STRING,
+                description=("Initial run input message."),
+            ),
+        ),
         description="Run start: initial message input.",
     ),
     LangflowComponentSpec(
@@ -113,7 +126,13 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.TRIGGER,
         display_name="Text Input",
         input_ports=(),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        output_ports=(
+            _IOPort(
+                "message",
+                PORT_TYPE_STRING,
+                description=("Initial run input message."),
+            ),
+        ),
         description="Run start: initial text input.",
     ),
     # ---- RETRIEVER ------------------------------------------------------ #
@@ -121,8 +140,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         component="VectorRetriever",
         node_type=NodeType.RETRIEVER,
         display_name="Vector Retriever",
-        input_ports=(_IOPort("query", PORT_TYPE_STRING),),
-        output_ports=(_IOPort("documents", PORT_TYPE_LIST),),
+        input_ports=(_IOPort("query", PORT_TYPE_STRING, description="Retrieval query string."),),
+        output_ports=(
+            _IOPort(
+                "documents",
+                PORT_TYPE_LIST,
+                description=("Retrieved chunks with provenance."),
+            ),
+        ),
         required_capabilities=("retriever",),
         config_fields={"top_k": "top_k", "collection": "collection"},
         description="Restricted retrieval over the workspace vector store.",
@@ -131,8 +156,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         component="VectorStoreRetriever",
         node_type=NodeType.RETRIEVER,
         display_name="Vector Store Retriever",
-        input_ports=(_IOPort("query", PORT_TYPE_STRING),),
-        output_ports=(_IOPort("documents", PORT_TYPE_LIST),),
+        input_ports=(_IOPort("query", PORT_TYPE_STRING, description="Retrieval query string."),),
+        output_ports=(
+            _IOPort(
+                "documents",
+                PORT_TYPE_LIST,
+                description=("Retrieved chunks with provenance."),
+            ),
+        ),
         required_capabilities=("retriever",),
         config_fields={"top_k": "top_k", "collection": "collection"},
         description="Restricted retrieval over the workspace vector store.",
@@ -141,8 +172,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         component="PGVectorRetriever",
         node_type=NodeType.RETRIEVER,
         display_name="PGVector Retriever",
-        input_ports=(_IOPort("query", PORT_TYPE_STRING),),
-        output_ports=(_IOPort("documents", PORT_TYPE_LIST),),
+        input_ports=(_IOPort("query", PORT_TYPE_STRING, description="Retrieval query string."),),
+        output_ports=(
+            _IOPort(
+                "documents",
+                PORT_TYPE_LIST,
+                description=("Retrieved chunks with provenance."),
+            ),
+        ),
         required_capabilities=("retriever",),
         config_fields={"top_k": "top_k", "collection": "collection"},
         description="Restricted retrieval over the workspace vector store.",
@@ -153,10 +190,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.LLM,
         display_name="Chat OpenAI",
         input_ports=(
-            _IOPort("input_value", PORT_TYPE_STRING),
-            _IOPort("system_message", PORT_TYPE_STRING, required=False),
+            _IOPort("input_value", PORT_TYPE_STRING, description="Prompt text sent to the model."),
+            _IOPort(
+                "system_message",
+                PORT_TYPE_STRING, required=False,
+                description=("Optional system instructions."),
+            ),
         ),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        output_ports=(_IOPort("message", PORT_TYPE_STRING, description="Model response message."),),
         required_capabilities=("llm",),
         config_fields={
             "model_name": "model",
@@ -171,10 +212,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.LLM,
         display_name="OpenAI Model",
         input_ports=(
-            _IOPort("input_value", PORT_TYPE_STRING),
-            _IOPort("system_message", PORT_TYPE_STRING, required=False),
+            _IOPort("input_value", PORT_TYPE_STRING, description="Prompt text sent to the model."),
+            _IOPort(
+                "system_message",
+                PORT_TYPE_STRING, required=False,
+                description=("Optional system instructions."),
+            ),
         ),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        output_ports=(_IOPort("message", PORT_TYPE_STRING, description="Model response message."),),
         required_capabilities=("llm",),
         config_fields={
             "model_name": "model",
@@ -189,10 +234,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.AGENT,
         display_name="Tool-Calling Agent",
         input_ports=(
-            _IOPort("input_value", PORT_TYPE_STRING),
-            _IOPort("tools", PORT_TYPE_LIST, required=False),
+            _IOPort("input_value", PORT_TYPE_STRING, description="Task text for the agent."),
+            _IOPort(
+                "tools",
+                PORT_TYPE_LIST, required=False,
+                description=("Bound tool references available to the agent."),
+            ),
         ),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        output_ports=(_IOPort("message", PORT_TYPE_STRING, description="Agent response message."),),
         required_capabilities=("agent", "tool"),
         config_fields={
             "model_name": "model",
@@ -207,8 +256,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         component="Tool",
         node_type=NodeType.TOOL,
         display_name="Tool",
-        input_ports=(_IOPort("input_value", PORT_TYPE_STRING),),
-        output_ports=(_IOPort("output", PORT_TYPE_ANY),),
+        input_ports=(
+            _IOPort(
+                "input_value",
+                PORT_TYPE_STRING,
+                description=("Tool input arguments."),
+            ),
+        ),
+        output_ports=(_IOPort("output", PORT_TYPE_ANY, description="Tool execution result."),),
         required_capabilities=("tool",),
         config_fields={"tool_name": "tool", "tool_metadata": "tool_metadata"},
         description="Reference to an approved declarative tool by name.",
@@ -218,10 +273,20 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         component="ConditionalRouter",
         node_type=NodeType.CONDITION,
         display_name="Conditional Router",
-        input_ports=(_IOPort("input_value", PORT_TYPE_ANY),),
+        input_ports=(
+            _IOPort(
+                "input_value",
+                PORT_TYPE_ANY,
+                description=("Value evaluated for route selection."),
+            ),
+        ),
         output_ports=(
-            _IOPort("result", PORT_TYPE_BOOLEAN),
-            _IOPort("message", PORT_TYPE_ANY),
+            _IOPort("result", PORT_TYPE_BOOLEAN, description="Boolean route-selection result."),
+            _IOPort(
+                "message",
+                PORT_TYPE_ANY,
+                description=("Passthrough of the evaluated input value."),
+            ),
         ),
         config_fields={"conditions": "routes"},
         description="Declarative route selection; selects a named route, "
@@ -232,24 +297,60 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         component="Prompt",
         node_type=NodeType.TRANSFORM,
         display_name="Prompt",
-        input_ports=(_IOPort("template", PORT_TYPE_STRING),),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        input_ports=(
+            _IOPort(
+                "template",
+                PORT_TYPE_STRING,
+                description=("Template text with interpolation fields."),
+            ),
+        ),
+        output_ports=(
+            _IOPort(
+                "message",
+                PORT_TYPE_STRING,
+                description=("Rendered message from the transform."),
+            ),
+        ),
         description="Bounded template interpolation (no eval/exec/imports).",
     ),
     LangflowComponentSpec(
         component="Template",
         node_type=NodeType.TRANSFORM,
         display_name="Template",
-        input_ports=(_IOPort("template", PORT_TYPE_STRING),),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        input_ports=(
+            _IOPort(
+                "template",
+                PORT_TYPE_STRING,
+                description=("Template text with interpolation fields."),
+            ),
+        ),
+        output_ports=(
+            _IOPort(
+                "message",
+                PORT_TYPE_STRING,
+                description=("Rendered message from the transform."),
+            ),
+        ),
         description="Bounded template interpolation (no eval/exec/imports).",
     ),
     LangflowComponentSpec(
         component="Parser",
         node_type=NodeType.TRANSFORM,
         display_name="Parser",
-        input_ports=(_IOPort("input_value", PORT_TYPE_ANY),),
-        output_ports=(_IOPort("message", PORT_TYPE_STRING),),
+        input_ports=(
+            _IOPort(
+                "input_value",
+                PORT_TYPE_ANY,
+                description=("Value to transform or parse."),
+            ),
+        ),
+        output_ports=(
+            _IOPort(
+                "message",
+                PORT_TYPE_STRING,
+                description=("Rendered message from the transform."),
+            ),
+        ),
         description="Bounded structured parse/clean step.",
     ),
     # ---- OUTPUT --------------------------------------------------------- #
@@ -258,10 +359,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.OUTPUT,
         display_name="Chat Output",
         input_ports=(
-            _IOPort("input_value", PORT_TYPE_ANY),
-            _IOPort("message", PORT_TYPE_ANY, required=False),
+            _IOPort("input_value", PORT_TYPE_ANY, description="Final answer value."),
+            _IOPort(
+                "message",
+                PORT_TYPE_ANY, required=False,
+                description=("Optional message surfaced to the caller."),
+            ),
         ),
-        output_ports=(_IOPort("output", PORT_TYPE_ANY),),
+        output_ports=(_IOPort("output", PORT_TYPE_ANY, description="Workflow output value."),),
         description="Verified answer sink.",
     ),
     LangflowComponentSpec(
@@ -269,10 +374,14 @@ _CATALOG: tuple[LangflowComponentSpec, ...] = (
         node_type=NodeType.OUTPUT,
         display_name="Text Output",
         input_ports=(
-            _IOPort("input_value", PORT_TYPE_ANY),
-            _IOPort("message", PORT_TYPE_ANY, required=False),
+            _IOPort("input_value", PORT_TYPE_ANY, description="Final answer value."),
+            _IOPort(
+                "message",
+                PORT_TYPE_ANY, required=False,
+                description=("Optional message surfaced to the caller."),
+            ),
         ),
-        output_ports=(_IOPort("output", PORT_TYPE_ANY),),
+        output_ports=(_IOPort("output", PORT_TYPE_ANY, description="Workflow output value."),),
         description="Verified answer sink.",
     ),
 )
@@ -325,6 +434,10 @@ MAX_DEPTH = 100
 #: hostile and is rejected rather than followed.
 MAX_TEMPLATE_DEPTH = 32
 
+#: Maximum characters echoed back for an id inside a structured rejection,
+#: so an oversized id cannot itself become an unbounded error payload.
+_REJECTION_ID_CHARS = 64
+
 
 class _DepthExceeded:
     """Sentinel for template chains exceeding the depth cap or cyclic."""
@@ -338,6 +451,96 @@ class _DepthExceeded:
 _DEPTH_EXCEEDED = _DepthExceeded()
 
 _LANGFLOW_TYPE_PREFIX = "langflow.io."
+
+
+# ---------------------------------------------------------------------------
+# B-1: config value-type + vetted-model validation
+# ---------------------------------------------------------------------------
+
+#: Vetted model identifiers accepted in imported config (advisory B-1).
+#: A model that is not on this list is rejected rather than passed through as
+#: an inert string, so an imported flow can never name an unvetted provider
+#: model.  Ownership of this list belongs to the coordinator / execution-policy
+#: layer; the adapter only enforces membership.
+VETTED_MODELS: frozenset[str] = frozenset({
+    "gpt-4o-mini",
+    "gpt-4o",
+    "gpt-4.1-mini",
+    "gpt-4.1",
+})
+
+#: Inclusive bounds for numeric config fields.
+_TEMPERATURE_RANGE = (0.0, 2.0)
+_MAX_TOKENS_CEILING = 32768
+_TOP_K_CEILING = 1000
+_MAX_STRING_CHARS = 256
+
+
+@dataclass(frozen=True)
+class _ConfigRule:
+    """Validation rule for one config key (advisory B-1).
+
+    ``kind`` is one of ``string``/``number``/``integer``/``boolean``/
+    ``list``/``dict``.  When ``allowlist`` is set the value must be a member.
+    ``pattern`` bounds free-form strings that are not allowlisted.
+    """
+
+    kind: str
+    allowlist: frozenset[str] | None = None
+    minimum: float | None = None
+    maximum: float | None = None
+    max_length: int = _MAX_STRING_CHARS
+    identifier: bool = False
+
+
+#: Per-config-key rules.  Keys are the *product* config keys (the values of
+#: ``config_fields``), not the Langflow template field names.
+_CONFIG_RULES: Mapping[str, _ConfigRule] = {
+    "model": _ConfigRule(
+        kind="string",
+        allowlist=VETTED_MODELS,
+        max_length=64,
+    ),
+    "temperature": _ConfigRule(
+        kind="number",
+        minimum=_TEMPERATURE_RANGE[0],
+        maximum=_TEMPERATURE_RANGE[1],
+    ),
+    "max_tokens": _ConfigRule(
+        kind="integer",
+        minimum=1,
+        maximum=_MAX_TOKENS_CEILING,
+    ),
+    "top_k": _ConfigRule(
+        kind="integer",
+        minimum=1,
+        maximum=_TOP_K_CEILING,
+    ),
+    "collection": _ConfigRule(kind="string", identifier=True, max_length=128),
+    "stream": _ConfigRule(kind="boolean"),
+    "tool": _ConfigRule(kind="string", identifier=True, max_length=128),
+    "tool_metadata": _ConfigRule(kind="dict"),
+    "instructions": _ConfigRule(kind="string", max_length=4096),
+    "routes": _ConfigRule(kind="list"),
+}
+
+#: Config keys with no declared rule fall back to a permissive scalar rule
+#: rather than being rejected outright (they are still length-bounded by
+#: ``MAX_FIELD_CHARS`` at ingestion).
+_DEFAULT_CONFIG_RULE = _ConfigRule(kind="string")
+
+#: Conservative identifier pattern for name-like config values
+#: (collection names, tool names): letters, digits, underscore, dot, dash.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+
+
+def _is_safe_identifier(value: str) -> bool:
+    """Return True iff *value* looks like a plain resource identifier.
+
+    Blocks whitespace, control characters, path traversal and shell-ish
+    metacharacters from reaching name-like config fields.
+    """
+    return bool(_IDENTIFIER_RE.match(value)) and ".." not in value
 
 #: Canonical Langflow component used when exporting each product node type.
 _CANONICAL_COMPONENT: dict[NodeType, str] = {
@@ -502,12 +705,25 @@ class LangflowAdapter:
         seen_node_ids: set[str] = set()
         for raw_node in raw_nodes:
             node_id = cls._node_id(raw_node)
-            # F-3: duplicate node ID rejection
+            # F-3: duplicate node ID rejection (bounded echo).
             if node_id is not None and node_id in seen_node_ids:
                 rejections.append({
                     "code": "DUPLICATE_NODE_ID",
-                    "message": f"node ID '{node_id}' appears more than once",
-                    "node_id": node_id,
+                    "message": (
+                        f"node ID '{cls._trunc(node_id)}' appears more than once"
+                    ),
+                    "node_id": cls._trunc(node_id),
+                })
+                continue
+            # F-5 class: node id enters NodeSpec.id, the internal dict keys,
+            # edge endpoint refs, rejection echoes and the revision hash.
+            if node_id is not None and len(node_id) > cls.MAX_FIELD_CHARS:
+                rejections.append({
+                    "code": "OVERSIZED_FIELD",
+                    "message": (
+                        f"node id exceeds {cls.MAX_FIELD_CHARS} chars"
+                    ),
+                    "node_id": cls._trunc(node_id),
                 })
                 continue
             if node_id is not None:
@@ -520,13 +736,16 @@ class LangflowAdapter:
                     "message": (
                         f"node display name exceeds {cls.MAX_FIELD_CHARS} chars"
                     ),
-                    "node_id": node_id,
+                    "node_id": cls._trunc(node_id),
                 })
                 continue
             # F-5: enforce MAX_FIELD_CHARS on template values
             rejections.extend(cls._check_template_sizes(raw_node, node_id))
             component, spec, node_rejections = cls._resolve_component(raw_node)
             rejections.extend(node_rejections)
+            if spec is not None and node_id is not None:
+                # B-1: validate allowlisted config values (type + vetted model)
+                rejections.extend(cls._check_config_values(raw_node, node_id, spec))
             if spec is not None and component is not None and node_id is not None:
                 resolved[node_id] = spec
                 node_names[node_id] = display_name
@@ -534,7 +753,7 @@ class LangflowAdapter:
                 rejections.append({
                     "code": "BAD_FLOW_FORMAT",
                     "message": "node object is missing 'id' or component type",
-                    "node_id": node_id,
+                    "node_id": cls._trunc(node_id),
                 })
         if rejections:
             raise LangflowImportError(rejections)
@@ -550,7 +769,9 @@ class LangflowAdapter:
                         "edge structure is deeper than the "
                         f"{MAX_DEPTH}-level scan limit; rejected (fail-closed)"
                     ),
-                    "edge_id": edge_id if isinstance(edge_id, str) else None,
+                    "edge_id": (
+                        cls._trunc(edge_id) if isinstance(edge_id, str) else None
+                    ),
                 })
             if edge_markers:
                 rejections.append({
@@ -559,7 +780,9 @@ class LangflowAdapter:
                         f"edge contains executable-code marker(s) "
                         f"{sorted(edge_markers)}; rejected"
                     ),
-                    "edge_id": edge_id if isinstance(edge_id, str) else None,
+                    "edge_id": (
+                        cls._trunc(edge_id) if isinstance(edge_id, str) else None
+                    ),
                 })
         if rejections:
             raise LangflowImportError(rejections)
@@ -638,9 +861,18 @@ class LangflowAdapter:
         """Translate Langflow edges into typed ``WorkflowEdgeSpec`` objects.
 
         Handle names are resolved against the ports declared by the node
-        catalog (case-insensitive); unresolvable handles are rejected rather
-        than silently guessed.  CONDITION sources derive their route value
-        from explicit edge metadata first, then the handle name.
+        catalog (case-insensitive).  A *present but unmatched* handle on a
+        non-CONDITION source is rejected rather than remapped.
+
+        CONDITION sources are a deliberate exception: a route handle carries
+        an opaque route label (``true``/``false``/route name), not a port
+        name, so an unmatched handle resolves to the fixed ``message``
+        passthrough output port.  The *target* port is still resolved
+        strictly, so no port confusion is possible; the route label is inert
+        data recorded in ``condition_value``.
+
+        Route values are derived from explicit edge metadata first, then the
+        source handle name, then the target handle name.
         """
         rejections: list[dict[str, Any]] = []
         edges: list[WorkflowEdgeSpec] = []
@@ -651,7 +883,18 @@ class LangflowAdapter:
                 if isinstance(raw_id, str) and raw_id
                 else f"lf-edge-{index}"
             )
-            edge_scope = {"edge_id": edge_id}
+            # The rejection scope is bounded so an oversized id cannot itself
+            # become an unbounded payload inside the structured error.
+            edge_scope = {"edge_id": edge_id[:_REJECTION_ID_CHARS]}
+            if len(edge_id) > cls.MAX_FIELD_CHARS:
+                rejections.append({
+                    **edge_scope,
+                    "code": "OVERSIZED_FIELD",
+                    "message": (
+                        f"edge id exceeds {cls.MAX_FIELD_CHARS} chars"
+                    ),
+                })
+                continue
 
             source_id = cls._edge_ref(raw_edge, "source", "source_node_id")
             target_id = cls._edge_ref(raw_edge, "target", "target_node_id")
@@ -669,11 +912,11 @@ class LangflowAdapter:
                 missing = source_id if source_spec is None else target_id
                 rejections.append({
                     **edge_scope,
-                    "node_id": missing,
+                    "node_id": cls._trunc(missing),
                     "code": "BAD_FLOW_FORMAT",
                     "message": (
-                        f"edge references unknown node '{missing}'; all edge "
-                        "endpoints must be allowlisted components"
+                        f"edge references unknown node '{cls._trunc(missing)}'; "
+                        "all edge endpoints must be allowlisted components"
                     ),
                 })
                 continue
@@ -696,11 +939,12 @@ class LangflowAdapter:
             if source_port is None:
                 rejections.append({
                     **edge_scope,
-                    "node_id": source_id,
+                    "node_id": cls._trunc(source_id),
                     "code": "UNRESOLVED_SOURCE_PORT",
                     "message": (
                         f"cannot determine the source output port of edge "
-                        f"'{edge_id}'; declared outputs of '{source_id}': "
+                        f"'{cls._trunc(edge_id)}'; declared outputs of "
+                        f"'{cls._trunc(source_id)}': "
                         f"{[p.name for p in source_node.output_ports]}"
                     ),
                 })
@@ -710,12 +954,12 @@ class LangflowAdapter:
             if target_port is None:
                 rejections.append({
                     **edge_scope,
-                    "node_id": target_id,
+                    "node_id": cls._trunc(target_id),
                     "code": "UNRESOLVED_TARGET_PORT",
                     "message": (
-                        f"edge '{edge_id}' target handle '{target_handle}' "
-                        f"does not map to a declared input port of "
-                        f"'{target_id}': "
+                        f"edge '{cls._trunc(edge_id)}' target handle "
+                        f"'{cls._trunc(target_handle)}' does not map to a "
+                        f"declared input port of '{cls._trunc(target_id)}': "
                         f"{[p.name for p in target_node.input_ports]}"
                     ),
                 })
@@ -726,14 +970,27 @@ class LangflowAdapter:
                 condition_value = cls._condition_value(
                     raw_edge, source_handle, target_handle
                 )
-                if condition_value is None:
+                if condition_value is None or condition_value == "":
                     rejections.append({
                         **edge_scope,
-                        "node_id": source_id,
+                        "node_id": cls._trunc(source_id),
                         "code": "CONDITION_EDGE_NO_VALUE",
                         "message": (
-                            f"conditional edge '{edge_id}' has no derivable "
-                            "route value"
+                            f"conditional edge '{cls._trunc(edge_id)}' "
+                            "has no derivable route value"
+                        ),
+                    })
+                    continue
+                if (
+                    isinstance(condition_value, str)
+                    and len(condition_value) > cls.MAX_FIELD_CHARS
+                ):
+                    rejections.append({
+                        **edge_scope,
+                        "code": "OVERSIZED_FIELD",
+                        "message": (
+                            "conditional edge route value exceeds "
+                            f"{cls.MAX_FIELD_CHARS} chars"
                         ),
                     })
                     continue
@@ -747,6 +1004,19 @@ class LangflowAdapter:
                 condition_value=condition_value,
             ))
         return edges, rejections
+
+    @staticmethod
+    def _trunc(value: Any) -> str:
+        """Bound an echoed untrusted value.
+
+        Rejections embed user-controlled strings (ids, handles, component
+        types) in their message/scope fields.  Without this, a hostile
+        multi-megabyte string would be amplified into logs once per edge.
+        """
+        text = value if isinstance(value, str) else str(value)
+        if len(text) > _REJECTION_ID_CHARS:
+            return text[:_REJECTION_ID_CHARS] + "...(truncated)"
+        return text
 
     @staticmethod
     def _edge_ref(raw_edge: Mapping[str, Any], *keys: str) -> str | None:
@@ -880,16 +1150,37 @@ class LangflowAdapter:
         exported["data"]["revision_hash"] = revision.content_hash
         return exported
 
-    @staticmethod
-    def _component_for(node: NodeSpec) -> str:
-        """Return the canonical Langflow component name for *node*."""
-        try:
-            return _CANONICAL_COMPONENT[node.type]
-        except KeyError as exc:
+    @classmethod
+    def _component_for(cls, node: NodeSpec) -> str:
+        """Return the canonical Langflow component name for *node*.
+
+        Some ``NodeType`` values have multiple catalog components that share
+        ports but differ elsewhere (TEXTINPUT vs CHATINPUT: same ports,
+        different description; TRANSFORM: ``Prompt``/``Template`` declare
+        ``template`` while ``Parser`` declares ``input_value``).  Selecting
+        purely by type would emit a component whose spec cannot reproduce the
+        stored node, breaking round-trip import.  So prefer the catalog entry
+        whose ports *and* description match the node exactly, then fall back to
+        the per-type canonical component.
+        """
+        in_names = tuple(sorted(p.name for p in node.input_ports))
+        out_names = tuple(sorted(p.name for p in node.output_ports))
+        default = _CANONICAL_COMPONENT.get(node.type)
+        for name, spec in cls.catalog().items():
+            if spec.node_type is not node.type:
+                continue
+            if (
+                tuple(sorted(p.name for p in spec.input_ports)) == in_names
+                and tuple(sorted(p.name for p in spec.output_ports)) == out_names
+                and spec.description == node.description
+            ):
+                return name
+        if default is None:
             raise ValueError(
                 f"node type '{node.type}' has no restricted Langflow "
                 "component mapping and cannot be exported"
-            ) from exc
+            )
+        return default
 
     @classmethod
     def _template_for(cls, node: NodeSpec, component: str) -> dict[str, Any]:
@@ -999,7 +1290,9 @@ class LangflowAdapter:
         """Resolve (and security-check) the component of *raw_node*."""
         rejections: list[dict[str, Any]] = []
         node_id = raw_node.get("id") if isinstance(raw_node, Mapping) else None
-        node_scope = {"node_id": node_id if isinstance(node_id, str) else None}
+        node_scope = {
+            "node_id": cls._trunc(node_id) if isinstance(node_id, str) else None
+        }
 
         data = raw_node.get("data")
         raw_type: Any = None
@@ -1015,13 +1308,15 @@ class LangflowAdapter:
             }]
 
         normalized = cls._normalize_component(raw_type)
+        bounded_type = cls._trunc(raw_type)
+        bounded_normalized = cls._trunc(normalized)
         if "." in raw_type and not raw_type.startswith(_LANGFLOW_TYPE_PREFIX):
             rejections.append({
                 **node_scope,
                 "code": "CUSTOM_CODE_COMPONENT",
                 "message": (
-                    f"component '{raw_type}' is loaded from an unvetted module "
-                    f"path; only '{_LANGFLOW_TYPE_PREFIX}...' standard "
+                    f"component '{bounded_type}' is loaded from an unvetted "
+                    f"module path; only '{_LANGFLOW_TYPE_PREFIX}...' standard "
                     "components are accepted"
                 ),
             })
@@ -1030,8 +1325,8 @@ class LangflowAdapter:
                 **node_scope,
                 "code": "CUSTOM_CODE_COMPONENT",
                 "message": (
-                    f"component '{normalized}' carries executable Python code "
-                    "and is rejected (no custom component execution)"
+                    f"component '{bounded_normalized}' carries executable "
+                    "Python code and is rejected (no custom component execution)"
                 ),
             })
         code_markers, depth_exceeded = cls._find_code_markers(raw_node)
@@ -1040,8 +1335,9 @@ class LangflowAdapter:
                 **node_scope,
                 "code": "OVERSIZED_FLOW",
                 "message": (
-                    f"component '{normalized}' has a structure deeper than "
-                    f"the {MAX_DEPTH}-level scan limit; rejected (fail-closed)"
+                    f"component '{bounded_normalized}' has a structure deeper "
+                    f"than the {MAX_DEPTH}-level scan limit; rejected "
+                    "(fail-closed)"
                 ),
             })
         if code_markers:
@@ -1049,7 +1345,7 @@ class LangflowAdapter:
                 **node_scope,
                 "code": "CUSTOM_CODE_COMPONENT",
                 "message": (
-                    f"component '{normalized}' contains executable-code "
+                    f"component '{bounded_normalized}' contains executable-code "
                     f"marker(s) {sorted(code_markers)}; rejected"
                 ),
             })
@@ -1062,8 +1358,8 @@ class LangflowAdapter:
                 **node_scope,
                 "code": "UNSUPPORTED_COMPONENT",
                 "message": (
-                    f"component '{normalized}' is not in the restricted "
-                    f"allowlist: {sorted(cls.catalog())}"
+                    f"component '{cls._trunc(normalized)}' is not in the "
+                    f"restricted allowlist: {sorted(cls.catalog())}"
                 ),
             })
             return normalized, None, rejections
@@ -1103,7 +1399,10 @@ class LangflowAdapter:
                     if isinstance(key, str):
                         normalized = cls._normalize_key(key)
                         if normalized and cls._has_marker(normalized):
-                            found.add(normalized)
+                            # Bound the stored form: matching already ran on the
+                            # full string, so only the echoed representation
+                            # shrinks and set truthiness is unaffected.
+                            found.add(cls._trunc(normalized))
                     # Check for {"type": "code", "value": "..."} pattern
                     if (
                         isinstance(sub, str)
@@ -1197,6 +1496,117 @@ class LangflowAdapter:
         return _DEPTH_EXCEEDED
 
     @classmethod
+    def _validate_config_value(
+        cls,
+        config_key: str,
+        value: Any,
+    ) -> str | None:
+        """Validate one config value against its rule (advisory B-1).
+
+        Returns ``None`` when the value is acceptable, otherwise a
+        human-readable reason.  Validation is strict and fail-closed: an
+        unvetted model name or a wrong-typed/range-violating value is
+        rejected rather than coerced.
+        """
+        rule = _CONFIG_RULES.get(config_key, _DEFAULT_CONFIG_RULE)
+
+        if rule.kind == "string":
+            if not isinstance(value, str):
+                return (
+                    f"expected a string for '{config_key}', got "
+                    f"{type(value).__name__}"
+                )
+            if len(value) > rule.max_length:
+                return (
+                    f"'{config_key}' exceeds {rule.max_length} characters"
+                )
+            if rule.allowlist is not None and value not in rule.allowlist:
+                return (
+                    f"model '{value}' is not vetted "
+                    f"(allowed: {sorted(rule.allowlist)})"
+                )
+            if rule.identifier and not _is_safe_identifier(value):
+                return (
+                    f"'{value}' is not a valid identifier for '{config_key}'"
+                )
+            return None
+
+        if rule.kind in {"number", "integer"}:
+            # bool is a subclass of int; a boolean is never a valid number.
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                return (
+                    f"expected a number for '{config_key}', got "
+                    f"{type(value).__name__}"
+                )
+            if rule.kind == "integer" and not float(value).is_integer():
+                return f"'{config_key}' must be an integer, got {value!r}"
+            if rule.minimum is not None and value < rule.minimum:
+                return f"'{config_key}' must be >= {rule.minimum}, got {value!r}"
+            if rule.maximum is not None and value > rule.maximum:
+                return f"'{config_key}' must be <= {rule.maximum}, got {value!r}"
+            return None
+
+        if rule.kind == "boolean":
+            if not isinstance(value, bool):
+                return (
+                    f"expected a boolean for '{config_key}', got "
+                    f"{type(value).__name__}"
+                )
+            return None
+
+        if rule.kind == "list":
+            if not isinstance(value, list):
+                return (
+                    f"expected a list for '{config_key}', got "
+                    f"{type(value).__name__}"
+                )
+            if len(value) > _TOP_K_CEILING:
+                return (
+                    f"'{config_key}' has more than {_TOP_K_CEILING} entries"
+                )
+            return None
+
+        if rule.kind == "dict":
+            if not isinstance(value, dict):
+                return (
+                    f"expected an object for '{config_key}', got "
+                    f"{type(value).__name__}"
+                )
+            return None
+
+        return f"unsupported config kind for '{config_key}'"
+
+    @classmethod
+    def _check_config_values(
+        cls,
+        raw_node: Mapping[str, Any],
+        node_id: str | None,
+        spec: LangflowComponentSpec,
+    ) -> list[dict[str, Any]]:
+        """Validate every allowlisted config value on *raw_node*.
+
+        Only allowlisted ``config_fields`` are inspected, so unknown template
+        fields are ignored exactly as before (advisory A-1 still holds).
+        """
+        rejections: list[dict[str, Any]] = []
+        template = cls._template(raw_node)
+        bounded_node_id = cls._trunc(node_id) if node_id is not None else None
+        for langflow_field, config_key in spec.config_fields.items():
+            value = cls._template_value(template.get(langflow_field))
+            if value is None or value is _DEPTH_EXCEEDED:
+                continue
+            reason = cls._validate_config_value(config_key, value)
+            if reason is not None:
+                rejections.append({
+                    "code": "INVALID_CONFIG_VALUE",
+                    "message": (
+                        f"config '{cls._trunc(config_key)}' rejected: {reason}"
+                    ),
+                    "node_id": bounded_node_id,
+                })
+        return rejections
+
+    @classmethod
     def _build_node_spec(
         cls,
         node_id: str,
@@ -1232,12 +1642,16 @@ class LangflowAdapter:
                     name=p.name,
                     type=p.type,
                     required=p.required,
-                    description=spec.description,
+                    description=p.description or spec.description,
                 )
                 for p in spec.input_ports
             ],
             output_ports=[
-                PortSpec(name=p.name, type=p.type, description=spec.description)
+                PortSpec(
+                    name=p.name,
+                    type=p.type,
+                    description=p.description or spec.description,
+                )
                 for p in spec.output_ports
             ],
             required_capabilities=list(spec.required_capabilities),
@@ -1257,26 +1671,28 @@ class LangflowAdapter:
         """
         rejections: list[dict[str, Any]] = []
         template = cls._template(raw_node)
+        bounded_node_id = cls._trunc(node_id) if node_id is not None else None
         for field_name, entry in template.items():
             value = cls._template_value(entry)
             if value is _DEPTH_EXCEEDED:
                 rejections.append({
                     "code": "BAD_FLOW_FORMAT",
                     "message": (
-                        f"template field '{field_name}' has an excessively "
-                        "deep or cyclic value/default chain; rejected"
+                        f"template field '{cls._trunc(field_name)}' has an "
+                        "excessively deep or cyclic value/default chain; "
+                        "rejected"
                     ),
-                    "node_id": node_id,
+                    "node_id": bounded_node_id,
                 })
                 continue
             if isinstance(value, str) and len(value) > cls.MAX_FIELD_CHARS:
                 rejections.append({
                     "code": "OVERSIZED_FIELD",
                     "message": (
-                        f"template field '{field_name}' exceeds "
+                        f"template field '{cls._trunc(field_name)}' exceeds "
                         f"{cls.MAX_FIELD_CHARS} chars"
                     ),
-                    "node_id": node_id,
+                    "node_id": bounded_node_id,
                 })
         return rejections
 

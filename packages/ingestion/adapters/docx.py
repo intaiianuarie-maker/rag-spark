@@ -70,13 +70,9 @@ def _body_elements(document: Any) -> list[DocumentElement]:
         elif tag == "tbl":
             table = Table(child, document)
             rows = [[cell.text for cell in row.cells] for row in table.rows]
-            table_text = " | ".join(
-                " ".join(cell for cell in row if cell) for row in rows if row
-            )
+            table_text = " | ".join(" ".join(cell for cell in row if cell) for row in rows if row)
             if table_text:
-                elements.append(
-                    make_element(ElementType.TABLE, table_text, section=section)
-                )
+                elements.append(make_element(ElementType.TABLE, table_text, section=section))
     return elements
 
 

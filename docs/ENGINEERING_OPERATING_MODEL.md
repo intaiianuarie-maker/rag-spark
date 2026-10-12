@@ -3,12 +3,15 @@
 **System:** Knowledge OS / RAG-Spark  
 **Architecture:** Multi-Agent Autonomous Engineering Team  
 **Roles & Topology:**
+- **Product & Communication Hub:** `museR` — Central team point of contact; all agents report to and communicate with `museR`.
 - **Coordinator & Release Manager:** `Antigravity` (`w4:p19`) — Git push authority, backlog curation, CI/CD orchestration.
 - **Backend / Agentic Engineer:** `dev11` (`w4:p1A`) — V3 stream (Agent Runtime, Tools, Research Engine).
 - **Workflow & Adapter Engineer:** `dev21` (`w4:p1B`) — V4 stream (Visual Workflows, Langflow Adapter, DSL Compiler).
 - **Independent Quality & Security Reviewer (Stream A):** `rew1` (`w4:p1D`) — Reviewer for `dev11` (V3).
 - **Independent Quality & Security Reviewer (Stream B):** `rew2` (`w4:p1E`) — Reviewer for `dev21` (V4).
 - **Independent Quality Auditor:** `jury` (`w4:p1C`) — Systemic audit, adversarial probes, benchmark verification.
+
+> **CRITICAL DIRECTIVE (2026-10-12):** All agents must direct all communications, pull requests, status reports, questions, and handovers to `museR` from now on.
 
 ---
 

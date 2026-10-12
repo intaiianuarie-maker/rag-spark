@@ -68,9 +68,7 @@ def _page_elements(page: Any, page_number: int) -> list[DocumentElement]:
                 make_element(ElementType.HEADING, text, page=page_number, section=section)
             )
         else:
-            elements.append(
-                make_element(ElementType.TEXT, text, page=page_number, section=section)
-            )
+            elements.append(make_element(ElementType.TEXT, text, page=page_number, section=section))
 
     for table in page.extract_tables() or []:
         table_text = _table_text(table)

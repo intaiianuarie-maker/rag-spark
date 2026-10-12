@@ -188,8 +188,9 @@ def _is_attributed_frame(sentence_text: str, match: re.Match) -> bool:
     _after_stripped = after.lstrip(" \t,;:." + _QUOTE_CHARS + "!?\u2014-")
     _after_tokens = _after_stripped.split()
     _after_first = _after_tokens[0] if _after_tokens else ""
-    if _REPORTING_VERB.search(_before_adj) or \
-            (_after_first and _REPORTING_VERB.search(_after_first)):
+    if _REPORTING_VERB.search(_before_adj) or (
+        _after_first and _REPORTING_VERB.search(_after_first)
+    ):
         return True
     return False
 
@@ -349,14 +350,12 @@ class ExtractiveGrounder:
         # claims like Alpha evidence in Alpha evidence about permissions.
         # re.IGNORECASE on the ORIGINAL text keeps match offsets in original
         # coordinates.
-        pattern = re.compile(
-            r"(?<![0-9.])\b" + re.escape(claim_norm) + r"\b", re.IGNORECASE
-        )
+        pattern = re.compile(r"(?<![0-9.])\b" + re.escape(claim_norm) + r"\b", re.IGNORECASE)
 
         pos = 0
         for m in _SENTENCE_BOUNDARY.finditer(chunk_content):
             sentence_start = pos
-            sentence_raw = chunk_content[sentence_start:m.start()]
+            sentence_raw = chunk_content[sentence_start : m.start()]
             pos = m.end()
             if not sentence_raw.strip():
                 continue
@@ -364,22 +363,25 @@ class ExtractiveGrounder:
             if not match:
                 continue
             folded = sentence_raw.casefold()
-            if (_NEGATION.search(folded)
-                    or _CONDITIONAL.search(folded)
-                    or _is_attributed_frame(sentence_raw, match)):
+            if (
+                _NEGATION.search(folded)
+                or _CONDITIONAL.search(folded)
+                or _is_attributed_frame(sentence_raw, match)
+            ):
                 continue
             # Offsets are relative to sentence_raw; map back to chunk_content.
-            return (True, (sentence_start + match.start(),
-                           sentence_start + match.end()))
+            return (True, (sentence_start + match.start(), sentence_start + match.end()))
 
         sentence_raw = chunk_content[pos:]
         if sentence_raw.strip():
             match = pattern.search(sentence_raw)
             if match:
                 folded = sentence_raw.casefold()
-                if not (_NEGATION.search(folded)
-                        or _CONDITIONAL.search(folded)
-                        or _is_attributed_frame(sentence_raw, match)):
+                if not (
+                    _NEGATION.search(folded)
+                    or _CONDITIONAL.search(folded)
+                    or _is_attributed_frame(sentence_raw, match)
+                ):
                     return (True, (pos + match.start(), pos + match.end()))
 
         return (False, None)
@@ -432,27 +434,86 @@ async def verify_claims(
         for chunk_id in claim.chunk_ids:
             item = by_chunk.get(chunk_id)
             if item is not None:
+                # RP-03 / G4: Never ground citations against synthesized graph summaries!
+                is_graph_item = bool(item.metadata and item.metadata.get("is_graph"))
+                content_to_verify = item.content
+                doc_id = item.document_id
+                filename = item.metadata.get("filename") if item.metadata else None
+                page = item.page
+                section = item.section
+                workspace_id = item.workspace_id
+
+                if is_graph_item:
+                    # Authoritative original-chunk hydration is mandatory
+                    if chunk_lookup is None:
+                        # Cannot authoritatively verify graph citation without store lookup
+                        continue
+                    canonical = await chunk_lookup.get(chunk_id)
+                    if canonical is None:
+                        # Nonexistent, deleted, or superseded chunk
+                        continue
+                    if (
+                        allowed_workspace_ids is not None
+                        and canonical.workspace_id not in allowed_workspace_ids
+                    ):
+                        # Foreign workspace chunk
+                        continue
+                    canonical_content = getattr(canonical, "content", None)
+                    if not canonical_content:
+                        continue
+                    content_to_verify = canonical_content
+                    doc_id = canonical.document_id or doc_id
+                    filename = canonical.filename or filename
+                    page = canonical.page if canonical.page is not None else page
+                    section = canonical.section or section
+                    workspace_id = canonical.workspace_id or workspace_id
+
                 grounding_score: float | None = None
                 span: tuple[int, int] | None = None
                 if claim_grounder is not None:
-                    grounding_score = claim_grounder.score(claim.text, item.content)
+                    grounding_score = claim_grounder.score(claim.text, content_to_verify)
                     if grounding_score < claim_grounder.threshold:
                         # Chunk does not substantiate the claim — not a citation.
                         continue
                     # Try to locate the exact span for the citation
                     if hasattr(claim_grounder, "locate"):
-                        span = claim_grounder.locate(claim.text, item.content)
+                        span = claim_grounder.locate(claim.text, content_to_verify)
                 valid_ids.append(chunk_id)
-                citations.append(_citation(chunk_id, item, claim.text, grounding_score, span))
-            elif chunk_lookup is not None and claim_grounder is None:
-                # Only existence/scope (no content to ground against).
+                citations.append(
+                    Citation(
+                        chunk_id=chunk_id,
+                        document_id=doc_id,
+                        filename=filename,
+                        page=page,
+                        section=section,
+                        span=span if span is not None else _span(claim.text, content_to_verify),
+                        workspace_id=workspace_id,
+                        grounding_score=grounding_score,
+                    )
+                )
+            elif chunk_lookup is not None:
                 citation = await chunk_lookup.get(chunk_id)
-                if citation is not None:
-                    # Workspace invariant: lookup-resolved chunks must carry a
-                    # workspace and must be inside the allowed scope (if set).
-                    if citation.workspace_id is not None:
-                        if (allowed_workspace_ids is None
-                                or citation.workspace_id in allowed_workspace_ids):
+                if citation is not None and citation.workspace_id is not None:
+                    if (
+                        allowed_workspace_ids is None
+                        or citation.workspace_id in allowed_workspace_ids
+                    ):
+                        if claim_grounder is not None:
+                            canonical_content = getattr(citation, "content", None)
+                            if canonical_content:
+                                grounding_score = claim_grounder.score(
+                                    claim.text, canonical_content
+                                )
+                                if grounding_score < claim_grounder.threshold:
+                                    continue
+                                if hasattr(claim_grounder, "locate"):
+                                    citation.span = claim_grounder.locate(
+                                        claim.text, canonical_content
+                                    )
+                                citation.grounding_score = grounding_score
+                                valid_ids.append(chunk_id)
+                                citations.append(citation)
+                        else:
                             valid_ids.append(chunk_id)
                             citations.append(citation)
         if valid_ids:

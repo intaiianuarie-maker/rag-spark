@@ -116,9 +116,7 @@ async def check_document_parser_contract(
             _fail(f"[{fixture.fixture_id}] boilerplate {banned!r} survived normalization")
 
     if parser.supported_mime_types and fixture.mime_type not in parser.supported_mime_types:
-        _fail(
-            f"[{fixture.fixture_id}] parser does not declare support for {fixture.mime_type}"
-        )
+        _fail(f"[{fixture.fixture_id}] parser does not declare support for {fixture.mime_type}")
 
     await _expect_error(
         parser.parse(fixture.data, mime_type="audio/mpeg", filename=fixture.filename),

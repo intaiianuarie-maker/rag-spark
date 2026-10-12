@@ -90,9 +90,7 @@ class DoclingParser(DocumentParser):
                     pipeline_options=NativePdfPipelineOptions()
                 )
 
-            converter = DocumentConverter(
-                format_options=format_options if format_options else None
-            )
+            converter = DocumentConverter(format_options=format_options if format_options else None)
             result = converter.convert(DocumentStream(name=stream_name, stream=BytesIO(data)))
             doc = result.document
         except ParseError:
@@ -138,9 +136,7 @@ class DoclingParser(DocumentParser):
                     else:
                         el_type = ElementType.TEXT
 
-                elements.append(
-                    make_element(el_type, text, page=page, section=section, bbox=bbox)
-                )
+                elements.append(make_element(el_type, text, page=page, section=section, bbox=bbox))
 
             for table in getattr(doc, "tables", []):
                 # Tables: concatenate cell texts if available, else fallback to table text

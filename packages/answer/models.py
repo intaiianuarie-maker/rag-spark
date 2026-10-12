@@ -57,6 +57,8 @@ class Citation(BaseModel):
     #: well the chunk substantiates the claim, or ``None`` when no grounder
     #: scored the citation (legacy/existence-only verification).
     grounding_score: float | None = None
+    #: Authoritative passage content used for grounding verification.
+    content: str | None = None
 
 
 class Answer(BaseModel):
@@ -71,4 +73,3 @@ class Answer(BaseModel):
     trace_id: str | None = None
     claims: list[Claim] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
-

@@ -9,6 +9,7 @@ seam and reports which stores were purged. Original bytes remain in
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -72,9 +73,7 @@ async def find_document_by_filename(
     return (await session.execute(statement)).scalars().first()
 
 
-async def latest_version(
-    session: AsyncSession, document_id: uuid.UUID
-) -> DocumentVersion | None:
+async def latest_version(session: AsyncSession, document_id: uuid.UUID) -> DocumentVersion | None:
     statement = (
         select(DocumentVersion)
         .where(DocumentVersion.document_id == document_id)
@@ -171,6 +170,16 @@ async def purge_document(
 
             register_store_purger("fts", _purge_fts)
             register_store_purger("qdrant", _purge_qdrant)
+
+            if os.environ.get("GRAPH_MODE", "off").strip().lower() in ("rule", "llm"):
+                from graph.factory import graph_db_path
+                from graph.sqlite_store import SQLiteGraphStore
+
+                async def _purge_graph(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+                    gstore = SQLiteGraphStore(graph_db_path())
+                    await gstore.tombstone_document(str(ws_id), str(doc_id))
+
+                register_store_purger("graph", _purge_graph)
         except Exception:
             pass
 

@@ -60,10 +60,19 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
 def build_answer_engine() -> AnswerEngine:
     """Construct the answer engine from settings (lazy; safe to call per request)."""
     model = os.environ.get("ANSWER_MODEL", DEFAULT_ANSWER_MODEL)
+    chunk_lookup = None
+    try:
+        from .adapters.postgres_lookup import PostgresChunkLookup
+
+        chunk_lookup = PostgresChunkLookup()
+    except Exception:
+        pass
+
     return AnswerEngine(
         orchestrator=create_orchestrator(),
         llm=LiteLLMProvider(),
         model=model,
+        chunk_lookup=chunk_lookup,
         # v1-rereview Q5: ground every citation via conservative extractive
         # check (claim text must be verbatim in the chunk) — interim v1 mode.
         claim_grounder=ExtractiveGrounder(),

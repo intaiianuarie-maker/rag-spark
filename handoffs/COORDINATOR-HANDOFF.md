@@ -48,3 +48,25 @@
 - **Evidence:** full suite 143 passed (`test_workflow_langflow_adapter` 95 + 48 pre-existing); ruff + mypy clean; A-1 allowlist + validator/compile integration re-confirmed (compile blocked only on edge-absence, i.e. W2-3 scope).
 - **Detail:** `handoffs/REW2-V4-W2-2-R2.md` + `handoffs/REW2-REVIEW-HANDOFF.md` (W2-2 R2 row: ACCEPTED).
 - **Carried forward:** B-1 (config value-type/vetted-model validation unowned — needs coordinator ownership before production execution of imports); B-2 (per-port descriptions). dev21 released to start W2-3 when the coordinator schedules it.
+
+### 2026-10-12 — rew2 (`w4:p1E`) → Antigravity: ✅ ACCEPT W2-3 R4 — W2 CARD COMPLETE (Stream B / V4, dev21)
+- **Slice:** W2-3 edges/condition routing + round-trip export, R4 revision. Final residual (derived marker echoes) verified closed: my exact R3 vectors re-measured at **150 / 132 chars** (were 5,000,076 / 5,000,058); detection semantics confirmed unchanged (`my_class`, `sourcecode`, `Code` all still detected/rejected).
+- **Evidence:** full suite 206 passed (158 adapter + 48 pre-existing); ruff + mypy clean; regression sweep green incl. 15/15 component round-trip hash equality and full-flow validate/compile.
+- **W2 card final state:** W2-1 R3 ✅ ACCEPTED, W2-2 R2 ✅ ACCEPTED, W2-3 R4 ✅ ACCEPTED — **Langflow compatibility spike slices all accepted through rew2's gate.** Detail: `handoffs/REW2-V4-W2-3-R4.md` + ledger rows in `handoffs/REW2-REVIEW-HANDOFF.md`.
+- **Carried-forward advisories:** B-1 (config value-type/vetted-model validation unowned — needs coordinator ownership before production execution of imported flows); B-2 (per-port descriptions); A-1 (scan is defense-in-depth only — future config mapping must keep allowlist-field reads). Merge/scheduling remains coordinator's call per `AGENTS.md`.
+
+### 2026-10-12 — dev11 (G2 cross-stream review) → museR: ✅ APPROVE V1/V2 P1 diff (unmerged)
+- **Slice:** independent cross-stream review of the unmerged V1/V2 P1 diff. First pass returned **CHANGES** with 2 blocking silent-failure defects; both fixed and re-verified to APPROVED.
+- **C1 (CRITICAL, fixed):** `apps/worker/jobs/ingest_pipeline.py:322` called `extractor.extract_batch(...)`, which does not exist (extractor implements only `extract`). With `GRAPH_MODE=rule|llm` every job raised `AttributeError`, swallowed by a bare `except`, then reported `READY` — graph extraction never ran while jobs reported success. Now calls `extractor.extract(...)`.
+- **C2 (HIGH, fixed):** `packages/ingestion/dedup.py:175` used `os.environ` without importing `os`. Confirmed by ruff (F821), mypy (`name-defined`) and AST. The line sat between the FTS/Qdrant and graph purger registrations and the bare `except Exception: pass` swallowed the `NameError`, so graph tombstones never purged while the per-store report implied success. Now `import os` at line 12.
+- **Runtime verification (not diff-reading):** C1 -> extract yields 3 entities + 1 relationship, persists, retrieves with `chunk_ids=['c-9']`. C2 -> purger registers `['fts','graph','qdrant']`, seeded entity goes 1 -> 0.
+- **Gates:** mandated 18/18 passed; full unit suite **638 passed**, 0 failed; ruff clean; mypy clean (40 files).
+- **Adversarial probes (9/9 PASS):** 900-vs-20 synthesized-summary rejection; tombstone rejection; superseded rejection; foreign-workspace rejection (no cross-WS leak); zero-vector/NaN/Inf/dim-mismatch rejection; `GRAPH_MODE=off` no graph writes; no-lookup fail-closed; **plus a new positive control** confirming the fixes do not over-reject legitimate grounded citations (`verified=1 citations=1`).
+- **Detail:** `handoffs/G2-V1V2-REVIEW-2026-10-12.md` (supersedes the prior CHANGES verdict in that file).
+- **Non-blocking follow-ups recorded (do not block merge):** N1 rule extractor emits duplicate entities per chunk (`SimpleEntityResolver` not applied in this path); N2 `factory.py` swallows `PostgresChunkLookup()` construction failures (fail-closed, but DB outage indistinguishable from no-graph-results in telemetry); N3 broad `except` in lookup adapter (fail-closed, acceptable); N4 the passing hook test exercises the extractor directly rather than through `process_job`, so it would not have caught C1 — a `process_job`-level test would be better.
+- **Read-only compliance:** no commits, no pushes; HEAD unchanged at `dd9ce11`; verdict file left untracked for Codex `w4:p17` merge authority.
+
+### 2026-10-12 — dev11: reporting order change (per museR)
+- **Coordinator is now museR.** From this point dev11 reports status/verdicts by (a) replying to prompts and (b) appending a dated entry to this file, section 4.
+- **Reviewer contact is via handoff files, not prompts:** dev11 <-> rew1 (`w4:p1D`) exchange through `handoffs/DEV11-V3-HANDOFF.md` <-> `handoffs/REW1-REVIEW-HANDOFF.md`.
+- **Only museR dispatches new tasks to dev11.** Standing by.

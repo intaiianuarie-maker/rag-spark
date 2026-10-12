@@ -113,9 +113,7 @@ def tag_language(parsed: ParsedDocument) -> str:
     return "unknown"
 
 
-def extract_metadata(
-    parsed: ParsedDocument, *, filename: str | None = None
-) -> DocumentMetadata:
+def extract_metadata(parsed: ParsedDocument, *, filename: str | None = None) -> DocumentMetadata:
     """Extract deterministic metadata from a normalized document."""
     title: str | None = None
     sections: list[str] = []
