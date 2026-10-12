@@ -23,7 +23,6 @@ import logging
 import os
 import re
 import uuid
-from dataclasses import replace
 
 from answer.engine import AnswerEngine
 from answer.factory import build_answer_engine
@@ -33,7 +32,12 @@ from core.errors import ReasonCode, canonical_code, error_detail, spec_for
 from core.logging import request_id_ctx
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.adapters.litellm_provider import LLMProviderError
-from models.router_config import WorkspaceModelConfig, route
+from models.router_config import (
+    WorkspaceModelConfig,
+    load_workspace_config,
+    provider_identity,
+    route_decision,
+)
 from pydantic import BaseModel, Field
 from retrieval.interfaces import RetrievalMode
 
@@ -111,16 +115,19 @@ def classify_query(query: str) -> str:
 
 
 def load_model_config(workspace_id: str, *, override_model: str | None) -> WorkspaceModelConfig:
-    """Authoritative model policy for ONE Ask request (T-V1-028 seam).
+    """Authoritative model policy for ONE Ask request (T-V1-028).
 
-    Three tiers are handed to :func:`models.router_config.route`, which — and
-    only which — decides their precedence:
+    Builds the three precedence tiers and hands them to
+    :func:`models.router_config.route_decision`, which — and only which — decides
+    their order (LOCKED: veto > permitted override > workspace rules > operator
+    default):
 
-    1. **workspace** — per-workspace ``routing_rules``. No rule store is
-       persisted yet (a new table needs an Alembic migration + coordinator
-       decision), so this tier currently contributes no rules and the seam is
-       empty rather than fake: whatever a future loader returns here is passed
-       through untouched, and the ordering stays policy-owned.
+    1. **workspace** — per-workspace ``routing_rules`` loaded from the
+       authoritative ``WORKSPACE_MODEL_CONFIG`` store via
+       :func:`models.router_config.load_workspace_config`. When the store has no
+       entry for this workspace the tier is empty rather than fake; whatever the
+       loader returns is passed through untouched and the ordering stays
+       policy-owned.
     2. **permitted override** — ``body.model`` supplied by the caller.
     3. **operator default** — ``ANSWER_MODEL`` when the operator configured it,
        else ``None`` so the policy module's own fallback applies. This file
@@ -128,48 +135,30 @@ def load_model_config(workspace_id: str, *, override_model: str | None) -> Works
        own: the handler never picks a model, it only reports what the router
        picked.
 
-    ``workspace_id`` is threaded through for the loader's use and for log
-    correlation; it is unused while the workspace tier has no store.
+    ``override_model`` is layered here (not in the store) because it is a
+    per-request caller input; the store only ever supplies the workspace tier.
     """
+    workspace = load_workspace_config(workspace_id)
     return WorkspaceModelConfig(
         workspace_id=workspace_id,
         override_model=override_model,
         preferred_model=os.environ.get("ANSWER_MODEL") or None,
-        routing_rules=(),
+        routing_rules=workspace.routing_rules if workspace else (),
     )
-
-
-def _rules_selected(config: WorkspaceModelConfig, query_class: str, model: str) -> bool:
-    """True when the workspace-rule tier, not the default tier, produced `model`.
-
-    Derived by asking the policy router again with only the rules stripped, so
-    the recorded reason can never disagree with the policy's own precedence
-    logic (no re-scoring is duplicated here). Disclosed limit: if rules were
-    ever to select exactly the default-tier model, the reason records the
-    default tier — the selection itself is still correct, and the rules tier is
-    empty at this call site today.
-    """
-    if not config.routing_rules:
-        return False
-    return route(query_class, replace(config, routing_rules=())) != model
 
 
 def selection_reason(config: WorkspaceModelConfig, query_class: str, model: str) -> str:
     """Label the precedence tier that produced `model`.
 
-    Mirrors :func:`models.router_config.route` (veto → override → workspace
-    rules → default) and returns a short enum string only: no query text, no
-    prompt content, no credentials ever reach the log.
+    Delegates to :func:`models.router_config.route_decision` so the label is
+    derived by the same policy pass that selects the model — the reason can
+    never disagree with the selection. Returns a short enum string only: no
+    query text, no prompt content, no credentials ever reach the log.
+
+    `model` is accepted for call-site symmetry with :func:`resolve_model`; the
+    policy derives the reason from (query_class, config) alone.
     """
-    if config.sensitive:
-        return "policy_veto_local_only"
-    if config.override_model is not None:
-        return "permitted_override"
-    if _rules_selected(config, query_class, model):
-        return "workspace_rules"
-    if config.preferred_model is not None:
-        return "operator_default"
-    return "operator_default_unconfigured"
+    return route_decision(query_class, config)[1]
 
 
 def resolve_model(
@@ -177,13 +166,13 @@ def resolve_model(
 ) -> tuple[str, str]:
     """Resolve the model for one Ask request: ``(model, selection_reason)``.
 
-    Every request on this path goes through here exactly once (T-V1-038):
-    there is no second model source in the handler, so a request bypassing the
-    router is structurally impossible rather than merely discouraged.
+    Every request on this path goes through here exactly once (T-V1-038): the
+    policy returns the model and its reason together, so a request bypassing the
+    router — or logging a reason that disagrees with the pick — is structurally
+    impossible rather than merely discouraged.
     """
     config = load_model_config(workspace_id, override_model=override_model)
-    model = route(query_class, config)
-    return model, selection_reason(config, query_class, model)
+    return route_decision(query_class, config)
 
 
 @router.post(
@@ -201,11 +190,15 @@ async def ask(
     except ApiError as exc:
         raise _http_error(exc) from exc
 
-    # T-V1-038: one router call per request, no other model source. Classify
-    # into a REAL router class so rule selection can engage (the old "general"
-    # placeholder disabled it), then let route() own the precedence and record
-    # which tier it used. The log line carries identifiers + reason only —
-    # never the query text (no prompt content), never credentials.
+    # T-V1-038/T-V1-028: one router call per request, no other model source.
+    # Classify into a REAL router class so rule selection can engage (the old
+    # "general" placeholder disabled it), then let route_decision() own the
+    # precedence and return the model together with the tier that picked it. The
+    # selected identity is threaded into the engine factory as its REQUIRED
+    # model — there is no post-hoc overwrite and no factory default, so the
+    # router's pick is the only model that can reach the provider. The log line
+    # carries identifiers + provider + reason only — never the query text (no
+    # prompt content), never credentials.
     query_class = classify_query(body.query)
     resolved_model, reason = resolve_model(
         str(workspace_id), query_class=query_class, override_model=body.model
@@ -217,13 +210,13 @@ async def ask(
             "workspace_id": str(workspace_id),
             "query_class": query_class,
             "model": resolved_model,
+            "provider": provider_identity(resolved_model),
             "reason": reason,
             "override_supplied": body.model is not None,
         },
     )
 
-    engine: AnswerEngine = build_answer_engine()
-    engine.model = resolved_model
+    engine: AnswerEngine = build_answer_engine(model=resolved_model)
 
     try:
         answer = await engine.answer(

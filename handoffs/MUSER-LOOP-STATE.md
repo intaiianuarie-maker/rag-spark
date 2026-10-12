@@ -112,6 +112,9 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 - T-V1-026 reviewer: APPROVE (no silent-empty proven, tracking IDs, fail-closed + re-pins
   confirmed sound, engine.py extension justified) → DONE. Pre-existing str(exc) surfaces
   filed as T-V1-051 (not this ticket's debt).
+- T-V1-027 reviewer: APPROVE (required-set executed, exact-set byte-identical ×3, F3 probe
+  bounded + non-preempting, m004 green) → DONE. One stale comment (errors.py LLM_GATEWAY
+  "not probed") folded into T-V1-049 scope.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),

@@ -208,7 +208,7 @@ def test_deleted_document_is_tombstoned_and_never_retrieved(client) -> None:
 
     monkeypatch = _pytest.MonkeyPatch()
     try:
-        monkeypatch.setattr(ask_router, "build_answer_engine", lambda: engine)
+        monkeypatch.setattr(ask_router, "build_answer_engine", lambda **_: engine)
         ask = client.post(
             f"/v1/workspaces/{workspace}/ask",
             json={"query": marker},

@@ -140,7 +140,15 @@ async def _ask(monkeypatch, *, override_model: str | None = None, query: str | N
     import app.ask.router as router_mod
 
     engine = _FakeEngine()
-    monkeypatch.setattr(router_mod, "build_answer_engine", lambda: engine)
+
+    def _fake_factory(*, model: str):
+        # T-V1-028: the handler must thread the router's pick into the factory
+        # as its REQUIRED model — capture it so tests can assert the exact
+        # identity that would reach the provider.
+        engine.model = model
+        return engine
+
+    monkeypatch.setattr(router_mod, "build_answer_engine", _fake_factory)
     workspace_id = uuid.uuid4()
     principal = Principal(
         user_id="u-tv1-038",
@@ -305,4 +313,7 @@ def test_ask_handler_path_has_no_hardcoded_model():
     assert "gpt-4o-mini" not in source  # no model literal anywhere in the call site
     assert "DEFAULT_ANSWER_MODEL" not in source  # handler does not import a default
     assert source.count("resolved_model, reason = resolve_model(") == 1  # single call-site
-    assert source.count("engine.model = resolved_model") == 1  # and it always applies
+    # The router's pick is threaded into the factory as its REQUIRED model; there
+    # is no second assignment that could overwrite it (T-V1-028 single source).
+    assert source.count("build_answer_engine(model=resolved_model)") == 1
+    assert "engine.model =" not in source

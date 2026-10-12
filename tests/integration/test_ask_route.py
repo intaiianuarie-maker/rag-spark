@@ -92,7 +92,7 @@ def test_ask_returns_grounded_answer(client, monkeypatch: pytest.MonkeyPatch) ->
     import app.ask.router as router
 
     engine = _FakeEngine(_sample_answer())
-    monkeypatch.setattr(router, "build_answer_engine", lambda: engine)
+    monkeypatch.setattr(router, "build_answer_engine", lambda **_: engine)
 
     token = _new_user(client)
     workspace = _create_workspace(client, token)
@@ -119,7 +119,7 @@ def test_ask_requires_authentication(client) -> None:
 def test_ask_forbidden_for_non_member(client, monkeypatch: pytest.MonkeyPatch) -> None:
     import app.ask.router as router
 
-    monkeypatch.setattr(router, "build_answer_engine", lambda: _FakeEngine(_sample_answer()))
+    monkeypatch.setattr(router, "build_answer_engine", lambda **_: _FakeEngine(_sample_answer()))
     owner = _new_user(client)
     outsider = _new_user(client)
     workspace = _create_workspace(client, owner)
@@ -142,7 +142,7 @@ def test_ask_maps_llm_error_to_503(client, monkeypatch: pytest.MonkeyPatch) -> N
         async def answer(self, *, query, acl_scope, mode=None, **kwargs):
             raise LLMProviderError("gateway down")
 
-    monkeypatch.setattr(router, "build_answer_engine", lambda: _DownEngine())
+    monkeypatch.setattr(router, "build_answer_engine", lambda **_: _DownEngine())
     token = _new_user(client)
     workspace = _create_workspace(client, token)
     response = client.post(

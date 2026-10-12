@@ -12,8 +12,6 @@ built, i.e. when ``/ask`` is called.
 
 from __future__ import annotations
 
-import os
-
 from models.adapters.litellm_provider import LiteLLMProvider
 
 from .engine import AnswerEngine
@@ -22,10 +20,6 @@ from .verification import ExtractiveGrounder
 
 #: Collection the hybrid orchestrator reads/writes (single v1 collection).
 DEFAULT_COLLECTION = "knowledge"
-
-#: Model the answer engine requests from LiteLLM (M7 router owns per-workspace
-#: config later).
-DEFAULT_ANSWER_MODEL = "gpt-4o-mini"
 
 
 def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
@@ -58,8 +52,15 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
     )
 
 
-def build_answer_engine() -> AnswerEngine:
+def build_answer_engine(*, model: str, collection: str = DEFAULT_COLLECTION) -> AnswerEngine:
     """Construct the answer engine from settings (lazy; safe to call per request).
+
+    T-V1-028: ``model`` is a REQUIRED, explicit input — the factory holds **no**
+    default model and reads no model env var. The Ask handler resolves the model
+    through the policy router (workspace > permitted override > operator default)
+    and passes the single selected identity in here, so a ``gpt-4o-mini`` silent
+    default cannot re-enter the path. An empty ``model`` is rejected by the
+    provider's typed contract, not papered over with a fallback.
 
     T-V1-022 wiring: one :class:`~answer.hydration.CanonicalHydrator` is built
     over the store lookup and shared by **both** hydration seams —
@@ -76,7 +77,6 @@ def build_answer_engine() -> AnswerEngine:
     Without a store the engine keeps the legacy ``chunk_lookup=None``
     contract and the decorator is a pass-through.
     """
-    model = os.environ.get("ANSWER_MODEL", DEFAULT_ANSWER_MODEL)
     chunk_lookup = None
     try:
         from .adapters.postgres_lookup import PostgresChunkLookup
@@ -88,7 +88,7 @@ def build_answer_engine() -> AnswerEngine:
     hydrator = CanonicalHydrator(chunk_lookup)
 
     return AnswerEngine(
-        orchestrator=HydratingOrchestrator(create_orchestrator(), hydrator),
+        orchestrator=HydratingOrchestrator(create_orchestrator(collection=collection), hydrator),
         llm=LiteLLMProvider(),
         model=model,
         # No store → None → legacy existence/scope-only verification.

@@ -561,7 +561,7 @@ def test_ask_maps_retrieval_unavailable_to_503_with_tracking_id(
                 trace_id="trace-ask-1",
             )
 
-    monkeypatch.setattr(router, "build_answer_engine", lambda: _Engine())
+    monkeypatch.setattr(router, "build_answer_engine", lambda **_: _Engine())
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
     client = TestClient(app)
@@ -596,7 +596,7 @@ def test_ask_empty_corpus_stays_a_200_abstention(monkeypatch) -> None:
                 trace_id="trace-empty-1",
             )
 
-    monkeypatch.setattr(router, "build_answer_engine", lambda: _Engine())
+    monkeypatch.setattr(router, "build_answer_engine", lambda **_: _Engine())
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
     client = TestClient(app)
