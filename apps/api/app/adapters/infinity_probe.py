@@ -2,9 +2,12 @@
 
 Uses plain httpx against the infinity server's HTTP surface rather than the
 embedding/rerank adapters, keeping readiness free of model-call semantics.
-Any HTTP response (including 404/405 on the root path — infinity only serves
-POST /embeddings and POST /rerank) proves the server is up and reachable;
-only transport/timeout failures count as down.
+
+Reachability is ``status_code < 500``: any sub-500 HTTP response (including
+307 from the root redirect and 404/405 — infinity only serves POST
+/embeddings and POST /rerank) proves the server is up and reachable, while a
+5xx means the process answered but the service is broken and must read red
+(T-V1-005). Transport/timeout failures stay unreachable.
 """
 
 from __future__ import annotations
@@ -23,9 +26,11 @@ async def probe(infinity_url: str, timeout_seconds: float) -> DependencyStatus:
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             response = await client.get(url)
         latency = (time.perf_counter() - start) * 1000
+        # T-V1-005: a 5xx means the process answered but the service is
+        # broken — a broken embeddings service must read red, not green.
         return DependencyStatus(
             name=name,
-            reachable=True,
+            reachable=response.status_code < 500,
             latency_ms=round(latency, 2),
             detail=f"GET / -> {response.status_code}",
         )
