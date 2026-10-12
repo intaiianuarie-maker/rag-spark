@@ -121,6 +121,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   re-pins stronger) → DONE. Reviewer lacked lint tooling; coordinator ran ruff+mypy clean.
 - T-V1-023 reviewer: APPROVE (test-only scope, all controls present, hydration genuinely
   does the work, T-021 files correctly excluded) → DONE.
+- T-V1-024 reviewer: APPROVE (6/6 false frames, 6/6 positives, limits honest, 120 green) → DONE.
+  Nits carried (non-blocking): 'eronic' typo + broad nu/se markers — fix opportunistically.
 - T-V1-021 reviewer: APPROVE (real SIGKILL, deterministic seams, drain asserted, provenance
   clean, lint/type self-run) → DONE. C-section ingestion reliability complete (016–021).
 - T-V1-020 reviewer: APPROVE (atomic claim, fenced ack, ack-after-durability, 80/80 stable —
