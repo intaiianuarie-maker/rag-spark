@@ -6,7 +6,19 @@
 
 ---
 
-## 0. rew1 REVIEW — REJECTED, FIXES IN PROGRESS (2026-10-12)
+## 0. rew1 REVIEW — A0-1/A0-2/A1: ✅ ACCEPTED (2026-10-12, HEAD `d539f24` on main)
+
+**Verdict:** ACCEPTED, forwarded to Antigravity for final merge. Ledger: `handoffs/REW1-REVIEW-HANDOFF.md` §0c.
+
+All 11 blockers closed and independently verified:
+- Gates: 45 passed (3 files), ruff clean, mypy clean (10 files)
+- Fail-before-fix demonstrated for all 12 new tests (7 agent + 5 research) against pre-fix code
+- rew1's 10 invariant probes pass; security re-scan clean
+
+### Non-blocking follow-ups (from ledger, next slice)
+1. **research-engine ModelPolicy plumbing** — `engine.py` still hardcodes `model="gpt-4o-mini"` in `plan_research`/`synthesize_report` (rew1 B4 partially addressed for agents only).
+2. **Stale `run.error` after COMPLETED** — `run_enforced` can finish COMPLETED while `run.error` still holds the text of an earlier blocked step; clear or supersede it on terminal success.
+3. **Filter revoked/deleted ids from abstention `evidence_ids`** — the zero-verified-evidence path returns all evidence ids including revoked/deleted ones; exclude them from the abstention report's `evidence_ids`.
 
 **Verdict:** REQUEST CHANGES (B1–B11). Full ledger: `handoffs/REW1-REVIEW-HANDOFF.md`.
 
