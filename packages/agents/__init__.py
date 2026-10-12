@@ -27,7 +27,6 @@ from .interfaces import (
 from .runtime import AgentRuntime
 from .tools import (
     CalculatorTool,
-    PythonSandboxTool,
     Tool,
     ToolRegistry,
 )
@@ -45,7 +44,6 @@ __all__ = [
     "ContextOverrideError",
     "InvalidRunTransitionError",
     "ModelPolicy",
-    "PythonSandboxTool",
     "RetryPolicy",
     "RunBudget",
     "RunContext",

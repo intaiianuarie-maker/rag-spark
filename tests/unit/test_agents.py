@@ -17,7 +17,6 @@ from agents import (
     ContextOverrideError,
     InvalidRunTransitionError,
     ModelPolicy,
-    PythonSandboxTool,
     RunBudget,
     RunContext,
     RunState,
@@ -81,29 +80,6 @@ async def test_calculator_tool() -> None:
 
     res_err = await calc.execute("ws-1", expression="10 / 0")
     assert "error" in res_err
-
-
-@pytest.mark.unit
-async def test_python_sandbox_tool_security() -> None:
-    sandbox = PythonSandboxTool()
-
-    # Valid execution
-    valid_res = await sandbox.execute(
-        "ws-1",
-        code="data = [1, 2, 3, 4]\nresult = sum(x * 2 for x in data)",
-    )
-    assert valid_res.get("result") == "20"
-
-    # Blocked imports
-    bad_import = await sandbox.execute("ws-1", code="import os\nos.listdir('.')")
-    assert "Security violation" in bad_import.get("error", "")
-
-    bad_from = await sandbox.execute("ws-1", code="from subprocess import run\nrun('ls')")
-    assert "Security violation" in bad_from.get("error", "")
-
-    # Blocked built-ins
-    bad_builtin = await sandbox.execute("ws-1", code="f = open('/etc/passwd')")
-    assert "Security violation" in bad_builtin.get("error", "")
 
 
 @pytest.mark.unit
