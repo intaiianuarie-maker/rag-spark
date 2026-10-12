@@ -1,7 +1,15 @@
-"""Agent Tool Framework and Sandboxing (Sections 26 & 27).
+"""Agent Tool Framework (Sections 26 & 27).
 
-Provides standard tools (calculator, python sandbox, knowledge search) and
-a thread-safe ToolRegistry.
+Provides standard tools (calculator, with knowledge-read/search tools arriving in
+A1-1) and a thread-safe ToolRegistry.
+
+Python execution is DISABLED in this V3 release (plan invariant 5): no
+tool-produced Python runs in the API or shared worker process. The earlier
+in-process sandbox was removed in A0-1 review B1 — its `exec()` with a deny-list
+guard was trivially bypassable. If code execution is ever approved it belongs in
+a separately isolated worker (nsjail/firejail/gVisor + ulimit + wall-clock
+timeout + read-only FS + no network + no production credentials), behind its own
+reviewed capability.
 """
 
 from __future__ import annotations

@@ -1,9 +1,12 @@
 """Unit tests for Phase 11 Agent Runtime and Tool Framework."""
 
+import asyncio
 import json
+import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 from agents import (
@@ -22,6 +25,7 @@ from agents import (
     RunState,
     RunStatus,
     StepEvent,
+    Tool,
     ToolPolicy,
     ToolRegistry,
     ToolSpec,
@@ -309,3 +313,246 @@ def test_tool_arguments_cannot_override_context() -> None:
 def test_usage_cost_is_optional() -> None:
     usage = Usage(prompt_tokens=10, completion_tokens=5, tool_calls=1)
     assert usage.cost_usd is None
+
+
+# --------------------------------------------------------------------------------------
+# V3 (A1) enforced dispatch — rew1 B2/B3/B4 fail-before-fix tests
+# --------------------------------------------------------------------------------------
+
+
+class _ScriptedLLM(LLMProvider):
+    """LLM that emits a fixed action then a final answer."""
+
+    provider_name = "scripted"
+
+    def __init__(self, responses: list[str]) -> None:
+        self.responses = list(responses)
+        self.calls = 0
+
+    async def generate(self, request: GenerationRequest) -> GenerationResult:
+        text = (
+            self.responses[self.calls]
+            if self.calls < len(self.responses)
+            else "Final Answer: done"
+        )
+        self.calls += 1
+        return GenerationResult(
+            text=text, model=request.model, prompt_tokens=10, completion_tokens=5
+        )
+
+    async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+        yield (await self.generate(request)).text
+
+
+def _enforced_context(
+    *,
+    allowed_tools: list[str] | None = None,
+    budget: RunBudget | None = None,
+    deadline: datetime | None = None,
+) -> RunContext:
+    """Build a RunContext with overridable policy/budget/deadline for tests."""
+    return RunContext(
+        run_id=f"run-{uuid.uuid4().hex[:8]}",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(default_model="test-model"),
+        budget=budget or RunBudget(),
+        deadline=deadline or (datetime.now(UTC) + timedelta(seconds=60)),
+        allowed_tools=allowed_tools if allowed_tools is not None else ["calculator"],
+    )
+
+
+def test_enforced_dispatch_denies_unlisted_tool() -> None:
+    """B2: a tool outside the allowlist must be BLOCKED, not executed."""
+    registry = ToolRegistry()
+    calls = []
+
+    class _Recording(Tool):
+        name = "hidden_tool"
+        description = "hidden"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs) -> object:
+            calls.append(kwargs)
+            return {"ok": True}
+
+    registry.register(_Recording())
+    llm = _ScriptedLLM(
+        ['Thought: use hidden\nAction: hidden_tool\nAction Input: {"x": 1}', "Final Answer: ok"]
+    )
+    runtime = AgentRuntime(llm, registry)
+    run = asyncio.run(runtime.run_enforced(context=_enforced_context(), goal="try"))
+    assert calls == [], "BLOCKED tool must not execute"
+    assert run.status == AgentRunStatus.COMPLETED
+    assert run.error is not None
+    assert "tool_not_allowed" in run.error
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+
+
+def test_enforced_dispatch_rejects_reserved_context_override() -> None:
+    """B3: tool arguments must not be able to override the run context."""
+    registry = ToolRegistry()
+    registry.register(CalculatorTool())
+    llm = _ScriptedLLM(
+        [
+            'Thought: escalate\nAction: calculator\n'
+            'Action Input: {"expression": "1+1", "workspace_id": "ws-victim"}',
+            "Final Answer: ok",
+        ]
+    )
+    runtime = AgentRuntime(llm, registry)
+
+    run = asyncio.run(runtime.run_enforced(context=_enforced_context(), goal="try"))
+    assert "tool_not_allowed" in (run.error or "")
+    assert not any(
+        s.tool_output == {"result": 2} for s in run.steps
+    ), "override attempt must not execute the tool"
+
+
+def test_enforced_dispatch_validates_strict_schema() -> None:
+    """B3: extra/missing properties must be rejected by the ToolSpec schema."""
+
+    class _StrictTool(Tool):
+        name = "strict"
+        description = "strict"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"a": {"type": "integer"}},
+            "required": ["a"],
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs) -> object:
+            return {"echo": kwargs}
+
+    registry = ToolRegistry()
+    registry.register(_StrictTool())
+    llm = _ScriptedLLM(
+        [
+            'Thought: bad args\nAction: strict\nAction Input: {"a": 1, "b": 2}',
+            "Final Answer: ok",
+        ]
+    )
+    runtime = AgentRuntime(llm, registry)
+
+    run = asyncio.run(
+        runtime.run_enforced(
+            context=_enforced_context(allowed_tools=["strict"]), goal="try"
+        )
+    )
+    assert "tool_schema_invalid" in (run.error or "")
+
+
+def test_enforced_dispatch_enforces_tool_call_budget() -> None:
+    """B4: max_tool_calls must stop the run with a limit state."""
+    registry = ToolRegistry()
+    registry.register(CalculatorTool())
+    # Every step asks for a tool; budget is 2 tool calls.
+    llm = _ScriptedLLM(
+        [
+            f'Thought: x{idx}\nAction: calculator\nAction Input: {{"expression": "1+1"}}'
+            for idx in range(10)
+        ]
+    )
+    runtime = AgentRuntime(llm, registry)
+
+    run = asyncio.run(
+        runtime.run_enforced(
+            context=_enforced_context(
+                budget=RunBudget(max_steps=20, max_tool_calls=2, max_tokens=100000)
+            ),
+            goal="loop",
+        )
+    )
+    assert run.status == AgentRunStatus.MAX_STEPS_EXCEEDED
+    assert "budget" in (run.error or "")
+
+
+def test_enforced_dispatch_checks_deadline_before_spend() -> None:
+    """B4: a past deadline stops the run before any model call."""
+
+    class _CountingLLM(LLMProvider):
+        provider_name = "counting"
+        calls = 0
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            type(self).calls += 1
+            return GenerationResult(text="Final Answer: x", model=request.model)
+
+        async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+            yield "x"
+
+    registry = ToolRegistry()
+    runtime = AgentRuntime(_CountingLLM(), registry)
+
+    before = _CountingLLM.calls
+    run = asyncio.run(
+        runtime.run_enforced(
+            context=_enforced_context(deadline=datetime.now(UTC) - timedelta(seconds=5)),
+            goal="expired",
+        )
+    )
+    assert _CountingLLM.calls == before, "no model call after deadline"
+    assert run.status == AgentRunStatus.MAX_STEPS_EXCEEDED
+    assert "deadline" in (run.error or "")
+
+
+def test_enforced_dispatch_enforces_token_budget() -> None:
+    """B4: token budget is enforced across steps."""
+
+    class _BigLLM(LLMProvider):
+        provider_name = "big"
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            return GenerationResult(
+                text="Final Answer: done", model=request.model, prompt_tokens=900,
+                completion_tokens=900,
+            )
+
+        async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+            yield "done"
+
+    runtime = AgentRuntime(_BigLLM(), ToolRegistry())
+
+    run = asyncio.run(
+        runtime.run_enforced(
+            context=_enforced_context(budget=RunBudget(max_tokens=1000)), goal="tokens"
+        )
+    )
+    assert run.status == AgentRunStatus.MAX_STEPS_EXCEEDED
+    assert "token budget" in (run.error or "")
+
+
+def test_enforced_dispatch_enforces_output_size_bound() -> None:
+    """B3: oversized tool output is rejected, not returned to the model."""
+
+    class _VerboseTool(Tool):
+        name = "verbose"
+        description = "verbose"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs) -> object:
+            return {"blob": "A" * 100000}
+
+    registry = ToolRegistry()
+    registry.register(_VerboseTool())
+    llm = _ScriptedLLM(
+        ['Thought: big\nAction: verbose\nAction Input: {"x": 1}', "Final Answer: ok"]
+    )
+    runtime = AgentRuntime(llm, registry)
+
+    run = asyncio.run(
+        runtime.run_enforced(
+            context=_enforced_context(allowed_tools=["verbose"]), goal="try"
+        )
+    )
+    assert "tool_output_too_large" in (run.error or "")
