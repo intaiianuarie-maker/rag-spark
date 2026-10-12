@@ -84,6 +84,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   T-V1-016 dispatched (dev1).
 - T-V1-015 reviewer: APPROVE (ordering fail-closed verified, rebuild safety proven,
   follow-ups confirmed absent) → DONE.
+- T-V1-037 reviewer: APPROVE (comment-only proven, config renders, 0 off-box backing ports,
+  80/443 confirmed host-nginx) → DONE. (Closed late — stuck IN-PROGRESS post-commit.)
 - T-V1-041 reviewer: APPROVE (4-file scope, finite documented cap, cancel propagates,
   pre-headers identical, fast subset green, 16s test spot-checked) → DONE. Bonus signal:
   reviewer spotted dev1's T-V1-014 reindex change in flight (uncommitted, correctly excluded).

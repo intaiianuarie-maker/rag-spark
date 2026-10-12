@@ -1,8 +1,11 @@
 """POST /ask — grounded answer with verified citations (TASK-M4-002).
 
-The route is thin: authenticate + authorize (workspace read), build the answer
-engine, and map failures. All retrieval/generation/verification logic lives in
-`packages/answer` behind the orchestrator + LLM provider interfaces.
+The route is thin: authenticate + authorize (workspace read), resolve the
+model through the policy router (T-V1-038: workspace → permitted override →
+operator default, with the ordering owned by ``models.router_config.route``),
+build the answer engine, and map failures. All retrieval/generation/verification
+logic lives in `packages/answer` behind the orchestrator + LLM provider
+interfaces.
 
 Carried from M4-001 acceptance: an `LLMProviderError` (gateway down) is
 surfaced as **503**, never 500.
@@ -10,9 +13,11 @@ surfaced as **503**, never 500.
 
 from __future__ import annotations
 
+import logging
 import os
 import re
 import uuid
+from dataclasses import replace
 
 from answer.engine import AnswerEngine
 from answer.factory import build_answer_engine
@@ -20,6 +25,7 @@ from answer.models import Answer
 from core.auth import ACLScope, Principal
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.adapters.litellm_provider import LLMProviderError
+from models.router_config import WorkspaceModelConfig, route
 from pydantic import BaseModel, Field
 from retrieval.interfaces import RetrievalMode
 
@@ -27,6 +33,8 @@ from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/ask", tags=["ask"])
+
+logger = logging.getLogger("knowledge_os.api.ask")
 
 
 class AskRequest(BaseModel):
@@ -88,6 +96,82 @@ def classify_query(query: str) -> str:
     return "simple"
 
 
+def load_model_config(workspace_id: str, *, override_model: str | None) -> WorkspaceModelConfig:
+    """Authoritative model policy for ONE Ask request (T-V1-028 seam).
+
+    Three tiers are handed to :func:`models.router_config.route`, which — and
+    only which — decides their precedence:
+
+    1. **workspace** — per-workspace ``routing_rules``. No rule store is
+       persisted yet (a new table needs an Alembic migration + coordinator
+       decision), so this tier currently contributes no rules and the seam is
+       empty rather than fake: whatever a future loader returns here is passed
+       through untouched, and the ordering stays policy-owned.
+    2. **permitted override** — ``body.model`` supplied by the caller.
+    3. **operator default** — ``ANSWER_MODEL`` when the operator configured it,
+       else ``None`` so the policy module's own fallback applies. This file
+       therefore contains **no model literal** and no default override of its
+       own: the handler never picks a model, it only reports what the router
+       picked.
+
+    ``workspace_id`` is threaded through for the loader's use and for log
+    correlation; it is unused while the workspace tier has no store.
+    """
+    return WorkspaceModelConfig(
+        workspace_id=workspace_id,
+        override_model=override_model,
+        preferred_model=os.environ.get("ANSWER_MODEL") or None,
+        routing_rules=(),
+    )
+
+
+def _rules_selected(config: WorkspaceModelConfig, query_class: str, model: str) -> bool:
+    """True when the workspace-rule tier, not the default tier, produced `model`.
+
+    Derived by asking the policy router again with only the rules stripped, so
+    the recorded reason can never disagree with the policy's own precedence
+    logic (no re-scoring is duplicated here). Disclosed limit: if rules were
+    ever to select exactly the default-tier model, the reason records the
+    default tier — the selection itself is still correct, and the rules tier is
+    empty at this call site today.
+    """
+    if not config.routing_rules:
+        return False
+    return route(query_class, replace(config, routing_rules=())) != model
+
+
+def selection_reason(config: WorkspaceModelConfig, query_class: str, model: str) -> str:
+    """Label the precedence tier that produced `model`.
+
+    Mirrors :func:`models.router_config.route` (veto → override → workspace
+    rules → default) and returns a short enum string only: no query text, no
+    prompt content, no credentials ever reach the log.
+    """
+    if config.sensitive:
+        return "policy_veto_local_only"
+    if config.override_model is not None:
+        return "permitted_override"
+    if _rules_selected(config, query_class, model):
+        return "workspace_rules"
+    if config.preferred_model is not None:
+        return "operator_default"
+    return "operator_default_unconfigured"
+
+
+def resolve_model(
+    workspace_id: str, *, query_class: str, override_model: str | None
+) -> tuple[str, str]:
+    """Resolve the model for one Ask request: ``(model, selection_reason)``.
+
+    Every request on this path goes through here exactly once (T-V1-038):
+    there is no second model source in the handler, so a request bypassing the
+    router is structurally impossible rather than merely discouraged.
+    """
+    config = load_model_config(workspace_id, override_model=override_model)
+    model = route(query_class, config)
+    return model, selection_reason(config, query_class, model)
+
+
 @router.post(
     "",
     response_model=Answer,
@@ -103,25 +187,26 @@ async def ask(
     except ApiError as exc:
         raise _http_error(exc) from exc
 
-    from answer.factory import DEFAULT_ANSWER_MODEL
-    from models.router_config import WorkspaceModelConfig, route
-
-    # Honest router wiring (V1-COMPLETION fix order #4, M7-001a): classify the
-    # query into a REAL router class so rule selection can engage, and honor
-    # ANSWER_MODEL as the workspace preferred model (previously the route
-    # always fell through to FALLBACK because "general" is not a known class
-    # and preferred_model was never set, silently discarding ANSWER_MODEL).
-    # Per-workspace routing_rules are not yet persisted (no DB table; adding
-    # one requires an Alembic migration + coordinator decision), so with empty
-    # rules the router still resolves to preferred/FALLBACK — the call is now
-    # a real seam, not a no-op.
+    # T-V1-038: one router call per request, no other model source. Classify
+    # into a REAL router class so rule selection can engage (the old "general"
+    # placeholder disabled it), then let route() own the precedence and record
+    # which tier it used. The log line carries identifiers + reason only —
+    # never the query text (no prompt content), never credentials.
     query_class = classify_query(body.query)
-    config = WorkspaceModelConfig(
-        workspace_id=str(workspace_id),
-        override_model=body.model,
-        preferred_model=os.environ.get("ANSWER_MODEL", DEFAULT_ANSWER_MODEL),
+    resolved_model, reason = resolve_model(
+        str(workspace_id), query_class=query_class, override_model=body.model
     )
-    resolved_model = route(query_class, config)
+    logger.info(
+        "ask_model_selected",
+        extra={
+            "event": "ask_model_selected",
+            "workspace_id": str(workspace_id),
+            "query_class": query_class,
+            "model": resolved_model,
+            "reason": reason,
+            "override_supplied": body.model is not None,
+        },
+    )
 
     engine: AnswerEngine = build_answer_engine()
     engine.model = resolved_model
