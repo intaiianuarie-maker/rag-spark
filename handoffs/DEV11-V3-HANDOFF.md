@@ -14,15 +14,15 @@
 |---|---|---|
 | B1 PythonSandboxTool RCE | CRITICAL | ✅ **ACCEPTED by rew1** (commit `5c899ec`): zero refs in packages/tests/apps; no eval/exec/subprocess/importlib surface; 23 passed + 10 research contracts; ruff+mypy clean. |
 | B11 committed to wrong branch | PROCESS | ✅ **CLOSED by rew1** (main `3dbe8fb`); handoff branch claim corrected. |
-| B2 ToolPolicy never enforced | HIGH | ⬜ Not started |
-| B3 no ToolSpec validation / reserved-context guard | HIGH | ⬜ Not started |
-| B4 RunBudget/RetryPolicy/ModelPolicy unwired | HIGH | ⬜ Not started |
-| B5 silent fallbacks → false COMPLETED | HIGH | ⬜ Not started |
-| B6 cross-run evidence leakage | HIGH | ⬜ Not started |
-| B7 cross-workspace add silently dropped | MEDIUM | ⬜ Not started |
-| B8 ReportClaim has no validator | MEDIUM | ⬜ Not started |
-| B9 V3 provenance dead defaults | MEDIUM | ⬜ Not started |
-| B10 tautological contract checks | MEDIUM | ⬜ Not started |
+| B2 ToolPolicy never enforced | HIGH | ✅ **FIXED** (`fc5b18b`): `run_enforced` checks policy before dispatch; default-deny; BLOCKED + TOOL_NOT_ALLOWED. |
+| B3 no ToolSpec validation / reserved-context guard | HIGH | ✅ **FIXED** (`fc5b18b`): strict schema validation, `validate_tool_arguments()`, timeout + output-byte bounds. |
+| B4 RunBudget/RetryPolicy/ModelPolicy unwired | HIGH | ✅ **FIXED** (`fc5b18b`): deadline/token/tool-call budget checked before spend; limit states. |
+| B5 silent fallbacks → false COMPLETED | HIGH | ✅ **FIXED** (`A0-2`): typed `ResearchEngineError`; zero-evidence reports abstain FAILED. |
+| B6 cross-run evidence leakage | HIGH | ✅ **FIXED** (`A0-2`): `run_id` threaded through store; cross-run raises `EvidenceStoreError`. |
+| B7 cross-workspace add silently dropped | MEDIUM | ✅ **FIXED** (`A0-2`): raises `EvidenceStoreError` instead of dropping. |
+| B8 ReportClaim has no validator | MEDIUM | ✅ **FIXED** (`A0-2`): pydantic validator; SUPPORTED ≥1 evidence; citations resolve to chunks. |
+| B9 V3 provenance dead defaults | MEDIUM | ✅ **FIXED** (`A0-2`): provenance populated explicitly; typed citations; findings derived from claims. |
+| B10 tautological contract checks | MEDIUM | ✅ **FIXED** (`A0-2`): checks validate supplied arguments against real objects. |
 
 **This submission:** B1 + B11 only. B2–B10 fixes follow as the next slice.
 
