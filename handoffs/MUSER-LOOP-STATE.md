@@ -49,6 +49,9 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   via tasks/render_board.py. V3/V4 stay GATED per standing rule.
 - T-V1-004 reviewer: APPROVE (scope 2 files, both tests pin canonical-not-summary, 72 green,
   ruff clean) → DONE. Authorship answer pending with T-V1-005.
+- T-V1-007 reviewer: APPROVE (no-false-204 + pop verified, exactly-one-tombstone test,
+  parent-comparison proves 2 failures pre-exist) → DONE. (Reviewer stash cycle restored;
+  pre-existing unrelated stashes left alone.)
 - T-V1-010 committed d134e64 (70/70 vitest, tsc clean; second stringify is 502-synthesis,
   flagged for reviewer) → REVIEW, reviewer on it. WAVE-6 quarantined (351 lines, same shapes).
   Board discipline fixed: JSON-only edits + render_board.py (hand-edit duplicates eliminated).

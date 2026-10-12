@@ -107,6 +107,28 @@ class PostgresLexicalStore(LexicalStore):
             await session.commit()
         return len(records)
 
+    async def count_ids(self, *, ids: Sequence[str]) -> int:
+        """Count how many of ``ids`` currently exist in ``lexical_docs``.
+
+        Write-verification seam (T-V1-042): the ingest pipeline calls this
+        after ``index`` to prove the rows really landed, so it is read-only
+        (no commit), cheap (one COUNT over the primary key, no ranking), and
+        honest — a transport/DB failure propagates instead of faking a count.
+        Ids are deduplicated and mapped through the same deterministic
+        ``_to_uuid`` used at index time, with semantics identical to
+        ``QdrantVectorStore.count_ids``: the number of distinct given ids
+        present in the store right now.
+        """
+        if not ids:
+            return 0
+        qids = list(dict.fromkeys(_to_uuid(str(i)) for i in ids))
+        async with self._session_factory() as session:
+            result = await session.execute(
+                text("SELECT count(*) FROM lexical_docs WHERE id = ANY(:ids)"),
+                {"ids": qids},
+            )
+            return int(result.scalar_one())
+
     async def search(
         self,
         *,

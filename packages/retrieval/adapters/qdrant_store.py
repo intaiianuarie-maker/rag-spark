@@ -209,6 +209,36 @@ class QdrantVectorStore(VectorStore):
         except Exception as e:
             raise VectorStoreError(f"upsert failed for {collection}: {e}") from e
 
+    async def count_ids(self, *, collection: str, ids: Sequence[str]) -> int:
+        """Count how many of ``ids`` currently exist as points in the collection.
+
+        Write-verification seam (T-V1-042): the ingest pipeline calls this
+        after ``upsert`` to prove the points really landed, so it is
+        read-only and cheap — one retrieve for the whole id batch, no scroll
+        and no delete. Ids are deduplicated and mapped through the same
+        deterministic ``_to_point_id`` used at upsert time, with semantics
+        identical to ``PostgresLexicalStore.count_ids``: the number of
+        distinct given ids present in the store right now. A transport
+        failure raises ``VectorStoreError`` instead of falling back to a
+        guessed count, so the pipeline reports STORE_WRITE_UNVERIFIED rather
+        than a false success.
+        """
+        if not ids:
+            return 0
+        coll = collection or self._default_collection
+        if not coll:
+            raise VectorStoreError("collection name required")
+        try:
+            qids = list(dict.fromkeys(_to_point_id(i) for i in ids))
+            existing = await self._client.retrieve(
+                collection_name=coll, ids=qids, with_payload=False, with_vectors=False
+            )
+            return len(existing)
+        except VectorStoreError:
+            raise
+        except Exception as e:
+            raise VectorStoreError(f"count_ids failed for {collection}: {e}") from e
+
     async def search(
         self,
         *,
