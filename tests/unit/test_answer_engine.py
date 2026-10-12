@@ -1108,3 +1108,119 @@ async def test_citation_content_guarantee_is_grounder_gated() -> None:
     )
     assert verified_g == []
     assert citations_g == []
+
+
+# --- T-V1-004: canonical content pinned on graph + store grounder paths ------
+
+
+async def test_verify_claims_graph_path_content_is_canonical_not_summary() -> None:
+    """F6 on the graph path: ``content`` is the store-hydrated canonical, never the summary.
+
+    An ``is_graph`` item carries only the synthesized ``[Knowledge Graph
+    Context]`` passage (with a *wrong* budget), while ``MemoryChunkLookup``
+    holds the authoritative original chunk. The citation must come back with
+    exactly the canonical text — provenance and grounding included — and no
+    trace of the synthesized summary.
+    """
+    from answer.adapters.postgres_lookup import MemoryChunkLookup
+    from retrieval.interfaces import RetrievedItem
+
+    summary = (
+        "[Knowledge Graph Context]\n"
+        "Entities: Board. Relationships: approves budget of 900 dollars."
+    )
+    canonical = "The team met to review expenses. The launch budget is 20 dollars."
+    item = RetrievedItem(
+        content=summary,
+        score=1.0,
+        workspace_id="ws-a",
+        document_id="doc-graph",
+        chunk_id="c-graph-9",
+        metadata={"is_graph": True, "entities_count": 2, "relationships_count": 1},
+    )
+    lookup = MemoryChunkLookup()
+    lookup.add_chunk(
+        "c-graph-9",
+        content=canonical,
+        workspace_id="ws-a",
+        document_id="doc-launch",
+        filename="launch_plan.pdf",
+        page=1,
+        section="Budget",
+    )
+    claims = [Claim(text="The launch budget is 20 dollars.", chunk_ids=["c-graph-9"])]
+
+    verified, citations = await verify_claims(
+        claims,
+        [item],
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified[0].chunk_ids == ["c-graph-9"]
+    assert len(citations) == 1
+
+    content = citations[0].content
+    assert content is not None
+    assert content == canonical  # exact canonical passage, not a derived text
+    assert summary not in content  # synthesized passage provably absent
+    assert "[Knowledge Graph Context]" not in content
+    assert "900 dollars" not in content  # the summary's wrong figure never leaks
+
+    # Provenance + grounding both came from the hydrated store record.
+    assert citations[0].document_id == "doc-launch"
+    assert citations[0].filename == "launch_plan.pdf"
+    assert citations[0].page == 1
+    assert citations[0].section == "Budget"
+    assert citations[0].grounding_score == 1.0
+    assert citations[0].span is not None
+
+
+async def test_verify_claims_store_path_with_grounder_content_is_canonical() -> None:
+    """F6 on the store path (chunk resolved by ``chunk_lookup``, grounder set).
+
+    The claim cites a chunk that is *not* among the retrieved items, so
+    verification runs through the lookup branch. That branch must ground
+    against — and report — the store's canonical content: acceptance itself is
+    proof (the claim's "20 dollars" exists only in the canonical text, not in
+    the retrieved summary), and ``content`` must equal the canonical text with
+    the summary absent.
+    """
+    from answer.adapters.postgres_lookup import MemoryChunkLookup
+
+    summary = "Retrieved context: the launch budget is 900 dollars (graph summary)."
+    canonical = "The team met to review expenses. The launch budget is 20 dollars."
+    item = make_item(summary, 0.9, chunk_id="c-context", workspace_id="ws-a")
+    lookup = MemoryChunkLookup()
+    lookup.add_chunk(
+        "c-store-9",
+        content=canonical,
+        workspace_id="ws-a",
+        document_id="doc-launch",
+        filename="launch_plan.pdf",
+        page=1,
+        section="Budget",
+    )
+    claims = [Claim(text="The launch budget is 20 dollars.", chunk_ids=["c-store-9"])]
+
+    verified, citations = await verify_claims(
+        claims,
+        [item],
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified[0].chunk_ids == ["c-store-9"]
+    assert len(citations) == 1
+
+    content = citations[0].content
+    assert content is not None
+    assert content == canonical  # store-resolved citation carries canonical content
+    assert summary not in content  # retrieved summary provably absent
+    assert "900 dollars" not in content
+
+    # Grounder ran against the canonical text (score, span, provenance).
+    assert citations[0].document_id == "doc-launch"
+    assert citations[0].page == 1
+    assert citations[0].grounding_score == 1.0
+    assert citations[0].span is not None
