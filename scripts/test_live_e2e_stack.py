@@ -1,6 +1,7 @@
 """Live end-to-end integration test against running Docker stack and OpenRouter."""
 
 import uuid
+
 import httpx
 
 API_BASE = "http://localhost:8000"
@@ -56,7 +57,9 @@ def main():
         if r.status_code == 200:
             data = r.json()
             assert "status" in data, f"Missing status in answer: {data}"
-            print(f"Verified Answer status={data.get('status')}, reason_code={data.get('reason_code')}")
+            ans_stat = data.get('status')
+            ans_code = data.get('reason_code')
+            print(f"Verified Answer status={ans_stat}, reason_code={ans_code}")
 
     print("ALL LIVE TESTS COMPLETED SUCCESSFULLY!")
 
