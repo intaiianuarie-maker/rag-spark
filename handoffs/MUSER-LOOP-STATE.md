@@ -74,6 +74,9 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   HEAD-move disclosed + verified empty, timeout flag correctly deferred to T-041) → DONE.
 - T-V1-013 reviewer: APPROVE (new-files-only scope, genuinely hostile fixture, 3-stage SHA
   identity, zero partials proven non-tautologically, 85 green) → DONE. Section B complete.
+- T-V1-032 reviewer: APPROVE (clean scope, no shared list proven, passage ACL-checked,
+  answer-embedded fallback judged right, 135 green) → DONE. Own miss admitted: T-015 prompt
+  never followed its /clear (26m idle caught by Jev SILENT-IDLE) — dispatched on catch-up.
 - T-V1-041 reviewer: APPROVE (4-file scope, finite documented cap, cancel propagates,
   pre-headers identical, fast subset green, 16s test spot-checked) → DONE. Bonus signal:
   reviewer spotted dev1's T-V1-014 reindex change in flight (uncommitted, correctly excluded).
