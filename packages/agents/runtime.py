@@ -313,6 +313,8 @@ class AgentRuntime:
                 agent_run.final_output = final_answer.group(1).strip()
                 state.transition_to(RunStatus.COMPLETED)
                 agent_run.status = _legacy_status(state.status)
+                # rew1 follow-up 2: clear any earlier blocked-step error text.
+                agent_run.error = None
                 break
 
             if action:
@@ -357,6 +359,9 @@ class AgentRuntime:
             agent_run.final_output = text
             state.transition_to(RunStatus.COMPLETED)
             agent_run.status = _legacy_status(state.status)
+            # rew1 follow-up 2: an earlier blocked step must not leave a stale
+            # error on a successfully completed run.
+            agent_run.error = None
             break
         else:
             if not RunState.is_terminal(state.status):

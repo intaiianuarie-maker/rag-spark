@@ -12,6 +12,7 @@ from research import (
     ResearchEngine,
     ResearchEngineError,
     ResearchEvidence,
+    ResearchModelPolicy,
     ResearchStatus,
 )
 
@@ -283,3 +284,64 @@ async def test_cross_workspace_add_raises() -> None:
     )
     with pytest.raises(EvidenceStoreError):
         await store.add_evidence("ws-attacker", [ev])
+
+
+@pytest.mark.unit
+async def test_engine_uses_injected_model_policy() -> None:
+    """rew1 follow-up 1: research model selection is policy-driven, not hardcoded."""
+    seen: list[str] = []
+
+    class _RecordingLLM(LLMProvider):
+        provider_name = "recording"
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            seen.append(request.model)
+            return GenerationResult(
+                text=json.dumps({"subquestions": ["q1"], "scope": "s"}),
+                model=request.model,
+            )
+
+        async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+            yield ""
+
+    engine = ResearchEngine(
+        _RecordingLLM(),
+        MemoryEvidenceStore(),
+        model_policy=ResearchModelPolicy(
+            planning_model="custom-planner", synthesis_model="custom-synth"
+        ),
+    )
+    await engine.plan_research("t")
+    assert seen == ["custom-planner"], "planning must use the injected policy model"
+
+
+@pytest.mark.unit
+async def test_revoked_evidence_excluded_from_report() -> None:
+    """rew1 follow-up 3: revoked/deleted evidence must not support a report."""
+    store = MemoryEvidenceStore()
+    engine = ResearchEngine(MockResearchLLM(), store)
+    ws = "ws-revoked"
+    await store.add_evidence(
+        ws,
+        [
+            ResearchEvidence(
+                id="ev-rev",
+                workspace_id=ws,
+                run_id="r1",
+                claim="revoked claim",
+                source="doc",
+                quote="span",
+                verification=EvidenceVerificationState.VERIFIED,
+                document_id="doc",
+                document_version="v1",
+                chunk_id="c1",
+                source_hash="h",
+                revoked_at="2026-01-01T00:00:00+00:00",
+            )
+        ],
+    )
+    report = await engine.synthesize_report(ws, "t", run_id="r1")
+    assert report.status == ResearchStatus.FAILED
+    assert report.evidence_ids == []
+    assert report.supported_findings == []
+    assert any("revoked" in u for u in report.unknowns)

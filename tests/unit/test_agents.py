@@ -389,9 +389,14 @@ def test_enforced_dispatch_denies_unlisted_tool() -> None:
     run = asyncio.run(runtime.run_enforced(context=_enforced_context(), goal="try"))
     assert calls == [], "BLOCKED tool must not execute"
     assert run.status == AgentRunStatus.COMPLETED
-    assert run.error is not None
-    assert "tool_not_allowed" in run.error
+    # The blocked step is recorded durably in the trace (rew1 follow-up 2:
+    # the run itself completed, so its scalar error is cleared).
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert any(
+        s.tool_output is not None
+        and "not allowed by the run policy" in str(s.tool_output.get("error", ""))
+        for s in run.steps
+    )
 
 
 def test_enforced_dispatch_rejects_reserved_context_override() -> None:
@@ -408,7 +413,9 @@ def test_enforced_dispatch_rejects_reserved_context_override() -> None:
     runtime = AgentRuntime(llm, registry)
 
     run = asyncio.run(runtime.run_enforced(context=_enforced_context(), goal="try"))
-    assert "tool_not_allowed" in (run.error or "")
+    # rew1 follow-up 2: the scalar error is cleared on completion; the blocked
+    # attempt stays recorded in the step trace.
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
     assert not any(
         s.tool_output == {"result": 2} for s in run.steps
     ), "override attempt must not execute the tool"
@@ -445,7 +452,14 @@ def test_enforced_dispatch_validates_strict_schema() -> None:
             context=_enforced_context(allowed_tools=["strict"]), goal="try"
         )
     )
-    assert "tool_schema_invalid" in (run.error or "")
+    # rew1 follow-up 2: assert on the recorded blocked step, not the cleared
+    # scalar error.
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert any(
+        s.tool_output is not None
+        and "undeclared" in str(s.tool_output.get("error", "")).lower()
+        for s in run.steps
+    )
 
 
 def test_enforced_dispatch_enforces_tool_call_budget() -> None:
@@ -555,4 +569,13 @@ def test_enforced_dispatch_enforces_output_size_bound() -> None:
             context=_enforced_context(allowed_tools=["verbose"]), goal="try"
         )
     )
-    assert "tool_output_too_large" in (run.error or "")
+    # rew1 follow-up 2: the run completed, so the scalar error is cleared; the
+    # oversized-output rejection stays recorded in the step trace.
+    assert run.status == AgentRunStatus.COMPLETED
+    assert run.error is None
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert any(
+        s.tool_output is not None
+        and "exceeded" in str(s.tool_output.get("error", "")).lower()
+        for s in run.steps
+    )

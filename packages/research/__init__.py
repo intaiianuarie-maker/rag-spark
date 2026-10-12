@@ -1,6 +1,10 @@
 """Research Engine and Evidence Store package (Phase 12 / Sections 28-29) + V3 contracts (A0)."""
 
-from .engine import ResearchEngine, ResearchEngineError
+from .engine import (
+    ResearchEngine,
+    ResearchEngineError,
+    ResearchModelPolicy,
+)
 from .evidence_store import EvidenceStore, EvidenceStoreError, MemoryEvidenceStore
 from .interfaces import (
     Citation,
@@ -27,6 +31,7 @@ __all__ = [
     "ResearchEngine",
     "ResearchEngineError",
     "ResearchEvidence",
+    "ResearchModelPolicy",
     "ResearchPlan",
     "ResearchReport",
     "ResearchRun",
