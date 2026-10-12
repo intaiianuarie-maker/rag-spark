@@ -1224,3 +1224,258 @@ async def test_verify_claims_store_path_with_grounder_content_is_canonical() -> 
     assert citations[0].page == 1
     assert citations[0].grounding_score == 1.0
     assert citations[0].span is not None
+
+
+# --- T-V1-023: reject controls (missing/deleted/superseded/foreign + 20-vs-900) -------
+# The jury's failing controls (QF-03) must now fail closed: every invalid ref
+# abstains, the one valid claim passes, a multi-source summary cannot fan out to
+# every source, and no summary-relative span is accepted as a source span.
+
+_T023_CANONICAL = "Alice met Acme. The launch budget is 20 dollars."
+_T023_SUMMARY = (
+    "[Knowledge Graph Context]\n"
+    "Entities: Board. Relationships: approves budget of 900 dollars."
+)
+
+
+@pytest.mark.parametrize(
+    ("chunk_id", "reason"),
+    [
+        ("ch-missing", "missing"),  # never present in the store
+        ("ch-deleted", "deleted"),  # document tombstoned
+        ("ch-superseded", "superseded"),  # version superseded
+        ("ch-foreign", "foreign-workspace"),  # store says a workspace the caller cannot see
+    ],
+)
+async def test_t023_reject_controls_lifecycle_and_scope_abstain(chunk_id: str, reason: str) -> None:
+    """Controls 1-4: missing / deleted / superseded / foreign-workspace refs all abstain.
+
+    The retrieved item is tagged in-scope (``ws-a``) AND carries the correct
+    canonical text, so the payload alone would verify the claim — only the
+    **store's** lifecycle/scope verdict can reject it. This is the fail-closed
+    control: the store is authoritative for existence, version currency and
+    workspace scope, never the retrieved payload.
+    """
+    from answer.adapters.postgres_lookup import MemoryChunkLookup
+    from retrieval.interfaces import RetrievedItem
+
+    lookup = MemoryChunkLookup()
+    lookup.add_chunk("ch-live", content=_T023_CANONICAL, workspace_id="ws-a", document_id="doc-a")
+    lookup.add_chunk(
+        "ch-deleted", content=_T023_CANONICAL, workspace_id="ws-a", is_deleted=True
+    )
+    lookup.add_chunk(
+        "ch-superseded", content=_T023_CANONICAL, workspace_id="ws-a", is_superseded=True
+    )
+    lookup.add_chunk(
+        "ch-foreign", content=_T023_CANONICAL, workspace_id="ws-FOREIGN", document_id="doc-f"
+    )
+    # ch-missing is deliberately absent from the store.
+
+    item = RetrievedItem(
+        content=_T023_CANONICAL,
+        score=1.0,
+        workspace_id="ws-a",
+        document_id="doc-a",
+        chunk_id=chunk_id,
+    )
+    claims = [Claim(text="The launch budget is 20 dollars.", chunk_ids=[chunk_id])]
+
+    verified, citations = await verify_claims(
+        claims,
+        [item],
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [], f"{reason} ref must abstain (no verified claim)"
+    assert citations == [], f"{reason} ref must yield no citation"
+
+
+async def test_t023_hallucinated_20vs900_rejected_real_claim_passes() -> None:
+    """Control 5 (20-vs-900 hallucinated description) rejects; the real claim passes.
+
+    The graph summary asserts budget=900 while the authoritative chunk says 20.
+    A claim echoing the hallucinated 900 must abstain (the summary can never
+    stand in for the store), while the true 20 claim passes with a citation whose
+    ``content`` is the canonical passage and whose ``span`` is a **source-relative**
+    offset into that canonical text — never an offset into the summary.
+    """
+    from answer.adapters.postgres_lookup import MemoryChunkLookup
+    from retrieval.interfaces import RetrievedItem
+
+    lookup = MemoryChunkLookup()
+    lookup.add_chunk("ch-live", content=_T023_CANONICAL, workspace_id="ws-a", document_id="doc-a")
+    item = RetrievedItem(
+        content=_T023_SUMMARY,
+        score=1.0,
+        workspace_id="ws-a",
+        document_id="doc-graph",
+        chunk_id="ch-live",
+        metadata={"is_graph": True, "routing_hint": True},
+    )
+
+    # (a) hallucinated 900 -> rejected, even though the summary carries it.
+    verified_h, citations_h = await verify_claims(
+        [Claim(text="The launch budget is 900 dollars.", chunk_ids=["ch-live"])],
+        [item],
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified_h == [] and citations_h == []
+
+    # (b) true 20 -> passes with canonical content and a SOURCE-relative span.
+    verified, citations = await verify_claims(
+        [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-live"])],
+        [item],
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert len(verified) == 1 and verified[0].chunk_ids == ["ch-live"]
+    assert len(citations) == 1
+    citation = citations[0]
+    assert citation.content == _T023_CANONICAL  # canonical, summary provably absent
+    assert "900" not in (citation.content or "")
+    assert citation.span is not None
+    start, end = citation.span
+    # The span indexes the SOURCE (canonical) text to exactly the claim, so it
+    # cannot be a summary-relative offset.
+    assert _T023_CANONICAL[start:end].lower() == "the launch budget is 20 dollars"
+    assert _T023_SUMMARY[start:end].lower() != "the launch budget is 20 dollars"
+
+
+async def test_t023_multi_source_summary_cannot_fan_out_to_every_source() -> None:
+    """Multi-source summary copied under each source ID cannot credit every source.
+
+    QF-03: the generated summary spanned two sources and was copied verbatim under
+    BOTH evidence chunk IDs, so every source appeared to substantiate the whole
+    summary. After canonical hydration, a claim that exists only in source B's
+    canonical text must cite B alone (not A), a summary figure present in NEITHER
+    source's canonical must be rejected for both, and each accepted span must be a
+    source-relative offset into that source's own canonical text.
+    """
+    from answer.adapters.postgres_lookup import MemoryChunkLookup
+    from retrieval.interfaces import RetrievedItem
+
+    canon_a = "Alice met Acme. The launch budget is 20 dollars."
+    canon_b = "Bob joined Beta. The office rent is 500 dollars."
+    summary = (
+        "[Graph] Summary of 2 sources. Alice met Acme. The launch budget is 20 dollars. "
+        "Bob joined Beta. The office rent is 500 dollars."
+    )
+    lookup = MemoryChunkLookup()
+    lookup.add_chunk("src-a", content=canon_a, workspace_id="ws-a", document_id="doc-a")
+    lookup.add_chunk("src-b", content=canon_b, workspace_id="ws-a", document_id="doc-b")
+    # The SAME multi-source summary is copied under BOTH evidence chunk IDs.
+    hint = {"is_graph": True, "routing_hint": True}
+    items = [
+        RetrievedItem(
+            content=summary,
+            score=1.0,
+            workspace_id="ws-a",
+            document_id="doc-a",
+            chunk_id="src-a",
+            metadata=hint,
+        ),
+        RetrievedItem(
+            content=summary,
+            score=1.0,
+            workspace_id="ws-a",
+            document_id="doc-b",
+            chunk_id="src-b",
+            metadata=hint,
+        ),
+    ]
+
+    # (a) a claim living only in B's canonical cites B alone, not every source.
+    verified, citations = await verify_claims(
+        [Claim(text="The office rent is 500 dollars.", chunk_ids=["src-a", "src-b"])],
+        items,
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert len(citations) == 1, "a shared summary must not credit every source"
+    assert citations[0].chunk_id == "src-b"
+    assert verified[0].chunk_ids == ["src-b"]
+    assert citations[0].content == canon_b  # B's canonical, not the shared summary
+    assert citations[0].span is not None
+    start, end = citations[0].span
+    assert canon_b[start:end].lower() == "the office rent is 500 dollars"  # source-relative span
+
+    # (b) a summary-only figure in NEITHER source's canonical is rejected for both.
+    verified_none, citations_none = await verify_claims(
+        [Claim(text="The CEO is Carol.", chunk_ids=["src-a", "src-b"])],
+        items,
+        chunk_lookup=lookup,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified_none == [] and citations_none == []
+
+
+async def test_t023_engine_abstains_on_hallucinated_900_context_never_sees_summary() -> None:
+    """End-to-end jury control: hallucinated 900 abstains; the model never sees the summary.
+
+    The retrieved graph item carries a synthesized description asserting budget=900
+    while the authoritative chunk says 20. Even when the model echoes the
+    hallucinated 900, the engine must abstain (zero citations / claims), and the
+    prompt context handed to the model must already be the canonical passage (20),
+    never the summary (900) — hydration strictly precedes context build. The
+    positive control, a truthful 20 claim, still answers with the canonical
+    citation.
+    """
+    from answer.adapters.postgres_lookup import MemoryChunkLookup
+    from answer.hydration import CanonicalHydrator, HydratingOrchestrator
+    from retrieval.interfaces import RetrievedItem
+
+    lookup = MemoryChunkLookup()
+    lookup.add_chunk("ch-live", content=_T023_CANONICAL, workspace_id="ws-a", document_id="doc-a")
+    item = RetrievedItem(
+        content=_T023_SUMMARY,
+        score=1.0,
+        workspace_id="ws-a",
+        document_id="doc-graph",
+        chunk_id="ch-live",
+        metadata={"is_graph": True, "routing_hint": True},
+    )
+
+    def build_engine(llm_json: str) -> tuple[AnswerEngine, _FakeLLM]:
+        hydrator = CanonicalHydrator(lookup)
+        orchestrator = HydratingOrchestrator(_FakeOrchestrator([item]), hydrator)
+        llm = _FakeLLM(llm_json)
+        engine = AnswerEngine(
+            orchestrator=orchestrator,
+            llm=llm,
+            model="fake-model",
+            chunk_lookup=hydrator,
+            claim_grounder=ExtractiveGrounder(),
+        )
+        return engine, llm
+
+    scope = ACLScope(user_id="u1", workspace_ids=["ws-a"])
+
+    hallucination = (
+        '{"answer": "The launch budget is 900 dollars.", '
+        '"claims": [{"text": "The launch budget is 900 dollars.", "chunk_ids": ["ch-live"]}]}'
+    )
+    engine, llm = build_engine(hallucination)
+    result = await engine.answer(query="budget?", acl_scope=scope)
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.claims == [] and result.citations == []
+    # The prompt context the model saw was already canonical (20), never the summary.
+    seen = llm.requests[0].messages[-1].content
+    assert "20 dollars" in seen
+    assert "900" not in seen
+
+    truthful = (
+        '{"answer": "The launch budget is 20 dollars.", '
+        '"claims": [{"text": "The launch budget is 20 dollars.", "chunk_ids": ["ch-live"]}]}'
+    )
+    engine, _ = build_engine(truthful)
+    result = await engine.answer(query="budget?", acl_scope=scope)
+    assert result.status == AnswerStatus.ANSWERED
+    assert [c.chunk_id for c in result.citations] == ["ch-live"]
+    assert result.citations[0].content == _T023_CANONICAL
