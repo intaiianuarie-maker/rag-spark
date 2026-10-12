@@ -27,7 +27,23 @@ import { ACCESS_COOKIE } from "@/app/(auth)/api/auth/_lib/cookies";
  * cancellation (see `boundedBodyStream`).
  */
 
-const APP_PROXY_TIMEOUT_MS = 15_000;
+/**
+ * Hard cap on how long the proxy waits on the upstream backend (T-V1-041).
+ *
+ * The deadline covers the WHOLE upstream exchange — response headers AND
+ * body — because the composed signal stays attached to the body stream after
+ * `fetch` resolves. It is a fixed bound, never an unbounded wait: at this
+ * deadline the upstream request is aborted no matter what the backend does,
+ * and a client hang-up (`request.signal`, composed in below) can only end it
+ * EARLIER.
+ *
+ * Raised 15 s → 30 s: T-V1-011 measured 8.6–16.7 s for a GOOD Ask answer
+ * against the live gateway; at 15 s the proxy converted exactly those
+ * upstream 200s into "backend_unreachable" 502s. 30 s covers the measured
+ * ~17 s worst case with ~2x margin. Fast paths are unaffected (the deadline
+ * is a ceiling, not a delay) and the raise costs nothing on cancellation.
+ */
+export const APP_PROXY_TIMEOUT_MS = 30_000;
 /**
  * Hard cap on forwarded request-body bytes. Mirrors the backend document cap
  * (`packages/ingestion/normalize.py` → `MAX_DOCUMENT_BYTES = 25 MiB`), so the
@@ -96,6 +112,48 @@ function uploadTooLargeResponse(): Response {
   );
 }
 
+/**
+ * Map a failed upstream exchange onto the proxy's error contract (shared by
+ * the pre-headers failure — `fetch` rejected — and the post-headers body
+ * failure, so both surfaces report the same statuses):
+ *
+ *  - client hung up first (`request.signal.aborted`) → 499 `client_disconnected`
+ *    (nobody is left to answer; nginx convention);
+ *  - the deadline fired (composed signal aborted, or `fetch` rejected with
+ *    its `TimeoutError`) → 502 `backend_unreachable`, timeout wording;
+ *  - anything else (connection refused/reset, upstream body error) → 502
+ *    `backend_unreachable`, unreachable wording.
+ */
+function upstreamFailureResponse(
+  error: unknown,
+  base: string,
+  request: Request,
+  deadlineFired: boolean,
+): Response {
+  if (request.signal.aborted) {
+    return Response.json(
+      {
+        ok: false,
+        error: { code: "client_disconnected", message: "Client closed the request." },
+      },
+      { status: 499 },
+    );
+  }
+  const timedOut = deadlineFired || (error instanceof Error && error.name === "TimeoutError");
+  return Response.json(
+    {
+      ok: false,
+      error: {
+        code: "backend_unreachable",
+        message: timedOut
+          ? `Backend at ${base} timed out.`
+          : `Backend at ${base} is unreachable.`,
+      },
+    },
+    { status: 502 },
+  );
+}
+
 export async function forward(
   request: Request,
   pathSegments: readonly string[],
@@ -149,13 +207,14 @@ export async function forward(
     if (request.body) body = boundedBodyStream(request.body, MAX_UPLOAD_BYTES);
   }
 
+  let upstreamSignal: AbortSignal | null = null;
   let upstream: Response;
   try {
     // Cancellation contract (T-V1-012): a client hang-up (request.signal)
     // cancels the upstream request and, via the bounded stream's cancel
-    // propagation, the inbound body; the fixed timeout still bounds total
-    // upstream time.
-    const signal = AbortSignal.any([
+    // propagation, the inbound body; the composed deadline still bounds the
+    // TOTAL upstream time — headers AND body (see APP_PROXY_TIMEOUT_MS).
+    upstreamSignal = AbortSignal.any([
       AbortSignal.timeout(APP_PROXY_TIMEOUT_MS),
       request.signal,
     ]);
@@ -167,7 +226,7 @@ export async function forward(
       // RequestInit type predates the field, hence the intersection type.
       duplex: "half",
       cache: "no-store",
-      signal,
+      signal: upstreamSignal,
     };
     upstream = await fetch(url, init);
   } catch (error: unknown) {
@@ -183,34 +242,27 @@ export async function forward(
       // past the limit.
       return uploadTooLargeResponse();
     }
-    if (request.signal.aborted) {
-      // The CLIENT hung up first: the upstream request has been cancelled and
-      // there is nobody left to answer. 499 (nginx convention, valid Response
-      // status) keeps logs honest about who ended the request.
-      return Response.json(
-        {
-          ok: false,
-          error: { code: "client_disconnected", message: "Client closed the request." },
-        },
-        { status: 499 },
-      );
-    }
-    return Response.json(
-      {
-        ok: false,
-        error: {
-          code: "backend_unreachable",
-          message:
-            error instanceof Error && error.name === "TimeoutError"
-              ? `Backend at ${base} timed out.`
-              : `Backend at ${base} is unreachable.`,
-        },
-      },
-      { status: 502 },
-    );
+    return upstreamFailureResponse(error, base, request, false);
   }
 
-  const text = await upstream.text();
+  let text: string;
+  try {
+    // The deadline signal stays attached to the body stream, so headers AND
+    // body are bounded by the SAME cap (T-V1-041). A body that stalls or
+    // errors after the headers arrived therefore rejects HERE and is mapped
+    // to the error contract below — instead of escaping forward() as an
+    // unhandled rejection (an opaque 500 from the route handler). A body
+    // that simply arrives (every fast path) is untouched.
+    text = await upstream.text();
+  } catch (error: unknown) {
+    if (body) void body.cancel().catch(() => undefined);
+    return upstreamFailureResponse(
+      error,
+      base,
+      request,
+      upstreamSignal?.aborted === true && !request.signal.aborted,
+    );
+  }
 
   // Bodiless statuses must be forwarded with a null body — constructing a
   // Response with `body: ""` and status 204 throws

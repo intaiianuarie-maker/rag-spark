@@ -72,6 +72,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   T-V1-007 dispatched (dev1).
 - T-V1-011 reviewer: APPROVE (handoffs-only scope, 2/2 browser+backend 200s re-verified live,
   HEAD-move disclosed + verified empty, timeout flag correctly deferred to T-041) → DONE.
+- T-V1-013 reviewer: APPROVE (new-files-only scope, genuinely hostile fixture, 3-stage SHA
+  identity, zero partials proven non-tautologically, 85 green) → DONE. Section B complete.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
