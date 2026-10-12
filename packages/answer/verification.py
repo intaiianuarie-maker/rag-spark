@@ -81,7 +81,10 @@ _SENTENCE_BOUNDARY = re.compile(r"(?<![0-9])[.!?]+(?:\s+|$)")
 _NEGATION = re.compile(
     r"\b(?:not|no|never|none|nothing|nowhere|neither|nor|without|falsely|denied|denies|deny|denial|refutes|refute|refuted|contradicts|contradict|contradicted|rejected|rejects|reject|refused|refuse|refuses|false|cannot|can't|"
     r"isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|wouldn't|couldn't|shouldn't|"
-    r"mightn't|mustn't|hasn't|haven't|hadn't)\b"
+    r"mightn't|mustn't|hasn't|haven't|hadn't|"
+    r"nu|nici|deloc|fals|falsă|respins|respinge|respinsă|contrazice|refuză|"
+    r"não|nunca|jamais|falso|falsa|rejeita|rejeitado|nega|negado|recusa)\b",
+    re.IGNORECASE,
 )
 # Context-preserving attribution frames. A claim is grounded as the source's
 # OWN assertion only when it is NOT embedded in one of these frames, each of

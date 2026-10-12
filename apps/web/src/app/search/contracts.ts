@@ -110,8 +110,7 @@ export async function searchDocuments(
     `/v1/workspaces/${workspaceId}/search`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body,
     },
   );
 }

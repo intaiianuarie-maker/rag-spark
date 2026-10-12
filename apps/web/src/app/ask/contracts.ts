@@ -44,8 +44,7 @@ export async function askQuestion(
     `/v1/workspaces/${workspaceId}/ask`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ query, ...(model ? { model } : {}) }),
+      body: { query, ...(model ? { model } : {}) },
     },
   );
 }
