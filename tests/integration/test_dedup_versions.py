@@ -176,6 +176,75 @@ def _fts_ids(document_id: str) -> list[str]:
     )
 
 
+def _fts_version_count(version_id: str) -> int:
+    """FTS rows keyed to ONE document version (T-V1-017 evidence helper)."""
+    return int(
+        _db_scalar(
+            "SELECT count(*) FROM lexical_docs WHERE document_version_id = :v",
+            {"v": version_id},
+        )
+    )
+
+
+def _qdrant_version_points(version_id: str) -> list[str]:
+    """Live Qdrant point ids whose payload names ONE document version.
+
+    Uses the real Qdrant scroll API (not SQL) — the vector-store side of the
+    T-V1-017 "both stores cleaned" evidence.
+    """
+    from qdrant_client.http.models import FieldCondition, Filter, MatchValue
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    async def run() -> list[str]:
+        store = QdrantVectorStore(collection="knowledge")
+        try:
+            points, _ = await store._client.scroll(
+                collection_name="knowledge",
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(
+                            key="document_version_id", match=MatchValue(value=version_id)
+                        )
+                    ]
+                ),
+                limit=1000,
+                with_payload=False,
+                with_vectors=False,
+            )
+            return sorted(str(p.id) for p in points)
+        finally:
+            await store.close()
+
+    return asyncio.run(run())
+
+
+def _job_error_code(job_id: str) -> str | None:
+    return _db_scalar(
+        "SELECT error_code FROM ingestion_jobs WHERE id = :i", {"i": job_id}
+    )
+
+
+def _install_stub_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
+    """1024-d non-zero fakes so the REAL Qdrant write stage runs on this box.
+
+    This box's Infinity serves 384-d where the collection expects 1024-d
+    (T-V1-043), which gates the vector stage with EMBED_UNAVAILABLE before any
+    point is written — the cleanup under test could never be observed. The
+    stub satisfies the pipeline's ZERO_VECTOR_REJECTED guard and the store's
+    dimension boundary while every store write/delete still goes to live
+    Qdrant through the real adapter.
+    """
+    from retrieval.adapters import infinity_embed
+
+    class _StubProvider:
+        dimension = 1024
+
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[0.001] * self.dimension for _ in texts]
+
+    monkeypatch.setattr(infinity_embed, "InfinityEmbeddingProvider", _StubProvider)
+
+
 def _qdrant_count(workspace_id: str, document_id: str) -> int:
     """Live Qdrant points for one document (Q3: must be zero after delete)."""
     from qdrant_client.http.models import FieldCondition, Filter, MatchAny
@@ -260,8 +329,8 @@ def test_repeat_job_reuses_stable_publication_ids(
         dimension = 1024
 
         async def embed_documents(self, texts: list[str]) -> list[list[float]]:
-            # Non-zero, correct-dimension fake vectors: satisfies the pipeline's
-            # ZERO_VECTOR_REJECTED guard without a real embedding call.
+            # Non-zero, correct-dimension fake vectors: satisfy the store
+            # boundary (T-V1-015) without a real embedding call.
             return [[0.001] * self.dimension for _ in texts]
 
     class _RecordingStore:
@@ -318,6 +387,153 @@ def test_repeat_job_reuses_stable_publication_ids(
     assert hits_2 == hits_1  # search still resolves the same documents
     assert document_id in hits_1  # and the document is actually retrievable
     assert _chunk_count(version_id) == len(chunks_1)  # no row growth
+
+
+def test_version_replace_exposes_only_new_version_everywhere(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-017: replacing a document exposes only the accepted version everywhere.
+
+    Upload v1 → run → upload v2 (same filename, changed content) → run, then
+    assert — through the STORE APIs and the LIVE search/citation paths, not SQL
+    alone (reviewer checklist 1) — that v1 is gone from FTS *and* Qdrant (2),
+    and that search + citations can only surface v2.
+    """
+    from answer.adapters.postgres_lookup import PostgresChunkLookup
+    from answer.models import Claim
+    from answer.verification import verify_claims
+
+    _install_stub_embedder(monkeypatch)
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    marker_v1 = f"supersede probe {uuid.uuid4().hex} cobalt quokka"
+    marker_v2 = f"supersede probe {uuid.uuid4().hex} vermilion wallaby"
+
+    first = _upload(client, token, workspace, "replace.txt", marker_v1.encode()).json()
+    _run_job(first["job_id"])
+    v1_version, document_id = first["version_id"], first["document_id"]
+    v1_chunks = _chunk_ids(v1_version)
+    assert v1_chunks
+    assert _fts_version_count(v1_version) >= 1  # v1 really was published...
+    assert _qdrant_version_points(v1_version)  # ...to BOTH stores
+    pre_hits = _search_results(client, token, workspace, marker_v1)
+    assert pre_hits, "v1 must be retrievable before the replace"
+
+    second = _upload(client, token, workspace, "replace.txt", marker_v2.encode()).json()
+    assert second["document_id"] == document_id
+    assert second["version_id"] != v1_version  # changed content → new generation
+    _run_job(second["job_id"])
+
+    v2_version = second["version_id"]
+    v2_chunks = _chunk_ids(v2_version)
+    assert v2_chunks
+
+    # (2) BOTH stores cleaned of the superseded version — store APIs, not SQL:
+    assert _fts_version_count(v1_version) == 0
+    assert _qdrant_version_points(v1_version) == []
+
+    # Search: v1's unique text is unretrievable, v2's is retrievable and the
+    # hits name only v2 chunks (no stale-version hit can be returned).
+    post_v1_hits = _search_results(client, token, workspace, marker_v1)
+    assert post_v1_hits == []
+    post_v2_hits = _search_results(client, token, workspace, marker_v2)
+    assert post_v2_hits, "v2 must be retrievable after the replace"
+    hit_chunk_ids = {item["chunk_id"] for item in post_v2_hits}
+    assert hit_chunk_ids and hit_chunk_ids <= set(v2_chunks)
+    assert not hit_chunk_ids & set(v1_chunks)
+    assert {item["document_id"] for item in post_v2_hits} == {document_id}
+
+    # Citations: the authoritative chunk lookup refuses every superseded v1
+    # chunk id and resolves every v2 chunk id to v2 content only.
+    lookup = PostgresChunkLookup()
+
+    async def _citation_checks() -> tuple[object, list, list]:
+        assert await lookup.get(v1_chunks[0]) is None  # superseded → never citable
+        cit_v2 = await lookup.get(v2_chunks[0])
+        claims = [
+            Claim(text=marker_v2, chunk_ids=[v1_chunks[0]]),  # stale v1 evidence
+            Claim(text=marker_v2, chunk_ids=[v2_chunks[0]]),  # accepted v2 evidence
+        ]
+        verified, citations = await verify_claims(
+            claims,
+            [],  # nothing pre-retrieved → forces the authoritative lookup path
+            chunk_lookup=lookup,
+            allowed_workspace_ids={workspace},
+        )
+        return cit_v2, verified, citations
+
+    cit_v2, verified, citations = asyncio.run(_citation_checks())
+    assert cit_v2 is not None and cit_v2.document_id == document_id
+    assert marker_v2 in (cit_v2.content or "")
+    assert [c.chunk_id for c in citations] == [v2_chunks[0]]  # v2 ONLY
+    assert all(c.document_id == document_id for c in citations)
+    assert verified and verified[0].chunk_ids == [v2_chunks[0]]
+
+
+def test_supersession_cleanup_failure_is_retried_visibly(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-017 checklist 3: a failed store cleanup is queued for retry, visibly.
+
+    The Qdrant half of the supersession cleanup fails once: the job must show a
+    ``SUPERSESSION_CLEANUP_RETRY`` marker, the retry must be queued (captured,
+    not silently dropped), and the stale points must STILL be there (no false
+    "clean"). The next run cleans them and clears the marker.
+    """
+    import ingestion.queue as queue_mod
+    from retrieval.adapters import qdrant_store
+
+    _install_stub_embedder(monkeypatch)
+
+    real_delete_versions = qdrant_store.QdrantVectorStore.delete_versions
+    calls = {"n": 0}
+
+    async def flaky_delete_versions(self, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("simulated Qdrant outage during supersession cleanup")
+        return await real_delete_versions(self, **kwargs)
+
+    monkeypatch.setattr(
+        qdrant_store.QdrantVectorStore, "delete_versions", flaky_delete_versions
+    )
+
+    scheduled: list[tuple[str, float]] = []
+
+    async def capture_schedule(job_id: str, delay: float) -> None:
+        scheduled.append((job_id, delay))
+
+    monkeypatch.setattr(queue_mod, "schedule_retry", capture_schedule)
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    first = _upload(
+        client, token, workspace, "retry-cleanup.txt", b"version one of retry cleanup"
+    ).json()
+    _run_job(first["job_id"])
+    v1_version = first["version_id"]
+    assert _qdrant_version_points(v1_version), "v1 points must exist before the replace"
+
+    second = _upload(
+        client, token, workspace, "retry-cleanup.txt", b"version two of retry cleanup"
+    ).json()
+    assert second["version_id"] != v1_version
+    _run_job(second["job_id"])
+
+    # Cleanup failed: marker visible on the job, retry queued, points STILL
+    # there (never reported clean), FTS half already committed.
+    assert calls["n"] == 1
+    assert _job_error_code(second["job_id"]) == "SUPERSESSION_CLEANUP_RETRY"
+    assert scheduled and scheduled[0][0] == second["job_id"]
+    assert _fts_version_count(v1_version) == 0
+    assert _qdrant_version_points(v1_version), "stale points must remain VISIBLE pre-retry"
+
+    # The queued retry re-runs the job: cleanup now succeeds and clears it.
+    _run_job(second["job_id"])
+    assert calls["n"] == 2
+    assert _job_error_code(second["job_id"]) is None  # marker cleared by the new run
+    assert _qdrant_version_points(v1_version) == []  # stale points gone after retry
 
 
 def test_changed_file_creates_immutable_version_and_supersedes(client) -> None:

@@ -590,6 +590,53 @@ class QdrantVectorStore(VectorStore):
         except Exception as e:
             raise VectorStoreError(f"delete failed for {collection}: {e}") from e
 
+    async def delete_versions(
+        self,
+        *,
+        collection: str,
+        version_ids: Sequence[str],
+        document_id: str | None = None,
+    ) -> int:
+        """Delete every point published for the given document versions (T-V1-017).
+
+        Cleanup call for supersession: points carry ``document_version_id`` in
+        their payload, so a replaced version's vectors are removed *precisely* —
+        the active version's points are never matched. Returns the number of
+        points that existed and were removed. The count scroll must succeed:
+        a cleanup that cannot be counted RAISES (``VectorStoreError``) so the
+        caller queues a retry instead of reporting stale points as clean.
+        """
+        if not version_ids:
+            return 0
+        coll = collection or self._default_collection
+        if not coll:
+            raise VectorStoreError("collection name required")
+        try:
+            must: list[Any] = [
+                FieldCondition(
+                    key="document_version_id",
+                    match=MatchAny(any=[str(v) for v in version_ids]),
+                )
+            ]
+            if document_id is not None:
+                must.append(
+                    FieldCondition(key="document_id", match=MatchValue(value=str(document_id)))
+                )
+            qfilter = Filter(must=must)
+            scrolled, _ = await self._client.scroll(
+                collection_name=coll,
+                scroll_filter=qfilter,
+                limit=10000,
+                with_payload=False,
+                with_vectors=False,
+            )
+            count = len(scrolled)
+            if count:
+                await self._client.delete(collection_name=coll, points_selector=qfilter)
+            return count
+        except Exception as e:
+            raise VectorStoreError(f"delete_versions failed for {collection}: {e}") from e
+
     async def close(self) -> None:
         try:
             await self._client.close()

@@ -4,6 +4,11 @@ Postgres is fully handled here. Vector (Qdrant) and full-text (FTS) purge land
 in M3-001a behind the store interfaces; this module exposes the registration
 seam and reports which stores were purged. Original bytes remain in
 ``document_versions.content`` until PD-005 moves them to MinIO.
+
+T-V1-017: **supersession** (version replace) cleans the superseded version's
+FTS rows and Qdrant points too, not only its Postgres chunk rows — otherwise a
+replaced version stays retrievable. A failed store cleanup is queued for retry
+(``SUPERSESSION_CLEANUP_*`` markers on the job), never silently dropped.
 """
 
 from __future__ import annotations
@@ -11,11 +16,11 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ingestion.persistence import ChunkRow, Document, DocumentVersion, IngestionJob
@@ -101,6 +106,12 @@ async def supersede_other_versions(
     A retryable failure can park an older version's job while a newer version
     completes first; when the older retry finishes, it must not delete the newer
     version's chunks.
+
+    T-V1-017: supersession now also removes the older versions' **FTS rows**
+    (same transaction — atomic with the chunk delete) and **Qdrant points**
+    (store cleanup call). A Qdrant cleanup failure does not fail the ingest
+    job (the *new* version is healthy): it is queued for retry and flagged on
+    the job so stale points are visibly pending, never silently kept.
     """
     keep = await session.get(DocumentVersion, keep_version_id)
     if keep is None:
@@ -119,13 +130,130 @@ async def supersede_other_versions(
     )
     if not older:
         return 0
+    # T-V1-017 (1): the superseded version's lexical rows leave in the SAME
+    # transaction as its chunk rows, so Postgres can never hold a half-superseded
+    # version (SQL here is implementation, not evidence — the test asserts via
+    # live search + citation hydration).
+    await session.execute(
+        text("DELETE FROM lexical_docs WHERE document_version_id = ANY(:ids)"),
+        {"ids": [str(v) for v in older]},
+    )
     await session.execute(delete(ChunkRow).where(ChunkRow.document_version_id.in_(older)))
     await session.execute(
         update(DocumentVersion)
         .where(DocumentVersion.id.in_(older))
         .values(superseded_at=datetime.now(UTC))
     )
+    # T-V1-017 (2): Qdrant points for the superseded versions, via the store's
+    # version-scoped cleanup call (payload document_version_id).
+    await _cleanup_superseded_vectors(
+        session, document_id=document_id, version_ids=older, keep_version_id=keep_version_id
+    )
     return len(older)
+
+
+async def _cleanup_superseded_vectors(
+    session: AsyncSession,
+    *,
+    document_id: uuid.UUID,
+    version_ids: Sequence[uuid.UUID],
+    keep_version_id: uuid.UUID,
+) -> bool:
+    """Remove superseded versions' Qdrant points; queue a retry when it fails.
+
+    Failure is never silent: the job is marked ``SUPERSESSION_CLEANUP_RETRY``
+    (cleared by the next run's ``error_code = None``) and the job id is put on
+    the delayed queue so the worker re-runs it and retries this cleanup. Once
+    ``attempts >= max_attempts`` the marker becomes ``SUPERSESSION_CLEANUP_FAILED``
+    and the failure stays loud in the logs.
+    """
+    ids = [str(v) for v in version_ids]
+    try:
+        from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+        qdrant = QdrantVectorStore(collection="knowledge")
+        try:
+            removed = await qdrant.delete_versions(
+                collection="knowledge",
+                version_ids=ids,
+                document_id=str(document_id),
+            )
+        finally:
+            await qdrant.close()
+        logger.info(
+            "supersession_vectors_cleaned",
+            extra={
+                "event": "supersession_vectors_cleaned",
+                "document_id": str(document_id),
+                "superseded_version_ids": ids,
+                "points_removed": removed,
+            },
+        )
+        return True
+    except Exception as exc:
+        job = await latest_job_for_version(session, keep_version_id)
+        detail = f"superseded-version Qdrant cleanup failed: {type(exc).__name__}: {exc}"[:2000]
+        if job is None:
+            logger.warning(
+                "supersession_cleanup_failed",
+                extra={
+                    "event": "supersession_cleanup_failed",
+                    "document_id": str(document_id),
+                    "superseded_version_ids": ids,
+                    "job_id": None,
+                    "retry_queued": False,
+                    "error": str(exc),
+                },
+            )
+            return False
+        will_retry = job.attempts < job.max_attempts
+        job.error_code = (
+            "SUPERSESSION_CLEANUP_RETRY" if will_retry else "SUPERSESSION_CLEANUP_FAILED"
+        )
+        job.error_message = detail
+        logger.warning(
+            "supersession_cleanup_failed",
+            extra={
+                "event": "supersession_cleanup_failed",
+                "document_id": str(document_id),
+                "superseded_version_ids": ids,
+                "job_id": str(job.id),
+                "retry_queued": will_retry,
+                "error": str(exc),
+            },
+        )
+        if will_retry:
+            await _queue_cleanup_retry(job)
+        return False
+
+
+async def _queue_cleanup_retry(job: IngestionJob) -> None:
+    """Put the job back on the delayed queue so the cleanup is retried (T-V1-017)."""
+    from ingestion.queue import IngestQueueUnavailable, schedule_retry
+
+    try:
+        await schedule_retry(str(job.id), 2.0 ** min(job.attempts, 5))
+        logger.warning(
+            "supersession_cleanup_retry_queued",
+            extra={
+                "event": "supersession_cleanup_retry_queued",
+                "job_id": str(job.id),
+                "attempts": job.attempts,
+                "max_attempts": job.max_attempts,
+            },
+        )
+    except IngestQueueUnavailable as exc:
+        # No retry path available: keep the FAILED-style marker so the orphan
+        # points are an acknowledged, greppable problem — never a silent one.
+        job.error_code = "SUPERSESSION_CLEANUP_FAILED"
+        logger.error(
+            "supersession_cleanup_retry_unavailable",
+            extra={
+                "event": "supersession_cleanup_retry_unavailable",
+                "job_id": str(job.id),
+                "error": str(exc),
+            },
+        )
 
 
 async def purge_document(
