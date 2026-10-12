@@ -6,8 +6,11 @@ from collections.abc import AsyncIterator
 import pytest
 from models.interfaces import GenerationRequest, GenerationResult, LLMProvider
 from research import (
+    EvidenceStoreError,
+    EvidenceVerificationState,
     MemoryEvidenceStore,
     ResearchEngine,
+    ResearchEngineError,
     ResearchEvidence,
     ResearchStatus,
 )
@@ -123,7 +126,7 @@ async def test_research_engine_full_pipeline() -> None:
     assert len(plan.subquestions) == 3
     assert "latency" in plan.subquestions[0].lower()
 
-    # Step 2: Evidence accumulation
+    # Step 2: Evidence accumulation — verified against a real stored chunk.
     ev = await engine.add_evidence_item(
         workspace_id=ws,
         query_id="q-raft",
@@ -132,6 +135,14 @@ async def test_research_engine_full_pipeline() -> None:
         quote="Raft decomposes consensus into leader election, log replication, and safety.",
         tags=["consensus", "protocols"],
         chunk_ids=["chunk-raft-1"],
+        document_id="paper-raft",
+        document_version="v1",
+        chunk_id="chunk-raft-1",
+        quote_start=0,
+        quote_end=69,
+        source_hash="sha256:aa11",
+        verification=EvidenceVerificationState.VERIFIED,
+        verification_reason="quote resolves to chunk-raft-1 in paper-raft v1",
     )
     assert ev.id.startswith("ev-")
 
@@ -143,3 +154,132 @@ async def test_research_engine_full_pipeline() -> None:
     assert "paper-raft" in report.citations
     assert "chunk-raft-1" in ev.chunk_ids
     assert report.evidence_ids == [ev.id]
+
+
+@pytest.mark.unit
+async def test_report_abstains_without_verified_evidence() -> None:
+    """rew1 B5: zero verified evidence must never produce a COMPLETED report."""
+    llm = MockResearchLLM()
+    store = MemoryEvidenceStore()
+    engine = ResearchEngine(llm, store)
+    ws = "ws-abstain"
+
+    # Caller-supplied prose is UNVERIFIED by default.
+    await engine.add_evidence_item(
+        workspace_id=ws,
+        query_id="q-x",
+        claim="Supplied by the caller.",
+        source="model-output",
+        quote="some span",
+    )
+
+    report = await engine.synthesize_report(ws, "Nothing")
+    assert report.status == ResearchStatus.FAILED
+    assert report.supported_findings == []
+    assert report.findings == []
+    assert "No verified evidence" in report.unknowns[0]
+
+
+@pytest.mark.unit
+async def test_planning_failure_raises_instead_of_faking() -> None:
+    """rew1 B5: a provider failure must raise, not return a plausible fallback."""
+
+    class _BrokenLLM(LLMProvider):
+        provider_name = "broken"
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            raise RuntimeError("provider down")
+
+        async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+            yield ""
+
+    engine = ResearchEngine(_BrokenLLM(), MemoryEvidenceStore())
+    with pytest.raises(ResearchEngineError):
+        await engine.plan_research("topic")
+
+
+@pytest.mark.unit
+async def test_synthesis_provider_failure_raises() -> None:
+    """rew1 B5: synthesis failure raises; no fake completed report."""
+
+    class _BrokenLLM(LLMProvider):
+        provider_name = "broken"
+
+        async def generate(self, request: GenerationRequest) -> GenerationResult:
+            if "research planner" in request.messages[-1].content:
+                return GenerationResult(
+                    text=json.dumps({"subquestions": ["q1"], "scope": "s"}),
+                    model=request.model,
+                )
+            raise RuntimeError("provider down mid-synthesis")
+
+        async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
+            yield ""
+
+    engine = ResearchEngine(_BrokenLLM(), MemoryEvidenceStore())
+    store = MemoryEvidenceStore()
+    engine.store = store
+    ws = "ws-synth"
+    await engine.add_evidence_item(
+        workspace_id=ws,
+        query_id="q",
+        claim="verified claim",
+        source="doc",
+        quote="exact quote",
+        verification=EvidenceVerificationState.VERIFIED,
+        document_id="doc",
+        document_version="v1",
+        chunk_id="c1",
+        source_hash="sha256:bb22",
+    )
+    with pytest.raises(ResearchEngineError):
+        await engine.synthesize_report(ws, "topic")
+
+
+@pytest.mark.unit
+async def test_evidence_run_scoping_blocks_cross_run_reads() -> None:
+    """rew1 B6: two runs in one workspace cannot mix evidence."""
+    store = MemoryEvidenceStore()
+    ws = "ws-runs"
+    ev_a = ResearchEvidence(
+        id="ev-a",
+        workspace_id=ws,
+        run_id="run-A",
+        claim="A claim",
+        source="doc-a",
+        quote="span a",
+    )
+    ev_b = ResearchEvidence(
+        id="ev-b",
+        workspace_id=ws,
+        run_id="run-B",
+        claim="B claim",
+        source="doc-b",
+        quote="span b",
+    )
+    await store.add_evidence(ws, [ev_a, ev_b])
+
+    run_a = await store.list_evidence(ws, run_id="run-A")
+    run_b = await store.list_evidence(ws, run_id="run-B")
+    assert [e.id for e in run_a] == ["ev-a"]
+    assert [e.id for e in run_b] == ["ev-b"]
+
+    # Cross-run get raises instead of returning the other run's evidence.
+    with pytest.raises(EvidenceStoreError):
+        await store.get_evidence(ws, "ev-b", run_id="run-A")
+
+
+@pytest.mark.unit
+async def test_cross_workspace_add_raises() -> None:
+    """rew1 B7: cross-workspace adds must raise, not silently drop."""
+    store = MemoryEvidenceStore()
+    ev = ResearchEvidence(
+        id="ev-x",
+        workspace_id="ws-victim",
+        run_id="r1",
+        claim="c",
+        source="s",
+        quote="q",
+    )
+    with pytest.raises(EvidenceStoreError):
+        await store.add_evidence("ws-attacker", [ev])

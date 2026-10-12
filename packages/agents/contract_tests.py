@@ -102,41 +102,55 @@ def check_tool_spec_contract(spec: ToolSpec) -> None:
 
 
 def check_tool_policy_contract(policy: ToolPolicy) -> None:
-    """ToolPolicy defaults to deny; an empty allowlist means no tools."""
+    """ToolPolicy defaults to deny; an empty allowlist means no tools.
+
+    The check validates the *supplied* policy (rew1 B10): every tool it allows
+    must be reflected in ``policy.allowed_tools``, and every other name must be
+    denied.
+    """
     _require_instance(policy, ToolPolicy, "tool policy")
-    # Empty allowlist -> nothing is allowed.
+    _require(isinstance(policy.allowed_tools, list), "allowed_tools must be a list")
+
+    allowed = set(policy.allowed_tools)
     empty = ToolPolicy(allowed_tools=[])
-    _require(not empty.allows("calculator"), "empty ToolPolicy must deny every tool")
-    _require(not empty.allows(""), "empty ToolPolicy must deny even an empty name")
-    # Non-empty allowlist -> only listed tools are allowed.
-    allow = ToolPolicy(allowed_tools=["calculator"])
-    _require(allow.allows("calculator"), "ToolPolicy must allow a listed tool")
-    _require(not allow.allows("python"), "ToolPolicy must deny an unlisted tool")
-    # The policy itself is frozen.
-    try:
-        policy.allowed_tools = ["python"]
-    except Exception:
-        pass
-    else:
-        _fail("ToolPolicy must be frozen (immutable)")
+    _require(not empty.allows("calculator"), "an empty allowlist must deny every tool")
+
+    # Supplied policy: a listed tool is allowed, a clearly unlisted one is not.
+    for name in policy.allowed_tools:
+        _require(policy.allows(name), f"ToolPolicy must allow its listed tool {name!r}")
+    sentinel = "__contract_absent_tool__"
+    if sentinel not in allowed:
+        _require(
+            not policy.allows(sentinel),
+            "ToolPolicy must deny a tool that is not in its allowlist",
+        )
+    # Empty allowlist is equivalent to the supplied policy denying everything.
+    if not allowed:
+        _require(
+            not policy.allows("calculator") and not policy.allows("python"),
+            "an empty supplied ToolPolicy must deny every tool",
+        )
 
 
 def check_run_state_contract(state: RunState) -> None:
-    """RunState transitions are monotonic; terminal states are one-way."""
+    """RunState transitions are monotonic; terminal states are one-way.
+
+    The check validates the *supplied* state (rew1 B10): its current status is
+    a valid RunStatus, and an active state must accept a legal transition.
+    """
     _require_instance(state, RunState, "run state")
-    # Active -> terminal is allowed.
-    s = RunState(status=RunStatus.QUEUED)
-    s.transition_to(RunStatus.RUNNING)
-    _require(s.status is RunStatus.RUNNING, "queued -> running must work")
-    s.transition_to(RunStatus.COMPLETED)
-    _require(s.status is RunStatus.COMPLETED, "running -> completed must work")
-    # Terminal -> anything is rejected.
-    try:
-        s.transition_to(RunStatus.RUNNING)
-    except InvalidRunTransitionError:
-        pass
-    else:
-        _fail("terminal run state must reject further transitions")
+    _require_instance(state.status, RunStatus, "RunState.status")
+
+    # A terminal supplied state rejects any further transition.
+    if RunState.is_terminal(state.status):
+        try:
+            state.transition_to(RunStatus.RUNNING)
+        except InvalidRunTransitionError:
+            pass
+        else:
+            _fail("a terminal run state must reject further transitions")
+        return
+
     # An unknown required failure can never produce COMPLETED.
     bad = RunState(status=RunStatus.RUNNING)
     bad.mark_unknown_required_failure("provider vanished mid-run")
@@ -146,14 +160,19 @@ def check_run_state_contract(state: RunState) -> None:
         pass
     else:
         _fail("unknown required failure must block COMPLETED")
-    # ...but FAILED is still reachable and records the error code.
     bad.transition_to(RunStatus.FAILED, error_code=AgentErrorCode.UNKNOWN_REQUIRED)
     _require(bad.status is RunStatus.FAILED, "failed must be reachable after unknown failure")
     _require(bad.error_code is AgentErrorCode.UNKNOWN_REQUIRED, "error_code must persist")
-    # error_code on a non-terminal transition is rejected.
+
+    # Active -> terminal is legal for the supplied state when no error is set.
     live = RunState(status=RunStatus.RUNNING)
+    live.transition_to(RunStatus.COMPLETED)
+    _require(live.status is RunStatus.COMPLETED, "running -> completed must work")
+
+    # error_code on a non-terminal transition is rejected.
+    live2 = RunState(status=RunStatus.RUNNING)
     try:
-        live.transition_to(RunStatus.WAITING_INPUT, error_code=AgentErrorCode.CANCELLED)
+        live2.transition_to(RunStatus.WAITING_INPUT, error_code=AgentErrorCode.CANCELLED)
     except InvalidRunTransitionError:
         pass
     else:

@@ -13,7 +13,11 @@ from .interfaces import Contradiction, ResearchEvidence
 
 
 class EvidenceStore(ABC):
-    """Abstract storage for research evidence items."""
+    """Abstract storage for research evidence items.
+
+    V3 (A0): every read is scoped to a research run. Two investigations in one
+    workspace can never mix evidence (rew1 B6).
+    """
 
     @abstractmethod
     async def add_evidence(self, workspace_id: str, items: Sequence[ResearchEvidence]) -> int:
@@ -21,25 +25,41 @@ class EvidenceStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get_evidence(self, workspace_id: str, evidence_id: str) -> ResearchEvidence | None:
-        """Fetch a specific evidence item."""
+    async def get_evidence(
+        self,
+        workspace_id: str,
+        evidence_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> ResearchEvidence | None:
+        """Fetch a specific evidence item, optionally scoped to a run."""
         raise NotImplementedError
 
     @abstractmethod
     async def list_evidence(
-        self, workspace_id: str, query_id: str | None = None
+        self,
+        workspace_id: str,
+        query_id: str | None = None,
+        *,
+        run_id: str | None = None,
     ) -> list[ResearchEvidence]:
-        """List evidence for a workspace, optionally filtered by query/topic."""
+        """List evidence for a workspace, filtered by query and/or research run."""
         raise NotImplementedError
 
     @abstractmethod
-    async def detect_contradictions(self, workspace_id: str) -> list[Contradiction]:
-        """Identify contradicting claims in the accumulated evidence."""
+    async def detect_contradictions(
+        self, workspace_id: str, *, run_id: str | None = None
+    ) -> list[Contradiction]:
+        """Identify contradicting claims within a workspace/run scope."""
         raise NotImplementedError
 
 
+class EvidenceStoreError(RuntimeError):
+    """Raised for cross-workspace or cross-run evidence access attempts."""
+
+
 class MemoryEvidenceStore(EvidenceStore):
-    """In-memory EvidenceStore with workspace isolation."""
+    """In-memory EvidenceStore with workspace and run isolation."""
 
     def __init__(self) -> None:
         # workspace_id -> evidence_id -> ResearchEvidence
@@ -53,28 +73,56 @@ class MemoryEvidenceStore(EvidenceStore):
         self._ensure_ws(workspace_id)
         written = 0
         for item in items:
-            if item.workspace_id == workspace_id:
-                self._store[workspace_id][item.id] = item
-                written += 1
+            if item.workspace_id != workspace_id:
+                # rew1 B7: a dropped item is indistinguishable from an empty one.
+                raise EvidenceStoreError(
+                    f"evidence {item.id} belongs to workspace {item.workspace_id}, "
+                    f"not {workspace_id}"
+                )
+            self._store[workspace_id][item.id] = item
+            written += 1
         return written
 
-    async def get_evidence(self, workspace_id: str, evidence_id: str) -> ResearchEvidence | None:
+    async def get_evidence(
+        self,
+        workspace_id: str,
+        evidence_id: str,
+        *,
+        run_id: str | None = None,
+    ) -> ResearchEvidence | None:
         self._ensure_ws(workspace_id)
-        return self._store[workspace_id].get(evidence_id)
+        item = self._store[workspace_id].get(evidence_id)
+        if item is None:
+            return None
+        if run_id is not None and item.run_id != run_id:
+            # rew1 B6: evidence from another run must not be readable here.
+            raise EvidenceStoreError(
+                f"evidence {evidence_id} belongs to run {item.run_id!r}, not {run_id!r}"
+            )
+        return item
 
     async def list_evidence(
-        self, workspace_id: str, query_id: str | None = None
+        self,
+        workspace_id: str,
+        query_id: str | None = None,
+        *,
+        run_id: str | None = None,
     ) -> list[ResearchEvidence]:
         self._ensure_ws(workspace_id)
-        all_items = list(self._store[workspace_id].values())
-        if query_id:
-            return [it for it in all_items if it.query_id == query_id]
-        return all_items
-
-    async def detect_contradictions(self, workspace_id: str) -> list[Contradiction]:
-        """Rule-based and tag-based contradiction detector."""
-        self._ensure_ws(workspace_id)
         items = list(self._store[workspace_id].values())
+        if run_id is not None:
+            # rew1 B6: run scoping is the default isolation filter.
+            items = [it for it in items if it.run_id == run_id]
+        if query_id:
+            items = [it for it in items if it.query_id == query_id]
+        return items
+
+    async def detect_contradictions(
+        self, workspace_id: str, *, run_id: str | None = None
+    ) -> list[Contradiction]:
+        """Rule-based and tag-based contradiction detector, scoped to one run."""
+        self._ensure_ws(workspace_id)
+        items = await self.list_evidence(workspace_id, run_id=run_id)
         contradictions: list[Contradiction] = []
 
         # Simple semantic contradiction check (opposing polarity or conflict tags)
