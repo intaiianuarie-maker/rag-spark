@@ -157,6 +157,21 @@ class GraphStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def tombstone_entity(self, workspace_id: str, entity_id: str) -> bool:
+        """Mark a single entity, its incident edges, and affected communities tombstoned."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def tombstone_relationship(self, workspace_id: str, relationship_id: str) -> bool:
+        """Mark a single relationship tombstoned and prune affected communities."""
+        raise NotImplementedError
+
+    @abstractmethod
+    async def tombstone_document(self, workspace_id: str, document_id: str) -> int:
+        """Tombstone every node/edge whose provenance includes document_id."""
+        raise NotImplementedError
+
+    @abstractmethod
     async def delete_workspace(self, workspace_id: str) -> int:
         """Delete all entities, relationships, and communities for a workspace."""
         raise NotImplementedError

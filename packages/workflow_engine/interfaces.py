@@ -1,17 +1,24 @@
 """Workflow Engine domain interfaces (Phase 13 / Section 30).
 
-Implements DAG-based workflow execution models: Node, Edge, Workflow, NodeRun, WorkflowRun.
+Implements DAG-based workflow execution models: Node, Edge, Workflow, NodeRun,
+WorkflowRun.  Also includes W0/W1 strict contracts: typed ports, versioned
+revisions, capability manifest, validation results, compiled execution plans,
+and the NodeExecutor Protocol.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 from enum import StrEnum
-from typing import Any
+from typing import Any, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 class NodeType(StrEnum):
+    """Supported node types. Availability is gated by CapabilityManifest."""
+
     TRIGGER = "trigger"
     RETRIEVER = "retriever"
     LLM = "llm"
@@ -39,7 +46,7 @@ class WorkflowRunStatus(StrEnum):
 
 
 class WorkflowNode(BaseModel):
-    """A single operational block in a workflow DAG."""
+    """A single operational block in a workflow DAG (prototype model)."""
 
     id: str
     type: NodeType
@@ -48,7 +55,7 @@ class WorkflowNode(BaseModel):
 
 
 class WorkflowEdge(BaseModel):
-    """A directed dependency between two workflow nodes."""
+    """A directed dependency between two workflow nodes (prototype model)."""
 
     id: str
     source_node_id: str
@@ -57,7 +64,7 @@ class WorkflowEdge(BaseModel):
 
 
 class Workflow(BaseModel):
-    """Definition of a runnable workflow DAG."""
+    """Definition of a runnable workflow DAG (prototype model)."""
 
     id: str
     workspace_id: str
@@ -65,6 +72,294 @@ class Workflow(BaseModel):
     description: str = ""
     nodes: list[WorkflowNode] = Field(default_factory=list)
     edges: list[WorkflowEdge] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
+# W0/W1: Strict contracts
+# ---------------------------------------------------------------------------
+
+PORT_TYPE_STRING = "string"
+PORT_TYPE_DICT = "dict"
+PORT_TYPE_LIST = "list"
+PORT_TYPE_BOOLEAN = "boolean"
+PORT_TYPE_NUMBER = "number"
+PORT_TYPE_ANY = "any"
+_SUPPORTED_PORT_TYPES = frozenset({
+    PORT_TYPE_STRING,
+    PORT_TYPE_DICT,
+    PORT_TYPE_LIST,
+    PORT_TYPE_BOOLEAN,
+    PORT_TYPE_NUMBER,
+    PORT_TYPE_ANY,
+})
+
+
+class PortSpec(BaseModel):
+    """A typed input or output port on a workflow node.
+
+    Ports make data-flow contracts explicit.  An input port without a
+    ``default`` value must be satisfied by an incoming edge or the initial
+    workflow input, otherwise validation fails (required-ports check).
+    """
+
+    name: str
+    type: str = PORT_TYPE_ANY
+    required: bool = True
+    default: Any = None
+    description: str = ""
+
+    def model_post_init(self, __context: Any) -> None:
+        if self.type not in _SUPPORTED_PORT_TYPES:
+            raise ValueError(
+                f"Unsupported port type '{self.type}'. "
+                f"Allowed: {{_SUPPORTED_PORT_TYPES}}"
+            )
+
+
+class NodeSpec(BaseModel):
+    """A workflow node with explicit port contracts and capability declarations.
+
+    Unlike the prototype ``WorkflowNode``, this model requires the node to
+    declare its input/output ports and the external capabilities it depends
+    on.  The compiler and executor use these declarations to detect missing
+    wiring and unavailable capabilities *before* any execution.
+    """
+
+    id: str
+    type: NodeType
+    name: str = ""
+    config: dict[str, Any] = Field(default_factory=dict)
+    input_ports: list[PortSpec] = Field(default_factory=list)
+    output_ports: list[PortSpec] = Field(default_factory=list)
+    required_capabilities: list[str] = Field(default_factory=list)
+    description: str = ""
+
+
+class WorkflowEdgeSpec(BaseModel):
+    """A typed edge routing a named output port to a named input port.
+
+    Replaces the prototype ``WorkflowEdge`` which only carried node-level
+    connectivity.  Port-level edges let the compiler verify that every
+    required input is satisfied and that types are compatible.
+    """
+
+    id: str
+    source_node_id: str
+    source_port: str
+    target_node_id: str
+    target_port: str
+    condition_value: Any | None = None
+
+
+class WorkflowDefinition(BaseModel):
+    """A workflow definition with port-level contracts and typed edges."""
+
+    id: str
+    workspace_id: str
+    name: str
+    description: str = ""
+    nodes: list[NodeSpec] = Field(default_factory=list)
+    edges: list[WorkflowEdgeSpec] = Field(default_factory=list)
+    workspace_capabilities: set[str] = Field(default_factory=set)
+
+
+class WorkflowRevision(BaseModel):
+    """Immutable, versioned revision of a workflow definition.
+
+    The ``content_hash`` is a SHA-256 digest of the canonical (sorted,
+    JSON-serialised) spec.  Revisions are immutable: any change to the
+    definition produces a new revision number and a new hash.  This is the
+    unit the compiler operates on, ensuring a published revision never
+    changes under users.
+
+    The model is frozen (``frozen=True``) to prevent top-level field
+    reassignment.  Post-construction mutations of nested spec fields are
+    detected by hash verification in the compiler and executor.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    workflow_id: str
+    revision: int
+    content_hash: str
+    spec: WorkflowDefinition
+    created_at: str = ""
+
+    # ------------------------------------------------------------------ #
+    # Hash construction / verification
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _compute_content_hash(spec: WorkflowDefinition) -> str:
+        """Compute the canonical SHA-256 of *spec* (sorted JSON)."""
+        canonical = json.dumps(spec.model_dump(mode="json"), sort_keys=True)
+        return hashlib.sha256(canonical.encode()).hexdigest()
+
+    @classmethod
+    def create(
+        cls,
+        spec: WorkflowDefinition,
+        *,
+        revision: int = 1,
+        created_at: str = "",
+    ) -> WorkflowRevision:
+        """Create a revision with a caller-computed content_hash.
+
+        The hash is derived from the canonical JSON of *spec*, so identical
+        specs always produce identical revisions.
+        """
+        h = cls._compute_content_hash(spec)
+        return cls(
+            workflow_id=spec.id,
+            revision=revision,
+            content_hash=h,
+            spec=spec,
+            created_at=created_at,
+        )
+
+    @model_validator(mode="after")
+    def _verify_hash(self) -> WorkflowRevision:
+        """Reject revisions whose content_hash does not match the spec."""
+        computed = self._compute_content_hash(self.spec)
+        if computed != self.content_hash:
+            raise ValueError(
+                f"content_hash mismatch: expected {computed}, "
+                f"got {self.content_hash}"
+            )
+        return self
+
+
+class CapabilityManifest(BaseModel):
+    """Declares which node types and external capabilities are available.
+
+    Nodes whose ``type`` is not in ``supported_node_types``, or whose
+    ``required_capabilities`` are not in ``enabled_capabilities``, are
+    rejected by the validator rather than silently downgrade-passthrough.
+    """
+
+    supported_node_types: set[NodeType] = Field(default_factory=set)
+    enabled_capabilities: set[str] = Field(default_factory=set)
+
+
+class ValidationError(BaseModel):
+    """A single validation error with a stable machine-readable code."""
+
+    code: str
+    message: str
+    node_id: str | None = None
+    edge_id: str | None = None
+
+
+class ValidationResult(BaseModel):
+    """Result of workflow validation. ``valid`` is True iff no errors."""
+
+    valid: bool
+    errors: list[ValidationError] = Field(default_factory=list)
+
+    @property
+    def error_summary(self) -> str:
+        if self.valid:
+            return "valid"
+        return "; ".join(f"{e.code}: {e.message}" for e in self.errors)
+
+
+class ExecutionEdgeInfo(BaseModel):
+    """Describes one outgoing edge from a node in the execution plan.
+
+    ``condition_value`` is set for edges originating from ``CONDITION`` nodes.
+    The executor compares it against the source node's output on
+    ``source_port`` to decide whether the edge is *active*.
+    """
+
+    target_node_id: str
+    source_port: str
+    target_port: str
+    condition_value: Any | None = None
+
+
+class ExecutionStep(BaseModel):
+    """One step in a compiled execution plan.
+
+    ``order`` gives the deterministic topological position.  For nodes with
+    multiple inbound edges, ``join_mode`` describes how inputs are merged
+    (``"all"`` = all predecessors must complete; ``"any"`` = any one
+    suffices, used for condition-fan-out branches).
+    """
+
+    node_id: str
+    order: int
+    join_mode: str = "all"
+    input_mapping: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="target_port -> list of 'source_node:source_port'",
+    )
+    outgoing_edges: list[ExecutionEdgeInfo] = Field(default_factory=list)
+
+
+class ExecutionPlan(BaseModel):
+    """Deterministic execution plan produced by the compiler.
+
+    The plan is a pure data structure — no side effects, no execution.
+    """
+
+    revision_hash: str
+    steps: list[ExecutionStep]
+    trigger_node_id: str
+    output_node_ids: list[str]
+
+    def next_steps_after(self, completed_node_id: str) -> list[ExecutionStep]:
+        """Return steps whose order is greater than the completed node's."""
+        completed_orders = {
+            s.order for s in self.steps if s.node_id == completed_node_id
+        }
+        if not completed_orders:
+            return []
+        max_order = max(completed_orders)
+        ready: list[ExecutionStep] = []
+        for step in self.steps:
+            if step.order > max_order:
+                ready.append(step)
+        return ready
+
+    def step_by_node_id(self, node_id: str) -> ExecutionStep | None:
+        """Return the step for *node_id*, or ``None``."""
+        return next((s for s in self.steps if s.node_id == node_id), None)
+    def edge_to(
+        self, target_node_id: str
+    ) -> list[tuple[str, str, Any | None]]:
+        """Return ``(source_node_id, source_port, condition_value)`` for each
+        incoming edge of *target_node_id*."""
+        result: list[tuple[str, str, Any | None]] = []
+        for step in self.steps:
+            for edge in step.outgoing_edges:
+                if edge.target_node_id == target_node_id:
+                    result.append(
+                        (step.node_id, edge.source_port, edge.condition_value)
+                    )
+        return result
+
+
+@runtime_checkable
+class NodeExecutor(Protocol):
+    """Execution-adapter Protocol — decouples node execution from
+    validation/compilation.
+
+    Concrete implementations may call real LLM/retriever/agent runtimes (W2+).
+    W0/W1 uses ``FakeNodeExecutor`` for deterministic testing without
+    installing or calling LangGraph/Langflow/real models.
+    """
+
+    async def execute_node(
+        self,
+        node: NodeSpec,
+        input_data: dict[str, Any],
+        workspace_id: str,
+    ) -> dict[str, Any]:
+        """Execute *node* and return a mapping of output_port_name -> value.
+
+        If the node type or a required capability is not implemented, raise
+        ``NotImplementedError`` (failure honesty — never mock success).
+        """
+        ...
 
 
 class NodeRun(BaseModel):

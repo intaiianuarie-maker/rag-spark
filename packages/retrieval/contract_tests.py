@@ -306,6 +306,10 @@ async def check_embedding_provider_contract(provider: EmbeddingProvider) -> None
             _fail(f"dimension mismatch: expected {provider.dimension}, got {len(vector)}")
         if any(not math.isfinite(value) for value in vector):
             _fail("embeddings must be finite floats")
+        # Q1: a zero vector carries no semantic signal and would match
+        # everything under cosine similarity — a manufactured embedding.
+        if all(math.isclose(v, 0.0, abs_tol=1e-9) for v in vector):
+            _fail(f"embedding provider must not return a zero vector: {vector}")
 
     again = await provider.embed_documents(["alpha", "beta"])
     if again != vectors:
@@ -314,6 +318,10 @@ async def check_embedding_provider_contract(provider: EmbeddingProvider) -> None
     query_vector = await provider.embed_query("alpha")
     if len(query_vector) != provider.dimension:
         _fail(f"query vector dimension mismatch: {len(query_vector)} != {provider.dimension}")
+
+    # Q1: the query vector must also be non-zero.
+    if all(math.isclose(v, 0.0, abs_tol=1e-9) for v in query_vector):
+        _fail("embedding provider must not return a zero query vector")
 
     if await provider.embed_documents([]) != []:
         _fail("empty batch must return an empty list (no crash, no network call)")

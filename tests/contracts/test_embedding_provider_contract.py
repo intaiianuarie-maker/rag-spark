@@ -27,3 +27,19 @@ async def test_contract_requires_dimension_and_revision_metadata() -> None:
     assert provider.dimension == len(await provider.embed_query("probe"))
     assert provider.model_name and provider.revision
     assert provider.dimension > 0
+
+
+class _ZeroVectorFakeEmbeddingProvider(FakeEmbeddingProvider):
+    """A provider that returns all-zero vectors (Q1 violation)."""
+
+    async def embed_documents(self, texts):
+        return [[0.0] * self.dimension for _ in texts]
+
+    async def embed_query(self, text: str):
+        return [0.0] * self.dimension
+
+
+async def test_contract_rejects_zero_vector_provider() -> None:
+    """Q1: the embedding contract must fail any provider that returns zero vectors."""
+    with pytest.raises(AssertionError, match="zero vector"):
+        await check_embedding_provider_contract(_ZeroVectorFakeEmbeddingProvider())

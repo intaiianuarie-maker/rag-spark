@@ -158,7 +158,7 @@ services:
       INFERENCE_ENGINE: onnx
       PORT: "7997"
     ports:
-      - "7997:7997"
+      - "127.0.0.1:7997:7997"
 
 volumes:
   pgdata:

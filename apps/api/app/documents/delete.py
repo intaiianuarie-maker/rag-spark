@@ -1,9 +1,12 @@
-"""Document delete endpoint (M2-001d): tombstone + purge.
+"""Document delete endpoint (M2-001d / V1-Q3): tombstone + purge.
 
-Postgres chunks are removed and the document is tombstoned. Qdrant/FTS purge is
-registered by M3 adapters (`ingestion.dedup.register_store_purger`); until then
-the per-store report shows them not purged. Original bytes stay in Postgres
-until PD-005 moves them to MinIO.
+Postgres chunks are removed and the document is tombstoned (`deleted_at`).
+Qdrant/FTS purges run through `ingestion.dedup` store purgers with a
+document-scoped filter (`build_purge_filter`); the delete endpoint reports the
+per-store report and always returns 204 once the tombstone commits.
+`GET .../documents/{id}` on a tombstoned document returns an honest 404
+(`document_not_found`), and deleted chunks are gone from FTS/Qdrant so search
+and ask can never return or cite them.
 """
 
 from __future__ import annotations

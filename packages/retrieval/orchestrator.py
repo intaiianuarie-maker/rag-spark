@@ -60,8 +60,10 @@ logger = logging.getLogger("knowledge_os.retrieval.orchestrator")
 #: RRF smoothing constant (canonical k=60; pinned by check_rrf_determinism).
 RRF_K = 60
 
-#: The five trace keys every returned item carries (debugger contract).
-TRACE_KEYS = ("dense", "sparse", "lexical", "rrf", "rerank")
+#: The six trace keys every returned item carries (debugger contract).
+#: ``graph`` appears when the optional graph retriever leg surfaced the item
+#: (see V2-GRAPH-PLAN G3/G4).
+TRACE_KEYS = ("dense", "sparse", "lexical", "graph", "rrf", "rerank")
 
 
 @runtime_checkable

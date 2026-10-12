@@ -19,6 +19,7 @@ from core.auth import ACLScope, Principal
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.adapters.litellm_provider import LLMProviderError
 from pydantic import BaseModel, Field
+from retrieval.interfaces import RetrievalMode
 
 from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
@@ -29,6 +30,7 @@ router = APIRouter(prefix="/v1/workspaces/{workspace_id}/ask", tags=["ask"])
 class AskRequest(BaseModel):
     query: str = Field(min_length=1)
     model: str | None = None
+    mode: RetrievalMode = RetrievalMode.HYBRID
 
 
 def _http_error(exc: ApiError) -> HTTPException:
@@ -68,6 +70,7 @@ async def ask(
         return await engine.answer(
             query=body.query,
             acl_scope=ACLScope(user_id=principal.user_id, workspace_ids=[str(workspace_id)]),
+            mode=body.mode,
         )
     except LLMProviderError as exc:
         raise HTTPException(

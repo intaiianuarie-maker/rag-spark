@@ -49,6 +49,7 @@ from models.interfaces import (
 )
 from retrieval.interfaces import (
     DEFAULT_CONTEXT_TOP_K,
+    RetrievalMode,
     RetrievalOrchestrator,
 )
 
@@ -84,11 +85,21 @@ class AnswerEngine:
     #: existence+scope-only contract.
     claim_grounder: ClaimGrounder | None = field(default_factory=ExtractiveGrounder)
 
-    async def answer(self, *, query: str, acl_scope: ACLScope) -> Answer:
-        """Retrieve, generate, parse and verify a grounded answer."""
+    async def answer(
+        self, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
+    ) -> Answer:
+        """Retrieve, generate, parse and verify a grounded answer.
+
+        ``mode`` selects the retrieval leg (default ``HYBRID`` = v1 behavior);
+        it is passed straight through to ``orchestrator.retrieve`` so callers
+        can opt into ``GRAPH``/``HYBRID_GRAPH`` once ``GRAPH_MODE`` enables the
+        graph leg (G4). ACL-before-ranking and citation verification apply to
+        every mode.
+        """
         items = await self.orchestrator.retrieve(
             query=query,
             acl_scope=acl_scope,
+            mode=mode,
             context_top_k=self.max_context_items,
         )
         prompt = build_prompt(query, items)

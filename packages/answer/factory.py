@@ -28,7 +28,14 @@ DEFAULT_ANSWER_MODEL = "gpt-4o-mini"
 
 
 def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
-    """Dense (Qdrant) + lexical (PG FTS) + rerank (infinity) hybrid orchestrator."""
+    """Dense (Qdrant) + lexical (PG FTS) + rerank (infinity) hybrid orchestrator.
+
+    G4 wiring: threads the optional graph retriever built by
+    ``graph.factory.create_graph_retriever``. When ``GRAPH_MODE=off`` (default)
+    the factory returns ``None`` and the orchestrator's graph leg no-ops, so
+    retrieval behavior is byte-identical to v1.
+    """
+    from graph.factory import create_graph_retriever
     from ingestion.persistence import get_session_factory
     from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
     from retrieval.adapters.infinity_rerank import InfinityReranker
@@ -46,6 +53,7 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
         lexical=lexical,
         collection=collection,
         reranker=reranker,
+        graph=create_graph_retriever(),
     )
 
 

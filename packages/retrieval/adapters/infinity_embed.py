@@ -29,6 +29,7 @@ NOTICES.md).
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Sequence
 from typing import Any
@@ -48,6 +49,16 @@ DEFAULT_DIMENSION = 1024
 DEFAULT_REVISION = "BAAI/bge-m3"
 DEFAULT_BATCH_SIZE = 32
 DEFAULT_TIMEOUT_SECONDS = 30.0
+
+#: Vectors whose L2 norm is below this threshold carry no semantic signal and
+#: would match everything equally under cosine similarity — a *manufactured*
+#: vector that must never be indexed or searched (TASK-Q1: no false success).
+ZERO_VECTOR_TOLERANCE = 1e-9
+
+
+def _is_zero_vector(vector: Sequence[float]) -> bool:
+    """Return True when the vector's L2 norm is negligibly small."""
+    return math.hypot(*vector) < ZERO_VECTOR_TOLERANCE
 
 
 class EmbeddingProviderError(RuntimeError):
@@ -145,10 +156,25 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
                 raise EmbeddingProviderError(
                     "infinity /embeddings returned an invalid embedding vector"
                 )
-            raw_vec = [float(value) for value in embedding]
+            try:
+                raw_vec = [float(value) for value in embedding]
+            except (TypeError, ValueError, OverflowError) as exc:
+                raise EmbeddingProviderError(
+                    "infinity /embeddings returned an invalid numeric component"
+                ) from exc
+            if not all(math.isfinite(value) for value in raw_vec):
+                raise EmbeddingProviderError(
+                    "infinity /embeddings returned a non-finite embedding component"
+                )
             if len(raw_vec) != self.dimension:
-                allow_adapt = os.environ.get("ALLOW_DIMENSION_ADAPTATION", "true").lower() in ("1", "true", "yes")
-                if allow_adapt and len(raw_vec) >= 64:  # Real model adaptation (e.g. 384-d to 1024-d), not stub dummy <64
+                allow_adapt = (
+                    os.environ.get("ALLOW_DIMENSION_ADAPTATION", "true")
+                    .lower()
+                    in ("1", "true", "yes")
+                )
+                if allow_adapt and len(raw_vec) >= 64:
+                    # Real model adaptation (e.g. 384-d to 1024-d),
+                    # not stub dummy <64.
                     if len(raw_vec) < self.dimension:
                         raw_vec = raw_vec + [0.0] * (self.dimension - len(raw_vec))
                     else:
@@ -158,6 +184,11 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
                         f"infinity /embeddings returned {len(raw_vec)}-d vector, "
                         f"expected {self.dimension}-d"
                     )
+            if _is_zero_vector(raw_vec):
+                raise EmbeddingProviderError(
+                    "infinity /embeddings returned a zero-vector "
+                    "(no semantic signal; refusing manufactured embedding)"
+                )
             vectors.append(raw_vec)
         return vectors
 

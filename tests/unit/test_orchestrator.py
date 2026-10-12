@@ -553,3 +553,132 @@ async def test_hybrid_graph_retrieval_mode() -> None:
     # Should fuse results from dense/lexical and graph
     assert any("graph" in item.scores or "dense" in item.scores for item in items)
 
+
+
+# --- G4 wiring: flag-off parity + flag-on graph leg ----------------------------
+
+
+async def test_g4_graph_off_means_no_graph_leg() -> None:
+    """G4 flag-off parity: ``graph=None`` → graph modes yield no graph items."""
+    from retrieval.interfaces import RetrievalMode
+
+    orchestrator, _, _ = await _orchestrator()
+    assert orchestrator.graph is None
+    items = await orchestrator.retrieve(
+        query="permissions",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+        mode=RetrievalMode.HYBRID_GRAPH,
+    )
+    assert all("graph" not in item.scores for item in items)
+
+
+async def test_g4_graph_on_leg_runs_before_ranking_with_acl_scope() -> None:
+    """G4 R-004: graph leg is workspace-scoped; foreign items never rank."""
+    from graph import Entity, GraphRetriever, MemoryGraphStore
+    from retrieval.interfaces import RetrievalMode
+
+    store = MemoryGraphStore()
+    await store.upsert_entities(
+        "ws-b",
+        [
+            Entity(
+                id="e1",
+                name="permissions",
+                type="CONCEPT",
+                workspace_id="ws-b",
+                chunk_ids=["chk-foreign-1"],
+            )
+        ],
+    )
+    orchestrator, _, _ = await _orchestrator()
+    orchestrator.graph = GraphRetriever(store)
+
+    items = await orchestrator.retrieve(
+        query="permissions",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+        mode=RetrievalMode.GRAPH,
+    )
+    # Foreign-workspace graph evidence must not leak into the caller's scope.
+    assert all(item.workspace_id == "ws-a" for item in items)
+
+
+def test_g4_factory_off_returns_none_graph(monkeypatch: pytest.MonkeyPatch) -> None:
+    """G4 §1a: ``GRAPH_MODE=off`` → factory wires ``graph=None`` (v1 parity)."""
+    import answer.factory as answer_factory
+
+    monkeypatch.setenv("GRAPH_MODE", "off")
+
+    class _Dense:
+        def __init__(self, **kwargs):
+            pass
+
+    class _Lexical:
+        def __init__(self, **kwargs):
+            pass
+
+    class _Embedding:
+        def __init__(self, **kwargs):
+            pass
+
+    class _Reranker:
+        def __init__(self, **kwargs):
+            pass
+
+    import retrieval.adapters.infinity_embed as embed_mod
+    import retrieval.adapters.infinity_rerank as rerank_mod
+    import retrieval.adapters.pg_fts as fts_mod
+    import retrieval.adapters.qdrant_store as qdrant_mod
+
+    monkeypatch.setattr(qdrant_mod, "QdrantVectorStore", _Dense)
+    monkeypatch.setattr(fts_mod, "PostgresLexicalStore", _Lexical)
+    monkeypatch.setattr(embed_mod, "InfinityEmbeddingProvider", _Embedding)
+    monkeypatch.setattr(rerank_mod, "InfinityReranker", _Reranker)
+    monkeypatch.setattr(
+        "ingestion.persistence.get_session_factory", lambda: object()
+    )
+
+    orch = answer_factory.create_orchestrator()
+    assert orch.graph is None
+
+
+def test_g4_factory_rule_wires_graph_retriever(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """G4 §1a: ``GRAPH_MODE=rule`` → factory wires a ``GraphRetriever``."""
+    import answer.factory as answer_factory
+    from graph.retriever import GraphRetriever
+
+    monkeypatch.setenv("GRAPH_MODE", "rule")
+    monkeypatch.setenv("GRAPH_DB_PATH", str(tmp_path / "graph.db"))
+
+    class _Dense:
+        def __init__(self, **kwargs):
+            pass
+
+    class _Lexical:
+        def __init__(self, **kwargs):
+            pass
+
+    class _Embedding:
+        def __init__(self, **kwargs):
+            pass
+
+    class _Reranker:
+        def __init__(self, **kwargs):
+            pass
+
+    import retrieval.adapters.infinity_embed as embed_mod
+    import retrieval.adapters.infinity_rerank as rerank_mod
+    import retrieval.adapters.pg_fts as fts_mod
+    import retrieval.adapters.qdrant_store as qdrant_mod
+
+    monkeypatch.setattr(qdrant_mod, "QdrantVectorStore", _Dense)
+    monkeypatch.setattr(fts_mod, "PostgresLexicalStore", _Lexical)
+    monkeypatch.setattr(embed_mod, "InfinityEmbeddingProvider", _Embedding)
+    monkeypatch.setattr(rerank_mod, "InfinityReranker", _Reranker)
+    monkeypatch.setattr(
+        "ingestion.persistence.get_session_factory", lambda: object()
+    )
+
+    orch = answer_factory.create_orchestrator()
+    assert isinstance(orch.graph, GraphRetriever)

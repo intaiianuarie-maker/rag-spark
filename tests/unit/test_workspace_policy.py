@@ -157,3 +157,126 @@ def test_last_owner_guard_allows_safe_changes() -> None:
     ensure_last_owner_safe(target_role=Role.OWNER, new_role=Role.ADMIN, owner_count=2)
     ensure_last_owner_safe(target_role=Role.OWNER, new_role=None, owner_count=2)
     ensure_last_owner_safe(target_role=Role.EDITOR, new_role=None, owner_count=1)
+
+
+def test_build_purge_filter_scopes_one_document_in_one_workspace() -> None:
+    """Q3: purge filters carry exactly document_ids=[doc] + workspace_ids=[ws]."""
+    import uuid
+
+    from ingestion.dedup import build_purge_filter
+
+    workspace_id, document_id = uuid.uuid4(), uuid.uuid4()
+    filt = build_purge_filter(workspace_id, document_id)
+    assert filt.workspace_ids == [str(workspace_id)]
+    assert filt.document_ids == [str(document_id)]
+
+
+async def test_purge_document_fans_out_to_registered_stores_with_scoped_filter() -> None:
+    """Q3: purge_document triggers every registered purger with (ws, doc) ids."""
+    import uuid
+
+    from ingestion import dedup
+    from ingestion.dedup import build_purge_filter
+
+    workspace_id, document_id = uuid.uuid4(), uuid.uuid4()
+    seen: dict[str, object] = {}
+
+    async def fake_fts(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+        seen["fts"] = build_purge_filter(ws_id, doc_id)
+
+    async def fake_qdrant(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+        seen["qdrant"] = build_purge_filter(ws_id, doc_id)
+
+    class _Scalars:
+        def all(self) -> list[object]:
+            return []
+
+    class _Result:
+        def scalars(self) -> _Scalars:
+            return _Scalars()
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.document = type("Doc", (), {"workspace_id": workspace_id})()
+
+        async def get(self, *args: object, **kwargs: object) -> object:
+            return self.document
+
+        async def execute(self, *args: object, **kwargs: object) -> _Result:
+            return _Result()
+
+        async def commit(self) -> None:
+            return None
+
+    session = _FakeSession()
+
+    saved = dict(dedup._STORE_PURGERS)
+    dedup._STORE_PURGERS.clear()
+    dedup.register_store_purger("fts", fake_fts)
+    dedup.register_store_purger("qdrant", fake_qdrant)
+    try:
+        report = await dedup.purge_document(
+            session, workspace_id=workspace_id, document_id=document_id  # type: ignore[arg-type]
+        )
+    finally:
+        dedup._STORE_PURGERS.clear()
+        dedup._STORE_PURGERS.update(saved)
+
+    assert report == {"postgres": True, "fts": True, "qdrant": True}
+    assert session.document.deleted_at is not None  # type: ignore[attr-defined]
+    for name in ("fts", "qdrant"):
+        filt = seen[name]
+        assert filt.workspace_ids == [str(workspace_id)]  # type: ignore[union-attr]
+        assert filt.document_ids == [str(document_id)]  # type: ignore[union-attr]
+
+
+async def test_purge_document_reports_failed_store_without_false_success() -> None:
+    """Q3: a failing store purger reports False (never swallowed as success)."""
+    import uuid
+
+    from ingestion import dedup
+
+    workspace_id, document_id = uuid.uuid4(), uuid.uuid4()
+
+    async def ok_purger(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+        return None
+
+    async def bad_purger(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+        raise RuntimeError("qdrant down")
+
+    class _Scalars:
+        def all(self) -> list[object]:
+            return []
+
+    class _Result:
+        def scalars(self) -> _Scalars:
+            return _Scalars()
+
+    class _FakeSession:
+        def __init__(self) -> None:
+            self.document = type("Doc", (), {"workspace_id": workspace_id})()
+
+        async def get(self, *args: object, **kwargs: object) -> object:
+            return self.document
+
+        async def execute(self, *args: object, **kwargs: object) -> _Result:
+            return _Result()
+
+        async def commit(self) -> None:
+            return None
+
+    session = _FakeSession()
+
+    saved = dict(dedup._STORE_PURGERS)
+    dedup._STORE_PURGERS.clear()
+    dedup.register_store_purger("fts", ok_purger)
+    dedup.register_store_purger("qdrant", bad_purger)
+    try:
+        report = await dedup.purge_document(
+            session, workspace_id=workspace_id, document_id=document_id  # type: ignore[arg-type]
+        )
+    finally:
+        dedup._STORE_PURGERS.clear()
+        dedup._STORE_PURGERS.update(saved)
+
+    assert report == {"postgres": True, "fts": True, "qdrant": False}

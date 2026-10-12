@@ -26,6 +26,8 @@ async def probe(
         async with httpx.AsyncClient(timeout=timeout_seconds) as client:
             try:
                 response = await client.get(url)
+            except httpx.TimeoutException:
+                raise
             except Exception:
                 response = None
             if response is None or response.status_code != 200:

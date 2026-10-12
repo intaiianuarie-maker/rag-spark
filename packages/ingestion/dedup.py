@@ -8,19 +8,41 @@ seam and reports which stores were purged. Original bytes remain in
 
 from __future__ import annotations
 
+import logging
 import uuid
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ingestion.persistence import ChunkRow, Document, DocumentVersion, IngestionJob
 
+if TYPE_CHECKING:
+    from retrieval.interfaces import SearchFilter
+
+logger = logging.getLogger("knowledge_os.ingestion.dedup")
+
 StorePurger = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
 
 #: Store purgers registered by later adapters (M3-001a: qdrant/fts).
 _STORE_PURGERS: dict[str, StorePurger] = {}
+
+
+def build_purge_filter(workspace_id: uuid.UUID, document_id: uuid.UUID) -> SearchFilter:
+    """Q3 tombstone filter: scope a purge to one document in one workspace.
+
+    Factored out so the filter shape (``document_ids=[str(document_id)]`` and
+    ``workspace_ids=[str(workspace_id)]``) is unit-testable without live
+    Qdrant/Postgres; both default store purgers must use this exact filter.
+    """
+    from retrieval.interfaces import SearchFilter
+
+    return SearchFilter(
+        workspace_ids=[str(workspace_id)],
+        document_ids=[str(document_id)],
+    )
 
 
 def register_store_purger(name: str, purger: StorePurger) -> None:
@@ -135,16 +157,15 @@ async def purge_document(
         try:
             from retrieval.adapters.pg_fts import PostgresLexicalStore
             from retrieval.adapters.qdrant_store import QdrantVectorStore
-            from retrieval.interfaces import SearchFilter
 
             async def _purge_fts(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
                 store = PostgresLexicalStore()
-                filt = SearchFilter(workspace_ids=[str(ws_id)], document_ids=[str(doc_id)])
+                filt = build_purge_filter(ws_id, doc_id)
                 await store.delete(query_filter=filt)
 
             async def _purge_qdrant(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
                 qdrant = QdrantVectorStore(collection="knowledge")
-                filt = SearchFilter(workspace_ids=[str(ws_id)], document_ids=[str(doc_id)])
+                filt = build_purge_filter(ws_id, doc_id)
                 await qdrant.delete(collection="knowledge", query_filter=filt)
                 await qdrant.close()
 
@@ -157,6 +178,16 @@ async def purge_document(
         try:
             await purger(workspace_id, document_id)
             report[name] = True
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "store_purge_failed",
+                extra={
+                    "event": "store_purge_failed",
+                    "store": name,
+                    "workspace_id": str(workspace_id),
+                    "document_id": str(document_id),
+                    "error": str(exc),
+                },
+            )
             report[name] = False
     return report

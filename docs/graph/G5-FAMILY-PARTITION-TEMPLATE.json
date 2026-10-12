@@ -1,0 +1,13 @@
+{
+  "__comment__": "dev/holdout assignment by manifest family_id. REQUIRED before any real G5 paired eval. (1) Freeze the selected eligible evaluated family universe in 'evaluated_families' (a subset of docs/graph/G5-DATASET-MANIFEST.json 'family_of' VALUES -- NOT the full 869-family inventory) before scoring; (2) fill 'dev' and 'holdout' (holdout MUST be non-empty) so every evaluated family is assigned to exactly one split with NO overlap between dev and holdout (a family in both is leakage). common_root is a contributor-supplied placeholder (<G5_DATASETS_ROOT>), not a machine-specific absolute path. Validate the frozen universe + partition with the command in docs/graph/G5-GOLD-AND-PARTITION-TEMPLATES.md. This file is intentionally EMPTY (illustrative form); do NOT commit real split assignments, evaluated family lists, or results here.",
+  "manifest": "docs/graph/G5-DATASET-MANIFEST.json",
+  "common_root": "<G5_DATASETS_ROOT>",
+  "evaluated_families": [],
+  "splits": {
+    "dev": [],
+    "holdout": []
+  },
+  "notes": [
+    "<optional human note>"
+  ]
+}

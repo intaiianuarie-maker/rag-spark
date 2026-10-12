@@ -153,6 +153,117 @@ class MemoryGraphStore(GraphStore):
         self._ensure_ws(workspace_id)
         return list(self._communities[workspace_id].values())
 
+    async def tombstone_entity(
+        self, workspace_id: str, entity_id: str
+    ) -> bool:
+        """Mark an entity, its incident edges, and affected communities tombstoned.
+
+        Mirrors the SQLite adapter's behavior: the entity and its incident
+        relationships are removed, and communities referencing them are pruned
+        in-place (summaries regenerated from surviving members) or tombstoned
+        when no entities remain.
+        """
+        self._ensure_ws(workspace_id)
+        if entity_id not in self._entities[workspace_id]:
+            return False
+
+        ws_rels = self._relationships[workspace_id]
+        incident_rel_ids = {
+            rid
+            for rid, rel in ws_rels.items()
+            if rel.source_entity_id == entity_id or rel.target_entity_id == entity_id
+        }
+        del self._entities[workspace_id][entity_id]
+        for rid in incident_rel_ids:
+            del ws_rels[rid]
+
+        self._prune_communities(workspace_id, {entity_id}, incident_rel_ids)
+        return True
+
+    async def tombstone_relationship(
+        self, workspace_id: str, relationship_id: str
+    ) -> bool:
+        """Mark a relationship tombstoned and prune affected communities.
+
+        The source and target entities survive; only the edge and any
+        community summaries referencing it are invalidated.
+        """
+        self._ensure_ws(workspace_id)
+        if relationship_id not in self._relationships[workspace_id]:
+            return False
+        del self._relationships[workspace_id][relationship_id]
+        self._prune_communities(workspace_id, set(), {relationship_id})
+        return True
+
+    def _prune_communities(
+        self,
+        workspace_id: str,
+        tombstoned_entity_ids: set[str],
+        tombstoned_relationship_ids: set[str],
+    ) -> None:
+        """Prune invalidated members from community provenance in-place.
+
+        Mirrors the SQLite adapter's ``_prune_communities``: communities lose
+        tombstoned members; summaries/titles are regenerated from surviving
+        entity names; communities with no surviving entities are tombstoned
+        (soft-deleted) so global retrieval never returns deleted facts.
+        """
+        ws_comms = self._communities[workspace_id]
+        ws_entities = self._entities[workspace_id]
+        for cid in list(ws_comms.keys()):
+            comm = ws_comms[cid]
+            kept_entities = [
+                eid for eid in comm.entity_ids if eid not in tombstoned_entity_ids
+            ]
+            kept_rels = [
+                rid
+                for rid in comm.relationship_ids
+                if rid not in tombstoned_relationship_ids
+            ]
+            if not kept_entities:
+                del ws_comms[cid]
+                continue
+            if kept_entities != comm.entity_ids or kept_rels != comm.relationship_ids:
+                surviving_names = [
+                    ws_entities[eid].name
+                    for eid in kept_entities
+                    if eid in ws_entities
+                ]
+                comm.entity_ids = kept_entities
+                comm.relationship_ids = kept_rels
+                if surviving_names:
+                    comm.title = " + ".join(surviving_names)
+                    comm.summary = "; ".join(surviving_names)
+                else:
+                    # Entity IDs remain in the community but none can be
+                    # loaded — invalidate the community to avoid retaining
+                    # stale summary/title referencing deleted provenance.
+                    del ws_comms[cid]
+
+    async def tombstone_document(self, workspace_id: str, document_id: str) -> int:
+        """Tombstone every entity/edge whose provenance includes document_id.
+
+        Communities referencing the removed nodes are pruned in the same
+        operation (summaries regenerated from surviving members; communities
+        with no surviving entities are invalidated).
+        """
+        self._ensure_ws(workspace_id)
+        count = 0
+        tombstoned_ent_ids: set[str] = set()
+        tombstoned_rel_ids: set[str] = set()
+        for eid in list(self._entities[workspace_id].keys()):
+            if document_id in self._entities[workspace_id][eid].document_ids:
+                tombstoned_ent_ids.add(eid)
+                del self._entities[workspace_id][eid]
+                count += 1
+        for rid in list(self._relationships[workspace_id].keys()):
+            if document_id in self._relationships[workspace_id][rid].document_ids:
+                tombstoned_rel_ids.add(rid)
+                del self._relationships[workspace_id][rid]
+                count += 1
+        self._prune_communities(workspace_id, tombstoned_ent_ids, tombstoned_rel_ids)
+        return count
+
     async def delete_workspace(self, workspace_id: str) -> int:
         total = 0
         if workspace_id in self._entities:

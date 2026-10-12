@@ -12,6 +12,18 @@
 
 ## 1. The Team Roles
 
+**Current user priorities:** dev1 (formerly v1) priority 1 is V1 product
+completion; dev2 (formerly v2) priority 1 is V2 product completion. V3/V4 are
+scheduled only after BOTH V1 and V2 are accepted complete by the coordinator.
+Earlier V4 development assignments are suspended; preserve work already done.
+
+**Standing user instruction:** Codex coordinator at `w4:p17` owns independent
+code review and is the only agent allowed to merge or deploy. All implementation
+agents submit scoped code and verification evidence to the coordinator. They must
+not publish releases, trigger deployment pipelines, or restart production services.
+Role ownership alone is not authorization to deploy the current working tree;
+existing acceptance gates and release authorization still apply.
+
 | Agent | Name / Pane | Role | Primary Responsibilities |
 |---|---|---|---|
 | **Boss / Coordinator** | `boss` (`w4:p1` / `w4:pV`) | Overall technical authority & dispatcher | Owns scope, dispatches tasks, accepts pull/handoff requests, marks tasks DONE. |

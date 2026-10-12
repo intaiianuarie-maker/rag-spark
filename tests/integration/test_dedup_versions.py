@@ -143,6 +143,51 @@ def _is_deleted(document_id: str) -> bool:
     return asyncio.run(run())
 
 
+def _fts_count(document_id: str) -> int:
+    return int(
+        _db_scalar(
+            "SELECT count(*) FROM lexical_docs WHERE document_id = :d", {"d": document_id}
+        )
+    )
+
+
+def _qdrant_count(workspace_id: str, document_id: str) -> int:
+    """Live Qdrant points for one document (Q3: must be zero after delete)."""
+    from qdrant_client.http.models import FieldCondition, Filter, MatchAny
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    async def run() -> int:
+        store = QdrantVectorStore(collection="knowledge")
+        try:
+            points, _ = await store._client.scroll(
+                collection_name="knowledge",
+                scroll_filter=Filter(
+                    must=[
+                        FieldCondition(key="workspace_id", match=MatchAny(any=[workspace_id])),
+                        FieldCondition(key="document_id", match=MatchAny(any=[document_id])),
+                    ]
+                ),
+                limit=100,
+                with_payload=False,
+                with_vectors=False,
+            )
+            return len(points)
+        finally:
+            await store.close()
+
+    return asyncio.run(run())
+
+
+def _search_results(client, token: str, workspace_id: str, query: str, mode: str = "keyword"):
+    response = client.post(
+        f"/v1/workspaces/{workspace_id}/search",
+        json={"query": query, "mode": mode},
+        headers=_auth(token),
+    )
+    assert response.status_code == 200, response.text
+    return response.json()["results"]
+
+
 def _version_count(document_id: str) -> int:
     return int(
         _db_scalar(
@@ -206,6 +251,64 @@ def test_delete_tombstones_and_purges_postgres(client) -> None:
     # A re-upload after deletion is a fresh document, not a dedup hit.
     again = _upload(client, token, workspace, "del.txt", b"to be deleted").json()
     assert again["document_id"] != document_id
+
+
+def test_delete_purges_fts_and_qdrant_and_is_unretrievable(client) -> None:
+    """Q3 deletion lifecycle: tombstone propagates to FTS + Qdrant; zero hits after.
+
+    Uploads uniquely-phrased content, verifies it is indexed and searchable,
+    deletes it, then asserts: chunks gone, ``lexical_docs`` rows gone, Qdrant
+    points gone, keyword search returns zero hits for the deleted document,
+    and the detail read is an honest 404 (tombstone, never served as live).
+    A second (live) document stays fully retrievable, proving the purge was
+    document-scoped and not a workspace wipe.
+    """
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    marker = f"tombstone probe {uuid.uuid4().hex} xylophone quasar"
+    live_marker = f"live control {uuid.uuid4().hex} xylophone quasar"
+
+    doomed = _upload(client, token, workspace, "doomed.txt", marker.encode()).json()
+    _run_job(doomed["job_id"])
+    live = _upload(client, token, workspace, "live.txt", live_marker.encode()).json()
+    _run_job(live["job_id"])
+
+    doomed_id, live_id = doomed["document_id"], live["document_id"]
+    assert _chunk_count(doomed["version_id"]) >= 1
+    assert _fts_count(doomed_id) >= 1
+    assert _qdrant_count(workspace, doomed_id) >= 1
+    pre_ids = [item["document_id"] for item in _search_results(client, token, workspace, marker)]
+    assert doomed_id in pre_ids
+
+    response = client.delete(
+        f"/v1/workspaces/{workspace}/documents/{doomed_id}", headers=_auth(token)
+    )
+    assert response.status_code == 204, response.text
+
+    assert _is_deleted(doomed_id) is True
+    assert _chunk_count(doomed["version_id"]) == 0
+    assert _fts_count(doomed_id) == 0
+    assert _qdrant_count(workspace, doomed_id) == 0
+
+    post_ids = [item["document_id"] for item in _search_results(client, token, workspace, marker)]
+    assert doomed_id not in post_ids
+    assert post_ids == []
+
+    # The live control document is untouched: rows, points, and search all intact.
+    assert _is_deleted(live_id) is False
+    assert _chunk_count(live["version_id"]) >= 1
+    assert _fts_count(live_id) >= 1
+    assert _qdrant_count(workspace, live_id) >= 1
+    live_ids = [
+        item["document_id"] for item in _search_results(client, token, workspace, live_marker)
+    ]
+    assert live_id in live_ids
+
+    detail = client.get(
+        f"/v1/workspaces/{workspace}/documents/{doomed_id}", headers=_auth(token)
+    )
+    assert detail.status_code == 404
+    assert detail.json()["detail"]["error"] == "document_not_found"
 
 
 def test_delete_requires_workspace_access(client) -> None:

@@ -53,9 +53,11 @@ class _FakeOrchestrator(RetrievalOrchestrator):
     def __init__(self, items):
         self.items = items
         self.calls = 0
+        self.last_kwargs: dict = {}
 
     async def retrieve(self, **kwargs):
         self.calls += 1
+        self.last_kwargs = dict(kwargs)
         return list(self.items)
 
 
@@ -618,6 +620,39 @@ async def test_engine_grounds_exact_value_not_partial_numeric() -> None:
     assert result.citations[0].grounding_score == 1.0
 
 
+@pytest.mark.parametrize(
+    "src",
+    [
+        # reporting verb in a conjunction clause after the claim (NOT attribution)
+        "The launch is approved, and Bob responded.",
+        # reporting verb in a subordinate clause after the claim (NOT attribution)
+        "The launch is approved after Bob responded.",
+        # reporting verb after a semicolon clause (NOT attribution)
+        "The launch is approved; Bob responded by email.",
+    ],
+)
+async def test_engine_postclaim_verb_not_attribution_is_grounded(src: str) -> None:
+    """R9: A reporting verb appearing later in the same sentence, in a
+    non-speaker-predicate clause (', and Bob responded', 'after Bob responded',
+    '; Bob responded by email'), is NOT postposed attribution. Frame 4 only
+    checks the first token of the post-claim text — a speaker predicate like
+    ', said Alice' — so distant verbs do not trigger false abstention."""
+    claim = "The launch is approved."
+    assert ExtractiveGrounder().score(claim, src) == 1.0
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    assert result.citations[0].grounding_score == 1.0
+
+
 # --- v1-rereview Q5 P2: cross-language translation is NOT supported by v1 ---
 # Extractive grounding requires the claim text to be a substring of the chunk.
 # A translation's text is in a different language, so it can never be a substring
@@ -654,4 +689,360 @@ async def test_engine_cross_language_translation_abstains(translation: str) -> N
     assert result.confidence.level == ConfidenceLevel.LOW
     # The unverifiable translation must not be echoed to the user as fact.
     assert translation.lower() not in result.answer.lower()
+
+
+# --- v1-rereview Q5 follow-up: attribution, decimal, and span regressions ------
+
+
+@pytest.mark.parametrize(
+    "attribution",
+    [
+        "denied",      # clause-level negation: Alice denied the claim
+        "reported",    # third-party attribution: Alice reported the claim
+        "qualified",   # hedged attribution: Alice qualified the claim
+    ],
+)
+async def test_engine_denied_reported_qualified_attribution_abstains(
+    attribution: str,
+) -> None:
+    """P1: A claim whose verbatim text appears inside a sentence where a third
+    party denies, reports, or qualifies it must NOT be promoted to HIGH.
+    The source is attributing or withholding the claim, not asserting it."""
+    src = f"Alice {attribution} the claim: the launch is approved."
+    claim = "The launch is approved."
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert "launch is approved" not in result.answer.lower()
+
+
+async def test_engine_valid_decimal_not_split() -> None:
+    """P1 positive: The decimal 1.25 stays intact during sentence splitting.
+    The full claim 'The rate is 1.25 percent.' is grounded HIGH."""
+    src = "The rate is 1.25 percent."
+    claim = "The rate is 1.25 percent."
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    assert result.citations[0].grounding_score == 1.0
+
+
+async def test_engine_partial_decimal_value_rejected() -> None:
+    """P1 negative: '25 percent.' is NOT a standalone value of '1.25 percent.'
+    The numeric-boundary guard in the sentence splitter preserves the decimal."""
+    src = "The rate is 1.25 percent."
+    claim = "25 percent."
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert "25 percent" not in result.answer.lower()
+
+
+async def test_engine_citation_span_to_accepted_sentence() -> None:
+    """P2: When the same claim text appears in a negated sentence (rejected) and
+    a clean sentence (accepted), the citation span must point to the accepted
+    sentence, not the first (rejected) occurrence."""
+    src = "It is false that the launch is approved. The launch is approved."
+    claim = "The launch is approved."
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    span = result.citations[0].span
+    # Span must fall within the second sentence (starts at position 41):
+    # "It is false that the launch is approved. " = 41 chars
+    assert span[0] >= 41
+    # The span text must be the exact claim verbatim.
+    assert src[span[0] : span[1]].lower() == "the launch is approved"
+
+
+# --- v1-rereview Q5 r4: structural quotation mode + original-offset spans ------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # colon-introduced attributed content (contested assertion)
+        "Alice challenged the assertion: the launch is approved.",
+        # quoted material attributed to a third party
+        "\u201cThe launch is approved,\u201d said Alice.",
+    ],
+)
+async def test_engine_attributed_quotation_abstains(src: str) -> None:
+    """R4 P1: a verbatim claim that is quoted or colon-introduced attributed
+    content must NOT be promoted to HIGH. The grounder rejects the frame
+    structurally (quotation mark / introducing colon) — a context-preserving
+    quotation mode — rather than an open-ended attribution-verb denylist."""
+    claim = "The launch is approved."
+    assert ExtractiveGrounder().score(claim, src) == 0.0
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert "launch is approved" not in result.answer.lower()
+
+
+async def test_engine_unicode_before_match_citation_slice() -> None:
+    """R4 P2: Unicode before the accepted sentence must not shift the citation
+    span. casefold('Straße') expands to 'strasse' (+1 char); spans must be
+    computed on the original text so the slice is the actual source span."""
+    src = "Straße. The launch is approved."
+    claim = "The launch is approved."
+    # The occurrence starts at index 8 (after "Straße. "), not 9.
+    assert ExtractiveGrounder().locate(claim, src) == (8, 30)
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    span = result.citations[0].span
+    assert span is not None
+    # Citation slice must equal the actual accepted source span.
+    assert src[span[0]:span[1]] == "The launch is approved"
+
+
+async def test_engine_unicode_in_match_citation_slice() -> None:
+    """R4 P2: Unicode *inside* the matched claim must not shift the span end.
+    The citation slice must equal the actual accepted source span, not a
+    casefold-expanded offset."""
+    src = "Die breite Straße ist frei."
+    claim = "Straße ist frei."
+    # The claim occurs at (11, 26) in the original text (ß stays one char).
+    assert ExtractiveGrounder().locate(claim, src) == (11, 26)
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    span = result.citations[0].span
+    assert span is not None
+    assert src[span[0]:span[1]] == "Straße ist frei"
+
+
+# --- v1-rereview Q5 r5: indirect attribution must abstain ----------------------
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # indirect speech: subject + reporting verb + content clause
+        "Alice said the launch is approved.",
+        # comma-fronted attribution: "According to <person>, <claim>"
+        "According to Alice, the launch is approved.",
+        # postposed attribution: "<claim>, said <person>"
+        "The launch is approved, said Alice.",
+        # direct attribution with restored verbs (was false-grounded in R8):
+        "Alice reported the launch is approved.",
+        "Alice noted the launch is approved.",
+    ],
+)
+async def test_engine_indirect_attribution_abstains(src: str) -> None:
+    """R5 P1: indirect-attribution constructions (no quotes, no colon) must
+    NOT be promoted to HIGH. The grounder rejects them structurally — a comma
+    before the claim (fronted attribution) or a reporting verb framing the
+    claim (indirect speech) — as part of the context-preserving contract."""
+    claim = "The launch is approved."
+    assert ExtractiveGrounder().score(claim, src) == 0.0
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert "launch is approved" not in result.answer.lower()
+
+
+@pytest.mark.parametrize(
+    "src",
+    [
+        # temporal phrase + comma is NOT attribution
+        "On Friday, the launch is approved.",
+        # prepositional phrase + comma is NOT attribution (noun "report",
+        # not the reporting verb - "report" was removed from the verb class)
+        "In the report, the launch is approved.",
+        # prepositional phrase + comma is NOT attribution (noun "note",
+        # also removed from the verb class)
+        "In the note, the launch is approved.",
+        # subordinate clause + comma: "responded" is a reporting verb but
+        # it is in a clause introduced by "After" - a subordinator, not
+        # attribution of the claim
+        "After Bob responded, the launch is approved.",
+    ],
+)
+async def test_engine_comma_not_attribution_is_grounded(src: str) -> None:
+    """REREREVIEW-7/8: A comma before the claim is NOT by itself attribution.
+    Temporal/prepositional phrases like 'On Friday, ...' and 'In the report/
+    note, ...' must still be grounded HIGH when the claim is verbatim. A
+    reporting verb in a subordinate clause ('After Bob responded, ...') is also
+    NOT attribution. Frame 3 requires a reporting verb in the text before the
+    comma that does NOT start with a subordinating conjunction; Frame 4 only
+    checks the text immediately adjacent to the claim (after the last comma).
+    Retains negatives for genuine attribution in
+    test_engine_indirect_attribution_abstains above."""
+    claim = "The launch is approved."
+    assert ExtractiveGrounder().score(claim, src) == 1.0
+    items = [make_item(src, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    assert result.citations[0].grounding_score == 1.0
+
+
+# --- G4 wiring: mode passthrough + graph-citation safety ----------------------
+
+
+async def test_engine_answer_defaults_to_hybrid_mode() -> None:
+    """G4 §1b: default /ask (no mode) is byte-identical to today (HYBRID)."""
+    from retrieval.interfaces import RetrievalMode
+
+    llm = _FakeLLM(
+        '{"answer": "Permissions are enforced.", '
+        '"claims": [{"text": "Alpha evidence about permissions", "chunk_ids": ["c-1"]}]}'
+    )
+    engine = _engine(llm)
+    result = await engine.answer(
+        query="what governs access?", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert engine.orchestrator.last_kwargs.get("mode") == RetrievalMode.HYBRID
+
+
+async def test_engine_answer_passes_mode_through_to_orchestrator() -> None:
+    """G4 §1b: explicit mode reaches orchestrator.retrieve(mode=mode)."""
+    from retrieval.interfaces import RetrievalMode
+
+    llm = _FakeLLM(
+        '{"answer": "Permissions are enforced.", '
+        '"claims": [{"text": "Alpha evidence about permissions", "chunk_ids": ["c-1"]}]}'
+    )
+    engine = _engine(llm)
+    await engine.answer(
+        query="what governs access?",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+        mode=RetrievalMode.HYBRID_GRAPH,
+    )
+    assert engine.orchestrator.last_kwargs.get("mode") == RetrievalMode.HYBRID_GRAPH
+
+
+async def test_engine_never_grounds_bare_synthesized_graph_context() -> None:
+    """G4 §2a: a claim is never grounded against the synthesized passage.
+
+    A graph-derived item whose content is ONLY the ``[Knowledge Graph
+    Context]`` passage (no locatable claim span in original chunk text) is
+    dropped by the extractive grounder, so the engine abstains rather than
+    citing synthesized content.
+    """
+    claim = "The launch is approved."
+    items = [
+        make_item(
+            "[Knowledge Graph Context]\nEntities: Launch (EVENT). Relationships: none",
+            1.0,
+            chunk_id="c-graph-1",
+        )
+    ]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-graph-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert ExtractiveGrounder().score(claim, items[0].content) == 0.0
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+
+
+async def test_engine_hydrated_graph_chunk_grounds_normally() -> None:
+    """G4 §2a positive pin: authoritative original-chunk text grounds as usual.
+
+    Graph provenance (``RetrievalMethod.GRAPH``) changes nothing about the
+    grounding rule — a claim verbatim in real chunk text is still accepted.
+    """
+    from retrieval.interfaces import RetrievalMethod
+
+    claim = "The launch is approved."
+    items = [
+        make_item(
+            "Board minutes record the decision. The launch is approved.",
+            1.0,
+            chunk_id="c-graph-1",
+            method=RetrievalMethod.GRAPH,
+        )
+    ]
+    llm = _FakeLLM(
+        json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-graph-1"]}]})
+    )
+    result = await _engine(llm, items=items).answer(
+        query="q",
+        acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"]),
+    )
+    assert result.status == AnswerStatus.ANSWERED
+    assert result.citations[0].chunk_id == "c-graph-1"
 
