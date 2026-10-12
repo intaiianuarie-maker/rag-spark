@@ -23,6 +23,7 @@ from answer.engine import AnswerEngine
 from answer.factory import build_answer_engine
 from answer.models import Answer
 from core.auth import ACLScope, Principal
+from core.errors import ReasonCode, error_detail
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.adapters.litellm_provider import LLMProviderError
 from models.router_config import WorkspaceModelConfig, route
@@ -44,9 +45,15 @@ class AskRequest(BaseModel):
 
 
 def _http_error(exc: ApiError) -> HTTPException:
+    """Map an :class:`ApiError` onto the shared taxonomy envelope.
+
+    T-V1-025: the ``{"error", "message"}`` shape is unchanged and the wire
+    value comes from the canonical registry (``core.errors.error_detail``);
+    unknown codes pass through verbatim, so no caller can be broken here.
+    """
     return HTTPException(
         status_code=exc.status_code,
-        detail={"error": exc.code, "message": exc.message},
+        detail=error_detail(exc.code, exc.message),
     )
 
 
@@ -221,8 +228,10 @@ async def ask(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "error": "llm_unavailable",
-                "message": "The model gateway is unavailable; try again shortly.",
+                **error_detail(
+                    ReasonCode.LLM_UNAVAILABLE,
+                    "The model gateway is unavailable; try again shortly.",
+                ),
                 "cause": str(exc)[:300],
             },
         ) from exc

@@ -105,6 +105,9 @@ const STATUS_LABEL: Record<AnswerStatus, string> = {
   insufficient_evidence: "Insufficient evidence",
   clarification_needed: "Clarification needed",
   unavailable: "Unavailable",
+  // T-V1-025 taxonomy states — labelled, never rendered as a clean answer.
+  degraded: "Degraded (optional capability down)",
+  needs_review: "Needs review",
 };
 
 const STATUS_CLASS: Record<AnswerStatus, string> = {
@@ -113,6 +116,8 @@ const STATUS_CLASS: Record<AnswerStatus, string> = {
   insufficient_evidence: "bg-neutral-100 text-neutral-600 ring-neutral-200 dark:bg-neutral-800 dark:text-neutral-300 dark:ring-neutral-700",
   clarification_needed: "bg-sky-50 text-sky-700 ring-sky-200 dark:bg-sky-900/20 dark:text-sky-300 dark:ring-sky-700/40",
   unavailable: "bg-red-50 text-red-700 ring-red-200 dark:bg-red-900/20 dark:text-red-300 dark:ring-red-700/40",
+  degraded: "bg-amber-50 text-amber-800 ring-amber-200 dark:bg-amber-900/20 dark:text-amber-300 dark:ring-amber-700/40",
+  needs_review: "bg-violet-50 text-violet-700 ring-violet-200 dark:bg-violet-900/20 dark:text-violet-300 dark:ring-violet-700/40",
 };
 
 /** Answer-truth block (status / confidence / limitations) for ONE message. */

@@ -67,25 +67,66 @@ export async function askQuestion(
   );
 }
 
-/* --- TASK-Q0 additive contract (mirrors packages/core/errors.py) ---
- * Purely additive exports; existing payload types above are unchanged.
+/* --- TASK-Q0 additive contract, carried end-to-end by T-V1-025 ---
+ * Single shared taxonomy lives in `packages/core/errors.py`; this file only
+ * MIRRORS it. Purely additive exports; existing payload types above are
+ * unchanged. Locked by tests/contracts/test_error_taxonomy_contract.py — a
+ * drift between these unions and the Python registry fails the build.
  */
 
-/** Answer `status` values — mirror of `packages/answer/models.py` AnswerStatus. */
+/** Answer `status` values — mirror of `packages/core.errors.AnswerStatus`
+ * (re-exported by `packages/answer/models.py`). `degraded` = grounded answer
+ * served with an optional capability down; `needs_review` = content accepted
+ * from a partially-parsed source. */
 export type AnswerStatus =
   | "answered"
   | "partial"
   | "insufficient_evidence"
   | "clarification_needed"
-  | "unavailable";
+  | "unavailable"
+  | "degraded"
+  | "needs_review";
+
+/** Ingestion job `status` values — mirror of `packages/core.errors.JobStatus`
+ * (re-exported by `packages/ingestion/persistence.py`). `ready` remains the
+ * only fully-published state; `degraded`/`partial`/`needs_review` are honest
+ * disclosure states on top of it. */
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "ready"
+  | "failed"
+  | "degraded"
+  | "partial"
+  | "needs_review";
 
 /** Canonical reason codes the ask endpoint may emit in `reason_code`
- * (mirror of the ANSWER subset of `packages/core.errors.ReasonCode`;
- * locked by tests/contracts/test_error_taxonomy_contract.py).
+ * (mirror of the ANSWER subset of `packages/core.errors.ReasonCode`).
  * `reason_code` stays `string | null` on the wire for compatibility. */
 export type AnswerReasonCode =
   | "PARSE_FALLBACK"
   | "EVIDENCE_MISSING"
   | "NO_CLAIMS"
   | "CITATION_INVALID"
-  | "PARTIAL_EVIDENCE";
+  | "PARTIAL_EVIDENCE"
+  | "DEGRADED_RESULT";
+
+/** Backing dependency names — mirror of `packages/core.errors.Dependency`. */
+export type Dependency =
+  | "postgres"
+  | "redis"
+  | "qdrant"
+  | "minio"
+  | "infinity"
+  | "llm_gateway"
+  | "graph_store"
+  | "worker";
+
+/** Enabled capability modes — mirror of `packages/core.errors.ServiceMode`. */
+export type ServiceMode = "search" | "ask" | "ingest" | "graph";
+
+/** Criticality of one dependency in one enabled mode — mirror of
+ * `packages/core.errors.DependencyRequirement`. `required` ⇒ the mode fails
+ * closed (no silent empty results); `optional` ⇒ the mode degrades and
+ * discloses; `unused` ⇒ never probe it for that mode. */
+export type DependencyRequirement = "required" | "optional" | "unused";

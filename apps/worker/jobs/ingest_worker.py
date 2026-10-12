@@ -7,6 +7,7 @@ import logging
 import uuid
 from datetime import UTC, datetime
 
+from core.errors import normalize_code
 from ingestion.persistence import (
     IngestionJob,
     JobStage,
@@ -31,7 +32,11 @@ async def record_failure(
     job = await session.get(IngestionJob, job_id)
     if job is None:
         return
-    job.error_code = exc.code
+    #: T-V1-025: persist through the shared taxonomy registry so DB and the
+    #: job-poll API speak one code-set. ``normalize_code`` is an identity for
+    #: every code the pipeline currently emits (legacy wire values are
+    #: registered as-is), so this changes no stored value today.
+    job.error_code = normalize_code(exc.code)
     job.error_message = (exc.message or "")[:2000]
 
     if exc.retryable and job.attempts < job.max_attempts:

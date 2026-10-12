@@ -14,6 +14,7 @@ from datetime import datetime
 from enum import StrEnum
 
 from core.config import get_settings
+from core.errors import JobStatus as JobStatus  # re-export: single shared definition (T-V1-025)
 from sqlalchemy import (
     DateTime,
     ForeignKey,
@@ -36,13 +37,6 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 class Base(DeclarativeBase):
     """Declarative base for ingestion persistence."""
-
-
-class JobStatus(StrEnum):
-    QUEUED = "queued"
-    RUNNING = "running"
-    READY = "ready"
-    FAILED = "failed"
 
 
 class JobStage(StrEnum):

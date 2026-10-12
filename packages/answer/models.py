@@ -10,15 +10,10 @@ from __future__ import annotations
 
 from enum import StrEnum
 
+from core.errors import (
+    AnswerStatus as AnswerStatus,  # re-export: single shared definition (T-V1-025)
+)
 from pydantic import BaseModel, Field
-
-
-class AnswerStatus(StrEnum):
-    ANSWERED = "answered"
-    PARTIAL = "partial"
-    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
-    CLARIFICATION_NEEDED = "clarification_needed"
-    UNAVAILABLE = "unavailable"
 
 
 class ConfidenceLevel(StrEnum):
