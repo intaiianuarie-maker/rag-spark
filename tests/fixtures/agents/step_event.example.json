@@ -1,0 +1,19 @@
+{
+  "sequence": 1,
+  "step_id": "step-0001",
+  "attempt_id": "att-0001",
+  "action_summary": "Computed 25 * 4 with the calculator tool",
+  "tool_name": "calculator",
+  "tool_input_ref": "tool_inputs/step-0001.json",
+  "tool_output_ref": "tool_outputs/step-0001.json",
+  "status": "succeeded",
+  "error_code": null,
+  "latency_ms": 42.5,
+  "usage": {
+    "prompt_tokens": 120,
+    "completion_tokens": 30,
+    "tool_calls": 1,
+    "cost_usd": null
+  },
+  "timestamp": "2026-10-12T11:00:00+00:00"
+}

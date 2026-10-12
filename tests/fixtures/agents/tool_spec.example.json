@@ -1,0 +1,36 @@
+{
+  "name": "calculator",
+  "version": "3",
+  "description": "Compute arithmetic expressions (e.g. '12 * 45 + 10').",
+  "input_schema": {
+    "type": "object",
+    "properties": {
+      "expression": {
+        "type": "string",
+        "description": "Mathematical expression to evaluate"
+      }
+    },
+    "required": ["expression"],
+    "additionalProperties": false
+  },
+  "result_schema": {
+    "type": "object",
+    "properties": {
+      "result": {"type": "number"}
+    },
+    "required": ["result"],
+    "additionalProperties": false
+  },
+  "tool_class": "read",
+  "permissions": ["workspace:read"],
+  "allowed_resources": ["calculator"],
+  "timeout_s": 5.0,
+  "max_output_bytes": 4096,
+  "retry_policy": {
+    "max_attempts": 1,
+    "initial_backoff_s": 0.0,
+    "backoff_multiplier": 2.0,
+    "max_backoff_s": 30.0,
+    "retryable_error_codes": []
+  }
+}

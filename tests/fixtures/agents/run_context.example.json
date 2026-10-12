@@ -1,0 +1,21 @@
+{
+  "run_id": "run-0001",
+  "workspace_id": "ws-0001",
+  "principal_id": "user-0001",
+  "authz_policy_revision": "pol-0001",
+  "model_policy": {
+    "allowed_models": ["gpt-4o-mini"],
+    "default_model": "gpt-4o-mini",
+    "max_output_tokens": 4096,
+    "temperature": 0.0
+  },
+  "budget": {
+    "max_steps": 10,
+    "max_tokens": 100000,
+    "max_tool_calls": 50,
+    "max_wall_clock_s": 300.0,
+    "max_concurrent_tools": 1
+  },
+  "deadline": "2026-10-12T12:00:00+00:00",
+  "allowed_tools": ["calculator"]
+}
