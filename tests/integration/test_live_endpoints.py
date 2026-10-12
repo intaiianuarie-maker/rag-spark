@@ -2,15 +2,26 @@
 
 Shape assertions always run when the API is up; the reachability assertion
 skips with details when compose is down, so a down stack can never look green.
+
+T-V1-027: `DEPENDENCIES` pins the EXACT `/ready` set — the same literal as
+`tests/fixtures/scripts/m004_ready_degraded.py` and
+`tests/integration/test_boot.py` (stores + `llm_gateway` + `worker`, plus
+`graph_store` only when the graph mode is enabled). Compose never sets
+`GRAPH_MODE`, so the live set is the seven base dependencies.
 """
 
 from __future__ import annotations
+
+import os
 
 import pytest
 
 pytestmark = pytest.mark.integration
 
-DEPENDENCIES = ("postgres", "redis", "qdrant", "minio", "infinity")
+# T-V1-027 — pinned exact set, same expression in all 3 places.
+BASE_DEPENDENCIES = ("postgres", "redis", "qdrant", "minio", "infinity", "llm_gateway", "worker")
+GRAPH_ENABLED = os.environ.get("GRAPH_MODE", "off").strip().lower() not in {"", "off"}
+DEPENDENCIES = BASE_DEPENDENCIES + (("graph_store",) if GRAPH_ENABLED else ())
 
 
 def test_health_is_200_with_service_and_version(api_client) -> None:
@@ -31,16 +42,20 @@ def test_version_endpoint_reports_build_info(api_client) -> None:
     assert "git_sha" in body and "env" in body
 
 
-def test_ready_shape_lists_all_five_dependencies(api_client) -> None:
-    """`/ready` must name postgres/redis/qdrant/minio/infinity whether ok or degraded."""
+def test_ready_shape_lists_every_enabled_dependency(api_client) -> None:
+    """`/ready` must name exactly the pinned set, whether ok or degraded."""
     response = api_client.get("/ready")
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["status"] in {"ok", "degraded"}, body
     assert isinstance(body["ready"], bool), body
     dependencies = body["dependencies"]
+    # Exact set: a new required dependency must be pinned here too (and in the
+    # two sibling contracts) — a silently added or dropped check is a failure.
+    assert set(dependencies) == set(DEPENDENCIES), (
+        f"/ready deps={sorted(dependencies)} expected {sorted(DEPENDENCIES)}"
+    )
     for name in DEPENDENCIES:
-        assert name in dependencies, f"/ready omitted {name}: {sorted(dependencies)}"
         assert dependencies[name]["name"] == name
         assert isinstance(dependencies[name]["reachable"], bool)
 

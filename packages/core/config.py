@@ -62,8 +62,33 @@ class Settings(BaseSettings):
     minio_secure: bool = False
     minio_region: str = "us-east-1"
 
+    # --- Model gateway (probed by /ready, T-V1-027) ---
+    # Base URL of the OpenAI-compatible completion gateway (LiteLLM proxy,
+    # OpenRouter, ...). /ready only ever GETs `<url><readiness_model_health_path>`
+    # — no API key, no completion, no tokens (review1 F3, unblocked by T-V1-027).
+    litellm_url: str = "http://localhost:4000"
+    readiness_model_health_path: str = "/health/liveliness"
+
+    # --- Knowledge graph (mirrors packages/graph/factory.py GRAPH_MODE/GRAPH_DB_PATH) ---
+    # /ready adds `graph_store` exactly when this is an enabled mode
+    # (`rule`/`llm`); any other value except `off` is a config error and reads
+    # red rather than silently dropping the dependency.
+    graph_mode: str = "off"
+    graph_db_path: str = "./.graph/graph.db"
+
     # --- Ops ---
+    # Per-probe transport budget for the store probes (postgres/redis/qdrant/
+    # minio/infinity).
     readiness_timeout_seconds: float = 1.5
+    # Per-probe transport budget for the capability probes (model gateway,
+    # worker consumer, graph store) so a slow external health endpoint cannot
+    # stretch the store budget.
+    readiness_capability_timeout_seconds: float = 2.0
+    # Freshness bound: /ready never reports a result older than this. A probe
+    # that misses the budget is cancelled and reported unreachable ("stale"),
+    # so a hung dependency can neither stall the response nor yield a stale
+    # ready-during-outage answer.
+    readiness_freshness_seconds: float = 5.0
     migrations_on_boot: bool = True
 
     @field_validator("log_level")

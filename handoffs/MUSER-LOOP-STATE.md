@@ -109,6 +109,9 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   judged non-blocking) → DONE.
 - T-V1-019 reviewer: APPROVE (gates correct, commit-before-raise proven, tests adequate,
   all risks non-blocking; 2 harmless undocumented moves noted) → DONE.
+- T-V1-026 reviewer: APPROVE (no silent-empty proven, tracking IDs, fail-closed + re-pins
+  confirmed sound, engine.py extension justified) → DONE. Pre-existing str(exc) surfaces
+  filed as T-V1-051 (not this ticket's debt).
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
