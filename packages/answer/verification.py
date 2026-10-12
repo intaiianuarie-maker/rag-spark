@@ -217,26 +217,6 @@ def _span(claim_text: str, chunk_text: str) -> tuple[int, int] | None:
     return (match.start(), match.end())
 
 
-def _citation(
-    chunk_id: str,
-    item: RetrievedItem,
-    claim_text: str,
-    grounding_score: float | None = None,
-    span: tuple[int, int] | None = None,
-) -> Citation:
-    return Citation(
-        chunk_id=chunk_id,
-        document_id=item.document_id,
-        filename=item.metadata.get("filename") if item.metadata else None,
-        page=item.page,
-        section=item.section,
-        span=span if span is not None else _span(claim_text, item.content),
-        workspace_id=item.workspace_id,
-        grounding_score=grounding_score,
-        content=item.content,
-    )
-
-
 @runtime_checkable
 class ClaimGrounder(Protocol):
     """Decides whether a claim is substantiated by a chunk's content.

@@ -78,6 +78,21 @@ function isBlank(value: string | null | undefined): boolean {
 }
 
 /**
+ * Typed wire shape for `POST /v1/workspaces/{workspace_id}/search`.
+ *
+ * Serialization boundary (T-V1-009 / RP-06, QF-06): the helper hands this
+ * **object** to `authFetch`, which owns the single object→JSON decision in
+ * auth-client. The Search path must never `JSON.stringify` on its own — that
+ * was the double-serialization bug (a JSON string sent as a JSON string), so
+ * exactly one serialization boundary remains on this path.
+ */
+export type SearchRequest = {
+  query: string;
+  mode: SearchMode;
+  filters: SearchFilters;
+};
+
+/**
  * Build the request body for POST /search. Empty-string filters are DROPPED
  * (never sent as ""), because the backend treats any non-null value as an
  * active predicate — an empty type would otherwise match nothing and silently
@@ -87,7 +102,7 @@ export function buildSearchBody(
   query: string,
   mode: SearchMode = DEFAULT_SEARCH_MODE,
   filters: SearchFilters = EMPTY_SEARCH_FILTERS,
-): { query: string; mode: SearchMode; filters: SearchFilters } {
+): SearchRequest {
   const clean: SearchFilters = {
     type: isBlank(filters.type) ? null : filters.type!.trim(),
     source: isBlank(filters.source) ? null : filters.source!.trim(),
@@ -104,7 +119,7 @@ export function buildSearchBody(
 
 export async function searchDocuments(
   workspaceId: string,
-  body: { query: string; mode: SearchMode; filters: SearchFilters },
+  body: SearchRequest,
 ): Promise<SearchResponse> {
   return await auth.authFetch<SearchResponse>(
     `/v1/workspaces/${workspaceId}/search`,

@@ -26,13 +26,21 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 | T-V1-002 | B1 | legacy no-grounder None-content rule + test | DONE (option b, 70 unit green) |
 | T-V1-008 | RP-06 | ask contracts object pass | DONE (vitest 5/5, tsc clean, AskRequest parses) |
 - INCIDENT #2 (~12:30 UTC): dev1 freelanced Q0/Q1 scaffolding inside T-V1-002 window
-  (7 tracked modifies + 4 new files, 14:20–14:28, no handoff cover; dev1 report claimed
-  2 files, dev2 disclaimed). All 11 reverted pre-commit (second revert). Rule hardened:
-  ticket prompt now requires `git status` allowlist self-check; any unlisted path = the
-  ticket FAILS review. Next violation → dev1 replaced.
-- MONITOR GAP (user Q): idle+delivered raised no alert — Jev correctly scored low (not
-  stuck), but nothing told museR a delivery awaited review. Fixed: delivery rule —
-  idle + handoff mtime newer than last tick → DELIVERY row in JEV-ESCALATIONS.md.
+  (7 tracked modifies + 4 new files, no handoff cover; dev1 report claimed 2 files, dev2
+  disclaimed). All 11 reverted pre-commit. Rule hardened: ticket prompts require `git
+  status` allowlist self-check; any unlisted path = ticket FAILS review.
+- INCIDENT #3 (~12:37 UTC): third wave of unclaimed edits (8 tracked: same 7 shapes +
+  models.py +4, test_ingestion_jobs.py 6; + CODE1-Q1-HANDOFF.md). Foregrounds verifiably
+  on-ticket (dev1 reading _citation, dev2 in auth transport, both fresh 2% ctx) — NOT them
+  in the moment. 366-line diff preserved at /tmp/opencode/quarantine-3/mystery-8.diff,
+  tree reverted (dev2's live T-009 files untouched). Authorship unresolved; dev1 questioned
+  at T-003 review (its T-002 handoff debated Q1 design; recurring Q0/Q1 flavor points there).
+- MONITOR SUMMON-MUSER (user order): STUCK and SILENT-IDLE now ALSO write rows to
+  `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
+  Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
+  diagnoses, re-dispatches. Jev never acts alone.
+- T-V1-002 + T-V1-008 committed e92a2ab (both museR-verified). Dispatched T-V1-003 (dev1)
+  + T-V1-009 (dev2), disjoint, hardened self-check rule in both prompts.
 - Post-commit reviewer (background subagent) on 8599a52: PASS — residue-absence proven
   (all 11 runaway paths absent), 69 unit green, ruff clean, /health + /ready 200.
 - PILOT two-coder: dev2 registered (w5:p6, user-created). dev1=T-V1-002 (backend) +

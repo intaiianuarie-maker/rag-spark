@@ -4,16 +4,36 @@
  * Covers the acceptance-critical, pure logic: hybrid-default mode, the
  * empty-filter drop (so the backend never over-narrows), and date-predicate
  * shape validation (exact day or inclusive range).
+ *
+ * T-V1-009 (RP-06, QF-06): the helper emits a request **object**, never a
+ * pre-stringified JSON string, so the Search path has exactly one
+ * serialization boundary (owned by auth-client).
  */
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_SEARCH_MODE,
   EMPTY_SEARCH_FILTERS,
   SEARCH_MODES,
   buildSearchBody,
   isValidDateFilter,
+  searchDocuments,
   type SearchFilters,
 } from "./contracts";
+
+const mocks = vi.hoisted(() => ({
+  authFetch: vi.fn(),
+}));
+
+vi.mock("@/lib/auth-client", () => ({
+  auth: { authFetch: mocks.authFetch },
+}));
+
+const RESPONSE = { results: [], mode: "hybrid" };
+
+beforeEach(() => {
+  mocks.authFetch.mockReset();
+  mocks.authFetch.mockResolvedValue(RESPONSE);
+});
 
 describe("SEARCH_MODES / default", () => {
   it("exposes exactly the three backend modes", () => {
@@ -92,5 +112,89 @@ describe("isValidDateFilter", () => {
     expect(isValidDateFilter("2026-01-01..")).toBe(false);
     expect(isValidDateFilter("2026-01-01-2026-03-31")).toBe(false);
     expect(isValidDateFilter("not-a-date")).toBe(false);
+  });
+});
+
+describe("searchDocuments → authFetch (T-V1-009)", () => {
+  it("passes an object body, not JSON.stringify output", async () => {
+    await searchDocuments("ws-1", buildSearchBody("quarterly report"));
+
+    expect(mocks.authFetch).toHaveBeenCalledTimes(1);
+    const [path, init] = mocks.authFetch.mock.calls[0] as [
+      string,
+      { method: string; body: unknown },
+    ];
+
+    expect(path).toBe("/v1/workspaces/ws-1/search");
+    expect(init.method).toBe("POST");
+    expect(typeof init.body).toBe("object");
+    expect(init.body).not.toBeInstanceOf(String);
+    expect(init.body).toEqual({
+      query: "quarterly report",
+      mode: "hybrid",
+      filters: EMPTY_SEARCH_FILTERS,
+    });
+    // The exact shape backend SearchRequest parses after the single auth-client
+    // stringify: one object, one serialization boundary.
+    expect(JSON.parse(JSON.stringify(init.body))).toEqual({
+      query: "quarterly report",
+      mode: "hybrid",
+      filters: {
+        type: null,
+        source: null,
+        date: null,
+        collection: null,
+        language: null,
+      },
+    });
+  });
+
+  it("emits a plain object from buildSearchBody (never a string)", () => {
+    const body = buildSearchBody("q", "keyword");
+    expect(typeof body).toBe("object");
+    expect(typeof body).not.toBe("string");
+    expect(body).not.toBeInstanceOf(String);
+  });
+
+  it("forwards mode + non-empty filters as object fields", async () => {
+    await searchDocuments(
+      "ws-1",
+      buildSearchBody("q", "semantic", {
+        type: "pdf",
+        source: null,
+        date: "2026-01-01..2026-03-31",
+        collection: null,
+        language: "en",
+      }),
+    );
+
+    const [, init] = mocks.authFetch.mock.calls[0] as [
+      string,
+      { body: unknown },
+    ];
+    expect(init.body).toEqual({
+      query: "q",
+      mode: "semantic",
+      filters: {
+        type: "pdf",
+        source: null,
+        date: "2026-01-01..2026-03-31",
+        collection: null,
+        language: "en",
+      },
+    });
+  });
+
+  it("returns the typed SearchResponse payload unchanged", async () => {
+    mocks.authFetch.mockResolvedValueOnce({ results: [], mode: "keyword" });
+    const res = await searchDocuments("ws-1", buildSearchBody("q", "keyword"));
+    expect(res).toEqual({ results: [], mode: "keyword" });
+  });
+
+  it("still surfaces authFetch failures (error handling preserved)", async () => {
+    mocks.authFetch.mockRejectedValueOnce(new Error("boom"));
+    await expect(searchDocuments("ws-1", buildSearchBody("q"))).rejects.toThrow(
+      "boom",
+    );
   });
 });
