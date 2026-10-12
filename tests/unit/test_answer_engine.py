@@ -1479,3 +1479,218 @@ async def test_t023_engine_abstains_on_hallucinated_900_context_never_sees_summa
     assert result.status == AnswerStatus.ANSWERED
     assert [c.chunk_id for c in result.citations] == ["ch-live"]
     assert result.citations[0].content == _T023_CANONICAL
+
+
+# --- T-V1-024: RO/PT negation preserves commitment (EN/RO/PT fixture) ----------
+# Goal (RP-08 / QF-08): "It is false that the budget is 900" must never support
+# "budget is 900" — in ANY language. The grounder is language-aware: every
+# language contributes a CLOSED commitment class (negation, conditional,
+# reporting verbs) plus the structural attribution frames, and for RO/PT — for
+# which the interim grounder has no clause parser — it additionally abstains
+# unless the claim IS the sentence's whole assertion. That is the conservative
+# side of the ticket's "language-aware context-preserving check OR conservative
+# abstain": every construction the grounder cannot positively model (negation,
+# conditionals, reported speech, qualified quantities) is a non-full-sentence
+# frame and therefore abstains.
+# 12-case fixture: EN+RO+PT x (6 false-frame rejects, 6 positive passes).
+# Cross-language (translation) limits stay DISCLOSED, never scored — see
+# test_t024_cross_language_limit_disclosed_not_scored at the end of this block.
+
+_T024_EN_CLAIM = "the budget is 900 dollars"
+_T024_RO_CLAIM = "bugetul este de 900 de dolari"
+_T024_PT_CLAIM = "o orçamento é de 900 dólares"
+
+#: 6 false frames — 2 per language: clause-level negation + reported speech
+#: (the reported budget-900 bug: a source that REPEATS or REPORTS 900 does not
+#: COMMIT to it, so it can never ground a "budget is 900" claim).
+_T024_FALSE_FRAMES = [
+    ("negation", "en", "It is false that the budget is 900 dollars.", _T024_EN_CLAIM),
+    ("reported-speech", "en", "Alice reported that the budget is 900 dollars.", _T024_EN_CLAIM),
+    ("negation", "ro", "Nu este adevărat că bugetul este de 900 de dolari.", _T024_RO_CLAIM),
+    ("reported-speech", "ro", "Alice a declarat că bugetul este de 900 de dolari.", _T024_RO_CLAIM),
+    ("negation", "pt", "Não é verdade que o orçamento é de 900 dólares.", _T024_PT_CLAIM),
+    ("reported-speech", "pt", "Alice afirmou que o orçamento é de 900 dólares.", _T024_PT_CLAIM),
+]
+
+#: 6 positive passes — 2 per language: a clean asserting sentence must still
+#: ground, so the new guards are not blunt over-abstention.
+_T024_POSITIVES = [
+    ("en", "The budget is 900 dollars.", _T024_EN_CLAIM),
+    ("en", "Alice met Acme. The budget is 900 dollars.", _T024_EN_CLAIM),
+    ("ro", "Alice și Bob au discutat. Bugetul este de 900 de dolari.", _T024_RO_CLAIM),
+    ("ro", "Bugetul este de 900 de dolari.", _T024_RO_CLAIM),
+    ("pt", "O orçamento é de 900 dólares.", _T024_PT_CLAIM),
+    ("pt", "Alice e Bob discutaram. O orçamento é de 900 dólares.", _T024_PT_CLAIM),
+]
+
+
+def test_t024_fixture_shape_is_12_cases_6_reject_6_pass() -> None:
+    """The scored fixture is exactly 12 cases: 6 false-frame rejects (2 per
+    language) and 6 positive passes (2 per language) — the ticket's metric."""
+    assert len(_T024_FALSE_FRAMES) == 6
+    assert len(_T024_POSITIVES) == 6
+    for lang in ("en", "ro", "pt"):
+        assert sum(1 for _, case_lang, _, _ in _T024_FALSE_FRAMES if case_lang == lang) == 2
+        assert sum(1 for case_lang, _, _ in _T024_POSITIVES if case_lang == lang) == 2
+
+
+@pytest.mark.parametrize(
+    ("construction", "lang", "source", "claim"),
+    _T024_FALSE_FRAMES,
+    ids=[f"{lang}-{construction}" for construction, lang, _, _ in _T024_FALSE_FRAMES],
+)
+async def test_t024_false_frame_never_supports_budget_900(
+    construction: str, lang: str, source: str, claim: str
+) -> None:
+    """RP-08/QF-08: a negated or merely reported budget-900 never grounds the
+    "budget is 900" claim — in EN, RO or PT (the reported bug is RO/PT)."""
+    assert ExtractiveGrounder().score(claim, source) == 0.0
+    chunk_id = f"c-t024-{lang}-{construction}"
+    items = [make_item(source, 0.9, chunk_id=chunk_id)]
+    verified, citations = await verify_claims(
+        [Claim(text=claim, chunk_ids=[chunk_id])],
+        items,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [], f"{lang}/{construction}: a false frame must abstain"
+    assert citations == [], f"{lang}/{construction}: no citation may be emitted"
+
+
+@pytest.mark.parametrize(
+    ("construction", "lang", "source", "claim"),
+    _T024_FALSE_FRAMES,
+    ids=[f"{lang}-{construction}" for construction, lang, _, _ in _T024_FALSE_FRAMES],
+)
+async def test_t024_engine_abstains_on_false_frame(
+    construction: str, lang: str, source: str, claim: str
+) -> None:
+    """End-to-end: the same false frames never reach the user as fact."""
+    items = [make_item(source, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]}))
+    result = await _engine(llm, items=items).answer(
+        query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.INSUFFICIENT_EVIDENCE
+    assert result.reason_code == "CITATION_INVALID"
+    assert result.claims == [] and result.citations == []
+    assert result.confidence.level == ConfidenceLevel.LOW
+    assert claim.lower() not in result.answer.lower()
+
+
+@pytest.mark.parametrize(
+    ("lang", "source", "claim"),
+    _T024_POSITIVES,
+    ids=[f"{lang}-{i}" for i, (lang, _, _) in enumerate(_T024_POSITIVES)],
+)
+async def test_t024_positive_still_grounds(lang: str, source: str, claim: str) -> None:
+    """Positive control: a clean asserting sentence still grounds with a
+    source-relative, verbatim span — the new guards do not blunt it."""
+    chunk_id = f"c-t024-pos-{lang}"
+    items = [make_item(source, 0.9, chunk_id=chunk_id)]
+    verified, citations = await verify_claims(
+        [Claim(text=claim, chunk_ids=[chunk_id])],
+        items,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert len(verified) == 1 and verified[0].chunk_ids == [chunk_id]
+    assert len(citations) == 1
+    citation = citations[0]
+    assert citation.grounding_score == 1.0
+    assert citation.span is not None
+    start, end = citation.span
+    assert source[start:end].casefold() == claim.casefold()  # source-relative span
+
+
+@pytest.mark.parametrize(
+    ("lang", "source", "claim"),
+    _T024_POSITIVES,
+    ids=[f"{lang}-{i}" for i, (lang, _, _) in enumerate(_T024_POSITIVES)],
+)
+async def test_t024_engine_answers_positive(lang: str, source: str, claim: str) -> None:
+    """End-to-end positive control: ANSWERED/HIGH with the verbatim citation."""
+    items = [make_item(source, 0.9, chunk_id="c-1")]
+    llm = _FakeLLM(json.dumps({"answer": claim, "claims": [{"text": claim, "chunk_ids": ["c-1"]}]}))
+    result = await _engine(llm, items=items).answer(
+        query="q", acl_scope=ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    )
+    assert result.status == AnswerStatus.ANSWERED, f"{lang} positive must still answer"
+    assert result.confidence.level == ConfidenceLevel.HIGH
+    assert len(result.citations) == 1
+    assert result.citations[0].grounding_score == 1.0
+
+
+@pytest.mark.parametrize(
+    ("case", "source", "claim"),
+    [
+        # conditionals: the antecedent is withheld, never asserted
+        ("conditional-en", "If the budget is 900 dollars, notify Alice.", _T024_EN_CLAIM),
+        (
+            "conditional-ro",
+            "Dacă bugetul este de 900 de dolari, anunță-l pe Alice.",
+            _T024_RO_CLAIM,
+        ),
+        (
+            "conditional-pt",
+            "Caso o orçamento seja de 900 dólares, avise Alice.",
+            "o orçamento seja de 900 dólares",
+        ),
+        # qualified quantities: a hedged value does not commit to the plain one
+        ("quantity-hedge-en", "The budget is about 900 dollars.", "900 dollars"),
+        ("quantity-hedge-ro", "Bugetul este aproximativ 900 de dolari.", "900 de dolari"),
+        ("quantity-hedge-pt", "O orçamento é cerca de 900 dólares.", "900 dólares"),
+        # locale number shapes: a partial number is never a value of its own
+        ("thousands-separator", "The budget is 1,900 dollars.", "900 dollars"),
+        ("decimal-comma", "The budget is 900,5 dollars.", "900"),
+        # fronted attribution ("Potrivit lui Alice, ...", "Segundo Alice, ...")
+        ("fronted-ro", "Potrivit lui Alice, bugetul este de 900 de dolari.", _T024_RO_CLAIM),
+        ("fronted-pt", "Segundo Alice, o orçamento é de 900 dólares.", _T024_PT_CLAIM),
+    ],
+)
+async def test_t024_unsupported_constructions_abstain(
+    case: str, source: str, claim: str
+) -> None:
+    """Conditionals, qualified quantities and fronted attribution abstain in all
+    three languages — the two remaining construction classes the ticket names."""
+    assert ExtractiveGrounder().score(claim, source) == 0.0, f"{case} must abstain"
+
+
+@pytest.mark.parametrize(
+    ("source", "claim"),
+    [
+        # quantity change: 8/9 tokens shared, the value (the whole point) differs
+        ("Bugetul este de 20 de dolari.", "bugetul este de 900 de dolari"),
+        ("O orçamento é de 20 dólares.", "o orçamento é de 900 dólares"),
+        # token-identical role swap: same multiset of words, opposite meaning
+        ("Alice a plătit lui Bob.", "Bob a plătit lui Alice"),
+        ("Alice pagou Bob.", "Bob pagou Alice."),
+    ],
+)
+async def test_t024_no_keyword_counting_pseudo_entailment(source: str, claim: str) -> None:
+    """Reviewer checklist (3): support is never decided by token/keyword
+    overlap. Token-identical or 8/9-overlap contradictions abstain, which an
+    overlap scorer would accept as fully supported."""
+    assert ExtractiveGrounder().score(claim, source) == 0.0
+
+
+@pytest.mark.parametrize(
+    "translation",
+    [
+        "Bugetul este de 900 de dolari.",  # RO rendering of the EN source
+        "O orçamento é de 900 dólares.",  # PT rendering of the EN source
+    ],
+)
+async def test_t024_cross_language_limit_disclosed_not_scored(translation: str) -> None:
+    """DISCLOSED, NOT SCORED: a translation is not a substring of a source in a
+    different language, so the interim extractive mode abstains instead of
+    granting a false HIGH. That is the multilingual release gate, not a v1
+    regression — and it fails in the safe direction only."""
+    items = [make_item("The budget is 900 dollars.", 0.9, chunk_id="c-1")]
+    verified, citations = await verify_claims(
+        [Claim(text=translation, chunk_ids=["c-1"])],
+        items,
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified == [] and citations == []

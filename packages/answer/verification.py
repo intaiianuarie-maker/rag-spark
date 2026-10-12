@@ -44,9 +44,25 @@ denylist: (1) *quoted* — a quotation mark abuts the claim (`"X," said Alice.`)
 (3) *fronted* — a comma precedes it (`According to Alice, X`); and (4)
 *indirect* — a reporting verb frames it as content (`Alice said X`,
 `X, said Alice`). Frames 1-3 are positional; frame 4 uses a *closed* class of
-English reporting verbs, the minimal lexical knowledge that identifies an
-indirect report. Together these preserve the complete attributed context
+reporting verbs per language (English, then Romanian and Portuguese from
+T-V1-024), the minimal lexical knowledge that identifies an indirect report.
+Together these preserve the complete attributed context
 instead of asserting an arbitrary extracted clause as verified fact.
+
+**T-V1-024 — commitment is preserved in RO and PT too.** The commitment
+markers (negation/rejection, conditionals) and the reporting-verb class are
+closed sets *per language*: `"It is false that the budget is 900"`,
+`"Nu este adevărat că bugetul este de 900"` and `"Não é verdade que o
+orçamento é de 900"` all refuse to support the "budget is 900" claim, and a
+reported value ("Alice a declarat că …", "Alice afirmou que …") is never the
+source's own commitment. Because the interim grounder has no RO/PT clause
+parser, those two languages take the **conservative** half of the contract: a
+claim is accepted only when it *is* the whole sentence's assertion, so every
+construction the grounder cannot positively model (negation, conditionals,
+reported speech, qualified quantities) abstains. Quantity qualifiers
+("about / aproximativ / cerca de 900") and locale number shapes (the
+thousands separator in "1,900", the decimal comma in "900,5") are likewise
+never a value of their own.
 Word boundaries prevent partial-numeric sub-matching ("900" vs "1900 dollars").
 Citation spans are computed on the **original** text (case-insensitive
 matching via ``re.IGNORECASE``), never on a ``casefold()`` copy, so offsets
@@ -90,20 +106,61 @@ logger = logging.getLogger("knowledge_os.answer.verification")
 # so "1.25" stays whole instead of becoming "1" + "25".
 _SENTENCE_BOUNDARY = re.compile(r"(?<![0-9])[.!?]+(?:\s+|$)")
 
-# Whole-word, case-insensitive commitment markers for negation and rejection.
-# If a sentence contains the verbatim claim AND any of these tokens, the
-# sentence's commitment to the claim is negated, so we do NOT grant HIGH on it
-# (we may still look at another, clean sentence). This list is deliberately
-# conservative: abstaining on a marked sentence is the safe v1 interim
-# behaviour ("substring occurrence is not factual support"). Attribution /
-# quotation frames are detected structurally by _is_attributed_frame below,
-# not by appending verbs here.
+# ---------------------------------------------------------------------------
+# T-V1-024 — language-aware commitment markers (EN / RO / PT)
+# ---------------------------------------------------------------------------
+# Whole-word, case-insensitive commitment markers, one CLOSED class per
+# language. If a sentence contains the verbatim claim AND any of these tokens,
+# the sentence's commitment to the claim is negated, so we do NOT grant HIGH on
+# it (we may still look at another, clean sentence). The classes stay
+# deliberately conservative: abstaining on a marked sentence is the safe v1
+# interim behaviour ("substring occurrence is not factual support").
+# Attribution / quotation frames are detected structurally by
+# _is_attributed_frame below, never by appending verbs to these classes.
+#
+# The RO/PT classes are the ticket's reported gap: the English-only lists never
+# fired on "Alice a declarat că bugetul este de 900 de dolari." or "Alice
+# afirmou que o orçamento é de 900 dólares.", so a *reported* budget-900 value
+# was grounded as the source's own fact. Each Romance class carries its own
+# negation vocabulary; the two Romance sets are also searched TOGETHER by
+# :func:`_markers_for`, because a cheap hint cannot reliably separate Romanian
+# from Portuguese and a mis-detected hint must only ever cost recall, never
+# correctness.
+
+# English (superset of the pre-T-V1-024 list, unchanged).
+_NEGATION_EN_TERMS = (
+    r"not|no|never|none|nothing|nowhere|neither|nor|without|falsely|"
+    r"denied|denies|deny|denial|refutes|refute|refuted|contradicts|contradict|"
+    r"contradicted|rejected|rejects|reject|refused|refuse|refuses|false|cannot|can't|"
+    r"isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|wouldn't|couldn't|"
+    r"shouldn't|mightn't|mustn't|hasn't|haven't|hadn't"
+)
+
+# Romanian negation / rejection ("nu este adevărat că bugetul este de 900 ...").
+_NEGATION_RO_TERMS = (
+    r"nu|nici|niciodată|niciodata|nimeni|nimic|nicăieri|deloc|fără|fara|"
+    r"fals|falsă|falsa|neadevărat|neadevarat|incorect|eronic|"
+    r"respins|respinge|respinsă|respinsa|contrazice|refuză|refuza|"
+    r"neconfirmat|nejustificat|nedeclarat"
+)
+
+# Portuguese negation / rejection ("Não é verdade que o orçamento é de 900 ...").
+_NEGATION_PT_TERMS = (
+    r"não|nao|nunca|jamais|nada|ninguém|ninguem|nenhum|nenhuma|tampouco|"
+    r"falso|falsa|falsamente|inverídico|inveridico|errado|errada|"
+    r"rejeita|rejeitado|rejeitada|negou|negado|negada|nega|recusa|recusou|contradiz"
+)
+
+_NEGATION_EN = re.compile(rf"\b(?:{_NEGATION_EN_TERMS})\b", re.IGNORECASE)
+_NEGATION_RO = re.compile(rf"\b(?:{_NEGATION_RO_TERMS})\b", re.IGNORECASE)
+_NEGATION_PT = re.compile(rf"\b(?:{_NEGATION_PT_TERMS})\b", re.IGNORECASE)
+# Union used for any RO/PT sentence (see :func:`_markers_for`).
+_NEGATION_ROMANCE = re.compile(
+    rf"\b(?:{_NEGATION_RO_TERMS}|{_NEGATION_PT_TERMS})\b", re.IGNORECASE
+)
+# Backward-compatible superset: every language, searched at once.
 _NEGATION = re.compile(
-    r"\b(?:not|no|never|none|nothing|nowhere|neither|nor|without|falsely|denied|denies|deny|denial|refutes|refute|refuted|contradicts|contradict|contradicted|rejected|rejects|reject|refused|refuse|refuses|false|cannot|can't|"
-    r"isn't|aren't|wasn't|weren't|don't|doesn't|didn't|won't|wouldn't|couldn't|shouldn't|"
-    r"mightn't|mustn't|hasn't|haven't|hadn't|"
-    r"nu|nici|deloc|fals|falsă|respins|respinge|respinsă|contrazice|refuză|"
-    r"não|nunca|jamais|falso|falsa|rejeita|rejeitado|nega|negado|recusa)\b",
+    rf"\b(?:{_NEGATION_EN_TERMS}|{_NEGATION_RO_TERMS}|{_NEGATION_PT_TERMS})\b",
     re.IGNORECASE,
 )
 # Context-preserving attribution frames. A claim is grounded as the source's
@@ -128,11 +185,13 @@ _NEGATION = re.compile(
 # _SUBORDINATOR in Frame 3 (pre-comma text starting with "In") and the
 # proximity check in Frame 4 (reporting verb must be immediately adjacent to
 # the claim, not in a distant clause).
-_QUOTE_CHARS = "\"'\u201c\u201d\u2018\u2019"
+_QUOTE_CHARS = "\"'\u201c\u201d\u2018\u2019\u201e\u00ab\u00bb"
 
-
-_REPORTING_VERB = re.compile(
-    r"\b(?:said|says|saying|tell|tells|told|telling|"
+# Reporting verbs, one CLOSED class per language. RO/PT forms are T-V1-024:
+# "a declarat că", "a spus că", "susține", "afirmou", "disse", "segundo", ...
+# Without them, indirect speech in RO/PT read as the source's own assertion.
+_EN_REPORTING_VERB_TERMS = (
+    r"said|says|saying|tell|tells|told|telling|"
     r"state|states|stated|stating|claim|claims|claimed|claiming|"
     r"write|writes|wrote|written|writing|argue|argues|argued|arguing|"
     r"assert|asserts|asserted|asserting|remark|remarks|remarked|remarking|"
@@ -146,9 +205,37 @@ _REPORTING_VERB = re.compile(
     r"concede|concedes|conceded|conceding|acknowledge|acknowledges|acknowledged|"
     r"warn|warns|warned|warning|challenge|challenges|challenged|challenging|"
     r"deny|denies|denied|denying|refute|refutes|refuted|refuting|"
-    r"according|regarding)\b",
-    re.IGNORECASE,
+    r"according|regarding"
 )
+
+# Romanian reporting verbs (compound tenses: "a declarat", plus the bare stem
+# the participle carries). "potrivit"/"conform" are the RO attribution openers
+# ("Potrivit lui Alice, ...") mirroring EN "according to".
+_RO_REPORTING_VERB_TERMS = (
+    r"declarat|spus|afirmat|afirmă|afirma|susținut|sustinut|susține|sustine|"
+    r"raportat|raportează|raporteaza|menționat|menționează|menționeaza|"
+    r"relatat|relatează|relateaza|scris|scrie|argumentat|argumentă|argumenta|"
+    r"contestat|contestă|contesta|negat|neagă|neaga|confirmat|confirmă|confirma|"
+    r"răspuns|raspuns|răspunde|raspunde|anunțat|anuntat|anunță|anunta|"
+    r"potrivit|conform"
+)
+
+# Portuguese reporting verbs ("Alice afirmou que ...", "segundo Alice, ...").
+_PT_REPORTING_VERB_TERMS = (
+    r"disse|diz|dizem|afirmou|afirma|afirmam|declarou|declara|relatou|relata|"
+    r"mencionou|menciona|escreveu|escreve|argumentou|argumenta|sustentou|sustenta|"
+    r"contestou|contesta|negou|nega|rejeitado|rejeitou|rejeita|confirmou|confirma|"
+    r"respondeu|responde|anunciou|anuncia|segundo|conforme|de acordo com"
+)
+
+_REPORTING_VERB_EN = re.compile(rf"\b(?:{_EN_REPORTING_VERB_TERMS})\b", re.IGNORECASE)
+_REPORTING_VERB_RO = re.compile(rf"\b(?:{_RO_REPORTING_VERB_TERMS})\b", re.IGNORECASE)
+_REPORTING_VERB_PT = re.compile(rf"\b(?:{_PT_REPORTING_VERB_TERMS})\b", re.IGNORECASE)
+_REPORTING_VERB_ROMANCE = re.compile(
+    rf"\b(?:{_RO_REPORTING_VERB_TERMS}|{_PT_REPORTING_VERB_TERMS})\b", re.IGNORECASE
+)
+# Backward-compatible alias: the English closed class (pre-T-V1-024 behaviour).
+_REPORTING_VERB = _REPORTING_VERB_EN
 
 # Words that introduce subordinate clauses or prepositional phrases before a
 # comma ("After Bob responded, X", "In the note, X", "On Friday, X"). When
@@ -158,12 +245,21 @@ _REPORTING_VERB = re.compile(
 _SUBORDINATOR = re.compile(
     r"^\s*(?:after|although|as|because|before|even|if|in|on|since|though|"
     r"unless|until|when|where|whether|while|whereas|wherever|whenever|"
-    r"however|therefore|despite|although|whereupon)\b",
+    r"however|therefore|despite|although|whereupon|"
+    # T-V1-024: RO/PT subordinators + prepositions ('Dacă bugetul ..., ...',
+    # 'Se o orçamento ..., ...', 'Em caso de ..., ...') are context-setting,
+    # not attribution openers.
+    r"dacă|daca|după|dupa|prin|între|intre|până|pana|"
+    r"se|caso|em|por|desde|para|com|através|atraves)\b",
     re.IGNORECASE,
 )
 
 
-def _is_attributed_frame(sentence_text: str, match: re.Match) -> bool:
+def _is_attributed_frame(
+    sentence_text: str,
+    match: re.Match,
+    reporting_verb: re.Pattern[str] | None = None,
+) -> bool:
     """Return True when the verbatim claim sits inside an attribution frame
     (quoted, colon-introduced, comma-fronted, or indirect speech) instead of
     being the sentence's own assertion. See the frame notes above.
@@ -174,7 +270,13 @@ def _is_attributed_frame(sentence_text: str, match: re.Match) -> bool:
     verb must be *syntactically connected* to the claim: a subordinating
     conjunction or preposition before the comma ('After Bob responded, X',
     'In the note, X') does NOT count as attribution.
+
+    ``reporting_verb`` is the language-routed closed class to test with
+    (:func:`_markers_for`): the English class for EN sentences, the RO+PT union
+    for a Romanian or Portuguese one ("Alice a declarat că X", "Alice afirmou
+    que X"). Defaults to the English class for direct callers.
     """
+    verb_class = reporting_verb if reporting_verb is not None else _REPORTING_VERB
     start, end = match.start(), match.end()
     before = sentence_text[:start]
     after = sentence_text[end:]
@@ -195,7 +297,7 @@ def _is_attributed_frame(sentence_text: str, match: re.Match) -> bool:
     if "," in before:
         last_comma_idx = before.rfind(",")
         pre_comma = before[:last_comma_idx]
-        if _REPORTING_VERB.search(pre_comma) and not _SUBORDINATOR.match(pre_comma):
+        if verb_class.search(pre_comma) and not _SUBORDINATOR.match(pre_comma):
             return True
     # 4. Indirect speech: a reporting verb is *immediately adjacent* to the claim
     #    ('Alice said X', 'X, said Alice'). For `before`, only check the text
@@ -208,17 +310,151 @@ def _is_attributed_frame(sentence_text: str, match: re.Match) -> bool:
     _after_stripped = after.lstrip(" \t,;:." + _QUOTE_CHARS + "!?\u2014-")
     _after_tokens = _after_stripped.split()
     _after_first = _after_tokens[0] if _after_tokens else ""
-    if _REPORTING_VERB.search(_before_adj) or (
-        _after_first and _REPORTING_VERB.search(_after_first)
+    if verb_class.search(_before_adj) or (
+        _after_first and verb_class.search(_after_first)
     ):
         return True
     return False
 
 
-_CONDITIONAL = re.compile(
-    r"\b(?:if|unless|whether|might|may|could|would|should|must|optional|provided|"
-    r"assuming|given that|provided that|as long as)\b"
+# --- T-V1-024: language-aware routing + conservative Romance abstain -----------
+
+# Cheap, closed-set language hints. This is NOT a language identifier: it only
+# has to answer "is this sentence English, or is it Romanian/Portuguese?".
+# Romanian and Portuguese share too many ASCII stopwords ("de", "este", "o")
+# to be separated reliably here, so both map to the single "romance" family and
+# are then handled by the UNION of the RO and PT closed classes — a
+# mis-detected hint may cost recall, never correctness. Diacritics carry most
+# of the signal (ă â î ș ț for RO, ã õ ç for PT) plus a handful of
+# unmistakable function words; ASCII-only words that are also English ("in",
+# "as", "no") are deliberately NOT used.
+_RO_HINT = re.compile(
+    r"[\u0103\u00e2\u00ee\u0219\u021b\u015f\u0163]"
+    r"|\b(?:nu|nici|și|si|să|sa|că|ca|este|sunt|sunteți|sunteti|bugetul|lansarea|"
+    r"pentru|foarte|aprobat|aprobată|aprobata|anunță|anunta|fără|fara)\b",
+    re.IGNORECASE,
 )
+_PT_HINT = re.compile(
+    r"[\u00e3\u00f5\u00e7]"
+    r"|\b(?:não|nao|são|sao|está|esta|estão|estao|você|voce|também|tambem|"
+    r"orçamento|orcamento|dólares|dolares|através|atraves|nunca)\b",
+    re.IGNORECASE,
+)
+
+# Quantity qualifiers: the value is hedged/approximate, so an unqualified claim
+# ("900 dollars") is NOT what the source commits to ("about 900 dollars").
+# Closed class, EN+RO+PT; applied ONLY to digit-bearing claims (a quantity),
+# which keeps prose such as "evidence about permissions" out of its scope.
+_APPROXIMATION = re.compile(
+    r"\b(?:about|around|approximately|approx\.?|circa|roughly|nearly|over|under|"
+    r"up to|at least|at most|more than|less than|estimated|est\.?)\b"
+    r"|\b(?:aproximativ|aprox\.?|circa|în jur de|in jur de|cam|peste|sub|"
+    r"mai mult de|mai puțin de|mai putin de|undeva la|evaluat|evaluată|evaluata)\b"
+    r"|\b(?:aproximadamente|cerca de|por volta de|em torno de|mais de|menos de|"
+    r"acima de|abaixo de|uns|umas|estimado|estimada)\b",
+    re.IGNORECASE,
+)
+
+
+def _is_romance(text: str) -> bool:
+    """True when ``text`` carries a Romanian or Portuguese hint."""
+    return bool(_RO_HINT.search(text) or _PT_HINT.search(text))
+
+
+def _markers_for(
+    text: str,
+) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
+    """Return the (negation, conditional, reporting-verb) classes for ``text``.
+
+    English sentences keep the pre-T-V1-024 English classes; a Romanian or
+    Portuguese sentence gets the RO+PT union of classes so that a hint that cannot
+    tell the two apart still recognises both vocabularies.
+    """
+    if _is_romance(text):
+        return (_NEGATION_ROMANCE, _CONDITIONAL_ROMANCE, _REPORTING_VERB_ROMANCE)
+    return (_NEGATION_EN, _CONDITIONAL_EN, _REPORTING_VERB_EN)
+
+
+def _squash(text: str) -> str:
+    """Whitespace-collapsed, case-folded form used only for equality checks."""
+    return re.sub(r"\s+", " ", text).strip().casefold()
+
+
+def _is_whole_sentence_assertion(sentence_text: str, claim_norm: str) -> bool:
+    """True when ``claim_norm`` *is* the sentence's assertion, clause and all.
+
+    RO/PT have no clause-boundary parser in the interim grounder, so every
+    construction that is NOT a bare assertion — negation ("Nu este adevărat
+    că bugetul este de 900"), conditionals ("Dacă bugetul este de 900, ..."),
+    reported speech ("Alice a declarat că bugetul este de 900"), qualified
+    quantities ("Aproximativ 900 de dolari") — arrives as a *fragment* of the
+    sentence. Accepting only whole-sentence claims is therefore the
+    conservative, context-preserving rule for those two languages: anything
+    the grounder cannot positively model abstains instead of being asserted.
+    """
+    sentence = _squash(sentence_text).rstrip(".,;:!?\u201d\u00bb\"'")
+    return bool(sentence) and sentence == _squash(claim_norm)
+
+
+def _sentence_asserts(sentence_raw: str, match: re.Match, claim_norm: str) -> bool:
+    """True when ``sentence_raw`` commits to ``claim_norm`` as its own fact.
+
+    T-V1-024's context-preserving commitment check, run per candidate sentence:
+
+    1. the sentence carries no negation/rejection marker of its own language
+       ("It is false that X", "Nu este adevărat că X", "Não é verdade que X");
+    2. it carries no conditional marker ("If X ...", "Dacă X ...", "Caso X ...");
+    3. a quantified claim is not hedged ("about 900", "aproximativ 900",
+       "cerca de 900");
+    4. the claim is not quoted / colon-fronted / comma-fronted / indirect
+       speech, using the reporting-verb class of its own language;
+    5. for RO/PT only, the claim IS the sentence's whole assertion — the
+       interim grounder has no RO/PT clause parser, so any construction it
+       cannot positively model (negation, conditionals, reported speech,
+       qualified quantities) is a non-full-sentence frame and abstains.
+
+    Every branch abstains (never asserts): a substring occurrence inside a
+    marked sentence is not factual support. This is a closed, language-routed
+    rule set — not token counting and not a keyword-similarity score.
+    """
+    folded = sentence_raw.casefold()
+    negation, conditional, reporting_verb = _markers_for(sentence_raw)
+    if negation.search(folded) or conditional.search(folded):
+        return False
+    if _APPROXIMATION.search(folded) and any(ch.isdigit() for ch in claim_norm):
+        # A hedged quantity does not commit to the plain number.
+        return False
+    if _is_attributed_frame(sentence_raw, match, reporting_verb):
+        return False
+    if _is_romance(sentence_raw) and not _is_whole_sentence_assertion(
+        sentence_raw, claim_norm
+    ):
+        return False
+    return True
+
+
+_CONDITIONAL_EN_TERMS = (
+    r"if|unless|whether|might|may|could|would|should|must|optional|provided|"
+    r"assuming|given that|provided that|as long as"
+)
+_CONDITIONAL_RO_TERMS = (
+    r"dacă|daca|ar putea|presupunând|presupunand|cu condiția|cu conditia|"
+    r"atâta timp cât|atata timp cat|în cazul|in cazul|condiția|conditia|eventual|"
+    r"altfel|în funcție de|in functie de"
+)
+_CONDITIONAL_PT_TERMS = (
+    r"se|caso|desde que|contanto que|supondo|presupondo|em caso de|para o caso de|"
+    r"sendo|caso seja|vamos dizer|digamos"
+)
+
+_CONDITIONAL_EN = re.compile(rf"\b(?:{_CONDITIONAL_EN_TERMS})\b", re.IGNORECASE)
+_CONDITIONAL_RO = re.compile(rf"\b(?:{_CONDITIONAL_RO_TERMS})\b", re.IGNORECASE)
+_CONDITIONAL_PT = re.compile(rf"\b(?:{_CONDITIONAL_PT_TERMS})\b", re.IGNORECASE)
+_CONDITIONAL_ROMANCE = re.compile(
+    rf"\b(?:{_CONDITIONAL_RO_TERMS}|{_CONDITIONAL_PT_TERMS})\b", re.IGNORECASE
+)
+# Backward-compatible alias (pre-T-V1-024 English conditional class).
+_CONDITIONAL = _CONDITIONAL_EN
 
 
 def _span(claim_text: str, chunk_text: str) -> tuple[int, int] | None:
@@ -286,10 +522,32 @@ class ExtractiveGrounder:
     conditionally withholds, or attributes the claim is not trusted (we still
     accept a *different*, clean sentence of the same chunk).
 
+    **T-V1-024 — language-aware commitment (EN / RO / PT).** The negation,
+    conditional and reporting-verb markers above are one *closed class per
+    language*, and a cheap hint routes a sentence to its own class (a
+    Romanian or Portuguese sentence gets the union of both Romance sets, so a
+    hint that cannot separate them can only cost recall, never correctness):
+    a Romanian or Portuguese source therefore preserves commitment exactly
+    like an English one — "Nu este adevărat că bugetul este de 900" and
+    "Não é verdade que o orçamento é de 900" refuse the "budget is 900"
+    claim, and a reported value ("Alice a declarat că …", "Alice afirmou que
+    …") is not the source's commitment. Since the interim grounder has no
+    RO/PT clause parser, those two languages take the conservative half of
+    the contract: **the claim must be the whole sentence's assertion**
+    (:func:`_is_whole_sentence_assertion`), so any construction it cannot
+    positively model — negation, conditionals, reported speech, qualified
+    quantities — arrives as a sentence fragment and abstains. A hedged
+    quantity ("about / aproximativ / cerca de 900") never commits to the
+    plain number, and the numeric boundary guards reject a partial value
+    across locale separators ("900" inside "1,900" or "900,5").
+
     Together these reject the support-vs-contradiction failures that a
     token-overlap or bare-substring scorer cannot see (negation stripping,
     entity/role swap, quantity/date changes, clause-level negation,
-    conditionals, quoted/attributed speech, partial-numeric sub-values). Claims
+    conditionals, quoted/attributed speech, partial-numeric sub-values) — and
+    nothing here is decided by keyword or token *counting*: the checks are
+    closed-class markers plus containment, and every one of them abstains
+    rather than infers support. Claims
     that cannot be verified by these checks abstain at ``INSUFFICIENT_EVIDENCE``
     rather than risk a false ``HIGH``.
 
@@ -307,6 +565,9 @@ class ExtractiveGrounder:
     Limitations (disclosed, **not** shipped as passes):
     - Paraphrases are not validated (the claim must be a verbatim sentence
       fragment; paraphrase is a separate semantic-release gate).
+    - RO/PT clause-level extraction: a claim must be the whole sentence's
+      assertion, so a clean *embedded* RO/PT clause abstains (T-V1-024's
+      conservative trade — recall is given up, never correctness).
     - Cross-language: a translation's text is not a substring of a source in a
       different language, so EN→RO/PT abstains — the multilingual release gate,
       not a v1 extractive limitation.
@@ -330,12 +591,14 @@ class ExtractiveGrounder:
         """Shared sentence-level grounding helper.
 
         Returns (accepted, span) where accepted is True only when the claim
-        appears verbatim (case-insensitive, word-bounded, with a numeric
-        boundary guard against partial decimal sub-matching like 25 in 1.25)
-        inside a single sentence that *asserts* the claim: the sentence does
-                not negate or condition it, and the claim is not quoted, colon-,
-        comma-fronted, or indirect-speech attributed content. span is the
-        (start, end) offsets
+        appears verbatim (case-insensitive, word-bounded, with numeric
+        boundary guards against partial sub-matching like 25 in 1.25 or 900 in
+        1,900 / 900,5) inside a single sentence that *asserts* the claim: the
+        sentence does not negate or condition it, does not hedge the quantity,
+        the claim is not quoted, colon-, comma-fronted, or indirect-speech
+        attributed content, and — for RO/PT, which the interim grounder cannot
+        parse at clause level — the claim IS the sentence's whole assertion
+        (see :func:`_sentence_asserts`). span is the (start, end) offsets
         of the claim text within chunk_content, measured in the **original**
         text (case-insensitive matching uses ``re.IGNORECASE`` on the original
         string, never ``casefold()``, so offsets stay valid even when
@@ -345,13 +608,20 @@ class ExtractiveGrounder:
         if not claim_norm:
             return (False, None)
 
-        # Pattern: (?<![0-9.]) prevents matching within decimal numbers
-        # (e.g. 25 in 1.25); word boundaries prevent partial word matches
-        # (e.g. 900 in 1900). Substring matching allows partial-sentence
-        # claims like Alpha evidence in Alpha evidence about permissions.
-        # re.IGNORECASE on the ORIGINAL text keeps match offsets in original
-        # coordinates.
-        pattern = re.compile(r"(?<![0-9.])\b" + re.escape(claim_norm) + r"\b", re.IGNORECASE)
+        # Pattern: the lookbehind prevents the claim from starting inside a
+        # number — as a decimal tail (25 in 1.25) or as a thousands-group tail
+        # (900 in 1,900: "," is not a word char, so \b alone lets it through).
+        # The lookahead prevents it from ending where the source keeps writing
+        # the number with a separator (900 in "900,5"), which is how RO/PT
+        # decimal commas hide a different value. Word boundaries still prevent
+        # partial word matches (900 in 1900). Substring matching allows
+        # partial-sentence claims like Alpha evidence in Alpha evidence about
+        # permissions. re.IGNORECASE on the ORIGINAL text keeps match offsets
+        # in original coordinates.
+        pattern = re.compile(
+            r"(?<![0-9.,])\b" + re.escape(claim_norm) + r"\b(?![.,][0-9])",
+            re.IGNORECASE,
+        )
 
         pos = 0
         for m in _SENTENCE_BOUNDARY.finditer(chunk_content):
@@ -363,27 +633,15 @@ class ExtractiveGrounder:
             match = pattern.search(sentence_raw)
             if not match:
                 continue
-            folded = sentence_raw.casefold()
-            if (
-                _NEGATION.search(folded)
-                or _CONDITIONAL.search(folded)
-                or _is_attributed_frame(sentence_raw, match)
-            ):
-                continue
-            # Offsets are relative to sentence_raw; map back to chunk_content.
-            return (True, (sentence_start + match.start(), sentence_start + match.end()))
+            if _sentence_asserts(sentence_raw, match, claim_norm):
+                # Offsets are relative to sentence_raw; map back to chunk_content.
+                return (True, (sentence_start + match.start(), sentence_start + match.end()))
 
         sentence_raw = chunk_content[pos:]
         if sentence_raw.strip():
             match = pattern.search(sentence_raw)
-            if match:
-                folded = sentence_raw.casefold()
-                if not (
-                    _NEGATION.search(folded)
-                    or _CONDITIONAL.search(folded)
-                    or _is_attributed_frame(sentence_raw, match)
-                ):
-                    return (True, (pos + match.start(), pos + match.end()))
+            if match and _sentence_asserts(sentence_raw, match, claim_norm):
+                return (True, (pos + match.start(), pos + match.end()))
 
         return (False, None)
 
