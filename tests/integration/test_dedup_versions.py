@@ -428,3 +428,145 @@ def test_cross_workspace_dedup_is_isolated(client) -> None:
     assert _chunk_count(a["version_id"]) >= 1
     assert _chunk_count(b["version_id"]) >= 1
 
+
+def _graph_live_rows(workspace_id: str, document_id: str) -> int:
+    """Live (non-tombstoned) graph rows whose provenance names this document."""
+    import json
+    import sqlite3
+
+    from graph.factory import graph_db_path
+
+    conn = sqlite3.connect(graph_db_path())
+    try:
+        total = 0
+        for table in ("graph_entities", "graph_relationships"):
+            payloads = conn.execute(
+                "SELECT payload FROM " + table + " WHERE workspace_id=? AND tombstoned=0",
+                (workspace_id,),
+            ).fetchall()
+            total += sum(
+                1
+                for (payload,) in payloads
+                if document_id in json.loads(payload).get("document_ids", [])
+            )
+        return total
+    finally:
+        conn.close()
+
+
+def _seed_graph_rows(workspace_id: str, document_id: str) -> int:
+    """Insert two entities + one relationship bound to the document (G2 store)."""
+    from graph.factory import graph_db_path
+    from graph.interfaces import Entity, Relationship
+    from graph.sqlite_store import SQLiteGraphStore
+
+    suffix = uuid.uuid4().hex[:12]
+    entity = Entity(
+        id=f"ent-{suffix}",
+        name=f"Late Toggle {suffix}",
+        workspace_id=workspace_id,
+        document_ids=[document_id],
+    )
+    peer = Entity(
+        id=f"ent-peer-{suffix}",
+        name=f"Late Toggle Peer {suffix}",
+        workspace_id=workspace_id,
+        document_ids=[document_id],
+    )
+    rel = Relationship(
+        id=f"rel-{suffix}",
+        source_entity_id=entity.id,
+        target_entity_id=peer.id,
+        workspace_id=workspace_id,
+        document_ids=[document_id],
+    )
+
+    async def run() -> None:
+        store = SQLiteGraphStore(graph_db_path())
+        try:
+            await store.upsert_entities(workspace_id, [entity, peer])
+            await store.upsert_relationships(workspace_id, [rel])
+        finally:
+            store.close()
+
+    asyncio.run(run())
+    return 3
+
+
+def test_late_graph_mode_toggle_still_purges_graph_rows(
+    client, monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    """T-V1-007 (RP-04-lite, QF-04): re-evaluate graph purger registration every call.
+
+    Purge once with ``GRAPH_MODE=off`` — that first purge lazily registers
+    fts/qdrant, so the registry is non-empty from then on. Toggling
+    ``GRAPH_MODE=rule`` on *late* must still register the graph purger on the
+    next delete: the second document's graph rows are tombstoned and the
+    response stays a clean 204 (207 semantics unchanged — nothing failed). A
+    counting spy pins exactly one graph purge per delete (no double-purge),
+    and toggling the mode back off unregisters the purger again so a stale
+    closure never fires on the third document (still 204, rows untouched).
+    """
+    from graph.sqlite_store import SQLiteGraphStore
+    from ingestion import dedup
+
+    monkeypatch.setenv("GRAPH_DB_PATH", str(tmp_path / "graph.db"))
+    monkeypatch.setenv("GRAPH_MODE", "off")
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+
+    # Phase 1 — graph OFF: this delete registers fts/qdrant (registry becomes
+    # non-empty) but must never register the graph purger.
+    first = _upload(client, token, workspace, "late-toggle-1.txt", b"first document").json()
+    first_response = client.delete(
+        f"/v1/workspaces/{workspace}/documents/{first['document_id']}",
+        headers=_auth(token),
+    )
+    assert first_response.status_code == 204, first_response.text
+    assert "graph" not in dedup.registered_stores()
+
+    # Phase 2 — seed graph rows for a second document (as the rule-mode
+    # extractor would persist them), still with the toggle off.
+    second = _upload(client, token, workspace, "late-toggle-2.txt", b"second document").json()
+    second_id = second["document_id"]
+    assert _seed_graph_rows(workspace, second_id) == 3
+    assert _graph_live_rows(workspace, second_id) == 3
+
+    # Phase 3 — LATE toggle on: registration must be re-evaluated on this
+    # call even though the registry has been non-empty since phase 1.
+    monkeypatch.setenv("GRAPH_MODE", "rule")
+    purges: list[tuple[str, str]] = []
+    real_tombstone = SQLiteGraphStore.tombstone_document
+
+    async def _counting_tombstone(self, ws_id: str, doc_id: str) -> int:
+        purges.append((ws_id, doc_id))
+        return await real_tombstone(self, ws_id, doc_id)
+
+    monkeypatch.setattr(SQLiteGraphStore, "tombstone_document", _counting_tombstone)
+
+    response = client.delete(
+        f"/v1/workspaces/{workspace}/documents/{second_id}", headers=_auth(token)
+    )
+    assert response.status_code == 204, response.text  # 204/207 semantics unchanged
+    assert "graph" in dedup.registered_stores()  # late registration took effect
+    assert purges == [(workspace, second_id)]  # exactly one purge, no double-purge
+    assert _graph_live_rows(workspace, second_id) == 0  # graph rows tombstoned
+
+    # Phase 4 — toggle back OFF: the purger must unregister again so a stale
+    # graph purge never fires; the third document's graph rows survive its
+    # graph-off delete and the status stays 204.
+    third = _upload(client, token, workspace, "late-toggle-3.txt", b"third document").json()
+    third_id = third["document_id"]
+    assert _seed_graph_rows(workspace, third_id) == 3
+    monkeypatch.setenv("GRAPH_MODE", "off")
+
+    purges.clear()
+    third_response = client.delete(
+        f"/v1/workspaces/{workspace}/documents/{third_id}", headers=_auth(token)
+    )
+    assert third_response.status_code == 204, third_response.text
+    assert "graph" not in dedup.registered_stores()
+    assert purges == []  # no stale graph purge after the toggle back off
+    assert _graph_live_rows(workspace, third_id) == 3  # rows untouched
+

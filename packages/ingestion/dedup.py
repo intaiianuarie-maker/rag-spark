@@ -170,16 +170,6 @@ async def purge_document(
 
             register_store_purger("fts", _purge_fts)
             register_store_purger("qdrant", _purge_qdrant)
-
-            if os.environ.get("GRAPH_MODE", "off").strip().lower() in ("rule", "llm"):
-                from graph.factory import graph_db_path
-                from graph.sqlite_store import SQLiteGraphStore
-
-                async def _purge_graph(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
-                    gstore = SQLiteGraphStore(graph_db_path())
-                    await gstore.tombstone_document(str(ws_id), str(doc_id))
-
-                register_store_purger("graph", _purge_graph)
         except Exception as exc:
             # Registration failure must never read as a clean purge: the
             # vector/lexical stores were NOT purged, so mark them failed in
@@ -195,6 +185,41 @@ async def purge_document(
             )
             report.setdefault("fts", False)
             report.setdefault("qdrant", False)
+
+    # T-V1-007 (RP-04-lite, QF-04): the GRAPH_MODE check is re-evaluated on
+    # EVERY call, not only when the registry is empty, so a late
+    # ``GRAPH_MODE=rule`` toggle still purges graph rows on the next delete
+    # (the registry is non-empty from the first purge onwards, which used to
+    # freeze the graph decision made at that moment). Registration is keyed
+    # by name, so re-registering is idempotent — exactly one purge per store
+    # per call, never a double-purge. Toggling the mode back off unregisters
+    # the purger again so a stale closure never fires.
+    try:
+        if os.environ.get("GRAPH_MODE", "off").strip().lower() in ("rule", "llm"):
+            from graph.factory import graph_db_path
+            from graph.sqlite_store import SQLiteGraphStore
+
+            async def _purge_graph(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+                gstore = SQLiteGraphStore(graph_db_path())
+                await gstore.tombstone_document(str(ws_id), str(doc_id))
+
+            register_store_purger("graph", _purge_graph)
+        else:
+            _STORE_PURGERS.pop("graph", None)
+    except Exception as exc:
+        # Same no-false-204 rule as the fts/qdrant seam: a graph purge that
+        # cannot even be registered is reported as a failed store, never
+        # silently dropped from the per-store report.
+        logger.warning(
+            "graph_purger_registration_failed",
+            extra={
+                "event": "graph_purger_registration_failed",
+                "workspace_id": str(workspace_id),
+                "document_id": str(document_id),
+                "error": str(exc),
+            },
+        )
+        report.setdefault("graph", False)
 
     for name, purger in _STORE_PURGERS.items():
         try:

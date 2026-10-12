@@ -63,6 +63,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   Trap: zero changes since arming — tree quiet.
 - T-V1-006 reviewer: APPROVE (1+/1- rename, 11 green, pycache confirmed git-ignored) → DONE.
   T-V1-007 dispatched (dev1).
+- T-V1-011 reviewer: APPROVE (handoffs-only scope, 2/2 browser+backend 200s re-verified live,
+  HEAD-move disclosed + verified empty, timeout flag correctly deferred to T-041) → DONE.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
