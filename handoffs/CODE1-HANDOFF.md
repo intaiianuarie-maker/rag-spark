@@ -54,3 +54,12 @@ REUSED: none
 BUILT: docstring-only rewrite (no reuse fit; no custom logic)
 VERIFY: `grep -n 'cannot be grounded' packages/answer/verification.py` → empty (exit 1); `/root/ko-venv/bin/ruff check packages/answer/` → All checks passed
 RISKS: none — docs only; no behavior, perf, or security surface; left uncommitted, no deploy/restart
+
+## 2026-10-12 T-V1-002 — Close the legacy None-content citation path
+TASK: T-V1-002
+CHANGE: packages/answer/models.py (Citation.content field comment, 61-70, docs only); tests/unit/test_answer_engine.py (appended test_citation_content_guarantee_is_grounder_gated)
+WHY: chose option (b) — softened the F6 guarantee to the grounder-gated paths of verify_claims, with claim_grounder=None store-lookup named as the sole documented None case (RP-03, QF-03); option (a) (drop falsy-content citations at verification.py:522-524) was rejected because it breaks the pinned legacy contract in the existing, append-only test_verify_claims_store_lookup_scoped_positive (lookup Citation without content must still verify under existence+scope only)
+REUSED: none (no new dependency; pydantic BaseModel field stays unchanged)
+BUILT: comment rewrite + one appended test pinning both halves: source text names grounder-gated/claim_grounder=None, legacy no-grounder lookup still verifies with content=None, grounder-gated lookup without canonical content drops the citation
+VERIFY: /root/ko-venv/bin/pytest tests/unit/test_answer_engine.py -q → 70 passed (49 tests at HEAD → 50, +1 new); /root/ko-venv/bin/ruff check packages/answer/models.py tests/unit/test_answer_engine.py → All checks passed; git diff --stat shows only models.py + test file for this ticket (verification.py untouched, 0 logic lines changed)
+RISKS: docs-only on the guarantee — no behavior change, so no ACL/citation/perf surface; residual: legacy no-grounder path can still emit content=None (documented, engine wires ExtractiveGrounder by default so production is grounder-gated); left uncommitted, no deploy/restart

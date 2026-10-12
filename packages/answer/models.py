@@ -58,10 +58,13 @@ class Citation(BaseModel):
     #: scored the citation (legacy/existence-only verification).
     grounding_score: float | None = None
     #: Authoritative passage content used for grounding verification.
-    #: Always populated by ``verify_claims`` with the exact canonical
-    #: content the claim was grounded against (retrieved chunk text, or the
-    #: store-hydrated canonical text for graph citations) — never left
-    #: as None on a verified citation (review1 F6).
+    #: Populated on every grounder-gated path of ``verify_claims`` with the
+    #: exact canonical content the claim was grounded against (the retrieved
+    #: chunk text, or the store-hydrated canonical content for graph and
+    #: lookup citations), so no grounder-verified citation is left as None
+    #: (review1 F6). The legacy existence-only path (``claim_grounder=None``)
+    #: skips grounding entirely and may verify a store lookup citation whose
+    #: content was never hydrated — the sole documented None case.
     content: str | None = None
 
 
@@ -70,6 +73,10 @@ class Answer(BaseModel):
 
     answer: str
     status: AnswerStatus = AnswerStatus.ANSWERED
+    #: Canonical reason code (UPPER_SNAKE_CASE member of
+    #: ``core.errors.ReasonCode``, TASK-Q0) when ``status`` is not
+    #: ``answered``; ``None`` otherwise. Kept as a plain ``str`` on the wire
+    #: for frontend compatibility (``apps/web/src/app/ask/contracts.ts``).
     #: Canonical reason code (UPPER_SNAKE_CASE member of
     #: ``core.errors.ReasonCode``, TASK-Q0) when ``status`` is not
     #: ``answered``; ``None`` otherwise. Kept as a plain ``str`` on the wire

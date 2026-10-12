@@ -1055,3 +1055,56 @@ async def test_engine_hydrated_graph_chunk_grounds_normally() -> None:
     assert result.status == AnswerStatus.ANSWERED
     assert result.citations[0].chunk_id == "c-graph-1"
 
+
+
+# --- T-V1-002: the Citation.content guarantee is grounder-gated --------------
+
+
+async def test_citation_content_guarantee_is_grounder_gated() -> None:
+    """T-V1-002 (b): the ``Citation.content`` guarantee is scoped, and the
+    field comment says exactly what the code does.
+
+    ``content`` is populated on every grounder-gated path of ``verify_claims``
+    (retrieved item text, store-hydrated canonical text for graph/lookup
+    citations) — no grounder-verified citation is None. The legacy
+    existence-only contract (``claim_grounder=None``) is the sole documented
+    exception: it may verify a store lookup citation without hydrated content.
+    """
+    import inspect
+
+    from answer.models import Citation
+
+    comment = inspect.getsource(Citation)
+    assert "grounder-gated" in comment
+    assert "claim_grounder=None" in comment
+
+    class _UnhydratedLookup:
+        async def get(self, chunk_id):
+            return Citation(
+                chunk_id=chunk_id,
+                document_id="doc-c",
+                page=3,
+                workspace_id="ws-a",
+            )
+
+    items = _items()
+    claims = [Claim(text="x", chunk_ids=["c-9"])]
+
+    # Legacy existence-only path: still verifies, content may be None.
+    verified, citations = await verify_claims(
+        claims, items, chunk_lookup=_UnhydratedLookup(), allowed_workspace_ids={"ws-a"}
+    )
+    assert verified[0].chunk_ids == ["c-9"]
+    assert citations[0].content is None
+
+    # Grounder-gated path: no canonical content -> citation dropped, so no
+    # grounder-verified citation can carry content=None.
+    verified_g, citations_g = await verify_claims(
+        claims,
+        items,
+        chunk_lookup=_UnhydratedLookup(),
+        allowed_workspace_ids={"ws-a"},
+        claim_grounder=ExtractiveGrounder(),
+    )
+    assert verified_g == []
+    assert citations_g == []

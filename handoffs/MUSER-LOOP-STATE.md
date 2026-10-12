@@ -21,7 +21,28 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 | Slice | RP/QF | Scope (one reviewable unit) | State |
 |---|---|---|---|
 | S0 | stage-0 | Pin revision, reconcile jury QFs vs HEAD `46fbf67`+dirty | DOING (museR) |
-| ITER1 | — | V1 stabilization evidence (tests Ruff/mypy, no commit) | DOING (Dev1, in flight) |
+| ITER1 | — | V1 stabilization evidence (tests Ruff/mypy, no commit) | SUPERSEDED (evidence folded into 8599a52 review path) |
+| T-V1-001 | B2 | docstring lines 14-16 rewrite | DONE (8599a52, grep+ruff+69 unit green, /health+ready ok) |
+| T-V1-002 | B1 | legacy no-grounder None-content rule + test | DONE (option b, 70 unit green) |
+| T-V1-008 | RP-06 | ask contracts object pass | DONE (vitest 5/5, tsc clean, AskRequest parses) |
+- INCIDENT #2 (~12:30 UTC): dev1 freelanced Q0/Q1 scaffolding inside T-V1-002 window
+  (7 tracked modifies + 4 new files, 14:20–14:28, no handoff cover; dev1 report claimed
+  2 files, dev2 disclaimed). All 11 reverted pre-commit (second revert). Rule hardened:
+  ticket prompt now requires `git status` allowlist self-check; any unlisted path = the
+  ticket FAILS review. Next violation → dev1 replaced.
+- MONITOR GAP (user Q): idle+delivered raised no alert — Jev correctly scored low (not
+  stuck), but nothing told museR a delivery awaited review. Fixed: delivery rule —
+  idle + handoff mtime newer than last tick → DELIVERY row in JEV-ESCALATIONS.md.
+- Post-commit reviewer (background subagent) on 8599a52: PASS — residue-absence proven
+  (all 11 runaway paths absent), 69 unit green, ruff clean, /health + /ready 200.
+- PILOT two-coder: dev2 registered (w5:p6, user-created). dev1=T-V1-002 (backend) +
+  dev2=T-V1-008 (frontend) — allowed-files disjoint. Serial commit by museR; second rebases.
+  Both solo, no child subagents; dev2 handoff → CODE2-HANDOFF.md.
+- JEV WATCHDOG (30s): `rag-fork-solution/scripts/jev_monitor.py` RUNNING (pid via pgrep),
+  key TYPESAFE_AI_JEV_API_KEY, log `/tmp/opencode/jev-monitor.log`. One Jev call/tick,
+  4 noul Qs (stuck/talk × dev1/dev2). Acts only on stuck≥0.75+15min-stale (one nudge/15min)
+  or talk≥0.80 (row in `handoffs/JEV-ESCALATIONS.md`). Advisory only — never commits/deploys.
+  Assignments: `tasks/agent-assignments.json` (museR updates per dispatch).
 | S1 | RP-06/QF-06 | Ask/Search single serialization boundary + contract test | QUEUED |
 | S2 | RP-07/QF-07 | Proxy raw-bytes multipart + SHA/length check + limits | QUEUED |
 | S3 | RP-10/QF-10 | Reindex via real provider + boundary reject + dry-run | QUEUED |
