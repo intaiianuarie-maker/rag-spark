@@ -117,6 +117,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   "not probed") folded into T-V1-049 scope.
 - T-V1-028 reviewer: APPROVE (precedence locked + reconciled, sole call-site, logs clean,
   34 green) → DONE. T-V1-029 dispatched (dev2, local-only).
+- T-V1-020 reviewer: APPROVE (atomic claim, fenced ack, ack-after-durability, 80/80 stable —
+  transient flake never recurred, timing-sensitivity noted) → DONE.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),

@@ -8,12 +8,18 @@ Acceptance mapping (TASKS.md M7-001a + DECISIONS.md M7-001b condition 3):
 - preferred_model honored when no rule matches (no rules, unknown query
   class, or no registered model supports the required capability).
 - rules-vs-no-rules provably different in the ko-venv suite.
+- sensitive veto: resolves to an explicitly allowed local model or fails
+  closed with LocalOnlyUnavailable — never the `local-only` label as a model
+  name (T-V1-029).
 """
 
+import pytest
 from models.router_config import (
     DEFAULT_ROUTING_RULES,
+    LOCAL_ONLY_MODEL_ENV,
     MODEL_REGISTRY,
     REQUIRED_CAPABILITY,
+    LocalOnlyUnavailable,
     ModelProfile,
     RoutingDimension,
     RoutingRule,
@@ -28,15 +34,37 @@ def _with_rules(**kwargs):
     return WorkspaceModelConfig(**base)
 
 
-def test_veto_never_overridden():
+def test_veto_fails_closed_when_no_local_model_is_configured():
+    """T-V1-029 re-pin: the veto is local-or-explicit-unavailable, never a label.
+
+    The pre-T-V1-029 contract returned the ``local-only`` SENTINEL as if it
+    were a routable model name — which the provider would then post to
+    whatever gateway was configured (possibly an external one). With no
+    explicitly allowed local model configured, every query class on a
+    sensitive workspace now raises :class:`LocalOnlyUnavailable` (documented
+    503 upstream) instead.
+    """
     config = _with_rules(
         preferred_model="gpt-4o-mini",
         override_model="o3-mini",
         sensitive=True,
     )
-    assert route("complex", config) == "local-only"
-    assert route("simple", config) == "local-only"
-    assert route("multilingual", config) == "local-only"
+    for query_class in ("complex", "simple", "multilingual"):
+        with pytest.raises(LocalOnlyUnavailable):
+            route(query_class, config)
+
+
+def test_veto_resolves_to_the_configured_local_model(monkeypatch):
+    """T-V1-029: an explicitly allowed local model beats override, preferred
+    and rules on a sensitive workspace — and it is a real model, not the label."""
+    monkeypatch.setenv(LOCAL_ONLY_MODEL_ENV, "llama3.1:8b")
+    config = _with_rules(
+        preferred_model="gpt-4o-mini",
+        override_model="o3-mini",
+        sensitive=True,
+    )
+    for query_class in ("complex", "simple", "multilingual"):
+        assert route(query_class, config) == "llama3.1:8b"
 
 
 def test_simple_fast():

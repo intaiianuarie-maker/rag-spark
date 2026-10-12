@@ -46,6 +46,7 @@ from app.ask.router import (  # noqa: E402
 from core.auth import Principal, Role  # noqa: E402
 from models.router_config import (  # noqa: E402
     FALLBACK_MODEL,
+    LOCAL_ONLY_MODEL_ENV,
     REQUIRED_CAPABILITY,
     RoutingDimension,
     RoutingRule,
@@ -273,7 +274,11 @@ def test_ask_policy_precedence_keeps_override_above_rules(monkeypatch):
     assert reason == "permitted_override"
 
 
-def test_ask_selection_reason_labels_the_veto_tier():
+def test_ask_selection_reason_labels_the_veto_tier(monkeypatch):
+    # T-V1-029 re-pin: the veto tier resolves to the explicitly allowed local
+    # model (a sensitive workspace with no local model configured now raises
+    # LocalOnlyUnavailable before any reason can be recorded).
+    monkeypatch.setenv(LOCAL_ONLY_MODEL_ENV, "llama3.1:8b")
     config = WorkspaceModelConfig(workspace_id="ws-1", sensitive=True, override_model="x")
     assert selection_reason(config, "simple", "local-only") == "policy_veto_local_only"
 

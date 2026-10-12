@@ -45,8 +45,10 @@ from app.ask.router import (  # noqa: E402
 from core.auth import Principal, Role  # noqa: E402
 from models.router_config import (  # noqa: E402
     FALLBACK_MODEL,
+    LOCAL_ONLY_MODEL_ENV,
     PRECEDENCE_ORDER,
     WORKSPACE_MODEL_CONFIG_ENV,
+    LocalOnlyUnavailable,
     RoutingDimension,
     RoutingRule,
     load_workspace_config,
@@ -108,14 +110,31 @@ def test_permitted_override_beats_workspace_rules_in_policy():
     assert route("simple", rules_only) != "override-x"
 
 
-def test_veto_beats_everything_and_is_never_overridden():
+def test_veto_beats_everything_and_is_never_overridden(monkeypatch):
+    """T-V1-029 re-pin: the veto resolves to the explicitly allowed local
+    model (never the ``local-only`` sentinel as a model name, never the
+    override/rules/preferred tiers)."""
+    monkeypatch.setenv(LOCAL_ONLY_MODEL_ENV, "llama3.1:8b")
     config = type(load_model_config(_WS, override_model=None))(
         workspace_id=_WS,
         sensitive=True,
         override_model="override-x",
         routing_rules=_rules(("capability", "chat")),
     )
-    assert route_decision("simple", config) == ("local-only", "policy_veto_local_only")
+    assert route_decision("simple", config) == ("llama3.1:8b", "policy_veto_local_only")
+
+
+def test_veto_fails_closed_without_a_configured_local_model():
+    """T-V1-029: no explicitly allowed local model ⇒ documented unavailable,
+    not a routable sentinel/cloud model."""
+    config = type(load_model_config(_WS, override_model=None))(
+        workspace_id=_WS,
+        sensitive=True,
+        override_model="override-x",
+        routing_rules=_rules(("capability", "chat")),
+    )
+    with pytest.raises(LocalOnlyUnavailable):
+        route_decision("simple", config)
 
 
 def test_route_decision_reason_matches_route_selection():

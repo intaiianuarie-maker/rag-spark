@@ -10,6 +10,13 @@ interfaces.
 Carried from M4-001 acceptance: an `LLMProviderError` (gateway down) is
 surfaced as **503**, never 500.
 
+T-V1-029 (local-only means local or explicit unavailable): a workspace stored
+with ``"sensitive": true`` is resolved by the policy to an explicitly allowed
+local model, or the request fails closed here with the registered
+``llm_unavailable`` 503 before any engine/gateway client exists. The factory
+additionally builds local models on the local-only transport, and the provider
+refuses the ``local-only`` sentinel — no path posts it to an external gateway.
+
 T-V1-026 (honest failure statuses): both failure legs of this route carry a
 ``trace_id`` — the request's tracking ID — so a support ticket can be joined to
 the retrieval/generation log lines. A required retrieval leg being down is a
@@ -33,6 +40,7 @@ from core.logging import request_id_ctx
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.adapters.litellm_provider import LLMProviderError
 from models.router_config import (
+    LocalOnlyUnavailable,
     WorkspaceModelConfig,
     load_workspace_config,
     provider_identity,
@@ -144,6 +152,10 @@ def load_model_config(workspace_id: str, *, override_model: str | None) -> Works
         override_model=override_model,
         preferred_model=os.environ.get("ANSWER_MODEL") or None,
         routing_rules=workspace.routing_rules if workspace else (),
+        # T-V1-029: the store's ``sensitive`` flag opts the workspace into the
+        # local-only veto; the policy then resolves it local-or-explicitly-
+        # unavailable (never a cloud model).
+        sensitive=workspace.sensitive if workspace else False,
     )
 
 
@@ -200,9 +212,24 @@ async def ask(
     # carries identifiers + provider + reason only — never the query text (no
     # prompt content), never credentials.
     query_class = classify_query(body.query)
-    resolved_model, reason = resolve_model(
-        str(workspace_id), query_class=query_class, override_model=body.model
-    )
+    try:
+        resolved_model, reason = resolve_model(
+            str(workspace_id), query_class=query_class, override_model=body.model
+        )
+    except LocalOnlyUnavailable as exc:
+        # T-V1-029: local-only means local or EXPLICIT unavailable. No local
+        # model is configured for this sensitive workspace, so the request
+        # fails closed HERE — before any engine (and therefore any gateway
+        # client) is built — with the registered 503 reason, the fixed safe
+        # message and the tracking ID. The `local-only` sentinel is a policy
+        # verdict, never a model, so it can never be posted to a gateway.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                **error_detail(ReasonCode.LLM_UNAVAILABLE, str(exc)),
+                "trace_id": request_id_ctx.get(),
+            },
+        ) from exc
     logger.info(
         "ask_model_selected",
         extra={

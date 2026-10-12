@@ -13,6 +13,7 @@ built, i.e. when ``/ask`` is called.
 from __future__ import annotations
 
 from models.adapters.litellm_provider import LiteLLMProvider
+from models.router_config import is_local_model, local_gateway_url
 
 from .engine import AnswerEngine
 from .hydration import CanonicalHydrator, HydratingOrchestrator
@@ -20,6 +21,22 @@ from .verification import ExtractiveGrounder
 
 #: Collection the hybrid orchestrator reads/writes (single v1 collection).
 DEFAULT_COLLECTION = "knowledge"
+
+
+def _llm_provider_for(model: str) -> LiteLLMProvider:
+    """Transport seam for one resolved model (T-V1-029).
+
+    A model the policy declares LOCAL is served over the explicitly local
+    transport only: ``LOCAL_GATEWAY_URL`` (loopback default), with
+    ``require_local=True`` so provider construction FAILS CLOSED when that
+    endpoint is not local — the cloud default resolution (``LITELLM_URL`` /
+    ``OPENROUTER_API_KEY``) is bypassed entirely, so a sensitive workspace can
+    never egress even when the deployment is configured for an external
+    gateway. Cloud models keep the existing default resolution untouched.
+    """
+    if is_local_model(model):
+        return LiteLLMProvider(base_url=local_gateway_url(), require_local=True)
+    return LiteLLMProvider()
 
 
 def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
@@ -62,6 +79,14 @@ def build_answer_engine(*, model: str, collection: str = DEFAULT_COLLECTION) -> 
     default cannot re-enter the path. An empty ``model`` is rejected by the
     provider's typed contract, not papered over with a fallback.
 
+    T-V1-029: the TRANSPORT follows the model's policy classification — a
+    locally declared model (see :func:`models.router_config.is_local_model`)
+    is built on the local gateway endpoint with ``require_local=True`` (fails
+    closed at construction if that endpoint is not local), so a local-only
+    workspace request can never reach an external gateway. Cloud models keep
+    the default gateway resolution; this factory still holds no model default
+    of its own.
+
     T-V1-022 wiring: one :class:`~answer.hydration.CanonicalHydrator` is built
     over the store lookup and shared by **both** hydration seams —
 
@@ -89,7 +114,7 @@ def build_answer_engine(*, model: str, collection: str = DEFAULT_COLLECTION) -> 
 
     return AnswerEngine(
         orchestrator=HydratingOrchestrator(create_orchestrator(collection=collection), hydrator),
-        llm=LiteLLMProvider(),
+        llm=_llm_provider_for(model),
         model=model,
         # No store → None → legacy existence/scope-only verification.
         chunk_lookup=hydrator if chunk_lookup is not None else None,

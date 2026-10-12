@@ -7,6 +7,15 @@ no LiteLLM type crosses the boundary — we return GenerationResult/str.
 Design: base_url from LITELLM_URL (default http://localhost:4000),
 api_key from LITELLM_API_KEY (optional, for gateway auth). Model identity
 is passthrough per contract; empty model raises typed error.
+
+T-V1-029 (local-only egress guard, defense in depth):
+- ``require_local=True`` (used for every local model) validates the RESOLVED
+  base_url at construction and raises :class:`LLMProviderError` when it is not
+  an explicitly local endpoint — a local-only request can never be pointed at
+  an external gateway, and the failure happens before any client exists.
+- the ``local-only`` policy SENTINEL is refused in ``generate``/``stream``:
+  it is a verdict, not a model, so it is never posted to ANY gateway (the
+  policy layer already refuses to return it; this is the egress-point backstop).
 """
 
 from __future__ import annotations
@@ -19,6 +28,7 @@ from typing import Any
 import httpx
 
 from ..interfaces import ChatMessage, GenerationRequest, GenerationResult, LLMProvider
+from ..router_config import LOCAL_ONLY_SENTINEL, is_local_endpoint
 
 DEFAULT_BASE_URL = "http://localhost:4000"
 DEFAULT_TIMEOUT = 30.0
@@ -26,6 +36,25 @@ DEFAULT_TIMEOUT = 30.0
 
 class LLMProviderError(RuntimeError):
     """Typed error for LiteLLM gateway failures."""
+
+
+def _guard_model_name(model: str) -> str:
+    """Reject empty models and the local-only policy sentinel (T-V1-029).
+
+    The sentinel is a routing verdict, never a model identity: posting it to a
+    gateway would leak the local-only policy marker to an external service (and
+    no gateway could serve it anyway). Failing here — before any payload is
+    built — is the last line of defence behind the policy layer, which never
+    returns the sentinel as a model.
+    """
+    name = model.strip()
+    if not name:
+        raise LLMProviderError("model name must not be empty")
+    if name == LOCAL_ONLY_SENTINEL:
+        raise LLMProviderError(
+            "local-only is a policy label, not a model; refusing to send it to a gateway"
+        )
+    return name
 
 
 def _to_openai_messages(msgs: list[ChatMessage]) -> list[dict[str, Any]]:
@@ -69,6 +98,7 @@ class LiteLLMProvider(LLMProvider):
         api_key: str | None = None,
         timeout: float = DEFAULT_TIMEOUT,
         client: httpx.AsyncClient | None = None,
+        require_local: bool = False,
     ) -> None:
         default_url = (
             "https://openrouter.ai/api/v1"
@@ -83,6 +113,13 @@ class LiteLLMProvider(LLMProvider):
             or (os.environ.get("DEEPSEEK_API_KEY") if "deepseek.com" in self.base_url else None)
         )
         self.timeout = timeout
+        #: T-V1-029 fail-closed: a local transport must resolve to an
+        #: explicitly local endpoint. Checked at construction — before a client
+        #: exists — so a misconfigured local gateway can never turn into egress.
+        if require_local and not is_local_endpoint(self.base_url):
+            raise LLMProviderError(
+                "local transport required but the configured gateway endpoint is not local"
+            )
         #: Injected in tests; otherwise one client is created lazily and reused
         #: (review Minor #1 — no per-call client churn).
         self._client = client
@@ -106,8 +143,7 @@ class LiteLLMProvider(LLMProvider):
             self._client = None
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
-        if not request.model.strip():
-            raise LLMProviderError("model name must not be empty")
+        _guard_model_name(request.model)
         payload: dict[str, Any] = {
             "model": request.model,
             "messages": _to_openai_messages(request.messages),
@@ -154,8 +190,7 @@ class LiteLLMProvider(LLMProvider):
             raise LLMProviderError(f"LiteLLM response parse failed: {e}") from e
 
     async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
-        if not request.model.strip():
-            raise LLMProviderError("model name must not be empty")
+        _guard_model_name(request.model)
         payload: dict[str, Any] = {
             "model": request.model,
             "messages": _to_openai_messages(request.messages),
