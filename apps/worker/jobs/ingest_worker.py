@@ -8,6 +8,17 @@ failure record written by this worker — including the terminal
 ``/jobs/{id}`` poll returns. Ingress → queue → worker → stores is therefore one
 joinable trace with no schema change (the job id already crosses every one of
 those boundaries).
+
+T-V1-020 (durable claim/ack): the loop no longer BRPOPs a job out of Redis
+(and thereby out of existence). Each fetch is a *claim* — the job moves onto a
+lease-scored claims zset with a fence token — and the claim is released
+(:func:`ack`) **only after a durable outcome is committed**: READY, a terminal
+FAILED record, or a re-queued retry (delayed-zset entry). A worker that dies
+mid-job keeps its claim un-acked; the lease expires and
+``recover_expired`` redelivers (at-least-once). Redelivery is safe because
+publication is idempotent (T-V1-016 stable IDs) and fenced against dead
+generations (T-V1-019). A heartbeat (:func:`renew`) extends the lease while a
+healthy job runs past the base lease.
 """
 
 from __future__ import annotations
@@ -19,13 +30,25 @@ from datetime import UTC, datetime
 
 from core.errors import normalize_code
 from core.logging import request_id_ctx, set_request_id
+
+# T-V1-020: claim/ack/lease live behind the adapter's typed surface. They are
+# not yet re-exported by ``ingestion.queue`` (outside this ticket's allowed
+# files) — see handoff "recommended follow-up".
+from ingestion.adapters.redis_queue import (
+    Claim,
+    ack,
+    claim,
+    lease_seconds,
+    recover_expired,
+    renew,
+)
 from ingestion.persistence import (
     IngestionJob,
     JobStage,
     JobStatus,
     get_session_factory,
 )
-from ingestion.queue import IngestQueueUnavailable, dequeue, promote_due, schedule_retry
+from ingestion.queue import IngestQueueUnavailable, promote_due, schedule_retry
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from jobs.ingest_pipeline import IngestPipelineError, process_job
@@ -34,6 +57,12 @@ logger = logging.getLogger("knowledge_os.worker.ingest")
 
 _BACKOFF_CAP_SECONDS = 30
 _UNHANDLED_RETRY_SECONDS = 2.0
+
+#: The loop's historical fetch seam name. T-V1-020: this is now
+#: ``claim`` under the hood — it returns a :class:`Claim` (job id + lease
+#: fence token), not a bare popped id. The name is kept because existing
+#: worker-loop tests pin ``run_worker``'s consumption seam as ``dequeue``.
+dequeue = claim
 
 
 async def record_failure(
@@ -107,45 +136,170 @@ async def process_one(job_id: uuid.UUID) -> None:
             )
 
 
+async def _ack_or_log(claimed: Claim | str) -> None:
+    """Release a claim once — and only once — its outcome is durable.
+
+    T-V1-020 reviewer checklist (1): every call site of this helper sits
+    *after* a committed DB record (READY, terminal FAILED, or QUEUED + delayed
+    re-queue). A plain ``str`` payload (legacy/test dequeue) carries no token
+    and has no claim to release. A fenced ``False`` means our lease already
+    expired and the job was re-claimed elsewhere — the other holder's delivery
+    stands; we only log.
+    """
+    if not isinstance(claimed, Claim):
+        return
+    try:
+        released = await ack(claimed)
+    except IngestQueueUnavailable:
+        # Nothing durable is at risk: the job's outcome is already committed.
+        # The un-acked claim expires and recovery redelivers (at-least-once).
+        logger.warning(
+            "ingest_ack_unavailable",
+            extra={"event": "ingest_ack_unavailable", "job_id": str(claimed)},
+        )
+        return
+    if not released:
+        logger.warning(
+            "ingest_ack_fenced",
+            extra={
+                "event": "ingest_ack_fenced",
+                "job_id": str(claimed),
+                "note": "lease expired and job re-claimed; other holder stands",
+            },
+        )
+
+
+async def _keep_alive(claimed: Claim | str) -> None:
+    """Heartbeat: extend the lease while a healthy job runs (T-V1-020).
+
+    A long embed/index must not lose its claim to the lease clock. Renewal is
+    token-fenced: once the lease has expired and the job was re-claimed,
+    ``renew`` returns False and this holder stops pretending to own the job.
+    """
+    if not isinstance(claimed, Claim):
+        return
+    interval = max(lease_seconds() / 3, 0.1)
+    while True:
+        # Renew first (the claim was just taken, extend it immediately), then
+        # keep the interval running while the job lives.
+        try:
+            if not await renew(claimed):
+                logger.warning(
+                    "ingest_claim_lease_lost",
+                    extra={
+                        "event": "ingest_claim_lease_lost",
+                        "job_id": str(claimed),
+                        "note": "renew fenced; claim was lost to expiry/recovery",
+                    },
+                )
+                return
+        except IngestQueueUnavailable:
+            # Transient: keep heartbeating; the lease survives a few misses.
+            logger.warning(
+                "ingest_claim_renew_unavailable",
+                extra={"event": "ingest_claim_renew_unavailable", "job_id": str(claimed)},
+            )
+        await asyncio.sleep(interval)
+
+
 async def run_worker(stop_event: asyncio.Event) -> None:
-    """Consume ingestion jobs until ``stop_event`` is set."""
+    """Consume ingestion jobs until ``stop_event`` is set.
+
+    T-V1-020: consumption is claim→process→ack, never a destructive pop.
+    The claim is released only after the durable outcome below; if this
+    process dies before that, the lease expires and ``recover_expired``
+    redelivers the job (at-least-once; publication is idempotent via the
+    T-V1-016 stable IDs).
+    """
     logger.info("ingest_worker_started", extra={"event": "ingest_worker_started"})
     while not stop_event.is_set():
         try:
             await promote_due()
-            job_id = await dequeue(timeout_seconds=1)
         except IngestQueueUnavailable:
             logger.warning(
                 "ingest_queue_unavailable", extra={"event": "ingest_queue_unavailable"}
             )
             await asyncio.sleep(2)
             continue
-        if job_id is None:
+        try:
+            # Reviewer checklist (2): every expired claim goes back on the
+            # ready queue each tick, before we claim anything new.
+            recovered = await recover_expired()
+            if recovered:
+                logger.warning(
+                    "ingest_claims_recovered",
+                    extra={
+                        "event": "ingest_claims_recovered",
+                        "count": recovered,
+                        "note": "expired claims re-queued (dead-worker recovery)",
+                    },
+                )
+        except IngestQueueUnavailable:
+            # Best-effort sweep: consumption below still applies its own
+            # queue-unavailable backoff if Redis is truly down.
+            logger.warning(
+                "ingest_claim_recovery_unavailable",
+                extra={"event": "ingest_claim_recovery_unavailable"},
+            )
+        try:
+            claimed = await dequeue(timeout_seconds=1)
+        except IngestQueueUnavailable:
+            logger.warning(
+                "ingest_queue_unavailable", extra={"event": "ingest_queue_unavailable"}
+            )
+            await asyncio.sleep(2)
+            continue
+        if claimed is None:
             continue
         try:
-            await process_one(uuid.UUID(job_id))
+            job_id = uuid.UUID(str(claimed))
         except ValueError:
             logger.warning(
                 "ingest_bad_job_id",
-                extra={"event": "ingest_bad_job_id", "job_id": job_id},
+                extra={"event": "ingest_bad_job_id", "job_id": str(claimed)},
             )
+            # A payload that is not a job id can never be processed: dropping
+            # the claim IS its terminal outcome (the warning above is the
+            # record). Leaving it claimed would only re-deliver garbage.
+            await _ack_or_log(claimed)
+            continue
+        heartbeat = asyncio.create_task(_keep_alive(claimed))
+        try:
+            await process_one(job_id)
         except Exception as exc:
-            # Catch-all: a failure escaping process_one (e.g. Postgres down while
-            # record_failure runs) must never kill the loop. Requeue best-effort
-            # so the dequeued job is not lost, then back off briefly.
+            # Catch-all: a failure escaping process_one (e.g. Postgres down
+            # while record_failure runs) committed NO durable outcome, so the
+            # claim must NOT be acked. Requeue fast for retry, and ack only
+            # once the delayed zset owns the job; if even that fails, the
+            # un-acked claim expires and recovery redelivers (T-V1-020).
             logger.error(
                 "ingest_worker_error",
                 extra={
                     "event": "ingest_worker_error",
-                    "job_id": job_id,
+                    "job_id": str(claimed),
                     "error": f"{type(exc).__name__}: {exc}",
                 },
             )
+            requeued = False
             try:
-                await schedule_retry(job_id, _UNHANDLED_RETRY_SECONDS)
+                await schedule_retry(str(claimed), _UNHANDLED_RETRY_SECONDS)
+                requeued = True
             except Exception:
                 logger.warning(
                     "ingest_requeue_failed",
-                    extra={"event": "ingest_requeue_failed", "job_id": job_id},
+                    extra={"event": "ingest_requeue_failed", "job_id": str(claimed)},
                 )
+            if requeued:
+                await _ack_or_log(claimed)
             await asyncio.sleep(1)
+        else:
+            # process_one returned normally: the durable outcome is committed
+            # (READY, terminal FAILED, or QUEUED + delayed retry via
+            # record_failure) — ack-after-durability, checklist (1).
+            await _ack_or_log(claimed)
+        finally:
+            heartbeat.cancel()
+            try:
+                await heartbeat
+            except asyncio.CancelledError:
+                pass

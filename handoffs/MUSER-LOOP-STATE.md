@@ -115,6 +115,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 - T-V1-027 reviewer: APPROVE (required-set executed, exact-set byte-identical ×3, F3 probe
   bounded + non-preempting, m004 green) → DONE. One stale comment (errors.py LLM_GATEWAY
   "not probed") folded into T-V1-049 scope.
+- T-V1-028 reviewer: APPROVE (precedence locked + reconciled, sole call-site, logs clean,
+  34 green) → DONE. T-V1-029 dispatched (dev2, local-only).
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
