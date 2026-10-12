@@ -18,6 +18,7 @@ import uuid
 from datetime import UTC, datetime
 
 from models.interfaces import ChatMessage, GenerationRequest, LLMProvider, MessageRole
+from pydantic import BaseModel, model_validator
 
 from .evidence_store import EvidenceStore
 from .interfaces import (
@@ -36,12 +37,50 @@ class ResearchEngineError(RuntimeError):
     """Raised when planning/synthesis/provider work cannot be completed honestly."""
 
 
+class ResearchModelPolicy(BaseModel):
+    """Model selection for research stages (rew1 follow-up 1).
+
+    Declared once and injected, so the engine never hardcodes a model name and
+    per-stage routing is explicit and testable.
+    """
+
+    planning_model: str
+    synthesis_model: str = ""
+
+    @model_validator(mode="after")
+    def _validate(self) -> ResearchModelPolicy:
+        if not self.planning_model:
+            raise ValueError("planning_model must be non-empty")
+        if not self.synthesis_model:
+            self.synthesis_model = self.planning_model
+        return self
+
+
+DEFAULT_RESEARCH_MODEL_POLICY = ResearchModelPolicy(planning_model="gpt-4o-mini")
+
+
 class ResearchEngine:
     """Multi-step research and synthesis engine."""
 
-    def __init__(self, llm_provider: LLMProvider, evidence_store: EvidenceStore) -> None:
+    def __init__(
+        self,
+        llm_provider: LLMProvider,
+        evidence_store: EvidenceStore,
+        *,
+        model_policy: ResearchModelPolicy | None = None,
+    ) -> None:
         self.llm = llm_provider
         self.store = evidence_store
+        # rew1 follow-up 1: model selection is policy-driven, not hardcoded.
+        self.model_policy = model_policy or DEFAULT_RESEARCH_MODEL_POLICY
+
+    def _resolve_model(self, purpose: str) -> str:
+        """Resolve a model through the policy; unsupported purposes fail loudly."""
+        if purpose == "planning":
+            return self.model_policy.planning_model
+        if purpose == "synthesis":
+            return self.model_policy.synthesis_model
+        raise ResearchEngineError(f"unknown model purpose: {purpose!r}")
 
     async def plan_research(self, topic: str) -> ResearchPlan:
         """Decompose a research topic into subquestions.
@@ -55,7 +94,7 @@ class ResearchEngine:
             f'Respond with JSON: {{"subquestions": ["q1", "q2", "q3"], "scope": "brief summary"}}'
         )
         req = GenerationRequest(
-            model="gpt-4o-mini",
+            model=self._resolve_model("planning"),
             messages=[ChatMessage(role=MessageRole.USER, content=prompt)],
             temperature=0.0,
         )
@@ -158,17 +197,29 @@ class ResearchEngine:
             e
             for e in evidence_items
             if e.verification is EvidenceVerificationState.VERIFIED
+            and e.deleted_at is None
+            and e.revoked_at is None
         ]
         unverified = [
             e
             for e in evidence_items
             if e.verification is not EvidenceVerificationState.VERIFIED
+            and e.deleted_at is None
+            and e.revoked_at is None
+        ]
+        revoked = [
+            e
+            for e in evidence_items
+            if e.deleted_at is not None or e.revoked_at is not None
         ]
 
         unknowns = ["No verified evidence is available for this topic."] if not verified else []
+        if revoked:
+            unknowns.append(f"{len(revoked)} evidence item(s) revoked or deleted and excluded.")
 
         if not verified:
             # Abstain honestly: no completed report off zero evidence.
+            # rew1 follow-up 3: revoked/deleted ids must not appear here either.
             return ResearchReport(
                 id=f"rep-{uuid.uuid4().hex[:8]}",
                 workspace_id=workspace_id,
@@ -176,7 +227,7 @@ class ResearchEngine:
                 status=ResearchStatus.FAILED,
                 executive_summary="",
                 findings=[],
-                evidence_ids=[e.id for e in evidence_items],
+                evidence_ids=[e.id for e in evidence_items if e not in revoked],
                 contradictions=contradictions,
                 unknowns=[*unknowns, f"unverified evidence present: {len(unverified)}"],
                 recommendations=[
@@ -204,7 +255,7 @@ class ResearchEngine:
         )
 
         req = GenerationRequest(
-            model="gpt-4o-mini",
+            model=self._resolve_model("synthesis"),
             messages=[ChatMessage(role=MessageRole.USER, content=prompt)],
             temperature=0.0,
         )

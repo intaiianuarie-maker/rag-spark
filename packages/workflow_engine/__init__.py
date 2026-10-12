@@ -1,9 +1,15 @@
 """Workflow Engine package (Phase 13 / Section 30).
 
 W0/W1 exports: strict contracts, validator, compiler, and fake runtime.
+W2 exports: restricted Langflow import adapter (compatibility spike).
 The prototype `WorkflowEngine` is preserved for backward compatibility.
 """
 
+from .adapters import (
+    LangflowAdapter,
+    LangflowComponentSpec,
+    LangflowImportError,
+)
 from .compiler import WorkflowCompiler
 from .engine import WorkflowEngine
 from .executor import FakeNodeExecutor, WorkflowExecutor
@@ -34,14 +40,15 @@ from .interfaces import (
 from .validator import WorkflowValidator
 
 __all__ = [
-    # W0/W1 contracts
     "CapabilityManifest",
     "ExecutionEdgeInfo",
     "ExecutionPlan",
     "ExecutionStep",
     "FakeNodeExecutor",
+    "LangflowAdapter",
+    "LangflowComponentSpec",
+    "LangflowImportError",
     "NodeExecutor",
-    # Prototype (preserved entrypoint)
     "NodeRun",
     "NodeRunStatus",
     "NodeSpec",

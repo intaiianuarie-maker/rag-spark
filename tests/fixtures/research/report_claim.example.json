@@ -1,0 +1,17 @@
+{
+  "statement": "PostgreSQL handles multi-tenant indexing.",
+  "evidence_ids": ["ev-0001"],
+  "citations": [
+    {
+      "document_id": "doc-pg",
+      "chunk_id": "chunk-pg-1",
+      "page": 3,
+      "section": "Multi-tenancy",
+      "span_start": 12,
+      "span_end": 58,
+      "quote": "PostgreSQL provides schema-level multi-tenancy.",
+      "source_hash": "sha256:9f2c1a4b7e0d3f5a6c8b1d4e7f0a2c5b8d1e4f7a0c3b6d9e2f5a8c1b4d7e0f3a"
+    }
+  ],
+  "status": "supported"
+}
