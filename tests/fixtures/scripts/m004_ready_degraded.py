@@ -29,12 +29,13 @@ os.environ["DATABASE_URL"] = "postgresql+psycopg://nobody:nothing@127.0.0.1:5999
 os.environ["REDIS_URL"] = "redis://127.0.0.1:59999/0"
 os.environ["QDRANT_URL"] = "http://127.0.0.1:59999"
 os.environ["MINIO_ENDPOINT"] = "http://127.0.0.1:59999"
+os.environ["INFINITY_URL"] = "http://127.0.0.1:59999"
 os.environ["READINESS_TIMEOUT_SECONDS"] = "1.5"
 
 from app.main import create_app
 from fastapi.testclient import TestClient
 
-DEPS = ("postgres", "redis", "qdrant", "minio")
+DEPS = ("postgres", "redis", "qdrant", "minio", "infinity")
 
 with TestClient(create_app()) as client:
     start = time.perf_counter()
@@ -65,9 +66,9 @@ for name in DEPS:
         errors.append(f"{name} missing error detail: {dependency}")
     if dependency["name"] != name:
         errors.append(f"{name} name mismatch {dependency['name']}")
-if elapsed > 6.0:
+if elapsed > 7.5:
     errors.append(
-        f"/ready took {elapsed:.2f}s (4 probes x 1.5s timeout should be concurrent)"
+        f"/ready took {elapsed:.2f}s (5 probes x 1.5s timeout should be concurrent)"
     )
 
 print(

@@ -58,6 +58,10 @@ class Citation(BaseModel):
     #: scored the citation (legacy/existence-only verification).
     grounding_score: float | None = None
     #: Authoritative passage content used for grounding verification.
+    #: Always populated by ``verify_claims`` with the exact canonical
+    #: content the claim was grounded against (retrieved chunk text, or the
+    #: store-hydrated canonical text for graph citations) — never left
+    #: as None on a verified citation (review1 F6).
     content: str | None = None
 
 
@@ -66,6 +70,10 @@ class Answer(BaseModel):
 
     answer: str
     status: AnswerStatus = AnswerStatus.ANSWERED
+    #: Canonical reason code (UPPER_SNAKE_CASE member of
+    #: ``core.errors.ReasonCode``, TASK-Q0) when ``status`` is not
+    #: ``answered``; ``None`` otherwise. Kept as a plain ``str`` on the wire
+    #: for frontend compatibility (``apps/web/src/app/ask/contracts.ts``).
     reason_code: str | None = None
     reason: str | None = None
     confidence: Confidence = Field(default_factory=Confidence)

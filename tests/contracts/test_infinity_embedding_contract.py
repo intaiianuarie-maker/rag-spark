@@ -172,7 +172,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, {"object": "list", "model": body.get("model"), "data": data})
             return
 
-        dimension = 3 if self.server.mode == "bad_dim" else DIMENSION
+        dimension = {"bad_dim": 3, "wrong_dim_512": 512}.get(self.server.mode, DIMENSION)
         data = [
             {"object": "embedding", "index": index, "embedding": _vector(text, dimension)}
             for index, text in enumerate(inputs)
@@ -348,6 +348,39 @@ async def test_wrong_dimension_is_rejected(
     stub.mode = "bad_dim"
     with pytest.raises(EmbeddingProviderError):
         await provider.embed_documents(["alpha"])
+
+
+async def test_dimension_mismatch_rejected_by_default_strict(
+    provider: InfinityEmbeddingProvider,
+    stub: _StubServer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F5: without an explicit opt-in, ANY dimension mismatch raises.
+
+    A 512-d response for the 1024-d bge-m3 contract is a model-identity
+    violation — the adapter must not silently zero-pad it into a vector
+    the served model never produced.
+    """
+    monkeypatch.delenv("ALLOW_DIMENSION_ADAPTATION", raising=False)
+    stub.mode = "wrong_dim_512"
+    with pytest.raises(EmbeddingProviderError, match="expected 1024-d"):
+        await provider.embed_documents(["alpha"])
+    with pytest.raises(EmbeddingProviderError, match="expected 1024-d"):
+        await provider.embed_query("alpha")
+
+
+async def test_dimension_adaptation_requires_explicit_opt_in(
+    provider: InfinityEmbeddingProvider,
+    stub: _StubServer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """F5: the adaptation escape hatch still works when explicitly enabled."""
+    stub.mode = "wrong_dim_512"
+    monkeypatch.setenv("ALLOW_DIMENSION_ADAPTATION", "true")
+    vectors = await provider.embed_documents(["alpha"])
+    assert len(vectors[0]) == DIMENSION
+    assert vectors[0][:512] == _vector("alpha", 512)
+    assert vectors[0][512:] == [0.0] * 512
 
 
 async def test_zero_vector_is_rejected(

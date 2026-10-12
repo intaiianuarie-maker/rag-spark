@@ -311,6 +311,46 @@ def test_delete_purges_fts_and_qdrant_and_is_unretrievable(client) -> None:
     assert detail.json()["detail"]["error"] == "document_not_found"
 
 
+def test_delete_surfaces_partial_purge_failure_as_207(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """F2: a failing store purger is visible as 207 + per-store report, never a false 204.
+
+    The tombstone still commits (the document reads 404), but the response
+    must name the failed store so operators know derived rows may remain.
+    """
+    from ingestion import dedup
+
+    async def boom_purger(ws_id, doc_id) -> None:
+        raise RuntimeError("qdrant down")
+
+    monkeypatch.setattr(dedup, "_STORE_PURGERS", {"boom": boom_purger})
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    uploaded = _upload(client, token, workspace, "doomed.txt", b"to be deleted").json()
+    _run_job(uploaded["job_id"])
+    document_id = uploaded["document_id"]
+
+    response = client.delete(
+        f"/v1/workspaces/{workspace}/documents/{document_id}", headers=_auth(token)
+    )
+    assert response.status_code == 207, response.text
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["error"] == "store_purge_failed"
+    assert body["stores"]["postgres"] is True
+    assert body["stores"]["boom"] is False
+    assert "boom" in body["failed_stores"]
+
+    # The tombstone stands regardless: the document is gone for reads.
+    assert _is_deleted(document_id) is True
+    detail = client.get(
+        f"/v1/workspaces/{workspace}/documents/{document_id}", headers=_auth(token)
+    )
+    assert detail.status_code == 404
+    assert detail.json()["detail"]["error"] == "document_not_found"
+
+
 def test_delete_requires_workspace_access(client) -> None:
     owner = _new_user(client)
     outsider = _new_user(client)

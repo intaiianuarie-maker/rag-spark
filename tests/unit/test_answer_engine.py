@@ -147,6 +147,15 @@ async def test_verify_claims_span_is_computed() -> None:
     assert citations[0].span == (21, 32)  # "permissions" inside the chunk text
 
 
+async def test_verify_claims_citation_carries_canonical_content() -> None:
+    """F6: every verified citation carries the exact content it was grounded against."""
+    items = _items()
+    claims = [Claim(text="Alpha evidence about permissions", chunk_ids=["c-1"])]
+    _, citations = await verify_claims(claims, items, allowed_workspace_ids={"ws-a"})
+    assert len(citations) == 1
+    assert citations[0].content == "Alpha evidence about permissions"
+
+
 async def test_verify_claims_store_lookup_scoped_positive() -> None:
     """Lookup-resolved citation with a matching workspace is accepted."""
 

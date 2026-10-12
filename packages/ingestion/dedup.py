@@ -180,8 +180,21 @@ async def purge_document(
                     await gstore.tombstone_document(str(ws_id), str(doc_id))
 
                 register_store_purger("graph", _purge_graph)
-        except Exception:
-            pass
+        except Exception as exc:
+            # Registration failure must never read as a clean purge: the
+            # vector/lexical stores were NOT purged, so mark them failed in
+            # the per-store report (review1 F2 — no false 204).
+            logger.warning(
+                "store_purger_registration_failed",
+                extra={
+                    "event": "store_purger_registration_failed",
+                    "workspace_id": str(workspace_id),
+                    "document_id": str(document_id),
+                    "error": str(exc),
+                },
+            )
+            report.setdefault("fts", False)
+            report.setdefault("qdrant", False)
 
     for name, purger in _STORE_PURGERS.items():
         try:

@@ -10,7 +10,7 @@ import pytest
 
 pytestmark = pytest.mark.integration
 
-DEPENDENCIES = ("postgres", "redis", "qdrant", "minio")
+DEPENDENCIES = ("postgres", "redis", "qdrant", "minio", "infinity")
 
 
 def test_health_is_200_with_service_and_version(api_client) -> None:
@@ -32,7 +32,7 @@ def test_version_endpoint_reports_build_info(api_client) -> None:
 
 
 def test_ready_shape_lists_all_four_dependencies(api_client) -> None:
-    """`/ready` must name postgres/redis/qdrant/minio whether ok or degraded."""
+    """`/ready` must name postgres/redis/qdrant/minio/infinity whether ok or degraded."""
     response = api_client.get("/ready")
     assert response.status_code == 200, response.text
     body = response.json()

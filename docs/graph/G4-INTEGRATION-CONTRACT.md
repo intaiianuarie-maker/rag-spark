@@ -1,17 +1,21 @@
 # G4 — Graph API / Factory / UI integration contract (V2)
 
-> Status: **contract prepared, integration NOT applied.** The protected
-> `packages/answer/*`, `packages/core/*`, and product API/UI wiring are gated on
-> accepted v1 Q9 and an explicit coordinator dispatch (V2-GRAPH-PLAN §3 seam
-> contract; AGENTS.md §2). This document is the *exact, review-ready* change set
-> so integration is mechanical once the gate opens. Nothing here is applied to
-> the tree yet.
+> Status: **backend wiring APPLIED at HEAD; UI selector remains.** The
+> `answer.factory` `graph=create_graph_retriever()`, `AskRequest.mode` /
+> `AnswerEngine.answer(mode)` (HYBRID default), and `SearchRequest.mode`
+> passthrough are merged (5dcb6c1; canonical hydration + ingest graph hook in
+> 46fbf67, G2-APPROVED). The V2-GRAPH-PLAN §3 gate was satisfied via those
+> post-Q9 exception merges (DECISIONS exception note pending — coordinator
+> owns it). True remaining gap: UI mode selector in `apps/web` (no
+> graph/hybrid_graph toggle; trace-panel label covered by D2).
 >
-> Author: dev2 (Stream B) · 2026-10-10 · branch `feat/v2-graph`.
+> Author: dev2 (Stream B) · 2026-10-10 · updated 2026-10-12 (code2 docs-only).
 
 The graph leg itself (G1 extract, G2 store, G3 retrieve/fuse) is implemented,
-tested, and reviewed-approved. What remains for "product completion" is the
-thin wiring that exposes it behind the flag. This contract pins that wiring.
+tested, and reviewed-approved. The backend exposure is also merged (factory
+graph wiring, ask/search mode passthrough, hydration + ingest hook — see §0).
+What remains for "product completion" is the UI selector. This contract pins
+that wiring (applied parts marked ✅, remaining parts marked ⚠).
 
 ## 0. Current state (verified 2026-10-10)
 
@@ -20,9 +24,9 @@ thin wiring that exposes it behind the flag. This contract pins that wiring.
 | `HybridRetrievalOrchestrator(graph=...)` | ✅ accepts an optional `graph` object; `GRAPH`/`HYBRID_GRAPH` modes; `TRACE_KEYS` includes `"graph"` | none — reviewed/approved |
 | `packages/graph/factory.py::create_graph_retriever` | ✅ builds `GraphRetriever \| None` from `GRAPH_MODE`/`GRAPH_DB_PATH` | none — new this cycle, tested |
 | `Search` endpoint mode | ✅ `SearchRequest.mode: RetrievalMode` already accepts `hybrid_graph`/`graph` | none at request-parsing level |
-| `answer.factory.create_orchestrator()` | ⚠ builds dense+lexical+rerank, passes **no** `graph=` | must pass `graph=create_graph_retriever()` |
-| `/ask` endpoint | ⚠ `AskRequest` has **no** `mode`; `engine.answer()` always calls `retrieve()` with default `HYBRID` | add opt-in `mode` |
-| UI (search/chat) | ⚠ no graph mode toggle | add `mode` selector (frontend stream) |
+| `answer.factory.create_orchestrator()` | ✅ APPLIED (5dcb6c1): passes `graph=create_graph_retriever()` (None when `GRAPH_MODE=off`) | none — flag-off parity holds |
+| `/ask` endpoint | ✅ APPLIED (5dcb6c1): `AskRequest.mode` + `AnswerEngine.answer(mode)`, HYBRID default | none backend-side |
+| UI (search/chat) | ⚠ no graph mode toggle | add `mode` selector (frontend stream) — TRUE REMAINING GAP |
 
 `GRAPH_MODE=off` (the default) is the byte-identical v1 **retrieval** path: the
 factory returns `None`, the orchestrator's graph leg no-ops, and no graph
@@ -35,7 +39,7 @@ Byte-identical *output* (not zero imports) is what is locked, by
 requirement is to avoid even the import, gate the import behind the flag rather
 than claiming no graph code loads.
 
-## 1. Protected change set (apply only after Q9 + coordinator dispatch)
+## 1. Protected change set (backend subset APPLIED via 5dcb6c1/46fbf67; UI pending)
 
 ### 1a. `packages/answer/factory.py` — wire the retriever (backend)
 

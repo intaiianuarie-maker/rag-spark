@@ -2,11 +2,16 @@
 
 Postgres chunks are removed and the document is tombstoned (`deleted_at`).
 Qdrant/FTS purges run through `ingestion.dedup` store purgers with a
-document-scoped filter (`build_purge_filter`); the delete endpoint reports the
-per-store report and always returns 204 once the tombstone commits.
-`GET .../documents/{id}` on a tombstoned document returns an honest 404
-(`document_not_found`), and deleted chunks are gone from FTS/Qdrant so search
-and ask can never return or cite them.
+document-scoped filter (`build_purge_filter`).
+
+Purge failures are surfaced, never swallowed (review1 F2): the endpoint
+returns 204 only when every store in the per-store report purged cleanly.
+When any store reports failure the tombstone still stands (the document is
+gone and reads 404), but the response is **207 Multi-Status** with the
+per-store report in the body so operators can see which store needs a
+re-purge. `GET .../documents/{id}` on a tombstoned document returns an
+honest 404 (`document_not_found`), and deleted chunks are gone from
+FTS/Qdrant so search and ask can never return or cite them.
 """
 
 from __future__ import annotations
@@ -16,6 +21,7 @@ import uuid
 
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi.responses import JSONResponse
 from ingestion.dedup import purge_document
 from ingestion.persistence import Document
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -39,8 +45,10 @@ def _http_error(exc: ApiError) -> HTTPException:
 @router.delete(
     "/{document_id}",
     status_code=status.HTTP_204_NO_CONTENT,
-    response_class=Response,
     summary="Tombstone a document and purge its derived rows",
+    responses={
+        207: {"description": "Tombstoned, but at least one store purge failed (see body)"},
+    },
 )
 async def delete_document(
     workspace_id: uuid.UUID,
@@ -63,6 +71,35 @@ async def delete_document(
     report = await purge_document(
         session, workspace_id=workspace_id, document_id=document_id
     )
+    failed = sorted(name for name, ok in report.items() if not ok)
+    if failed:
+        # The tombstone is committed (reads 404), but a downstream store
+        # still holds derived rows — report 207 with the per-store map so
+        # the failure is visible instead of a false-clean 204.
+        logger.warning(
+            "document_delete_degraded",
+            extra={
+                "event": "document_delete_degraded",
+                "document_id": str(document_id),
+                "workspace_id": str(workspace_id),
+                "stores": report,
+                "failed_stores": failed,
+            },
+        )
+        return JSONResponse(
+            status_code=status.HTTP_207_MULTI_STATUS,
+            content={
+                "status": "degraded",
+                "error": "store_purge_failed",
+                "message": (
+                    "Document tombstoned, but purge failed for: "
+                    + ", ".join(failed)
+                    + ". Re-purge or investigate before assuming full deletion."
+                ),
+                "stores": report,
+                "failed_stores": failed,
+            },
+        )
     logger.info(
         "document_deleted",
         extra={

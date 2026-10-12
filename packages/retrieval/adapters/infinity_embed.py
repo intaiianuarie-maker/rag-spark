@@ -167,9 +167,13 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
                     "infinity /embeddings returned a non-finite embedding component"
                 )
             if len(raw_vec) != self.dimension:
+                # Strict by default (review1 F5): a dimension mismatch is a
+                # model-identity violation, and silent zero-padding/truncation
+                # would manufacture vectors the served model never produced.
+                # Operators may explicitly opt into adaptation (e.g. a
+                # temporary smaller model) via ALLOW_DIMENSION_ADAPTATION=true.
                 allow_adapt = (
-                    os.environ.get("ALLOW_DIMENSION_ADAPTATION", "true")
-                    .lower()
+                    os.environ.get("ALLOW_DIMENSION_ADAPTATION", "false").lower()
                     in ("1", "true", "yes")
                 )
                 if allow_adapt and len(raw_vec) >= 64:

@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import os
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
 from ingestion.adapters.llamaindex_chunker import LlamaIndexUnavailableError
@@ -110,6 +110,10 @@ class PipelineResult:
     chunk_count: int
     language: str
     stages: list[str]
+    #: TASK-Q1: explicit partial/degraded disclosure — True when an optional
+    #: stage (e.g. graph extraction) failed while mandatory writes succeeded.
+    partial: bool = False
+    warnings: list[str] = field(default_factory=list)
 
 
 def ensure_element_limit(elements: list[DocumentElement], limit: int | None = None) -> None:
@@ -227,6 +231,14 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     stages.append(JobStage.INDEXING.value)
     _log_stage(job, JobStage.INDEXING.value)
 
+    # TASK-Q1 (V1-COMPLETION-PLAN §3): READY is gated on *verified* mandatory
+    # store writes — a call that merely returns without raising is not proof
+    # that anything landed. Both flags must be True before JobStatus.READY.
+    fts_write_verified = False
+    vector_write_verified = False
+    #: Explicit partial/degraded disclosures (existing columns only, no migration).
+    partial_reasons: list[str] = []
+
     try:
         from retrieval.adapters.pg_fts import PostgresLexicalStore
         from retrieval.interfaces import VectorRecord
@@ -246,7 +258,40 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             )
             for c in result.chunks
         ]
-        await lexical_store.index(records=records)
+        indexed = await lexical_store.index(records=records)
+        if indexed != len(records):
+            raise IngestPipelineError(
+                "INDEX_COUNT_MISMATCH",  # Q0 taxonomy code (packages/core/errors.py)
+                f"Postgres FTS reported {indexed} of {len(records)} records written",
+                retryable=True,
+            )
+        try:
+            fts_verified = await lexical_store.count_ids(ids=[r.id for r in records])
+        except Exception as exc:
+            raise IngestPipelineError(
+                "STORE_WRITE_UNVERIFIED",  # Q0 taxonomy code (packages/core/errors.py)
+                f"Postgres FTS write could not be verified: {type(exc).__name__}: {exc}",
+                retryable=True,
+            ) from exc
+        if fts_verified != len(records):
+            raise IngestPipelineError(
+                "INDEX_COUNT_MISMATCH",  # Q0 taxonomy code (packages/core/errors.py)
+                f"Postgres FTS verified {fts_verified} of {len(records)} written records",
+                retryable=True,
+            )
+        fts_write_verified = True
+        logger.info(
+            "store_write_verified",
+            extra={
+                "event": "store_write_verified",
+                "job_id": str(job.id),
+                "store": "fts",
+                "written": len(records),
+                "verified": fts_verified,
+            },
+        )
+    except IngestPipelineError:
+        raise
     except Exception as exc:
         logger.error("fts_indexing_failed", extra={"job_id": str(job.id), "error": str(exc)})
         raise IngestPipelineError(
@@ -262,34 +307,111 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     _log_stage(job, JobStage.EMBEDDING.value)
 
     try:
-        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider, _is_zero_vector
         from retrieval.adapters.qdrant_store import QdrantVectorStore
 
         coll = "knowledge"
-        qdrant = QdrantVectorStore(collection=coll)
-        await qdrant.ensure_collection(collection=coll, dimension=1024)
-
         embed_provider = InfinityEmbeddingProvider()
-        texts = [c.text for c in result.chunks]
-        vectors = await embed_provider.embed_documents(texts)
+        qdrant = QdrantVectorStore(collection=coll)
+        try:
+            await qdrant.ensure_collection(collection=coll, dimension=embed_provider.dimension)
 
-        qdrant_records = [
-            VectorRecord(
-                id=str(id_map[c.id]),
-                vector=vec,
-                workspace_id=str(job.workspace_id),
-                document_id=str(document.id) if document else None,
-                document_version_id=str(version.id),
-                chunk_id=str(id_map[c.id]),
-                content=c.text,
-                page=c.page,
-                section=c.section,
-                metadata={"language": result.language, **(c.metadata or {})},
+            texts = [c.text for c in result.chunks]
+            try:
+                vectors = await embed_provider.embed_documents(texts)
+            except Exception as exc:
+                logger.error(
+                    "embedding_failed", extra={"job_id": str(job.id), "error": str(exc)}
+                )
+                raise IngestPipelineError(
+                    "EMBED_UNAVAILABLE",  # Q0 taxonomy code (packages/core/errors.py)
+                    f"Embedding provider unavailable: {type(exc).__name__}: {exc}",
+                    retryable=True,
+                ) from exc
+
+            # Defensive write-side guard (TASK-Q1): never upsert a manufactured
+            # embedding. Reuses the provider's zero-vector definition/tolerance
+            # (no second implementation); the provider's own HTTP-path checks
+            # live in infinity_embed.py.
+            if len(vectors) != len(texts):
+                raise IngestPipelineError(
+                    "EMBED_UNAVAILABLE",  # Q0 taxonomy code (packages/core/errors.py)
+                    f"embedding returned {len(vectors)} vectors for {len(texts)} chunks",
+                    retryable=True,
+                )
+            for position, vec in enumerate(vectors):
+                if not vec or _is_zero_vector(vec):
+                    raise IngestPipelineError(
+                        "ZERO_VECTOR_REJECTED",  # Q0 taxonomy code (packages/core/errors.py)
+                        f"chunk {position} produced a zero/empty vector; "
+                        "refusing to upsert a manufactured embedding",
+                        retryable=False,
+                    )
+
+            qdrant_records = [
+                VectorRecord(
+                    id=str(id_map[c.id]),
+                    vector=vec,
+                    workspace_id=str(job.workspace_id),
+                    document_id=str(document.id) if document else None,
+                    document_version_id=str(version.id),
+                    chunk_id=str(id_map[c.id]),
+                    content=c.text,
+                    page=c.page,
+                    section=c.section,
+                    metadata={"language": result.language, **(c.metadata or {})},
+                )
+                for c, vec in zip(result.chunks, vectors, strict=True)
+            ]
+            try:
+                upserted = await qdrant.upsert(collection=coll, records=qdrant_records)
+            except Exception as exc:
+                logger.error(
+                    "qdrant_upsert_failed",
+                    extra={"job_id": str(job.id), "error": str(exc)},
+                )
+                raise IngestPipelineError(
+                    "qdrant_indexing_failed",
+                    f"Vector store upsert failed: {exc}",
+                    retryable=True,
+                ) from exc
+            if upserted != len(qdrant_records):
+                raise IngestPipelineError(
+                    "INDEX_COUNT_MISMATCH",  # Q0 taxonomy code (packages/core/errors.py)
+                    f"Qdrant reported {upserted} of {len(qdrant_records)} records written",
+                    retryable=True,
+                )
+            try:
+                vector_verified = await qdrant.count_ids(
+                    collection=coll, ids=[r.id for r in qdrant_records]
+                )
+            except Exception as exc:
+                raise IngestPipelineError(
+                    "STORE_WRITE_UNVERIFIED",  # Q0 taxonomy code (packages/core/errors.py)
+                    f"Qdrant write could not be verified: {type(exc).__name__}: {exc}",
+                    retryable=True,
+                ) from exc
+            if vector_verified != len(qdrant_records):
+                raise IngestPipelineError(
+                    "INDEX_COUNT_MISMATCH",  # Q0 taxonomy code (packages/core/errors.py)
+                    f"Qdrant verified {vector_verified} of {len(qdrant_records)} written records",
+                    retryable=True,
+                )
+            vector_write_verified = True
+            logger.info(
+                "store_write_verified",
+                extra={
+                    "event": "store_write_verified",
+                    "job_id": str(job.id),
+                    "store": "qdrant",
+                    "written": len(qdrant_records),
+                    "verified": vector_verified,
+                },
             )
-            for c, vec in zip(result.chunks, vectors, strict=True)
-        ]
-        await qdrant.upsert(collection=coll, records=qdrant_records)
-        await qdrant.close()
+        finally:
+            await qdrant.close()
+    except IngestPipelineError:
+        raise
     except Exception as exc:
         logger.error("qdrant_embedding_failed", extra={"job_id": str(job.id), "error": str(exc)})
         raise IngestPipelineError(
@@ -344,6 +466,27 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                 "graph_extraction_failed",
                 extra={"job_id": str(job.id), "error": str(exc)},
             )
+            # TASK-Q1: partial must be explicit, never a silent ready (V1 §5
+            # "no silent mandatory failures"). Disclosed through the existing
+            # error_code/error_message columns only (no migration) — the API
+            # surfaces them on an otherwise READY job via `_job_error`.
+            # TASK-Q1 partial reason — Q0 taxonomy code requested in handoff
+            # (packages/core/errors.py)
+            job.error_code = "GRAPH_INDEX_PARTIAL"
+            job.error_message = (
+                f"graph_extraction_failed: {type(exc).__name__}: {exc}"
+            )[:2000]
+            partial_reasons.append(f"graph_extraction_failed: {type(exc).__name__}: {exc}")
+
+    # TASK-Q1 verified-write gate: READY requires every mandatory store write
+    # (Postgres FTS + Qdrant) to have been re-read and counted successfully.
+    if not (fts_write_verified and vector_write_verified):
+        raise IngestPipelineError(
+            "STORE_WRITE_UNVERIFIED",  # Q0 taxonomy code (packages/core/errors.py)
+            "refusing READY: mandatory store writes are unverified "
+            f"(fts={fts_write_verified}, vectors={vector_write_verified})",
+            retryable=False,
+        )
 
     job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value
@@ -359,11 +502,23 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             "job_id": str(job.id),
             "chunks": len(result.chunks),
             "language": result.language,
+            "partial": bool(partial_reasons),
         },
     )
+    if partial_reasons:
+        logger.warning(
+            "ingest_job_ready_partial",
+            extra={
+                "event": "ingest_job_ready_partial",
+                "job_id": str(job.id),
+                "warnings": partial_reasons,
+            },
+        )
     return PipelineResult(
         job_id=str(job.id),
         chunk_count=len(result.chunks),
         language=result.language,
         stages=stages,
+        partial=bool(partial_reasons),
+        warnings=list(partial_reasons),
     )

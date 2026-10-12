@@ -3,10 +3,10 @@
 /**
  * RAG debugger trace view (TASK-M8-002) — per-result retrieval trace.
  *
- * Renders the frozen debugger trace contract: for every returned chunk the five
+ * Renders the frozen debugger trace contract: for every returned chunk the six
  * per-leg scores the orchestrator always carries (`dense`, `sparse`, `lexical`,
- * `rrf`, `rerank`). `rrf` is always present; the three leg scores appear exactly
- * when that leg surfaced the chunk; `rerank` only when reranking ran. So the
+ * `graph`, `rrf`, `rerank`). `rrf` is always present; the four leg scores appear
+ * exactly when that leg surfaced the chunk; `rerank` only when reranking ran. So the
  * panel shows which retrieval legs contributed and how the final fusion (`rrf`)
  * ranked the chunk — the "why is this result here" answer.
  *
@@ -14,8 +14,8 @@
  * in the node vitest environment (see trace-panel.test.ts).
  */
 
-/** Canonical trace keys, in the order the debugger displays them. */
-export const TRACE_KEYS = ["dense", "sparse", "lexical", "rrf", "rerank"] as const;
+/** Canonical trace keys, in the order the debugger displays them (mirrors orchestrator TRACE_KEYS). */
+export const TRACE_KEYS = ["dense", "sparse", "lexical", "graph", "rrf", "rerank"] as const;
 
 export type TraceKey = (typeof TRACE_KEYS)[number];
 
@@ -24,6 +24,7 @@ export const TRACE_LABELS: Record<TraceKey, string> = {
   dense: "Dense",
   sparse: "Sparse",
   lexical: "Lexical",
+  graph: "Graph",
   rrf: "Fusion (RRF)",
   rerank: "Rerank",
 };

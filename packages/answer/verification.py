@@ -11,9 +11,9 @@ When a :class:`ClaimGrounder` is configured (the engine wires one by default),
 a citation is added only when the cited chunk grounds the claim; citations to
 chunks that do not support the claim are dropped, and a claim left with no
 grounded citations is dropped too. Lookup-resolved citations (chunk not in the
-retrieved context) cannot be grounded — there is no chunk content to score —
-so they are dropped when a grounder is configured, keeping the verified set
-strictly to chunks that were retrieved *and* support the claim.
+retrieved context) are grounded against store-hydrated canonical content when
+present, else dropped, keeping the verified set strictly to chunks that
+support the claim.
 
 **v1 interim strategy — conservative extractive grounding with a
 context-preserving quotation mode.** The default :class:`ExtractiveGrounder`
@@ -233,6 +233,7 @@ def _citation(
         span=span if span is not None else _span(claim_text, item.content),
         workspace_id=item.workspace_id,
         grounding_score=grounding_score,
+        content=item.content,
     )
 
 
@@ -489,6 +490,11 @@ async def verify_claims(
                         span=span if span is not None else _span(claim.text, content_to_verify),
                         workspace_id=workspace_id,
                         grounding_score=grounding_score,
+                        # Verified canonical passage: the exact content the
+                        # claim was grounded against (review1 F6 — never None
+                        # on this path; store-resolved citations below already
+                        # carry it from the chunk lookup adapters).
+                        content=content_to_verify,
                     )
                 )
             elif chunk_lookup is not None:

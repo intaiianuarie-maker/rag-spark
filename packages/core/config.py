@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # --- Qdrant (dense vectors; PD-002) ---
     qdrant_url: str = "http://localhost:6333"
 
+    # --- infinity (bge-m3 embeddings + rerank; PD-002, :7997) ---
+    infinity_url: str = "http://localhost:7997"
+
     # --- MinIO / SeaweedFS S3 (document originals; PD-005) ---
     minio_endpoint: str = "http://localhost:8333"
     minio_access_key: str = "minioadmin"

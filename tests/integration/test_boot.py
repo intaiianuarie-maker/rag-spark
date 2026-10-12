@@ -2,7 +2,7 @@
 
 The boot test always runs: `/health` must be 200 and `/ready` must return 200
 with per-service reachability entries (non-fatal by design). When compose
-services are up, a stricter check asserts all four are reachable; otherwise it
+services are up, a stricter check asserts all five are reachable; otherwise it
 skips with a clear message (never a silent pass).
 """
 
@@ -16,7 +16,7 @@ os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 os.environ.setdefault("LOG_JSON", "false")
 os.environ.setdefault("APP_ENV", "test")
 
-DEPENDENCIES = ("postgres", "redis", "qdrant", "minio")
+DEPENDENCIES = ("postgres", "redis", "qdrant", "minio", "infinity")
 
 
 @pytest.mark.integration
