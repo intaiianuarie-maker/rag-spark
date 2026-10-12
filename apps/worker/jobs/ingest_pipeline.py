@@ -328,7 +328,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     _log_stage(job, JobStage.EMBEDDING.value)
 
     try:
-        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider, _is_zero_vector
+        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
         from retrieval.adapters.qdrant_store import QdrantVectorStore
 
         coll = "knowledge"
@@ -350,24 +350,15 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                     retryable=True,
                 ) from exc
 
-            # Defensive write-side guard (TASK-Q1): never upsert a manufactured
-            # embedding. Reuses the provider's zero-vector definition/tolerance
-            # (no second implementation); the provider's own HTTP-path checks
-            # live in infinity_embed.py.
+            # Shape check only (TASK-Q1): one vector per chunk. Zero / NaN / Inf /
+            # wrong-dimension vectors are rejected at the single storage boundary
+            # (T-V1-015, qdrant_store.validate_records) — not re-checked per caller.
             if len(vectors) != len(texts):
                 raise IngestPipelineError(
                     "EMBED_UNAVAILABLE",  # Q0 taxonomy code (packages/core/errors.py)
                     f"embedding returned {len(vectors)} vectors for {len(texts)} chunks",
                     retryable=True,
                 )
-            for position, vec in enumerate(vectors):
-                if not vec or _is_zero_vector(vec):
-                    raise IngestPipelineError(
-                        "ZERO_VECTOR_REJECTED",  # Q0 taxonomy code (packages/core/errors.py)
-                        f"chunk {position} produced a zero/empty vector; "
-                        "refusing to upsert a manufactured embedding",
-                        retryable=False,
-                    )
 
             qdrant_records = [
                 VectorRecord(

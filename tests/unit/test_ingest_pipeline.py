@@ -52,6 +52,36 @@ def test_stable_chunk_id_is_deterministic_within_a_generation() -> None:
     )  # never a bare chunk-id derivation
 
 
+def test_no_per_caller_zero_vector_guard_in_pipeline() -> None:
+    """T-V1-044: the store boundary (T-V1-015) is the single enforcement point.
+
+    The pipeline must not carry its own zero-vector check — a per-caller guard
+    here would make "single boundary, not per-caller checks" false.
+    """
+    import inspect
+
+    from jobs import ingest_pipeline
+
+    source = inspect.getsource(ingest_pipeline)
+    assert "_is_zero_vector" not in source  # no second zero-vector implementation
+    assert "ZERO_VECTOR_REJECTED" not in source  # per-caller reject path gone
+
+
+def test_zero_vector_is_still_rejected_at_the_store_boundary() -> None:
+    """Removed from the caller, not from the system: the boundary still refuses it."""
+    from retrieval.adapters.qdrant_store import (
+        REJECT_ZERO,
+        VectorStoreInvalidVector,
+        validate_record_vector,
+    )
+    from retrieval.interfaces import VectorRecord
+
+    record = VectorRecord(id="chk-1", vector=[0.0] * 4, content="x", workspace_id="ws-a")
+    with pytest.raises(VectorStoreInvalidVector) as excinfo:
+        validate_record_vector(record, expected_dim=4)
+    assert excinfo.value.reason == REJECT_ZERO
+
+
 def test_registry_maps_supported_mime_types() -> None:
     assert parser_for_mime("application/pdf") is not None
     assert parser_for_mime("text/plain") is not None
