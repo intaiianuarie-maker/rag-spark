@@ -101,6 +101,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   deletion, 25 green). All reviewer-APPROVEd. T-V1-043 (bge-m3) gates Q9.
 - T-V1-017 reviewer: APPROVE (atomic FTS, version-scoped Qdrant, never-silent retry,
   13 green with knob) → DONE. Worktree holds only dev2's live T-022 files — no waves.
+- T-V1-022 reviewer: APPROVE (ordering holds, fail-closed rejects, all 5 rulings confirmed,
+  15 green) → DONE. api+worker restarted (hydration is live runtime), /health ok.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),

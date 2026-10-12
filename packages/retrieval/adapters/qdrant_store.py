@@ -31,16 +31,46 @@ validation lives here once instead of being re-implemented per caller.
   and ``promote_replacement`` is the only sanctioned switch: it verifies the
   replacement first and performs no destructive call when verification fails,
   so a failed or interrupted rebuild leaves the prior index serving.
+
+Active-version read gate (T-V1-018, RP-09/QF-09)
+------------------------------------------------
+Being *written* is not the same as being *current*. ``upsert`` can legitimately
+leave a superseded generation behind for as long as the T-V1-017 cleanup is
+pending or retrying, so this module validates the retrieved payload against the
+**authoritative document** before its content is eligible as evidence:
+
+* ``search`` widens its ANN window, then drops every candidate whose payload
+  ``document_version_id`` is not the document's ``documents.current_version_id``
+  (a tombstoned document drops everything), then truncates back to ``top_k``.
+  The check is *pre-evidence*: a stale copy never leaves the store, so it can
+  never be ranked, cited or hydrated into a prompt — it is not a post-answer
+  filter and it does not depend on async cleanup having run.
+* The authoritative state is one batched read per search (no per-hit query) and
+  the gate is deterministic: the same store rows and the same authority produce
+  the same items, in the same order, every time.
+* When the authority cannot be consulted at all the read **refuses**
+  (``VectorStoreError``) instead of serving content it could not validate; the
+  orchestrator degrades that leg to ``[]`` exactly as it does for any other
+  store failure.
+
+Authority contract (see :func:`_postgres_active_versions`): a document the
+authority does not have — or one whose ``current_version_id`` was never set
+(pre-migration rows) — makes *no* active-version claim and passes through
+unchanged, which is also what keeps the frozen M0-04 vector-store contract
+green (its fixture documents are not rows, and ``documents.id`` is a UUID
+column, so those ids are outside the authority's key space entirely); a
+tombstoned document is always ineligible.
 """
 
 from __future__ import annotations
 
 import hashlib
+import logging
 import math
 import os
 import re
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
 from typing import Any
 
 from core.config import get_settings
@@ -71,6 +101,8 @@ DEFAULT_DENSE_DIM = 1024
 SPARSE_VOCAB = 30000  # hash-truncated vocab for BM25-like sparse
 
 _token_re = re.compile(r"\w+", re.UNICODE)
+
+logger = logging.getLogger("knowledge_os.retrieval.qdrant_store")
 
 
 class VectorStoreError(RuntimeError):
@@ -146,6 +178,22 @@ def _to_point_id(s: str) -> str:
         return str(uuid.uuid5(uuid.NAMESPACE_DNS, s))
 
 
+def _is_uuid(value: Any) -> bool:
+    """Is ``value`` in the authoritative document key space (a UUID)?
+
+    ``documents.id`` is a UUID column, so an id that is not a UUID can never
+    name a document row (T-V1-018): it is structurally outside the authority's
+    key space rather than an unknown document in it.
+    """
+    if value is None:
+        return False
+    try:
+        uuid.UUID(str(value))
+    except (ValueError, AttributeError, TypeError):
+        return False
+    return True
+
+
 def _text_to_sparse(text: str) -> SparseVector:
     """Deterministic BM25-like sparse vector from text (hash-truncated vocab)."""
     counts: dict[int, float] = {}
@@ -176,6 +224,96 @@ def _filter_from_search_filter(f: SearchFilter) -> Filter | None:
     return Filter(must=must)
 
 
+#: T-V1-018: candidate-window multiplier for the active-version gate. The gate
+#: can drop candidates, so ``search`` asks Qdrant for a wider window and
+#: truncates the filtered list back to ``top_k``: dropping a stale copy must
+#: neither shrink the returned set nor crowd out a current-version hit (no
+#: recall regression), and with nothing stale the first ``top_k`` candidates —
+#: and therefore the returned items — are exactly what they were before.
+CANDIDATE_OVERFETCH = 4
+
+#: Authoritative active-version lookup: ``document_id`` -> active version id.
+#: A document absent from the returned mapping is one the authority makes no
+#: claim about (never ingested under this contract, or pre-migration rows whose
+#: ``current_version_id`` was never set); ``None`` names a tombstoned document,
+#: which is never eligible as evidence.
+ActiveVersionResolver = Callable[[Collection[str]], Awaitable[Mapping[str, str | None]]]
+
+
+async def _postgres_active_versions(document_ids: Collection[str]) -> dict[str, str | None]:
+    """Authoritative active-version state, straight from the ``documents`` table.
+
+    The single source of truth for "which generation is live" is the
+    ``Document.current_version_id`` pointer (T-V1-016), not the vector payload
+    — a payload can only ever *claim* a generation. One batched read answers
+    every document in the candidate window, so the gate costs a constant number
+    of queries per search regardless of ``top_k``.
+
+    Reported per document:
+
+    * ``<version uuid str>`` — the active generation; a payload may only be
+      evidence when it claims exactly this version;
+    * ``None`` — the document is tombstoned (``deleted_at`` set): nothing
+      published for it is ever eligible, whether or not async cleanup has run;
+    * absent — the authority has no active-version claim to make: the id names
+      no document row, or the document is live but its pointer was never set
+      (pre-migration rows). Enforcing against those would strand every
+      pre-migration document and the frozen M0-04 contract fixtures, so they
+      pass through unchanged.
+
+    ``documents.id`` is a UUID column, so only UUID-shaped ids are in the
+    authority's key space at all: a payload naming anything else (contract
+    fixtures, pre-contract payloads) cannot be resolved to a document and is
+    therefore never looked up — that keeps an id the database would reject
+    (``invalid input syntax for type uuid``) from turning a no-claim read into
+    a hard refusal.
+
+    A transport/DB failure propagates: ``search`` turns it into a refusal
+    rather than a silent pass-through (see the module docstring).
+    """
+    ids = sorted({str(d) for d in document_ids if _is_uuid(d)})
+    if not ids:
+        return {}
+    from ingestion.persistence import get_session_factory
+    from sqlalchemy import text
+
+    async with get_session_factory()() as session:
+        result = await session.execute(
+            text(
+                "SELECT id, current_version_id, deleted_at FROM documents WHERE id = ANY(:ids)"
+            ),
+            {"ids": ids},
+        )
+        active: dict[str, str | None] = {}
+        for row in result.mappings().all():
+            if row["deleted_at"] is not None:
+                active[str(row["id"])] = None  # tombstoned: never eligible
+            elif row["current_version_id"] is not None:
+                active[str(row["id"])] = str(row["current_version_id"])
+            # else: no claim — leave the document absent from the mapping.
+        return active
+
+
+def _is_active_version(payload: Mapping[str, Any], active: Mapping[str, str | None]) -> bool:
+    """Pre-evidence gate (T-V1-018): is this payload the authoritative version?
+
+    Deterministic and payload-only once ``active`` is resolved — no clock, no
+    sleep, no cleanup-state guess. ``False`` means the retrieved content is a
+    leftover copy and is dropped before it can become evidence.
+    """
+    document_id = payload.get("document_id")
+    if document_id is None:
+        return True  # no document provenance: nothing to be stale against
+    key = str(document_id)
+    if key not in active:
+        return True  # the authority makes no active-version claim about this id
+    active_version = active[key]
+    if active_version is None:
+        return False  # tombstoned document: never eligible
+    payload_version = payload.get("document_version_id")
+    return payload_version is not None and str(payload_version) == active_version
+
+
 class QdrantVectorStore(VectorStore):
     """Qdrant hybrid store — implements retrieval.interfaces.VectorStore.
 
@@ -191,6 +329,7 @@ class QdrantVectorStore(VectorStore):
         collection: str | None = None,
         timeout: int = 10,
         client: AsyncQdrantClient | None = None,
+        active_version_resolver: ActiveVersionResolver | None = None,
     ) -> None:
         settings = get_settings()
         qurl = url or os.environ.get("QDRANT_URL") or settings.qdrant_url
@@ -198,6 +337,11 @@ class QdrantVectorStore(VectorStore):
         self._default_collection = collection
         #: Collection → configured dense dimension, learned once (T-V1-015).
         self._dimensions: dict[str, int] = {}
+        #: T-V1-018 pre-evidence gate: who answers "which version is active".
+        #: Defaults to the documents table; tests inject their own resolver.
+        self._active_version_resolver: ActiveVersionResolver = (
+            active_version_resolver or _postgres_active_versions
+        )
 
     @staticmethod
     def _dense_dim(info: Any) -> int | None:
@@ -490,6 +634,31 @@ class QdrantVectorStore(VectorStore):
         except Exception as e:
             raise VectorStoreError(f"count_ids failed for {collection}: {e}") from e
 
+    async def _active_versions_for(
+        self, payloads: Sequence[Mapping[str, Any]]
+    ) -> Mapping[str, str | None]:
+        """Authoritative active-version state for the documents in ``payloads``.
+
+        One batched lookup for the whole candidate window (T-V1-018). When the
+        authority cannot answer, the read **refuses** instead of guessing: an
+        unvalidatable candidate must not become evidence, and the orchestrator
+        already degrades a failing leg to ``[]``.
+        """
+        document_ids = {
+            str(p["document_id"]) for p in payloads if p.get("document_id") is not None
+        }
+        if not document_ids:
+            return {}
+        try:
+            active = await self._active_version_resolver(document_ids)
+        except Exception as e:
+            raise VectorStoreError(
+                f"active-version check failed for {len(document_ids)} document(s) "
+                f"({type(e).__name__}: {e}) — refusing to return content that cannot be "
+                "validated against the authoritative document"
+            ) from e
+        return dict(active or {})
+
     async def search(
         self,
         *,
@@ -507,18 +676,30 @@ class QdrantVectorStore(VectorStore):
             raise VectorStoreError("collection name required")
         try:
             qfilter = _filter_from_search_filter(query_filter)
+            # T-V1-018: widen the candidate window (CANDIDATE_OVERFETCH) so the
+            # active-version gate can drop a leftover copy without shrinking the
+            # set a caller gets back or crowding out a current-version hit.
             resp = await self._client.query_points(
                 collection_name=coll,
                 query=vector,
                 using=DENSE_NAME,
                 query_filter=qfilter,
-                limit=top_k,
+                limit=max(top_k, top_k * CANDIDATE_OVERFETCH),
                 with_payload=True,
             )
             results = resp.points
+            # Pre-evidence gate: payload generation/version is validated against
+            # the authoritative document BEFORE any content leaves this module,
+            # so a superseded generation can never be ranked, cited or hydrated
+            # into a prompt — cleanup being pending or retried changes nothing.
+            active = await self._active_versions_for([r.payload or {} for r in results])
             items: list[RetrievedItem] = []
+            stale = 0
             for r in results:
                 p = r.payload or {}
+                if not _is_active_version(p, active):
+                    stale += 1
+                    continue
                 items.append(
                     RetrievedItem(
                         content=str(p.get("content", "")),
@@ -534,7 +715,17 @@ class QdrantVectorStore(VectorStore):
                         metadata=dict(p.get("metadata", {})),
                     )
                 )
-            return items
+            if stale:
+                logger.warning(
+                    f"stale_version_hits_filtered: stale={stale} returned={len(items)} "
+                    f"collection={coll}",
+                    extra={
+                        "event": "stale_version_hits_filtered",
+                        "stale": stale,
+                        "collection": coll,
+                    },
+                )
+            return items[:top_k]
         except VectorStoreError:
             raise
         except Exception as e:

@@ -894,3 +894,300 @@ def test_late_graph_mode_toggle_still_purges_graph_rows(
     assert purges == []  # no stale graph purge after the toggle back off
     assert _graph_live_rows(workspace, third_id) == 3  # rows untouched
 
+
+# --------------------------------------------------------------------------------------
+# T-V1-018 — active-version retrieval filter (RP-09 / QF-09)
+# --------------------------------------------------------------------------------------
+
+DOC_UUID = "7a1f0f2e-4f6e-4d5a-9c2b-0d3f6a1b8e77"
+GEN_OLD = "1c9d5b7a-2e11-4f0c-8a3d-6b0f2c4d5e66"
+GEN_ACTIVE = "2d0e6c8b-3f22-4a1d-9b4e-7c1f3d5e6f77"
+
+
+class _ReadStubClient:
+    """Read-side stub: returns whatever candidates a test plants, in order."""
+
+    def __init__(self, points: list) -> None:
+        self._points = points
+        self.limits: list[int] = []
+
+    async def query_points(self, *, limit: int, **_: object):
+        self.limits.append(limit)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(points=self._points[:limit])
+
+    async def close(self) -> None:
+        return None
+
+
+def _candidate(
+    *, content: str, document_id: str | None, document_version_id: str | None, score: float
+):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(
+        score=score,
+        payload={
+            "workspace_id": "ws-a",
+            "content": content,
+            "metadata": {},
+            "document_id": document_id,
+            "document_version_id": document_version_id,
+            "chunk_id": f"chunk-{content}",
+        },
+    )
+
+
+def _gate_store(points: list, resolver):
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    client = _ReadStubClient(points)
+    store = QdrantVectorStore(
+        collection="knowledge",
+        client=client,  # type: ignore[arg-type]
+        active_version_resolver=resolver,
+    )
+    return store, client
+
+
+def _gate_search(store, top_k: int = 10) -> list:
+    from retrieval.interfaces import SearchFilter
+
+    async def run() -> list:
+        return await store.search(
+            collection="knowledge",
+            vector=[0.1] * 1024,
+            top_k=top_k,
+            query_filter=SearchFilter(workspace_ids=["ws-a"]),
+        )
+
+    return asyncio.run(run())
+
+
+def test_stale_generation_gate_filters_pre_evidence_deterministically() -> None:
+    """T-V1-018: the gate is a payload-vs-authority check, applied pre-evidence.
+
+    Service-free by design (injected authority): a candidate whose payload
+    ``document_version_id`` is not the document's authoritative active version
+    is dropped — including for a tombstoned document, and even when it is the
+    top-scoring candidate — while the active copy, an unclaimed document and a
+    payload with no document provenance pass through unchanged. An authority
+    that cannot answer makes the read **refuse** rather than serve content it
+    could not validate.
+    """
+    from retrieval.adapters.qdrant_store import VectorStoreError
+
+    stale = _candidate(
+        content="old generation", document_id=DOC_UUID, document_version_id=GEN_OLD, score=0.99
+    )
+    active = _candidate(
+        content="current generation",
+        document_id=DOC_UUID,
+        document_version_id=GEN_ACTIVE,
+        score=0.5,
+    )
+    tombstoned = _candidate(
+        content="deleted document",
+        document_id=DOC_UUID,
+        document_version_id=GEN_ACTIVE,
+        score=0.4,
+    )
+    unclaimed = _candidate(
+        content="no authority claim",
+        document_id=DOC_UUID,
+        document_version_id=GEN_OLD,
+        score=0.3,
+    )
+    no_provenance = _candidate(
+        content="no document provenance", document_id=None, document_version_id=None, score=0.2
+    )
+
+    async def authority_v2(_ids):
+        return {DOC_UUID: GEN_ACTIVE}
+
+    async def authority_tombstoned(_ids):
+        return {DOC_UUID: None}  # deleted_at set: nothing is eligible
+
+    async def authority_no_claim(_ids):
+        return {}  # unknown / pointer-less document: no supersession claim
+
+    async def authority_down(_ids):
+        raise RuntimeError("postgres unreachable")
+
+    # (1) A stale generation never comes back, even as the top-scoring hit.
+    hits = _gate_search(_gate_store([stale, active], authority_v2)[0])
+    assert [h.content for h in hits] == ["current generation"]
+    assert [h.document_version_id for h in hits] == [GEN_ACTIVE]
+
+    # (2) Tombstoned document: every candidate is dropped.
+    assert _gate_search(_gate_store([tombstoned, active], authority_tombstoned)[0]) == []
+
+    # (3) An authority with no claim lets the candidate pass through unchanged.
+    unclaimed_hits = _gate_search(_gate_store([unclaimed], authority_no_claim)[0])
+    assert [h.content for h in unclaimed_hits] == ["no authority claim"]
+
+    # (4) A payload with no document provenance makes no generation claim.
+    provenance_hits = _gate_search(_gate_store([no_provenance], authority_v2)[0])
+    assert [h.content for h in provenance_hits] == ["no document provenance"]
+
+    # (5) top_k is still honoured, and the candidate window is widened so a
+    # dropped stale copy cannot crowd out a current-version hit.
+    many_active = [
+        _candidate(
+            content=f"active {i}",
+            document_id=DOC_UUID,
+            document_version_id=GEN_ACTIVE,
+            score=1.0 - i,
+        )
+        for i in range(5)
+    ]
+    store, client = _gate_store([stale, *many_active], authority_v2)
+    assert len(_gate_search(store, top_k=3)) == 3
+    assert client.limits and client.limits[0] > 3
+
+    # (6) An unreachable authority refuses loudly instead of passing content on.
+    with pytest.raises(VectorStoreError, match="active-version check failed"):
+        _gate_search(_gate_store([active], authority_down)[0])
+
+
+def test_stale_generation_vector_is_never_returned_as_evidence(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-018: a leftover old-generation vector can never become evidence.
+
+    The gate validates the payload against the authoritative document BEFORE
+    any retrieved content leaves the store, so it must hold even while
+    supersession cleanup is still owed — here v1's generation is deliberately
+    re-planted into live Qdrant *after* v2 is authoritative and is asserted
+    (through the real Qdrant scroll API, not SQL) to still be sitting there.
+    What the read path then does with it is the ticket:
+
+    * the planted stale copy never comes back from ``search``, although it is
+      the exact-match top hit for the query vector;
+    * a sibling copy claiming the ACTIVE version is returned unchanged — the
+      gate is a version check, not a wall (current-version recall unaffected).
+    """
+    from ingestion.persistence import get_session_factory
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+    from retrieval.interfaces import SearchFilter, VectorRecord
+    from sqlalchemy import text
+
+    _install_stub_embedder(monkeypatch)
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    marker_v1 = f"stale evidence probe {uuid.uuid4().hex} amber wombat"
+    marker_v2 = f"stale evidence probe {uuid.uuid4().hex} jade wallaby"
+
+    first = _upload(client, token, workspace, "stale.txt", marker_v1.encode()).json()
+    _run_job(first["job_id"])
+    v1_version, document_id = first["version_id"], first["document_id"]
+
+    second = _upload(client, token, workspace, "stale.txt", marker_v2.encode()).json()
+    assert second["document_id"] == document_id
+    _run_job(second["job_id"])
+    v2_version = second["version_id"]
+    assert v2_version != v1_version  # new generation (T-V1-016)
+    assert _qdrant_version_points(v1_version) == []  # cleanup DID run...
+    assert _qdrant_version_points(v2_version)  # ...and v2 is published
+
+    # The authoritative document names v2 as the active version.
+    async def _active_version() -> str | None:
+        async with get_session_factory()() as session:
+            value = (
+                await session.execute(
+                    text("SELECT current_version_id FROM documents WHERE id = :d"),
+                    {"d": document_id},
+                )
+            ).scalar_one_or_none()
+            return str(value) if value is not None else None
+
+    assert asyncio.run(_active_version()) == v2_version
+
+    # Plant the leftovers: v1's generation re-published by hand, exactly as a
+    # failed (not-yet-retried) T-V1-017 cleanup would leave it.
+    stale_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"tv1-018-stale:{v1_version}"))
+    control_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"tv1-018-control:{v2_version}"))
+    stale_vector = [1.0] + [0.0] * 1023  # the exact-match query vector below
+    control_vector = [0.5, 0.5] + [0.0] * 1022
+    store = QdrantVectorStore(collection="knowledge")
+
+    async def _plant() -> int:
+        return await store.upsert(
+            collection="knowledge",
+            records=[
+                VectorRecord(
+                    id=stale_id,
+                    vector=stale_vector,
+                    content=marker_v1,
+                    workspace_id=workspace,
+                    document_id=document_id,
+                    document_version_id=v1_version,  # superseded generation
+                    chunk_id="chunk-stale-0001",
+                ),
+                VectorRecord(
+                    id=control_id,
+                    vector=control_vector,
+                    content=marker_v2,
+                    workspace_id=workspace,
+                    document_id=document_id,
+                    document_version_id=v2_version,  # the ACTIVE generation
+                    chunk_id="chunk-control-0001",
+                ),
+            ],
+        )
+
+    async def _search() -> list:
+        return await store.search(
+            collection="knowledge",
+            vector=stale_vector,  # the planted stale copy is the top hit
+            top_k=10,
+            query_filter=SearchFilter(workspace_ids=[workspace]),
+        )
+
+    try:
+        assert asyncio.run(_plant()) == 2
+        # The stale point really is in live Qdrant (store API, not SQL): if it
+        # stays invisible below, the gate hid it — not a silent cleanup.
+        assert stale_id in _qdrant_version_points(v1_version)
+        hits = asyncio.run(_search())
+    finally:
+        asyncio.run(store.close())
+
+    by_chunk = {hit.chunk_id: hit for hit in hits}
+    assert marker_v1 not in {hit.content for hit in hits}  # never returned, never evidence
+    assert {hit.document_version_id for hit in hits} <= {v2_version}
+    control = by_chunk.get("chunk-control-0001")
+    assert control is not None  # current-version recall: the active copy is unchanged
+    assert control.document_id == document_id
+    assert control.document_version_id == v2_version
+    assert control.content == marker_v2
+
+    # Non-vacuity control: with an authority that deliberately claims nothing,
+    # the very same query DOES surface the planted stale copy — proving the
+    # gate (not the query, not a cleanup that ran behind the test's back) is
+    # what keeps it out of the evidence set above.
+    async def _no_claim(_ids):
+        return {}
+
+    unfiltered_store = QdrantVectorStore(
+        collection="knowledge", active_version_resolver=_no_claim
+    )
+    try:
+        unfiltered = asyncio.run(
+            unfiltered_store.search(
+                collection="knowledge",
+                vector=stale_vector,
+                top_k=10,
+                query_filter=SearchFilter(workspace_ids=[workspace]),
+            )
+        )
+    finally:
+        asyncio.run(unfiltered_store.close())
+    assert marker_v1 in {hit.content for hit in unfiltered}
+    # ...and the v2 generation published by the ingest job is still retrievable
+    # through the live search endpoint.
+    endpoint_hits = _search_results(client, token, workspace, marker_v2)
+    assert marker_v2 in {hit["content"] for hit in endpoint_hits}
+
