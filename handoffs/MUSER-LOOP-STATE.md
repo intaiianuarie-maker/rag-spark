@@ -61,6 +61,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   hashes 11 disputed paths per tick + lsof/process snapshot on change). T-V1-006 dispatched.
 - T-V1-005 reviewer: APPROVE (3-file scope, full 5xx truth table, 13 green, ruff clean) → DONE.
   Trap: zero changes since arming — tree quiet.
+- T-V1-006 reviewer: APPROVE (1+/1- rename, 11 green, pycache confirmed git-ignored) → DONE.
+  T-V1-007 dispatched (dev1).
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
