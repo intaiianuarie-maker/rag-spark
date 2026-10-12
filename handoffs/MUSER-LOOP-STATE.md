@@ -54,6 +54,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   pre-existing unrelated stashes left alone.)
 - T-V1-042 reviewer: APPROVE (pure additions, identical cheap semantics, honest failures,
   compose hunk minimal + dated, 10 green re-run) → DONE. T-V1-043 (bge-m3) gates Q9.
+- T-V1-012 reviewer: APPROVE (4-file scope, no materialization, boundary verbatim, 413 +
+  cancel paths, 78 green, byte-identity re-proven) → DONE. T-V1-013 dispatched (dev2).
 - T-V1-010 committed d134e64 (70/70 vitest, tsc clean; second stringify is 502-synthesis,
   flagged for reviewer) → REVIEW, reviewer on it. WAVE-6 quarantined (351 lines, same shapes).
   Board discipline fixed: JSON-only edits + render_board.py (hand-edit duplicates eliminated).
