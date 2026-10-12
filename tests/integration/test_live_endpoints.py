@@ -31,7 +31,7 @@ def test_version_endpoint_reports_build_info(api_client) -> None:
     assert "git_sha" in body and "env" in body
 
 
-def test_ready_shape_lists_all_four_dependencies(api_client) -> None:
+def test_ready_shape_lists_all_five_dependencies(api_client) -> None:
     """`/ready` must name postgres/redis/qdrant/minio/infinity whether ok or degraded."""
     response = api_client.get("/ready")
     assert response.status_code == 200, response.text

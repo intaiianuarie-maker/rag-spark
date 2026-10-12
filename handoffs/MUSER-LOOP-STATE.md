@@ -35,12 +35,43 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   in the moment. 366-line diff preserved at /tmp/opencode/quarantine-3/mystery-8.diff,
   tree reverted (dev2's live T-009 files untouched). Authorship unresolved; dev1 questioned
   at T-003 review (its T-002 handoff debated Q1 design; recurring Q0/Q1 flavor points there).
-- MONITOR SUMMON-MUSER (user order): STUCK and SILENT-IDLE now ALSO write rows to
+- PUSH GAP (root cause): devs reported "done" in their own panes — visible to nobody.
+  No channel to museR existed. Fixed: mandatory herdr push to w5:p4 on completion (+ idle).
+  Monitor DELIVERY rows + judge nudges stay as backup.
+- DEV2 OBSERVED DEV1 (T-009 window): mystery files "dirty at start, CLEAN at end, HEAD still
+  e92a2ab — dev1 restored them in parallel" while dev1's own handoff claims "none touched
+  by me". dev1's tree-usage reporting is unreliable; FINAL WARNING carried in next dispatch
+  (start/end status self-report required).
+- BACKLOG COMPLETE (102): V1 40 (36 RP + 037 P0-bind/038 router-call/039 bytes-to-store/040 git-acquire;
+  P0 ss-check: PG/Redis/Qdrant loopback OK, public 3001/8000/7997/80/443 need justifying in T-037),
+  V2 8 (+007 communities/+008 attribution), V3 27 (accepted base inventoried, A0-A5/R0-R2 sliced),
+  V4 27 (W2 accepted kept, B-slice R1 reject → T-V4-001..005, W3-W7 sliced). Board auto-renders
+  via tasks/render_board.py. V3/V4 stay GATED per standing rule.
+- T-V1-004 reviewer: APPROVE (scope 2 files, both tests pin canonical-not-summary, 72 green,
+  ruff clean) → DONE. Authorship answer pending with T-V1-005.
+- T-V1-010 committed d134e64 (70/70 vitest, tsc clean; second stringify is 502-synthesis,
+  flagged for reviewer) → REVIEW, reviewer on it. WAVE-6 quarantined (351 lines, same shapes).
+  Board discipline fixed: JSON-only edits + render_board.py (hand-edit duplicates eliminated).
+  Dispatched T-V1-011 (dev2, browser evidence, no product files).
+- T-V1-010 reviewer: APPROVE (3-file scope, single request stringify confirmed, 502-site
+  response-only, zero sniffing, 70 green, tsc clean) → DONE.
+- T-V1-005 committed 0cc7048 (sub-500 fix, 13 green, ruff clean) → REVIEW, reviewer on it.
+  dev1 DENIES authorship on record (claims mid-run dirty-clean flips, evidence in its RISKS row);
+  corroborated by dev2's denial+observation. Verdict suspended pending FILE TRAP (monitor now
+  hashes 11 disputed paths per tick + lsof/process snapshot on change). T-V1-006 dispatched.
+- T-V1-005 reviewer: APPROVE (3-file scope, full 5xx truth table, 13 green, ruff clean) → DONE.
+  Trap: zero changes since arming — tree quiet.
+- MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),
   diagnoses, re-dispatches. Jev never acts alone.
-- T-V1-002 + T-V1-008 committed e92a2ab (both museR-verified). Dispatched T-V1-003 (dev1)
-  + T-V1-009 (dev2), disjoint, hardened self-check rule in both prompts.
+- T-V1-003 + T-V1-009 committed 23dbb5e → reviewer double-APPROVE → DONE. api+worker
+  restarted post-delete, /health + /ready green. Jev direct-nudge to w5:p4 live
+  (STUCK/SILENT-IDLE, 20-min cooldown per condition).
+- T-V1-004 committed 8390483 (116+/0-, 72 green) → REVIEW. WAVE-5 quarantined pre-commit
+  (351-line diff, same Q0/Q1 shapes + errors/taxonomy scaffolding, evidence kept).
+  dev2 timestamped dev1 editing those files; dev1 denies. Confrontation embedded in T-005
+  dispatch; replacement decision on its answer + recurrence.
 - Post-commit reviewer (background subagent) on 8599a52: PASS — residue-absence proven
   (all 11 runaway paths absent), 69 unit green, ruff clean, /health + /ready 200.
 - PILOT two-coder: dev2 registered (w5:p6, user-created). dev1=T-V1-002 (backend) +
@@ -78,14 +109,22 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 - V3 agents+research: `V3-AGENTS-RESEARCH-PLAN.md` (A0–A5/R0–R2). GATED.
 - V4 workflows: `V4-WORKFLOWS-PLAN.md` (W0–W7). Existing W0/W1 preserved, paused. GATED.
 
-## Cycle protocol (every slice) — FLOW v2 (2026-10-12, museR authorized to improve)
-1. museR: `/clear` Dev1 session, send ONE slice prompt: scope + files + binary acceptance (exact commands) + handoff format + 20-min time-box ("if blocked, report partial + blocker, don't spin").
-2. Dev1: implement, focused tests, append `CODE1-HANDOFF.md` (TASK/CHANGE/WHY/REUSED/BUILT/VERIFY/RISKS), reply done. No commit/deploy/restart.
-3. museR: run focused checks, commit immediately (shrink dirty surface; I own merge).
-4. PIPELINE: fresh-subagent reviewer verifies the immutable commit while Dev1 (fresh `/clear` session) starts the next slice. Fix-ups become new micro-slices if review says REQUEST-CHANGES.
-5. Deploy: restart only the affected service (`docker compose up -d <svc>`), curl `/health`+`/ready`; full-stack restart only on compose/infra change. Update this ledger + TASKS.md row per slice.
-6. STUCK RULE: Dev1 `working` + no handoff/diff change for 15 min → one status nudge, never a duplicate task prompt.
-7. No slice merges unrelated refactors. No reviewer session reused across slices.
+## Cycle protocol (every slice) — FLOW v3 (2026-10-12)
+STATES: QUEUED → IN-PROGRESS → REVIEW → DONE. REVIEW is real: delivery moves a ticket to
+REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE jumps).
+1. museR: `/clear` dev session, ONE slice prompt (scope + allowlist + 20-min box + handoff format).
+2. Dev: implement, focused tests, handoff row, then PUSH delivery:
+   `herdr agent prompt w5:p4 "DONE <ticket>: <handoff path>. <verify one-liners>"`.
+   A pane reply alone reaches nobody — the push is mandatory, then go idle.
+   Start AND end each ticket with `git status --short` pasted in the reply (self-report).
+3. DELIVERY → REVIEW: monitor DELIVERY row + judge nudge summon museR.
+4. museR **10-min review SLA**: verify acceptance themselves, quarantine unclaimed, commit.
+   Misses are the judge's escalation trigger (judge holds museR accountable, pings on breach).
+5. PIPELINE: fresh reviewer subagent verifies the commit (residue-absence + green checks);
+   meanwhile devs (fresh `/clear`) start next disjoint tickets. Reviewer PASS → DONE.
+6. Deploy: affected service restart + /health + /ready. Board + ledger + assignments per move.
+7. Idle-watch: judge owns it (all panes visible); Jev owns stuck/talk signals; museR owns review/dispatch.
+8. DEV1 DISCIPLINE: solo, no child subagents, ticket scope only (incident rule).
 - ~14:15 UTC: Dev1 Did not stop on esc/stop-prompt (diff 37→40, 3 runaway files). ctrl+c killed
   the session (pane back to clean shell, agent gone). Reverted 5 runaway paths (pg_fts.py,
   qdrant_store.py, errors.py, 2 tests); diff back to 35 (34 + this ledger). Fresh `dev1`
