@@ -33,6 +33,25 @@ def test_element_limit_refuses_past_n() -> None:
     assert excinfo.value.retryable is False
 
 
+def test_stable_chunk_id_is_deterministic_within_a_generation() -> None:
+    """T-V1-016: retries reuse identical publication IDs; new generation → new IDs."""
+    import uuid as uuid_mod
+
+    from jobs.ingest_pipeline import PUBLICATION_NAMESPACE, stable_chunk_id
+
+    generation = uuid_mod.uuid4()  # one DocumentVersion = one generation
+    first = [stable_chunk_id(generation, f"chunk-{i:04d}") for i in range(3)]
+    retry = [stable_chunk_id(generation, f"chunk-{i:04d}") for i in range(3)]
+    assert first == retry  # same generation, same chunks → identical IDs (zero growth)
+    assert len(set(first)) == 3  # distinct within the generation
+
+    next_generation = uuid_mod.uuid4()  # new upload → fresh version → fresh IDs
+    assert stable_chunk_id(next_generation, "chunk-0000") != first[0]
+    assert stable_chunk_id(next_generation, "chunk-0000") != uuid_mod.uuid5(
+        PUBLICATION_NAMESPACE, "chunk-0000"
+    )  # never a bare chunk-id derivation
+
+
 def test_registry_maps_supported_mime_types() -> None:
     assert parser_for_mime("application/pdf") is not None
     assert parser_for_mime("text/plain") is not None

@@ -45,6 +45,24 @@ logger = logging.getLogger("knowledge_os.worker.ingest")
 
 DEFAULT_MAX_ELEMENTS = 100_000
 
+#: T-V1-016: UUID namespace for deterministic publication IDs. A document
+#: *generation* is one ``DocumentVersion`` row (a new upload mints a new
+#: version → new generation); the *active* version is the pointer
+#: ``Document.current_version_id``. Retries of the same job re-run inside the
+#: same generation and must reuse identical chunk IDs, so FTS/Qdrant writes
+#: overwrite in place instead of accumulating orphan vector IDs.
+PUBLICATION_NAMESPACE = uuid.uuid5(uuid.NAMESPACE_URL, "knowledge-os/publication")
+
+
+def stable_chunk_id(version_id: uuid.UUID, chunk_id: str) -> uuid.UUID:
+    """Deterministic chunk publication ID within a document generation (T-V1-016).
+
+    Derived from (generation, chunk id) — both stable across retries of the
+    same job (the chunker emits positional ``chunk-NNNN`` ids). A new
+    generation (new version/upload) yields entirely fresh IDs.
+    """
+    return uuid.uuid5(PUBLICATION_NAMESPACE, f"{version_id}:{chunk_id}")
+
 
 def max_elements() -> int:
     try:
@@ -202,7 +220,10 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     await session.execute(delete(ChunkRow).where(ChunkRow.document_version_id == version.id))
     id_map: dict[str, uuid.UUID] = {}
     for chunk in result.chunks:
-        row_id = uuid.uuid4()
+        # T-V1-016: stable publication ID — same generation + same chunk ⇒ same
+        # UUID, so a retried job overwrites its own rows/points instead of
+        # minting a fresh random ID set (the old uuid4() accumulation bug).
+        row_id = stable_chunk_id(version.id, chunk.id)
         id_map[chunk.id] = row_id
         session.add(
             ChunkRow(

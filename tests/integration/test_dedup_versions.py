@@ -151,6 +151,31 @@ def _fts_count(document_id: str) -> int:
     )
 
 
+def _row_ids(query: str, params: dict) -> list[str]:
+    """All primary-key text values for a query, sorted (T-V1-016 assertions)."""
+    from ingestion.persistence import get_session_factory
+    from sqlalchemy import text
+
+    async def run() -> list[str]:
+        async with get_session_factory()() as session:
+            rows = (await session.execute(text(query), params)).scalars().all()
+            return sorted(str(v) for v in rows)
+
+    return asyncio.run(run())
+
+
+def _chunk_ids(version_id: str) -> list[str]:
+    return _row_ids(
+        "SELECT id FROM chunks WHERE document_version_id = :v", {"v": version_id}
+    )
+
+
+def _fts_ids(document_id: str) -> list[str]:
+    return _row_ids(
+        "SELECT id FROM lexical_docs WHERE document_id = :d", {"d": document_id}
+    )
+
+
 def _qdrant_count(workspace_id: str, document_id: str) -> int:
     """Live Qdrant points for one document (Q3: must be zero after delete)."""
     from qdrant_client.http.models import FieldCondition, Filter, MatchAny
@@ -210,6 +235,89 @@ def test_identical_reupload_skips_parse_and_reuses_version(client) -> None:
     assert second["version_id"] == version_id
     assert _chunk_count(version_id) == baseline  # no re-parse / duplication
     assert _version_count(first["document_id"]) == 1
+
+
+def test_repeat_job_reuses_stable_publication_ids(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-016: running the same job twice → identical retrievable set, zero ID growth.
+
+    A retry must re-publish the *same* generation's chunks under the *same*
+    stable IDs (uuid5 of generation + chunk id), so Postgres, FTS and the
+    vector store hold exactly one ID set after N runs — no random-ID
+    accumulation. Postgres + FTS are asserted against the live services; the
+    vector stage uses a recording stub for both the embedder and the store so
+    the published point IDs are captured exactly (this box's Infinity serves
+    384-d where 1024-d is expected, so a live upsert would gate the stage on
+    EMBED_UNAVAILABLE and leave nothing to count — see CODE1-HANDOFF
+    T-V1-015 RISKS).
+    """
+    from retrieval.adapters import infinity_embed, qdrant_store
+
+    published_ids: list[str] = []
+
+    class _StubProvider:
+        dimension = 1024
+
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            # Non-zero, correct-dimension fake vectors: satisfies the pipeline's
+            # ZERO_VECTOR_REJECTED guard without a real embedding call.
+            return [[0.001] * self.dimension for _ in texts]
+
+    class _RecordingStore:
+        def __init__(self, collection: str | None = None, **_: object) -> None:
+            self._collection = collection
+
+        async def ensure_collection(self, *, collection: str, dimension: int) -> None:
+            return None
+
+        async def upsert(self, *, collection: str, records) -> int:
+            published_ids.extend(str(r.id) for r in records)
+            return len(records)
+
+        async def count_ids(self, *, collection: str, ids) -> int:
+            return len(set(ids) & set(published_ids))
+
+        async def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(infinity_embed, "InfinityEmbeddingProvider", _StubProvider)
+    monkeypatch.setattr(qdrant_store, "QdrantVectorStore", _RecordingStore)
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    marker = f"stable id probe {uuid.uuid4().hex} xylophone quasar"
+    uploaded = _upload(client, token, workspace, "stable-ids.txt", marker.encode()).json()
+    version_id = uploaded["version_id"]
+    document_id = uploaded["document_id"]
+
+    _run_job(uploaded["job_id"])  # first attempt
+    chunks_1 = _chunk_ids(version_id)
+    fts_1 = _fts_ids(document_id)
+    points_1 = sorted(published_ids)
+    hits_1 = sorted(
+        item["document_id"] for item in _search_results(client, token, workspace, marker)
+    )
+    assert chunks_1  # chunks really landed for this generation
+    assert len(fts_1) == len(chunks_1)  # every chunk published to FTS, once
+    assert len(points_1) == len(chunks_1)  # every chunk published as a vector, once
+
+    published_ids.clear()
+    _run_job(uploaded["job_id"])  # retry of the SAME job (same generation)
+    chunks_2 = _chunk_ids(version_id)
+    fts_2 = _fts_ids(document_id)
+    points_2 = sorted(published_ids)
+    hits_2 = sorted(
+        item["document_id"] for item in _search_results(client, token, workspace, marker)
+    )
+
+    assert chunks_2 == chunks_1  # identical retrievable chunk set, by ID
+    assert fts_2 == fts_1  # FTS: no duplicate/orphan rows, no ID growth
+    assert points_2 == points_1  # vector store: same point IDs, zero growth
+    assert len(points_2) == len(set(points_2))  # no duplicated publication IDs
+    assert hits_2 == hits_1  # search still resolves the same documents
+    assert document_id in hits_1  # and the document is actually retrievable
+    assert _chunk_count(version_id) == len(chunks_1)  # no row growth
 
 
 def test_changed_file_creates_immutable_version_and_supersedes(client) -> None:
