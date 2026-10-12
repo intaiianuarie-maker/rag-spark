@@ -118,12 +118,23 @@ class GraphRetriever:
         result: GraphSearchResult,
         workspace_id: str,
     ) -> list[RetrievedItem]:
-        """Convert a GraphSearchResult into standard RetrievedItems with chunk provenance."""
+        """Convert a GraphSearchResult into standard RetrievedItems with chunk provenance.
+
+        The synthesized ``[Knowledge Graph Context]`` passage is a **routing
+        hint**, not evidence (T-V1-022): it decides *which* chunk refs are
+        candidates, and is tagged ``routing_hint`` so verification never
+        grounds a citation on it. The answer path hydrates every evidence ref
+        to its canonical stored passage *before* the prompt context is built
+        (``answer.hydration.HydratingOrchestrator``), so the description text
+        is replaced by the original chunk text — and a ref that cannot be
+        hydrated never reaches the model or a citation.
+        """
         items: list[RetrievedItem] = []
         if not result.summary and not result.entities:
             return items
 
-        # Build context passage from graph
+        # Routing passage (hint only): overwritten by canonical hydration
+        # before context build, and never citable on its own — see above.
         passage = f"[Knowledge Graph Context]\n{result.summary}"
         # Primary item carrying chunk IDs for citation resolution
         for chunk_id in result.evidence_chunk_ids:
@@ -136,6 +147,7 @@ class GraphRetriever:
                     chunk_id=chunk_id,
                     metadata={
                         "is_graph": True,
+                        "routing_hint": True,
                         "entities_count": len(result.entities),
                         "relationships_count": len(result.relationships),
                     },
@@ -149,7 +161,9 @@ class GraphRetriever:
                     score=result.score,
                     method=RetrievalMethod.FUSED,
                     workspace_id=workspace_id,
-                    metadata={"is_graph": True},
+                    # No ref → nothing to hydrate → never citable; the hint
+                    # only routes (it is dropped from the answer context).
+                    metadata={"is_graph": True, "routing_hint": True},
                 )
             )
 

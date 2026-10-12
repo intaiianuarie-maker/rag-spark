@@ -93,6 +93,14 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 - T-V1-041 reviewer: APPROVE (4-file scope, finite documented cap, cancel propagates,
   pre-headers identical, fast subset green, 16s test spot-checked) → DONE. Bonus signal:
   reviewer spotted dev1's T-V1-014 reindex change in flight (uncommitted, correctly excluded).
+- Catch-up (board-led, ledger behind): T-V1-004 → DONE (116+/0-, 72 green); T-V1-005 → DONE
+  (sub-500 fix, 13 green); T-V1-006 → DONE (1-line rename, 11 green); T-V1-007 → DONE
+  (late-toggle purge, exactly-one-tombstone); T-V1-010 → DONE (single boundary, 70 green);
+  T-V1-014 → DONE (real-provider reindex + dry-run); T-V1-016 → DONE (stable IDs, 9 green);
+  T-V1-042 → DONE (count_ids, 10 green, adaptation opt-in set); T-V1-044 → DONE (guard
+  deletion, 25 green). All reviewer-APPROVEd. T-V1-043 (bge-m3) gates Q9.
+- T-V1-017 reviewer: APPROVE (atomic FTS, version-scoped Qdrant, never-silent retry,
+  13 green with knob) → DONE. Worktree holds only dev2's live T-022 files — no waves.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
   `handoffs/JEV-ESCALATIONS.md`, which museR reads at every verify/commit/dispatch.
   Chain: Jev signal → dev nudged + museR summoned → museR talks to dev (prompt),

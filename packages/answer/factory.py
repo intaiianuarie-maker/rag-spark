@@ -17,6 +17,7 @@ import os
 from models.adapters.litellm_provider import LiteLLMProvider
 
 from .engine import AnswerEngine
+from .hydration import CanonicalHydrator, HydratingOrchestrator
 from .verification import ExtractiveGrounder
 
 #: Collection the hybrid orchestrator reads/writes (single v1 collection).
@@ -58,7 +59,23 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
 
 
 def build_answer_engine() -> AnswerEngine:
-    """Construct the answer engine from settings (lazy; safe to call per request)."""
+    """Construct the answer engine from settings (lazy; safe to call per request).
+
+    T-V1-022 wiring: one :class:`~answer.hydration.CanonicalHydrator` is built
+    over the store lookup and shared by **both** hydration seams —
+
+    * the orchestrator is decorated with
+      :class:`~answer.hydration.HydratingOrchestrator`, so every retrieved
+      candidate ref is resolved to the current document version, the caller's
+      scope, the original text and its provenance **before** the prompt context
+      is built (retrieved summaries/payload text never override it), and
+    * the same hydrator is handed to the engine as its ``chunk_lookup``, so
+      :func:`answer.verification.verify_claims` bulk-hydrates every cited ref
+      and revalidates lifecycle state immediately before returning the answer.
+
+    Without a store the engine keeps the legacy ``chunk_lookup=None``
+    contract and the decorator is a pass-through.
+    """
     model = os.environ.get("ANSWER_MODEL", DEFAULT_ANSWER_MODEL)
     chunk_lookup = None
     try:
@@ -68,11 +85,14 @@ def build_answer_engine() -> AnswerEngine:
     except Exception:
         pass
 
+    hydrator = CanonicalHydrator(chunk_lookup)
+
     return AnswerEngine(
-        orchestrator=create_orchestrator(),
+        orchestrator=HydratingOrchestrator(create_orchestrator(), hydrator),
         llm=LiteLLMProvider(),
         model=model,
-        chunk_lookup=chunk_lookup,
+        # No store → None → legacy existence/scope-only verification.
+        chunk_lookup=hydrator if chunk_lookup is not None else None,
         # v1-rereview Q5: ground every citation via conservative extractive
         # check (claim text must be verbatim in the chunk) — interim v1 mode.
         claim_grounder=ExtractiveGrounder(),

@@ -15,6 +15,22 @@ retrieved context) are grounded against store-hydrated canonical content when
 present, else dropped, keeping the verified set strictly to chunks that
 support the claim.
 
+**T-V1-022 — bulk canonical hydration.** When a store lookup is available, the
+*whole* set of candidate chunk refs is resolved up front (one deduplicated
+pass through :class:`~answer.hydration.CanonicalHydrator`) to the current
+document version, the caller's scope, the original text and its provenance —
+**before** any claim is grounded, and before the prompt context is built (the
+engine hydrates at the orchestrator seam, see
+:class:`~answer.hydration.HydratingOrchestrator`). Retrieved summaries and
+payload text never override the canonical record: a ref that does not resolve
+(missing / deleted / superseded / foreign) is rejected even when a retrieved
+item carries it, and grounding always runs on canonical text. Graph
+descriptions and any other item marked ``is_graph``/``routing_hint`` are
+**routing hints** — they are never a grounding source of their own. Finally,
+the lifecycle state of every surviving citation is revalidated **immediately
+before returning**, so a document deleted or superseded while the model was
+generating loses its citations (and any claim left without one).
+
 **v1 interim strategy — conservative extractive grounding with a
 context-preserving quotation mode.** The default :class:`ExtractiveGrounder`
 considers a claim grounded only when its text appears **verbatim** —
@@ -54,14 +70,18 @@ no valid ids is dropped from the output.
 
 from __future__ import annotations
 
+import logging
 import re
 from collections.abc import Sequence
 from typing import Protocol, runtime_checkable
 
 from retrieval.interfaces import RetrievedItem
 
+from .hydration import CanonicalHydrator, HydratedChunk, is_routing_hint
 from .interfaces import ChunkLookup
 from .models import Citation, Claim
+
+logger = logging.getLogger("knowledge_os.answer.verification")
 
 # Conservative sentence splitter (bodies only; trailing run of . ! ? stripped).
 # We use sentences only to *localise* a verbatim claim so that negation /
@@ -376,6 +396,14 @@ class ExtractiveGrounder:
         return None
 
 
+def _filename_of(item: RetrievedItem | None) -> str | None:
+    """Filename provenance carried by a retrieved item (``RetrievedItem`` has
+    no ``filename`` field — producers stash it in metadata)."""
+    if item is None:
+        return None
+    return (item.metadata or {}).get("filename")
+
+
 async def verify_claims(
     claims: Sequence[Claim],
     items: Sequence[RetrievedItem],
@@ -389,17 +417,36 @@ async def verify_claims(
 
     A ``chunk_id`` is valid only when it resolves to a chunk that **exists**, is
     **inside the caller's workspace scope**, and (when ``claim_grounder`` is set)
-    **substantiates the claim**: ``grounder.score(claim.text, chunk.content) >=
-    grounder.threshold``. Citations that fail grounding are dropped, and a claim
-    left with no surviving citation is dropped from the output.
-    Lookup-resolved citations (chunk not in the retrieved context) cannot be
-    grounded — there is no chunk content to score — so they are dropped when a
-    grounder is configured, keeping the verified set strictly to chunks that were
-    retrieved *and* support the claim.
+    **substantiates the claim**: ``grounder.score(claim.text, canonical.content)
+    >= grounder.threshold``. Citations that fail grounding are dropped, and a
+    claim left with no surviving citation is dropped from the output.
+
+    **T-V1-022 — bulk canonical hydration (before grounding).** With a store
+    available, every candidate ref cited by a claim is resolved *once*, up
+    front, to its current document version, the caller's scope, the original
+    text and provenance (:class:`answer.hydration.CanonicalHydrator`). Rules:
+
+    * a ref that does not resolve — missing, deleted, superseded or foreign —
+      is rejected **even when a retrieved item carries it** (the payload can
+      never stand in for the store);
+    * when the store returns the passage, that text *is* the grounding text
+      and the provenance it reports *is* the citation's provenance — retrieved
+      summaries and payload text never override it;
+    * items marked ``is_graph``/``routing_hint`` (graph descriptions) are never
+      a grounding source of their own: without canonical text they cannot be
+      cited at all;
+    * the surviving citations are **revalidated immediately before returning**,
+      so a document deleted or superseded while the model was generating loses.
+
+    When ``chunk_lookup`` is ``None`` no store exists to hydrate from, so the
+    legacy contract applies: existence + scope from the retrieved items only,
+    and routing-hint items (graph descriptions) are never citable.
 
     When ``claim_grounder`` is ``None`` the grounding gate is skipped and the
     behaviour is existence + scope only (the legacy contract).
     """
+    hydrator = _hydrator_for(chunk_lookup)
+
     by_chunk = {
         item.chunk_id: item
         for item in items
@@ -408,100 +455,141 @@ async def verify_claims(
         and (allowed_workspace_ids is None or item.workspace_id in allowed_workspace_ids)
     }
 
+    # (1) Bulk hydration: resolve EVERY candidate ref before any claim is
+    # grounded, in one deduplicated store pass (source lookups > 0 on the
+    # verify path; fresh reads so verification sees current lifecycle state).
+    hydrated: dict[str, HydratedChunk] = {}
+    if hydrator is not None:
+        hydrated = await hydrator.hydrate(
+            (ref for claim in claims for ref in claim.chunk_ids),
+            allowed_workspace_ids=allowed_workspace_ids,
+            fresh=True,
+        )
+
     verified: list[Claim] = []
     citations: list[Citation] = []
     for claim in claims:
         valid_ids: list[str] = []
         for chunk_id in claim.chunk_ids:
             item = by_chunk.get(chunk_id)
-            if item is not None:
-                # RP-03 / G4: Never ground citations against synthesized graph summaries!
-                is_graph_item = bool(item.metadata and item.metadata.get("is_graph"))
-                content_to_verify = item.content
+            if hydrator is None:
+                # No store: legacy existence + scope from the retrieved item.
+                if item is None:
+                    continue
+                if is_routing_hint(item):
+                    # RP-03 / G4: a synthesized graph description is a routing
+                    # hint, never evidence — without a store there is nothing
+                    # authoritative to ground it against.
+                    continue
+                content_to_verify: str | None = item.content
                 doc_id = item.document_id
-                filename = item.metadata.get("filename") if item.metadata else None
+                filename = _filename_of(item)
                 page = item.page
                 section = item.section
                 workspace_id = item.workspace_id
+            else:
+                canonical = hydrated.get(chunk_id)
+                if canonical is None:
+                    # Missing / deleted / superseded / foreign — rejected even
+                    # when a retrieved item still carries this ref.
+                    continue
+                hint = item is not None and is_routing_hint(item)
+                if canonical.has_text:
+                    # Canonical text always wins over payload/summary text.
+                    content_to_verify = canonical.content
+                elif hint:
+                    # Routing hint with no original text: never citable.
+                    continue
+                elif claim_grounder is not None:
+                    # Nothing canonical to ground against → cannot verify.
+                    continue
+                else:
+                    # Legacy existence-only contract may verify a store record
+                    # whose text was never hydrated (documented None case).
+                    content_to_verify = item.content if item is not None else None
+                doc_id = canonical.document_id or (item.document_id if item else None)
+                filename = canonical.filename or _filename_of(item)
+                item_page = item.page if item else None
+                page = canonical.page if canonical.page is not None else item_page
+                section = canonical.section or (item.section if item else None)
+                workspace_id = canonical.workspace_id or (item.workspace_id if item else None)
 
-                if is_graph_item:
-                    # Authoritative original-chunk hydration is mandatory
-                    if chunk_lookup is None:
-                        # Cannot authoritatively verify graph citation without store lookup
-                        continue
-                    canonical = await chunk_lookup.get(chunk_id)
-                    if canonical is None:
-                        # Nonexistent, deleted, or superseded chunk
-                        continue
-                    if (
-                        allowed_workspace_ids is not None
-                        and canonical.workspace_id not in allowed_workspace_ids
-                    ):
-                        # Foreign workspace chunk
-                        continue
-                    canonical_content = getattr(canonical, "content", None)
-                    if not canonical_content:
-                        continue
-                    content_to_verify = canonical_content
-                    doc_id = canonical.document_id or doc_id
-                    filename = canonical.filename or filename
-                    page = canonical.page if canonical.page is not None else page
-                    section = canonical.section or section
-                    workspace_id = canonical.workspace_id or workspace_id
-
-                grounding_score: float | None = None
-                span: tuple[int, int] | None = None
-                if claim_grounder is not None:
-                    grounding_score = claim_grounder.score(claim.text, content_to_verify)
-                    if grounding_score < claim_grounder.threshold:
-                        # Chunk does not substantiate the claim — not a citation.
-                        continue
-                    # Try to locate the exact span for the citation
-                    if hasattr(claim_grounder, "locate"):
-                        span = claim_grounder.locate(claim.text, content_to_verify)
-                valid_ids.append(chunk_id)
-                citations.append(
-                    Citation(
-                        chunk_id=chunk_id,
-                        document_id=doc_id,
-                        filename=filename,
-                        page=page,
-                        section=section,
-                        span=span if span is not None else _span(claim.text, content_to_verify),
-                        workspace_id=workspace_id,
-                        grounding_score=grounding_score,
-                        # Verified canonical passage: the exact content the
-                        # claim was grounded against (review1 F6 — never None
-                        # on this path; store-resolved citations below already
-                        # carry it from the chunk lookup adapters).
-                        content=content_to_verify,
-                    )
+            grounding_score: float | None = None
+            span: tuple[int, int] | None = None
+            if claim_grounder is not None:
+                if content_to_verify is None:
+                    continue
+                grounding_score = claim_grounder.score(claim.text, content_to_verify)
+                if grounding_score < claim_grounder.threshold:
+                    # Chunk does not substantiate the claim — not a citation.
+                    continue
+                # Try to locate the exact span for the citation
+                if hasattr(claim_grounder, "locate"):
+                    span = claim_grounder.locate(claim.text, content_to_verify)
+            if span is None and content_to_verify:
+                # Fall back to a plain case-insensitive span location.
+                span = _span(claim.text, content_to_verify)
+            valid_ids.append(chunk_id)
+            citations.append(
+                Citation(
+                    chunk_id=chunk_id,
+                    document_id=doc_id,
+                    filename=filename,
+                    page=page,
+                    section=section,
+                    span=span,
+                    workspace_id=workspace_id,
+                    grounding_score=grounding_score,
+                    # Verified canonical passage: the exact content the
+                    # claim was grounded against (review1 F6 — never None
+                    # on a grounder-gated path; the legacy existence-only
+                    # path may carry None, documented on Citation.content).
+                    content=content_to_verify,
                 )
-            elif chunk_lookup is not None:
-                citation = await chunk_lookup.get(chunk_id)
-                if citation is not None and citation.workspace_id is not None:
-                    if (
-                        allowed_workspace_ids is None
-                        or citation.workspace_id in allowed_workspace_ids
-                    ):
-                        if claim_grounder is not None:
-                            canonical_content = getattr(citation, "content", None)
-                            if canonical_content:
-                                grounding_score = claim_grounder.score(
-                                    claim.text, canonical_content
-                                )
-                                if grounding_score < claim_grounder.threshold:
-                                    continue
-                                if hasattr(claim_grounder, "locate"):
-                                    citation.span = claim_grounder.locate(
-                                        claim.text, canonical_content
-                                    )
-                                citation.grounding_score = grounding_score
-                                valid_ids.append(chunk_id)
-                                citations.append(citation)
-                        else:
-                            valid_ids.append(chunk_id)
-                            citations.append(citation)
+            )
         if valid_ids:
             verified.append(Claim(text=claim.text, chunk_ids=valid_ids))
+
+    # (3) Revalidate lifecycle state immediately before returning: a document
+    # deleted or superseded while the model was generating loses its citations
+    # here, and any claim left without a live citation is dropped with them.
+    if citations and hydrator is not None:
+        live = await hydrator.hydrate(
+            (citation.chunk_id for citation in citations),
+            allowed_workspace_ids=allowed_workspace_ids,
+            fresh=True,
+        )
+        dropped = {citation.chunk_id for citation in citations if citation.chunk_id not in live}
+        if dropped:
+            logger.info(
+                "verify_revalidation_dropped_citations",
+                extra={
+                    "event": "verify_revalidation_dropped_citations",
+                    "chunk_ids": sorted(dropped),
+                },
+            )
+            citations = [c for c in citations if c.chunk_id not in dropped]
+            revalidated: list[Claim] = []
+            for claim in verified:
+                kept = [ref for ref in claim.chunk_ids if ref not in dropped]
+                if kept:
+                    revalidated.append(Claim(text=claim.text, chunk_ids=kept))
+            verified = revalidated
+
     return verified, citations
+
+
+def _hydrator_for(chunk_lookup: ChunkLookup | None) -> CanonicalHydrator | None:
+    """Return the hydrator to verify with, or ``None`` for the legacy contract.
+
+    A :class:`~answer.hydration.CanonicalHydrator` supplied by the engine is
+    reused as-is (shared cache + ``lookups`` counter across the context and
+    verify seams); any other :class:`~answer.interfaces.ChunkLookup` is wrapped
+    in a fresh hydrator for this call. No store at all → ``None`` → legacy
+    existence/scope behaviour.
+    """
+    if isinstance(chunk_lookup, CanonicalHydrator):
+        return chunk_lookup if chunk_lookup.available else None
+    if chunk_lookup is None:
+        return None
+    return CanonicalHydrator(chunk_lookup)
