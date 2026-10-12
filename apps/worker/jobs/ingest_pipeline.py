@@ -7,7 +7,10 @@ worker can back off and eventually park a poison message as failed.
 Guards applied before any chunk/DB write:
 - size cap (``MAX_DOCUMENT_BYTES``);
 - **element-count cap** (boss ruling: a 25 MiB pathological TXT can yield 1.46M
-  elements — refuse past N with a typed error before Postgres writes).
+  elements — refuse past N with a typed error before Postgres writes);
+- **generation fence** (T-V1-019): a job is bound to one document generation
+  and may only publish it while that generation is still the document's live
+  one — see :func:`assert_generation_is_publishable`.
 """
 
 from __future__ import annotations
@@ -38,7 +41,7 @@ from ingestion.persistence import (
     JobStage,
     JobStatus,
 )
-from sqlalchemy import delete
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("knowledge_os.worker.ingest")
@@ -62,6 +65,188 @@ def stable_chunk_id(version_id: uuid.UUID, chunk_id: str) -> uuid.UUID:
     generation (new version/upload) yields entirely fresh IDs.
     """
     return uuid.uuid5(PUBLICATION_NAMESPACE, f"{version_id}:{chunk_id}")
+
+
+# T-V1-019: old-job fencing --------------------------------------------------#
+#: A job is bound to ONE generation (its ``document_version_id``). While it
+#: runs, the document may be **replaced** (a newer upload points
+#: ``Document.current_version_id`` elsewhere) or **deleted** (``deleted_at``
+#: tombstone). A job that finishes late must not resurrect its generation or
+#: mark itself READY, so every publication boundary re-compares the job's
+#: generation against the authoritative document row. The codes are the
+#: non-retryable failure reason left on the job (retrying a dead generation can
+#: never make it live again); they pass through ``normalize_code`` unchanged.
+FENCE_SUPERSEDED = "STALE_GENERATION"
+FENCE_DELETED = "DOCUMENT_DELETED"
+FENCE_GONE = "GENERATION_GONE"
+
+_FENCE_MESSAGES: dict[str, str] = {
+    FENCE_SUPERSEDED: "a newer generation of this document superseded this job's",
+    FENCE_DELETED: "this document was deleted while the job was running",
+    FENCE_GONE: "this document generation no longer exists",
+}
+
+
+async def generation_publication_state(
+    session: AsyncSession, *, document_id: uuid.UUID, version_id: uuid.UUID
+) -> str | None:
+    """May this generation still publish? ``None`` = yes, else the fence reason.
+
+    T-V1-019's authority is read **fresh** from ``documents`` /
+    ``document_versions`` — deliberately not the session's identity map, whose
+    copy was taken at dequeue time and is exactly the state that can be stale.
+    The comparison is a pure generation compare (pointer, tombstone,
+    ``superseded_at``, version number): no clock, no sleep, no guess about
+    whether async cleanup has run yet (ticket checklist 3).
+
+    ``Document.current_version_id`` is the same authority T-V1-018's read gate
+    validates payloads against, so the write side and the read side fence on
+    one definition of "the live generation":
+
+    * ``deleted_at`` set → :data:`FENCE_DELETED` (delete case);
+    * ``current_version_id`` set to another version, or ``superseded_at`` set →
+      :data:`FENCE_SUPERSEDED` (replace case);
+    * the version row is gone → :data:`FENCE_GONE`;
+    * pointer never set (pre-migration rows and directly-constructed fixtures):
+      no claim is made by the pointer, so the fallback generation compare asks
+      whether a strictly newer version of the same document exists — mirroring
+      T-V1-018's "no claim ⇒ not stale" rule rather than stranding those rows.
+    """
+    row = (
+        await session.execute(
+            select(
+                Document.deleted_at,
+                Document.current_version_id,
+                DocumentVersion.superseded_at,
+                DocumentVersion.version_number,
+            )
+            .select_from(DocumentVersion)
+            .join(Document, Document.id == DocumentVersion.document_id)
+            .where(DocumentVersion.id == version_id)
+        )
+    ).first()
+    if row is None:
+        return FENCE_GONE
+    deleted_at, current_version_id, superseded_at, version_number = row
+    if deleted_at is not None:
+        return FENCE_DELETED
+    if superseded_at is not None or (
+        current_version_id is not None and current_version_id != version_id
+    ):
+        return FENCE_SUPERSEDED
+    if current_version_id is None:
+        newer = await session.scalar(
+            select(func.count())
+            .select_from(DocumentVersion)
+            .where(
+                DocumentVersion.document_id == document_id,
+                DocumentVersion.version_number > version_number,
+            )
+        )
+        return FENCE_SUPERSEDED if newer else None
+    return None
+
+
+async def _unpublish_generation(
+    session: AsyncSession, *, document_id: uuid.UUID, version_id: uuid.UUID
+) -> None:
+    """Take one dead generation back out of every store (T-V1-019 compensation).
+
+    Called only once the fence has refused a job: whatever this run already
+    wrote belongs to a generation that is no longer published, so it must leave
+    Postgres chunks, the FTS rows and the vector points even when an earlier
+    stage of the same run committed them. The delete is scoped to this
+    ``document_version_id`` only — no other generation is touched.
+
+    The worker rolls the pipeline session back when the fence raises, so this
+    cleanup **commits before that raise**: an unpublish riding the doomed
+    transaction would be undone by the rollback and the stale generation would
+    silently survive. A store that cannot be reached is logged and skipped —
+    the fence refuses the job regardless, and the log is the alarm.
+    """
+    try:
+        await session.execute(
+            delete(ChunkRow).where(ChunkRow.document_version_id == version_id)
+        )
+        await session.execute(
+            text("DELETE FROM lexical_docs WHERE document_version_id = :version_id"),
+            {"version_id": str(version_id)},
+        )
+        try:
+            from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+            qdrant = QdrantVectorStore(collection="knowledge")
+            try:
+                await qdrant.delete_versions(
+                    collection="knowledge",
+                    version_ids=[str(version_id)],
+                    document_id=str(document_id),
+                )
+            finally:
+                await qdrant.close()
+        except Exception as exc:  # best effort: the job is refused either way
+            logger.warning(
+                "fenced_generation_vector_cleanup_failed",
+                extra={
+                    "event": "fenced_generation_vector_cleanup_failed",
+                    "document_id": str(document_id),
+                    "document_version_id": str(version_id),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+        await session.commit()
+    except Exception as exc:
+        logger.error(
+            "fenced_generation_unpublish_failed",
+            extra={
+                "event": "fenced_generation_unpublish_failed",
+                "document_id": str(document_id),
+                "document_version_id": str(version_id),
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+
+
+async def assert_generation_is_publishable(
+    session: AsyncSession,
+    *,
+    job: IngestionJob,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    gate: str,
+) -> None:
+    """The T-V1-019 publication gate: refuse a job whose generation is dead.
+
+    Raises a **non-retryable** :class:`IngestPipelineError` naming the fence
+    reason, after undoing this generation's publication. The caller (and the
+    worker's ``record_failure``) then park the job as FAILED — it can never
+    reach READY, so a late job can neither resurrect its content nor
+    false-mark its document as published.
+    """
+    reason = await generation_publication_state(
+        session, document_id=document_id, version_id=version_id
+    )
+    if reason is None:
+        return
+    logger.warning(
+        "ingest_publication_fenced",
+        extra={
+            "event": "ingest_publication_fenced",
+            "job_id": str(job.id),
+            "document_id": str(document_id),
+            "document_version_id": str(version_id),
+            "gate": gate,
+            "error_code": reason,
+        },
+    )
+    await _unpublish_generation(session, document_id=document_id, version_id=version_id)
+    raise IngestPipelineError(
+        reason,
+        f"refusing to publish at the {gate} gate: "
+        + _FENCE_MESSAGES.get(reason, "this generation is no longer publishable")
+        + f" (document {document_id}, generation {version_id})",
+        retryable=False,
+    )
 
 
 def max_elements() -> int:
@@ -197,6 +382,17 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             "parse_failed", f"{type(exc).__name__}: {exc}", retryable=True
         ) from exc
 
+    # T-V1-019 — PRE-WRITE gate. Everything below writes publication state
+    # (chunk rows, FTS rows, vector points) and finally READY, so a generation
+    # already replaced or deleted is refused here, before a single write.
+    await assert_generation_is_publishable(
+        session,
+        job=job,
+        document_id=job.document_id,
+        version_id=version.id,
+        gate="write",
+    )
+
     job.stage = JobStage.CHUNKING.value
     await session.commit()
     stages.append(JobStage.CHUNKING.value)
@@ -241,10 +437,11 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             )
         )
     if document is not None:
+        # Document-level metadata (language/title) is written after the
+        # T-V1-019 READY gate below, so a fenced generation makes no writes at
+        # all. Supersession stays here: it is generation-scoped to *strictly
+        # older* versions and can never republish this job's own generation.
         await supersede_other_versions(session, document.id, version.id)
-        document.language = result.language
-        if document.title is None:
-            document.title = result.metadata.title
 
     # Stage: INDEXING (Postgres FTS)
     job.stage = JobStage.INDEXING.value
@@ -432,7 +629,41 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             retryable=True,
         ) from exc
 
-    # Optional Graph Extraction & Indexing (V2 / RP-04 / QF-04)
+    # TASK-Q1 verified-write gate: READY requires every mandatory store write
+    # (Postgres FTS + Qdrant) to have been re-read and counted successfully.
+    if not (fts_write_verified and vector_write_verified):
+        raise IngestPipelineError(
+            "STORE_WRITE_UNVERIFIED",  # Q0 taxonomy code (packages/core/errors.py)
+            "refusing READY: mandatory store writes are unverified "
+            f"(fts={fts_write_verified}, vectors={vector_write_verified})",
+            retryable=False,
+        )
+
+    # T-V1-019 — PRE-READY gate. The document may have been replaced or
+    # deleted while parse/chunk/index ran: this generation must then neither
+    # publish (its writes are undone by the gate) nor be marked READY. The
+    # gate's unpublish commits before it raises, so the worker's rollback
+    # cannot silently restore the stale generation.
+    await assert_generation_is_publishable(
+        session,
+        job=job,
+        document_id=job.document_id,
+        version_id=version.id,
+        gate="ready",
+    )
+
+    # Only a generation that is still the document's live one may write
+    # document-level metadata (moved here from the chunk stage so the gate
+    # fences every write this pipeline makes, not only the store writes).
+    if document is not None:
+        document.language = result.language
+        if document.title is None:
+            document.title = result.metadata.title
+
+    # Optional Graph Extraction & Indexing (V2 / RP-04 / QF-04). Runs after
+    # the T-V1-019 gate for the same reason: a fenced generation must leave
+    # no index rows behind, and the partial disclosure below only belongs on
+    # a job that actually publishes.
     graph_mode_val = os.environ.get("GRAPH_MODE", "off").strip().lower()
     if graph_mode_val in ("rule", "llm"):
         try:
@@ -467,6 +698,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             logger.info(
                 "graph_extraction_indexed",
                 extra={
+                    "event": "graph_extraction_indexed",
                     "job_id": str(job.id),
                     "entities": len(extraction_result.entities),
                     "relationships": len(extraction_result.relationships),
@@ -489,16 +721,6 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                 f"graph_extraction_failed: {type(exc).__name__}: {exc}"
             )[:2000]
             partial_reasons.append(f"graph_extraction_failed: {type(exc).__name__}: {exc}")
-
-    # TASK-Q1 verified-write gate: READY requires every mandatory store write
-    # (Postgres FTS + Qdrant) to have been re-read and counted successfully.
-    if not (fts_write_verified and vector_write_verified):
-        raise IngestPipelineError(
-            "STORE_WRITE_UNVERIFIED",  # Q0 taxonomy code (packages/core/errors.py)
-            "refusing READY: mandatory store writes are unverified "
-            f"(fts={fts_write_verified}, vectors={vector_write_verified})",
-            retryable=False,
-        )
 
     job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value

@@ -224,6 +224,93 @@ def _job_error_code(job_id: str) -> str | None:
     )
 
 
+def _job_row(job_id: str) -> dict:
+    """The whole job row as a dict (T-V1-019: status/stage/error/attempts)."""
+    from ingestion.persistence import get_session_factory
+    from sqlalchemy import text
+
+    async def run() -> dict:
+        async with get_session_factory()() as session:
+            row = (
+                await session.execute(
+                    text(
+                        "SELECT status, stage, error_code, error_message, attempts, "
+                        "finished_at FROM ingestion_jobs WHERE id = :i"
+                    ),
+                    {"i": job_id},
+                )
+            ).mappings().one()
+            return dict(row)
+
+    return asyncio.run(run())
+
+
+def _active_version_id(document_id: str) -> str | None:
+    """The authoritative live generation (``documents.current_version_id``)."""
+    value = _db_scalar(
+        "SELECT current_version_id FROM documents WHERE id = :d", {"d": document_id}
+    )
+    return str(value) if value is not None else None
+
+
+async def _replace_document_mid_flight(document_id: str, data: bytes) -> tuple[str, str]:
+    """The exact DB effect of uploading a changed file over a document.
+
+    Mirrors ``apps/api/app/documents/upload.py`` for the replace path — new
+    ``DocumentVersion`` row, ``Document.current_version_id`` repointed at it,
+    and a QUEUED ``IngestionJob`` for the new generation. **Async** so the
+    replace can be awaited from inside a running job's own event loop (the
+    T-V1-019 mid-flight hook): a generation compare, never a sleep (checklist
+    3). Returns ``(new_version_id, new_job_id)``.
+    """
+    import hashlib
+
+    from ingestion.persistence import (
+        Document,
+        DocumentVersion,
+        IngestionJob,
+        JobStage,
+        JobStatus,
+        get_session_factory,
+    )
+    from sqlalchemy import func, select
+
+    async with get_session_factory()() as session:
+        document = await session.get(Document, uuid.UUID(document_id))
+        assert document is not None
+        next_number = (
+            (
+                await session.execute(
+                    select(func.coalesce(func.max(DocumentVersion.version_number), 0)).where(
+                        DocumentVersion.document_id == document.id
+                    )
+                )
+            ).scalar_one()
+            + 1
+        )
+        version = DocumentVersion(
+            document_id=document.id,
+            version_number=next_number,
+            checksum=hashlib.sha256(data).hexdigest(),
+            size_bytes=len(data),
+            mime_type="text/plain",
+            content=data,
+        )
+        session.add(version)
+        await session.flush()
+        document.current_version_id = version.id
+        job = IngestionJob(
+            workspace_id=document.workspace_id,
+            document_id=document.id,
+            document_version_id=version.id,
+            status=JobStatus.QUEUED.value,
+            stage=JobStage.QUEUED.value,
+        )
+        session.add(job)
+        await session.commit()
+        return str(version.id), str(job.id)
+
+
 def _install_stub_embedder(monkeypatch: pytest.MonkeyPatch) -> None:
     """1024-d non-zero fakes so the REAL Qdrant write stage runs on this box.
 
@@ -1191,3 +1278,195 @@ def test_stale_generation_vector_is_never_returned_as_evidence(
     endpoint_hits = _search_results(client, token, workspace, marker_v2)
     assert marker_v2 in {hit["content"] for hit in endpoint_hits}
 
+
+
+# --------------------------------------------------------------------------------------
+# T-V1-019 — old-job fencing: a generation replaced/deleted mid-flight cannot publish
+# --------------------------------------------------------------------------------------
+
+
+def test_late_job_for_a_replaced_generation_cannot_publish(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-019 (replace case): v1 finishing after v2 exists must not resurrect.
+
+    Upload v1 → start v1's job → **replace with v2 mid-flight** → let v1 finish.
+    The fence re-compares generations at the publication gates, so the expected
+    end state is:
+
+    * v1 unpublished **everywhere** — no chunk rows, no FTS rows, no vector
+      points, and zero search hits for its text;
+    * v1's job NOT READY — FAILED with ``STALE_GENERATION``;
+    * v2 intact — its own job reaches READY and publishes normally.
+
+    The replace is injected by wrapping the embedding provider (the pipeline's
+    own seam), so it lands at a known point *inside* v1's run: a generation
+    compare, not a sleep — the run is deterministic (checklist 3). The FTS
+    stage is wrapped in a recorder so the test also proves the gate undid
+    **real** writes: v1's lexical rows demonstrably landed before the replace
+    and are gone afterwards, which is the difference between a fence that
+    compensates and one that merely happens to run last (checklist 1).
+    """
+    from retrieval.adapters import infinity_embed, pg_fts
+
+    class _StubProvider:
+        """1024-d non-zero fakes so the REAL vector stage runs on this box
+        (T-V1-043 serves 384-d where the collection expects 1024-d)."""
+
+        dimension = 1024
+
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            return [[0.001] * self.dimension for _ in texts]
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    marker_v1 = f"old job fence probe {uuid.uuid4().hex} amber wombat"
+    marker_v2 = f"old job fence probe {uuid.uuid4().hex} jade wallaby"
+
+    first = _upload(client, token, workspace, "fence.txt", marker_v1.encode()).json()
+    v1_version, document_id = first["version_id"], first["document_id"]
+
+    replaced: dict[str, str | None] = {"version": None, "job": None}
+
+    class _ReplacingProvider(_StubProvider):
+        """The REPLACE lands here — mid-flight, just before v1's vector write."""
+
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            if replaced["version"] is None:
+                replaced["version"], replaced["job"] = await _replace_document_mid_flight(
+                    document_id, marker_v2.encode()
+                )
+            return await super().embed_documents(texts)
+
+    real_lexical = pg_fts.PostgresLexicalStore
+    fts_writes: list[tuple[str, int]] = []  # (document_version_id, rows written)
+
+    class _RecordingLexical:
+        """The REAL FTS store plus a recorder, so the test can prove v1's lexical
+        rows landed mid-flight and the fence's compensation removed them."""
+
+        def __init__(self, *args, **kwargs) -> None:
+            self._inner = real_lexical(*args, **kwargs)
+
+        def __getattr__(self, name: str):
+            return getattr(self._inner, name)
+
+        async def index(self, *, records) -> int:
+            written = await self._inner.index(records=records)
+            if records:
+                fts_writes.append((str(records[0].document_version_id), written))
+            return written
+
+    monkeypatch.setattr(infinity_embed, "InfinityEmbeddingProvider", _ReplacingProvider)
+    monkeypatch.setattr(pg_fts, "PostgresLexicalStore", _RecordingLexical)
+
+    _run_job(first["job_id"])  # v1 finishes AFTER the replace landed
+
+    # The scenario really happened: v2 exists, is the live generation, and v1
+    # really did publish to FTS before the fence compensated it away.
+    v2_version, v2_job = replaced["version"], replaced["job"]
+    assert v2_version and v2_job and v2_version != v1_version
+    assert _active_version_id(document_id) == v2_version
+    assert [w for w in fts_writes if w[0] == v1_version], "v1 must have published mid-flight"
+
+    # v1: unpublished everywhere + never READY (write AND status fence).
+    v1_row = _job_row(first["job_id"])
+    assert v1_row["status"] == "failed"
+    assert v1_row["stage"] == "failed"
+    assert v1_row["error_code"] == "STALE_GENERATION"
+    assert v1_row["finished_at"] is not None
+    # The refusal names the fence reason and the gate, so it is greppable.
+    assert "superseded" in (v1_row["error_message"] or "")
+    assert "ready" in (v1_row["error_message"] or "")
+    assert _chunk_count(v1_version) == 0
+    assert _fts_version_count(v1_version) == 0
+    assert _qdrant_version_points(v1_version) == []
+    assert _search_results(client, token, workspace, marker_v1) == []
+
+    # v2: intact — its own job publishes normally and stays the live generation.
+    _run_job(v2_job)
+    assert _job_row(v2_job)["status"] == "ready"
+    assert _chunk_count(v2_version) >= 1
+    assert _fts_version_count(v2_version) >= 1
+    assert _qdrant_version_points(v2_version)
+    assert _active_version_id(document_id) == v2_version
+    v2_hits = _search_results(client, token, workspace, marker_v2)
+    assert marker_v2 in {hit["content"] for hit in v2_hits}
+    v2_chunks = _chunk_ids(v2_version)
+    assert {hit["chunk_id"] for hit in v2_hits} and {hit["chunk_id"] for hit in v2_hits} <= set(
+        v2_chunks
+    )
+    # And v1 stays dead once v2 has published.
+    assert _chunk_count(v1_version) == 0
+    assert _search_results(client, token, workspace, marker_v1) == []
+
+
+def test_late_job_for_a_deleted_document_cannot_publish(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-019 (delete case): a job whose document is deleted mid-flight must not
+    resurrect it, and must not be marked READY.
+
+    The delete runs through the REAL ``ingestion.dedup.purge_document`` (the
+    API's tombstone path), injected by wrapping the pipeline's parser factory so
+    it lands between the job's parse and its first write. The PRE-WRITE gate
+    then refuses the job before a single chunk/FTS/vector row exists, the
+    tombstone stands, and nothing about the document is retrievable.
+    """
+    from ingestion.adapters.registry import parser_for_mime as real_parser_for_mime
+    from ingestion.dedup import purge_document
+    from ingestion.persistence import get_session_factory
+
+    _install_stub_embedder(monkeypatch)  # the control doc must still publish (T-V1-043)
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    marker = f"deleted mid flight probe {uuid.uuid4().hex} cobalt quokka"
+    uploaded = _upload(client, token, workspace, "fence-del.txt", marker.encode()).json()
+    version_id, document_id = uploaded["version_id"], uploaded["document_id"]
+
+    deleted = {"done": False}
+
+    class _DeletingParser:
+        def __init__(self, inner) -> None:
+            self._inner = inner
+
+        async def parse(self, *args, **kwargs):
+            if not deleted["done"]:
+                deleted["done"] = True
+                async with get_session_factory()() as session:
+                    report = await purge_document(
+                        session,
+                        workspace_id=uuid.UUID(workspace),
+                        document_id=uuid.UUID(document_id),
+                    )
+                assert report.get("postgres") is True  # the delete really landed
+            return await self._inner.parse(*args, **kwargs)
+
+    def _parser_for_mime(mime: str | None):
+        inner = real_parser_for_mime(mime)
+        return _DeletingParser(inner) if inner is not None else None
+
+    monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", _parser_for_mime)
+
+    _run_job(uploaded["job_id"])
+
+    assert deleted["done"] is True
+    status = _job_row(uploaded["job_id"])
+    assert status["status"] == "failed"  # never READY
+    assert status["stage"] == "failed"
+    assert status["error_code"] == "DOCUMENT_DELETED"
+    assert status["attempts"] == 1  # refused, and not retried into a resurrection
+
+    # Not resurrected: nothing written to any store, tombstone intact.
+    assert _chunk_count(version_id) == 0
+    assert _fts_version_count(version_id) == 0
+    assert _qdrant_version_points(version_id) == []
+    assert _is_deleted(document_id) is True
+    assert _search_results(client, token, workspace, marker) == []
+
+    # A live control document in the same workspace is unaffected.
+    control = _upload(client, token, workspace, "fence-live.txt", b"live control").json()
+    _run_job(control["job_id"])
+    assert _job_row(control["job_id"])["status"] == "ready"
+    assert _chunk_count(control["version_id"]) >= 1

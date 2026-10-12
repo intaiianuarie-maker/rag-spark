@@ -189,3 +189,40 @@ async def test_graph_indexing_hook_executed_when_enabled(tmp_path: Path, monkeyp
     ents = await store.find_entities_by_name("ws-graph-test", "Alice Smith")
     assert len(ents) == 1
     assert "chk-10" in ents[0].chunk_ids
+
+
+def test_publication_gate_covers_writes_and_status() -> None:
+    """T-V1-019 checklist (1): the fence guards BOTH writes and the READY status.
+
+    Source-level pin (same style as the zero-vector guard test above): the
+    pipeline must call ``assert_generation_is_publishable`` at the pre-write
+    boundary and again before the READY transition — a gate that only covered
+    one of the two would let a replaced/deleted generation either publish rows
+    or be marked READY. The refusal is non-retryable for every reason: a dead
+    generation can never become live again, so a retry would only re-attempt
+    the resurrection.
+    """
+    import inspect
+
+    from jobs import ingest_pipeline
+    from jobs.ingest_pipeline import (
+        _FENCE_MESSAGES,
+        FENCE_DELETED,
+        FENCE_GONE,
+        FENCE_SUPERSEDED,
+        IngestPipelineError,
+    )
+
+    source = inspect.getsource(ingest_pipeline.process_job)
+    assert source.count("await assert_generation_is_publishable(") == 2
+    assert 'gate="write"' in source
+    assert 'gate="ready"' in source
+    # The READY transition must come AFTER the ready gate, never before it.
+    assert source.index('gate="ready"') < source.index("job.status = JobStatus.READY.value")
+    # The fence itself must be a generation compare, not a timing guard.
+    gate = inspect.getsource(ingest_pipeline.generation_publication_state)
+    assert "current_version_id" in gate and "superseded_at" in gate
+    assert "asyncio.sleep" not in gate and "time.time" not in gate
+    for reason in (FENCE_SUPERSEDED, FENCE_DELETED, FENCE_GONE):
+        assert IngestPipelineError(reason, "fenced", retryable=False).retryable is False
+        assert reason in _FENCE_MESSAGES

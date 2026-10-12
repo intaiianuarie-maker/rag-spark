@@ -103,6 +103,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   13 green with knob) → DONE. Worktree holds only dev2's live T-022 files — no waves.
 - T-V1-022 reviewer: APPROVE (ordering holds, fail-closed rejects, all 5 rulings confirmed,
   15 green) → DONE. api+worker restarted (hydration is live runtime), /health ok.
+- T-V1-025 reviewer: APPROVE (taxonomy sound, wire UNMOVED, TS==Python, 15 green) → DONE.
+  Prose erratum: handoff says 57 codes, code has 54 — docs touch queued, no code impact.
 - T-V1-018 reviewer: APPROVE (pre-evidence gate proven, write path untouched, all 3 risks
   judged non-blocking) → DONE.
 - MONITOR SUMMON-MUSER: STUCK and SILENT-IDLE write rows to
