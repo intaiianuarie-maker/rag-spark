@@ -4,6 +4,70 @@
 #
 # Starts: web (Next.js), api (FastAPI), worker, postgres, redis, qdrant, seaweedfs (optional, PD-005).
 # All settings have defaults; copy .env.example to .env to override.
+#
+# ============================================================================
+# NETWORK SURFACE — T-V1-037 (2026-10-12). Every port this project publishes,
+# why it exists, and what `ss -tlnp` must show after a full recreate.
+# Backing services are loopback-only: 0 off-box reachable backing ports.
+# ----------------------------------------------------------------------------
+# LOOPBACK-ONLY (127.0.0.1) — backing services, never reachable off-box:
+#   postgres   127.0.0.1:5432     metadata + lexical FTS (PD-002)
+#   redis      127.0.0.1:6379     ingest queue / cache (M2-001c)
+#   qdrant     127.0.0.1:6333     vectors, HTTP API
+#              127.0.0.1:6334     vectors, gRPC
+#   seaweedfs  127.0.0.1:8333     S3 object store (PD-005). Its other exposed
+#                                 ports (7333/8080/8888/9333/…) are container
+#                                 internal only — no host publish, so no `ss` line.
+#   infinity   127.0.0.1:7997     embeddings + rerank model server.
+#                                 CLOSES the public :7997 finding (review
+#                                 2026-10-09 finding-01): no host client needs it.
+#                                 api/worker reach it over the compose network at
+#                                 http://infinity-rerank:7997 (service DNS), which
+#                                 bypasses the docker-proxy host binding entirely;
+#                                 loopback is kept only so host-local debugging
+#                                 (`curl localhost:7997/...`) still works.
+#                                 -> If a model server must ever be shared across
+#                                 boxes, that is an explicit decision in DECISIONS.md,
+#                                not a default port publish.
+# The host-side IP above never affects container-to-container traffic: services
+# talk on the compose network by service name, so loopback binds cost nothing.
+#
+# PUBLIC (0.0.0.0) — justified, one line each (ticket asks justify-or-remove):
+#   ${WEB_PORT:-3001}  -> :3000   web (Next.js) UI. Browser entry point: the ONLY
+#                                 port a human/browser agent needs to open.
+#                                 Same-origin /api/* proxy means the browser never
+#                                 touches :8000 directly. Justified: keep.
+#   ${API_PORT:-8000}  -> :8000   api (FastAPI). Published for HOST-LOCAL tooling
+#                                 only — `curl /health` + `/ready`, test suites,
+#                                 IDE/debug on this box. In-stack consumers use
+#                                 http://api:8000 (web) and the compose network.
+#                                 It is the product HTTP API, not a backing store:
+#                                 JWT-authenticated (AUTH_JWT_SECRET), CORS locked
+#                                 to CORS_ORIGINS (default http://localhost:3001).
+#                                 Justified: keep. Hardening option, if no remote
+#                                 host tooling is ever needed: prefix it with
+#                                 127.0.0.1 exactly like the backing services.
+#
+# NOT PUBLISHED BY THIS STACK — accounted for so the audit is complete:
+#   :80 / :443   owned by the HOST nginx reverse proxy (systemd, outside this
+#                compose project — `ss -tlnp` shows the `nginx` process, not
+#                `docker-proxy`). This stack serves plain HTTP behind it and
+#                terminates TLS at that proxy (COOKIE_SECURE=true when it does).
+#                Nothing to remove here; do not add 80/443 publishes to this file.
+#   :22          host sshd. Also not ours.
+#
+# EXPECTED `ss -tlnp` (grep docker-proxy) AFTER COORDINATOR REDEPLOY:
+#   127.0.0.1:5432 127.0.0.1:6379 127.0.0.1:6333 127.0.0.1:6334
+#   127.0.0.1:8333 127.0.0.1:7997           <- loopback (backing + model server)
+#   0.0.0.0:3001 0.0.0.0:8000 (+ their [::] twins)  <- public, justified above
+#   no 0.0.0.0:5432/6379/6333/6334/8333/7997       <- 0 off-box backing ports
+#   no :80, :443 from docker (host nginx owns both)
+# DEPLOY NOTE (not a code gap): a container created BEFORE a loopback fix keeps
+# its old 0.0.0.0 binding until it is recreated — `docker compose up -d` with
+# this file already declares 127.0.0.1 for all six backing/model ports, so the
+# ss state above appears only after the coordinator's redeploy. Nothing is
+# restarted from this ticket (coordinator owns deploys).
+# ============================================================================
 
 name: knowledge-os
 
@@ -49,6 +113,7 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-knowledge}
       POSTGRES_DB: ${POSTGRES_DB:-knowledge}
     ports:
+      # T-V1-037: loopback only — no off-box reach to the primary datastore.
       - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -63,6 +128,7 @@ services:
     image: redis:7.4.11-alpine
     command: ["redis-server", "--appendonly", "yes"]
     ports:
+      # T-V1-037: loopback only — the ingest queue must never be reachable off-box.
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
       - redisdata:/data
@@ -75,6 +141,7 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.19.2
     ports:
+      # T-V1-037: loopback only (HTTP + gRPC) — vector store stays off-box-invisible.
       - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
       - "127.0.0.1:${QDRANT_GRPC_PORT:-6334}:6334"
     volumes:
@@ -90,6 +157,9 @@ services:
       SEAWEEDFS_ACCESS_KEY: ${SEAWEEDFS_ACCESS_KEY:-admin}
       SEAWEEDFS_SECRET_KEY: ${SEAWEEDFS_SECRET_KEY:-admin}
     ports:
+      # T-V1-037: loopback only — S3 object store (document originals) is a
+      # backing service. The image also EXPOSEs 7333/8080/8888/9333/…, but those
+      # are container-internal: no host publish, so they never appear in `ss -tln`.
       - "127.0.0.1:${SEAWEEDFS_PORT:-8333}:8333"
     volumes:
       - weedfsdata:/data
@@ -106,6 +176,10 @@ services:
       MIGRATIONS_ON_BOOT: ${MIGRATIONS_ON_BOOT:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
     ports:
+      # T-V1-037 PUBLIC (justified): host-local tooling only (curl /health +
+      # /ready, test suites, IDE). In-stack callers use http://api:8000 over the
+      # compose network. It is the authenticated product API (JWT + CORS_ORIGINS),
+      # not a backing store — no backing port is reachable off-box.
       - "${API_PORT:-8000}:8000"
     depends_on:
       postgres:
@@ -148,8 +222,10 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
-      # Host default 3001: :3000 is a common dev port and is frequently
-      # occupied in this workspace; WEB_PORT stays overridable per host.
+      # T-V1-037 PUBLIC (justified): browser entry point — the single port a
+      # human/browser agent opens. Host default 3001: :3000 is a common dev port
+      # and is frequently occupied in this workspace; WEB_PORT stays overridable
+      # per host. The browser only ever talks same-origin here (see /api proxy).
       - "${WEB_PORT:-3001}:3000"
     depends_on:
       - api
@@ -163,6 +239,13 @@ services:
       INFERENCE_ENGINE: onnx
       PORT: "7997"
     ports:
+      # T-V1-037 — CLOSING the public infinity question (review 2026-10-09
+      # finding-01; V1-COMPLETION-PLAN §2 item 1). Not public, not justified
+      # public: api/worker reach this model server over the compose network at
+      # http://infinity-rerank:7997 (see INFINITY_URL above), which never touches
+      # the host proxy, so a public publish buys nothing and exposes an
+      # unauthenticated model server off-box. 127.0.0.1 keeps host-local debug
+      # only. Reversible only via an explicit DECISIONS.md row, never by default.
       - "127.0.0.1:7997:7997"
 
 volumes:

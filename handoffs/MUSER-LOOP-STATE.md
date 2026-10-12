@@ -77,6 +77,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 - T-V1-032 reviewer: APPROVE (clean scope, no shared list proven, passage ACL-checked,
   answer-embedded fallback judged right, 135 green) → DONE. Own miss admitted: T-015 prompt
   never followed its /clear (26m idle caught by Jev SILENT-IDLE) — dispatched on catch-up.
+- T-V1-033 reviewer: APPROVE (scope clean, key scoping + null-scope proven, deleted needs
+  probe-404, streaming audit green, 186 green) → DONE. T-V1-037 dispatched (dev2, compose).
 - T-V1-015 committed eaafe4f (14 pass, ruff/mypy clean; dev2 live files untouched) → REVIEW,
   reviewer on it. Follow-ups filed: T-V1-044 (redundant guard), T-V1-045 (promote adoption).
   T-V1-016 dispatched (dev1).
