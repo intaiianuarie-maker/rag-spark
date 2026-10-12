@@ -51,7 +51,16 @@ export async function forward(
   }
 
   const hasBody = method !== "GET" && method !== "DELETE";
-  const body = hasBody ? await request.text() : undefined;
+  let body: BodyInit | undefined = undefined;
+  if (hasBody) {
+    const ct = request.headers.get("content-type") || "";
+    if (ct.includes("multipart/") || ct.includes("application/octet-stream")) {
+      const buffer = await request.arrayBuffer();
+      body = Buffer.from(buffer);
+    } else {
+      body = await request.text();
+    }
+  }
 
   let upstream: Response;
   try {
