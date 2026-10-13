@@ -1,6 +1,6 @@
 # T-V1-036 — V1 acceptance runbook
 
-**Status:** authored, **not yet executed**. This file is the ordered plan the T-036 run
+**Status:** authored, and **executed on 2026-10-13** — see `handoffs/T-V1-036-ACCEPTANCE-RECORD.md`. This file is the ordered plan the T-036 run
 phase follows. Every number below is **sourced** from a committed record, cited inline.
 Nothing here was measured while writing it — where a duration was never recorded, it is
 marked **NOT RECORDED** rather than estimated into a fake figure.
@@ -39,8 +39,8 @@ unless stated, attached in the foreground.
 /root/ko-venv/bin/pytest tests/unit tests/contracts -q
 ```
 * **Recorded result:** `1252 passed, 0 failed` (T-V1-057).
-* **Duration:** NOT RECORDED — no handoff captured a wall-clock for this command. **Record
-  it on first execution**; do not quote a number until then.
+* **Duration: 103.82 s** (first measured on the 2026-10-13 acceptance run; the runbook
+  previously said NOT RECORDED).
 * Fails on: anything not in §4. This is the gate most likely to stay green.
 
 ### Step 2 — Q9 benchmark gate (hermetic: gold-context oracle, no services)
@@ -60,7 +60,7 @@ unless stated, attached in the foreground.
   GATE: PASS — groundedness 0.9888 (>= 0.9), citation_validity 1.0000 (== 1.0), abstention 1.0000 (>= 0.95)
   ```
 * `test_benchmark_gate.py` = **3 tests** (T-V1-076 ran it with two other files: 37 total).
-* **Duration:** NOT RECORDED for either command.
+* **Duration:** `1.11 s` (2a) and `1.90 s` (2b) — first measured on the 2026-10-13 run.
 * The slice file is **hash-pinned** (T-V1-075): drift raises `SliceIntegrityError` from
   `load_slices()`. A pin error is **not** a product failure — see §4 F9.
 
@@ -69,7 +69,8 @@ unless stated, attached in the foreground.
 ```bash
 RUN_WEB_E2E=1 /root/ko-venv/bin/pytest tests/integration/test_web_e2e.py -q
 ```
-* **Recorded result:** `2 passed in 84.42s` (T-V1-077).
+* **Recorded result:** `2 passed in 84.42s` (T-V1-077); **`2 passed in 42.27s`** on the
+  2026-10-13 acceptance run (incremental build).
 * **Assert zero skips** for this file — with `RUN_WEB_E2E` unset it reports
   **`2 skipped in 0.04s` and exits 0**, which is a skip indistinguishable from a pass.
   Run with `-rs` and confirm no `SKIPPED` line for `test_web_e2e.py`.
@@ -104,6 +105,9 @@ RUN_WEB_E2E=1 /root/ko-venv/bin/pytest tests/integration/test_web_e2e.py -q
   `test_crash_during_parse` (`1 passed in 70.27s`) and one more was attributed to T-V1-059.
   **Expected today: 6 failures** — see §4 F1.
 * **~348 s is the recorded cost.** On a contended box it is worse; budget accordingly.
+  The 2026-10-13 acceptance run completed this step in **107.36 s** — the six
+  long-standing `wait_stalled` failures no longer fire, so the historical 348 s no
+  longer describes this file.
 * If it fails: set `T021_KEEP_MARKERS=1` (E4) and re-run that one test.
 
 ### Step 7 — post-run reconciliation (live, read-only)

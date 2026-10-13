@@ -1,0 +1,35 @@
+=== STEP 7 | 2026-10-13T12:00:53Z | reconcile (dry run, no --apply) ===
+collection            : knowledge
+points in collection  : 2041
+points matched to PG  : 1927
+ORPHAN POINTS         : 114
+    superseded-version  : 67
+    tombstoned-doc      : 7
+    no-PG-row           : 0
+    other               : 40
+pointless PG chunks   : 627
+
+
+would delete           : 74 (categories: superseded-version, tombstoned-doc, no-PG-row)
+  superseded-version (67):
+      point=006ec99f-ab37-5471-ac3d-854545f9a6ab chunk=chunk-stale-0001 :: version superseded (superseded_at set)
+      point=0200ce09-01c9-5c16-91c1-033505128ab3 chunk=chunk-stale-0001 :: version superseded (superseded_at set)
+      point=052f87ec-b745-4b8a-a697-456454ede35a chunk=052f87ec-b745-4b8a-a697-456454ede35a :: version superseded (superseded_at set)
+      point=057a1573-8bfe-4f9b-b25a-83c5aa1bb14d chunk=057a1573-8bfe-4f9b-b25a-83c5aa1bb14d :: version superseded (superseded_at set)
+      point=0c134551-73c6-4e80-ac3e-aca8e38b5934 chunk=0c134551-73c6-4e80-ac3e-aca8e38b5934 :: version superseded (superseded_at set)
+      point=122e7bc5-9711-5ae7-a6db-97f16c3b8829 chunk=chunk-stale-0001 :: version superseded (superseded_at set)
+      point=1b96f861-9a9b-45b5-b344-e2d4b12d3abc chunk=1b96f861-9a9b-45b5-b344-e2d4b12d3abc :: version superseded (superseded_at set)
+      point=2a52e7ec-7b9d-58f3-a107-dd0faae66ebe chunk=chunk-stale-0001 :: version superseded (superseded_at set)
+      point=376b99bb-88b9-5951-bb1c-2a9a8e2d0464 chunk=chunk-stale-0001 :: version superseded (superseded_at set)
+      point=392155f3-e6a1-442b-a9e8-e8afb61c84e6 chunk=392155f3-e6a1-442b-a9e8-e8afb61c84e6 :: version superseded (superseded_at set)
+      ... and 57 more
+  tombstoned-doc (7):
+      point=1554a47a-32dc-5ea4-a557-4a6b55cd0230 chunk=1554a47a-32dc-5ea4-a557-4a6b55cd0230 :: document tombstoned (deleted_at set)
+      point=458463e6-346b-5417-9c55-9978ceda19aa chunk=458463e6-346b-5417-9c55-9978ceda19aa :: document tombstoned (deleted_at set)
+      point=4d0a554f-89da-5d6d-b5ee-05223b1aec6e chunk=4d0a554f-89da-5d6d-b5ee-05223b1aec6e :: document tombstoned (deleted_at set)
+      point=57e2ee4d-8d1d-5630-b35f-5afbdeab835b chunk=57e2ee4d-8d1d-5630-b35f-5afbdeab835b :: document tombstoned (deleted_at set)
+      point=629256f5-c94c-52ef-b219-30a6b7bbfb69 chunk=629256f5-c94c-52ef-b219-30a6b7bbfb69 :: document tombstoned (deleted_at set)
+      point=643ee29f-703a-58f2-88d6-254bbf9a010a chunk=643ee29f-703a-58f2-88d6-254bbf9a010a :: document tombstoned (deleted_at set)
+      point=a310f424-e5f0-53dc-966c-be0068f1a18e chunk=a310f424-e5f0-53dc-966c-be0068f1a18e :: document tombstoned (deleted_at set)
+
+DRY RUN — nothing deleted. Re-run with --apply --live <collection> to act.

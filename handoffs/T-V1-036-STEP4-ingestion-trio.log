@@ -1,0 +1,11 @@
+=== STEP 4 | 2026-10-13T11:56:28Z | pytest test_ingestion_jobs + test_knowledge_reads + test_security_placeholders -q ===
+..................x.x                                                    [100%][T-V1-071] dropped scratch collection knowledge_test_security_4eea5531
+
+=============================== warnings summary ===============================
+tests/integration/test_ingestion_jobs.py::test_upload_endpoint_returns_202_queued
+  /root/ko-venv/lib/python3.14/site-packages/fastapi/testclient.py:1: StarletteDeprecationWarning: Using `httpx` with `starlette.testclient` is deprecated; install `httpx2` instead.
+    from starlette.testclient import TestClient as TestClient  # noqa
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+19 passed, 2 xfailed, 1 warning in 41.00s
+ELAPSED 45.18 s

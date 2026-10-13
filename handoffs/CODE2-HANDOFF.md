@@ -2899,3 +2899,94 @@ PROGRESS ROW — CHANGE: **documentation only, +35 insertions / 0 deletions, no 
 PROGRESS ROW — FOREIGN-RED FILED (will block the T-036 run, not mine to fix): `test_originals_object_store.py::test_backfilled_rows_round_trip_through_the_object_store` fails `AssertionError: 4 row(s) have no storage_key (assert 4490 == 4486)`. All four rows are **`t1072.txt` with `mime_type = NULL`, created 2026-10-13 11:38Z — dev1's in-flight T-072 fixture**, not a T-V1-039 backfill gap and not mine (my own upload in the same run stored `storage_key` correctly). Real cross-suite interference: a **global** invariant (`count(*) == count(storage_key)`) plus another suite's fixture = red in a suite I do not own. Filed, not fixed; the runbook is not in this ticket's allowlist so it is reported here instead.
 PROGRESS ROW — RISKS: (a) I verified the compose worker cannot see these keys **by prefix**, not its env — if anyone points the worker's prefix at t039-*/t056-* or makes it consume a wildcard, the argument breaks; that is a compose decision and on today's evidence **none is needed**; (b) the originals suite accumulates 1 PG row + 1 object per run, which is what makes the global count assertion sensitive to other suites; (c) the foreign-red may be transient if dev1's fixture is mid-edit — I did not open their files; (d) "no compose dependency" is scoped to today's queue contract — re-verify after any worker redeploy; (e) I ran only these two suites, so I cannot say whether other files share the pattern. dev1's dedup.py + test_dedup_versions.py became dirty mid-ticket and were never touched by me. HEAD 24f3569 unmoved, index empty, no commit, knowledge 2041 before and after every run.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-036 RUN (acceptance record executed) — code2
+
+TASK: execute `handoffs/T-V1-036-RUNBOOK.md` in authored order and produce the acceptance record with verbatim transcripts. Start HEAD `5369d97` → end HEAD `5369d97` (**UNMOVED**). Allowed: `handoffs/T-V1-036-*` only. **No product/test edit of any kind** — the one red found was filed, not fixed.
+
+### VERDICT: **ACCEPTANCE CONDITIONAL** — every gate threshold met, 6 of 7 steps fully green, **one NEW product red** found and filed.
+
+| # | step | result | numbers | duration |
+|---|---|---|---|---|
+| 1 | unit + contract | **PASS** | `1350 passed, 0 failed` | 103.82 s |
+| 2a | Q9 bench | **PASS** | groundedness **0.9888** (≥0.90), validity **1.0000** (==1.0), abstention **1.0000** (≥0.95), `leaked=0` | 1.11 s |
+| 2b | Q9 gate test | **PASS** | `3 passed` | 1.90 s |
+| 3 | web e2e `RUN_WEB_E2E=1` | **PASS** | `2 passed`, **zero skips asserted** | 42.27 s |
+| 4 | ingestion trio | **PASS** | `19 passed, 2 xfailed` | 41.00 s |
+| 5 | dedup / versions | **PASS** | `18 passed` | 66.85 s |
+| 6 | crash recovery | **FAIL (1 of 8)** | `1 failed, 7 passed` — **6 known-reds HEALED**, 1 **NEW** | 107.36 s |
+| 7 | reconciliation (dry run) | **PASS** | 2041 pts, 1927 matched, 114 orphans, 627 pointless chunks | — |
+| 7b | post-run `/ready` | **PASS** | `ready:true`, all deps reachable — **no degradation window** | — |
+
+Q9 per-slice identical to the T-076 baseline: `en 1.0000 · ro 1.0000 · pt 0.9853 · tables 1.0000 · multi 0.9586 · OVERALL 50/0.9888/1.0000 · unanswerable abstention 1.0000`.
+
+### NEW RED — FILED, NOT FIXED (not in annex F1–F10)
+
+`test_crash_recovery.py::test_redelivery_after_delete_is_fenced_not_resurrected` — `assert 'INGESTION_ERROR' == 'DOCUMENT_DELETED'`.
+
+* **The safety property holds**: `final_status == "failed"` passed, `drained=True`, `verdict='PASS'`, no resurrection, no writes. Only the **disclosed code label** is wrong.
+* **Mechanism traced, not guessed**: the mid-cycle delete now also **purges originals** (`document_originals_purged … objects_removed: 1` in the transcript), so on restart `load_original_bytes` hits `OriginalMissing` → `IngestPipelineError("INGESTION_ERROR", …, retryable=False)` (`ingest_pipeline.py` ~633) **before** the PRE-WRITE generation fence that would emit `FENCE_DELETED = "DOCUMENT_DELETED"` (`:102`, raised `:154`). The T-039/T-072 originals guard **fires ahead of the delete fence**.
+* **Why it is more than a label**: at the code level a **delete is now indistinguishable from storage rot**. That is a disclosure regression in precisely the place an acceptance gate exists to catch.
+* **Follow-up filed** (product code, out of allowlist): decide precedence — delete fence wins when the document is tombstoned, or `OriginalMissing` maps to `DOCUMENT_DELETED` in that case.
+
+### THE STRONGEST RESULT — live isolation held
+
+**`knowledge` byte-identical before and after the whole run: 2041 points, 114 orphans (67/7/0/40) both times.** Every live suite wrote to scratch collections and dropped them (visible in-transcript: `dropped scratch collection knowledge_test_security_…`, `…knowledge_test_dedup_…`). T-V1-071 works. **The only thing that grew is Postgres** — pointless chunks **546 → 627 (+81)** — so PG accumulates test rows while Qdrant does not.
+
+### KNOWN-FAILURE ANNEX — what actually happened
+
+* **F1 HEALED (0 of 6).** The `wait_stalled` cross-cycle race no longer fires; step 6 costs **107.36 s**, not the historical ~348 s, so the runbook's budget line no longer describes this file.
+* **F9 passes** — no `SliceIntegrityError`, the corpus pin held through the bench.
+* **F2/F3 orphans unchanged** (corpus byte-stable); pointless chunks +81.
+* **F7 still unmeasured** — so **this record evidences 3 of RP-02's five targets, not five**, stated plainly rather than letting a green 3-of-5 read as 5-of-5.
+* **F8/F10 unchanged**; **F4** 42.27 s (incremental, not a CI cost); **F5/F6** not exercised by this runbook.
+* **T-V1-078's filed foreign-red is HEALED** — `test_originals_object_store.py` → **`5 passed`**; T-V1-072's fix landed and the `t1072` rows now carry `storage_key`.
+
+### CHANGE (transcripts + 2 docs, nothing else)
+
+* `handoffs/T-V1-036-STEP1-unit-contract.log`, `-STEP2-q9-bench.log`, `-STEP3-web-e2e.log`, `-STEP4-ingestion-trio.log`, `-STEP5-dedup.log`, `-STEP6-crash.log`, `-STEP7-reconcile.log`, `-STEP7b-postrun.log` — verbatim output, 8 files.
+* `handoffs/T-V1-036-ACCEPTANCE-RECORD.md` — NEW: per-step table, gates, the new red with its traced mechanism, annex outcomes, isolation evidence, and the reporting caveats that travel with the record.
+* `handoffs/T-V1-036-RUNBOOK.md` — **durations filled in** where the runbook said `NOT RECORDED` (step 1 → 103.82 s; step 2 → 1.11/1.90 s), step 3 and step 6 corrected, status marked executed. I had committed to refreshing these at dispatch rather than copying forward stale figures.
+
+### VERIFY
+
+```
+pre-run  /ready → ready:true, all deps reachable ; load 5.70, 3 GB avail ; knowledge 2041
+step1    pytest tests/unit tests/contracts -q                  → 1350 passed in 103.82s
+step2a   python3 evals/q9_run_benchmark.py                     → GATE: PASS 0.9888/1.0000 abstention 1.0000
+step2b   pytest tests/integration/test_benchmark_gate.py -q   → 3 passed in 0.47s
+step3    RUN_WEB_E2E=1 pytest test_web_e2e.py -q -rs          → 2 passed in 42.27s ; grep SKIPPED → none
+step4    trio                                                  → 19 passed, 2 xfailed in 41.00s
+step5    test_dedup_versions.py                                → 18 passed in 66.85s
+step6    test_crash_recovery.py                                → 1 failed, 7 passed in 107.36s
+step7    scripts/reconcile_points_chunks.py (dry run)         → 2041/1927/114 orphans/627 pointless
+step7b   curl /ready                                           → ready:true, all reachable
+         test_originals_object_store.py                        → 5 passed in 12.25s (foreign-red healed)
+post-run knowledge 2041 (unchanged) ; pointless chunks 546 → 627
+git status --short start & end → delta is exactly the 8 transcripts + 2 docs
+```
+
+Every step attached in the foreground, stage by stage; **no step exceeded 2× its runbook budget**.
+
+### RISKS / DISCLOSED
+
+- **(a) This record is CONDITIONAL, not PASS.** One unresolved new product red (§above). It is a disclosure/taxonomy regression with the safety property intact — but "safety intact" is my characterisation, and the code a consumer sees is wrong, so it is not mine to waive.
+- **(b) Three of five RP-02 targets, not five.** F7 has no runner. The record must not be cited as the full external-benchmark acceptance.
+- **(c) Oracle caveat, restated**: Q9 is a gold-context oracle. A green Q9 says nothing about embeddings or the live index.
+- **(d) The box was not idle** — load **5.70** on 4 cores at start, against the runbook's E3 "box free" precondition. Nothing timed out and no step blew its budget, but these durations are **not idle-box numbers** and should not be used as a capacity plan.
+- **(e) Step 3's 42.27 s was an incremental build** (`.next/` existed) — not a CI cost, same caveat as F4.
+- **(f) The crash step is the only place a safety-critical assertion is exercised, and it is the one step that is not green.** The 6 healed failures also mean the step now costs 107 s instead of 348 s, so the harness is cheaper *because* it is less broken — worth keeping in mind before re-timing anything.
+- **(g) `knowledge` was not written by this run, but PG was** (+81 pointless chunks). A post-run reconciliation that only looks at Qdrant would have missed that; both numbers are in the record.
+- **(h) FOREIGN CHURN.** 24 dirty paths at start and end, identical set (V4/workflow-engine + `handoffs/*`); none opened, staged, edited or reverted. No product or test file touched by me — the new red was **filed, not fixed**, per instruction.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1036run_{start,end}_status.txt`):
+- **start** (HEAD `5369d97`): 24 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `5369d97`, **UNMOVED**): the same foreign set **plus exactly my 8 transcripts + 2 docs**. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+
+PROGRESS ROW — TASK: T-V1-036 RUN — executed the T-V1-036 runbook end to end, 8 verbatim transcripts + acceptance record.
+PROGRESS ROW — VERDICT: **ACCEPTANCE CONDITIONAL.** PASS: unit+contract **1350 passed/0 failed (103.82s)**; Q9 bench **GATE PASS groundedness 0.9888 / validity 1.0000 / abstention 1.0000 / leaked=0 (1.11s)**; gate test **3 passed**; web e2e **2 passed, zero skips asserted (42.27s)**; ingestion trio **19 passed 2 xfailed**; dedup **18 passed**; reconciliation dry-run clean; `/ready` true before AND after with **no degradation window**. FAIL: crash recovery **1 failed, 7 passed (107.36s)**. **All three gate thresholds met.**
+PROGRESS ROW — NEW RED FILED (not fixed, product code out of allowlist): `test_redelivery_after_delete_is_fenced_not_resurrected` asserts `INGESTION_ERROR == DOCUMENT_DELETED`. **Safety holds** (status failed, drained=True, verdict PASS, no resurrection, no writes) — only the disclosed code is wrong. Mechanism traced: the mid-cycle delete now **purges originals** (`document_originals_purged … objects_removed: 1`), so on restart `load_original_bytes` raises `OriginalMissing` → `INGESTION_ERROR` (ingest_pipeline ~633) **before** the PRE-WRITE fence that emits `FENCE_DELETED` (:102/:154). The T-039/T-072 originals guard fires ahead of the delete fence, so **a delete is now indistinguishable from storage rot at the code level** — a disclosure regression exactly where an acceptance gate should catch it. Follow-up filed: decide precedence (delete fence wins when tombstoned, or map OriginalMissing → DOCUMENT_DELETED).
+PROGRESS ROW — STRONGEST RESULT + ANNEX: **live `knowledge` byte-identical before and after the whole run (2041 points, 114 orphans 67/7/0/40 both times)** — every live suite used scratch collections and dropped them, so T-071's isolation holds; **but PG grew, pointless chunks 546 → 627 (+81)**, which a Qdrant-only reconciliation would have missed. **F1 HEALED — the 6 known crash reds no longer fire** (step 6 is 107.36s, not the historical ~348s). **F9 passes** (corpus pin held). **F7 still unmeasured, so this record evidences 3 of RP-02's five targets, not five.** **T-V1-078's foreign-red is HEALED — test_originals_object_store 5 passed** after T-072's fix.
+PROGRESS ROW — DISCLOSED: CONDITIONAL not PASS (one unresolved new product red; "safety intact" is my characterisation, not a waiver); oracle caveat restated (Q9 is gold-context, says nothing about embeddings); **the box was NOT idle — load 5.70 on 4 cores against the runbook's E3 precondition, so these durations are not idle-box numbers and not a capacity plan**; step 3's 42.27s was an incremental build, not a CI cost; the crash step is the only place a safety-critical assertion is exercised AND the only non-green step, and its cost dropped because the harness is less broken — do not re-time on that basis; no product or test file touched, 0 commits, HEAD 5369d97 unmoved, index empty.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
