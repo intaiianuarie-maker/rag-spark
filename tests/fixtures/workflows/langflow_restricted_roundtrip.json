@@ -1,0 +1,219 @@
+{
+  "_comment": [
+    "W2 restricted round-trip fixture (Langflow 1.x export shape).",
+    "This is the *supported authoring subset* only: built-in declarative",
+    "components with typed ports and scalar/list config. It is a snapshot of",
+    "what a restricted Langflow editor is allowed to export and hand to the",
+    "product compiler. Loaded by tests/unit/test_workflow_langflow_fixture.py.",
+    "No custom components, code, executable-code markers, module paths,",
+    "absolute paths, credentials or PHI appear anywhere in this file.",
+    "Pin/audit note: LANGFOW_PIN = 'langflow 1.x export JSON'."
+  ],
+  "id": "flow-restricted-reference",
+  "name": "Restricted Reference Flow",
+  "description": "Verification-style flow over the supported declarative subset.",
+  "access_type": "PRIVATE",
+  "endpoint_name": null,
+  "is_component": false,
+  "data": {
+    "viewport": {"x": 0.0, "y": 0.0, "zoom": 1.0},
+    "nodes": [
+      {
+        "id": "ChatInput-ref01",
+        "type": "genericNode",
+        "position": {"x": 0.0, "y": 0.0},
+        "data": {
+          "type": "ChatInput",
+          "id": "ChatInput-ChatInput-ref01",
+          "node": {
+            "display_name": "Chat Input",
+            "description": "Run start: initial message input.",
+            "template": {
+              "input_value": {
+                "type": "str",
+                "required": false,
+                "value": "Summarise the policy document."
+              },
+              "sender": {"type": "str", "required": false, "value": "user"},
+              "sender_name": {"type": "str", "required": false, "value": "operator"}
+            }
+          }
+        }
+      },
+      {
+        "id": "ChatOpenAI-ref02",
+        "type": "genericNode",
+        "position": {"x": 400.0, "y": 0.0},
+        "data": {
+          "type": "ChatOpenAI",
+          "id": "ChatOpenAI-ChatOpenAI-ref02",
+          "node": {
+            "display_name": "Chat OpenAI",
+            "description": "Verified-answer LLM step (no free model routing).",
+            "template": {
+              "input_value": {"type": "str", "required": false, "value": null},
+              "system_message": {
+                "type": "str",
+                "required": false,
+                "value": "Answer only from retrieved evidence."
+              },
+              "model_name": {"type": "str", "required": false, "value": "gpt-4o-mini"},
+              "temperature": {"type": "float", "required": false, "value": 0.2},
+              "max_tokens": {"type": "int", "required": false, "value": 256},
+              "stream": {"type": "bool", "required": false, "value": false}
+            }
+          }
+        }
+      },
+      {
+        "id": "ConditionalRouter-ref03",
+        "type": "genericNode",
+        "position": {"x": 800.0, "y": 0.0},
+        "data": {
+          "type": "ConditionalRouter",
+          "id": "ConditionalRouter-ConditionalRouter-ref03",
+          "node": {
+            "display_name": "Conditional Router",
+            "description": "Declarative route selection.",
+            "template": {
+              "input_value": {"type": "any", "required": false, "value": null},
+              "conditions": {
+                "type": "list",
+                "required": false,
+                "value": ["legal", "general"]
+              }
+            }
+          }
+        }
+      },
+      {
+        "id": "ChatOutput-ref04",
+        "type": "genericNode",
+        "position": {"x": 1200.0, "y": 100.0},
+        "data": {
+          "type": "ChatOutput",
+          "id": "ChatOutput-ChatOutput-ref04",
+          "node": {
+            "display_name": "Chat Output",
+            "description": "Verified answer sink.",
+            "template": {
+              "input_value": {"type": "any", "required": false, "value": null},
+              "sender": {"type": "str", "required": false, "value": "assistant"},
+              "sender_name": {"type": "str", "required": false, "value": "agent"}
+            }
+          }
+        }
+      },
+      {
+        "id": "TextOutput-ref05",
+        "type": "genericNode",
+        "position": {"x": 1200.0, "y": 300.0},
+        "data": {
+          "type": "TextOutput",
+          "id": "TextOutput-TextOutput-ref05",
+          "node": {
+            "display_name": "Text Output",
+            "description": "Verified answer sink.",
+            "template": {
+              "input_value": {"type": "any", "required": false, "value": null}
+            }
+          }
+        }
+      }
+    ],
+    "edges": [
+      {
+        "id": "e-ref01",
+        "source": "ChatInput-ref01",
+        "target": "ChatOpenAI-ref02",
+        "sourceHandle": "ChatInput-ref01|message|message",
+        "targetHandle": "ChatOpenAI-ref02|input_value|input_value",
+        "data": {
+          "sourceHandle": {
+            "type": "output",
+            "id": "message",
+            "name": "message",
+            "output_types": ["Message"],
+            "selected_output": "message"
+          },
+          "targetHandle": {
+            "type": "input",
+            "id": "input_value",
+            "name": "input_value",
+            "fieldType": "str",
+            "input_types": ["Message"]
+          }
+        }
+      },
+      {
+        "id": "e-ref02",
+        "source": "ChatOpenAI-ref02",
+        "target": "ConditionalRouter-ref03",
+        "sourceHandle": "ChatOpenAI-ref02|message|message",
+        "targetHandle": "ConditionalRouter-ref03|input_value|input_value",
+        "data": {
+          "sourceHandle": {
+            "type": "output",
+            "id": "message",
+            "name": "message",
+            "output_types": ["Message"],
+            "selected_output": "message"
+          },
+          "targetHandle": {
+            "type": "input",
+            "id": "input_value",
+            "name": "input_value",
+            "fieldType": "any",
+            "input_types": ["Message"]
+          }
+        }
+      },
+      {
+        "id": "e-ref03",
+        "source": "ConditionalRouter-ref03",
+        "target": "ChatOutput-ref04",
+        "sourceHandle": "ConditionalRouter-ref03|true|true",
+        "targetHandle": "ChatOutput-ref04|input_value|input_value",
+        "data": {
+          "sourceHandle": {
+            "type": "output",
+            "id": "true",
+            "name": "true",
+            "output_types": ["Message"],
+            "selected_output": "true"
+          },
+          "targetHandle": {
+            "type": "input",
+            "id": "input_value",
+            "name": "input_value",
+            "fieldType": "any",
+            "input_types": ["Message"]
+          }
+        }
+      },
+      {
+        "id": "e-ref04",
+        "source": "ConditionalRouter-ref03",
+        "target": "TextOutput-ref05",
+        "sourceHandle": "ConditionalRouter-ref03|false|false",
+        "targetHandle": "TextOutput-ref05|input_value|input_value",
+        "data": {
+          "sourceHandle": {
+            "type": "output",
+            "id": "false",
+            "name": "false",
+            "output_types": ["Message"],
+            "selected_output": "false"
+          },
+          "targetHandle": {
+            "type": "input",
+            "id": "input_value",
+            "name": "input_value",
+            "fieldType": "any",
+            "input_types": ["Message"]
+          }
+        }
+      }
+    ]
+  }
+}

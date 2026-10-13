@@ -11,6 +11,7 @@ Tests verify:
 
 from __future__ import annotations
 
+import re
 import sys
 from typing import Any
 
@@ -593,7 +594,7 @@ class TestF1DepthLimitedWalk:
             new_list: list[Any] = []
             current.append(new_list)
             current = new_list
-        markers, depth_exceeded = LangflowAdapter._find_code_markers(value)
+        markers, _ = LangflowAdapter._find_code_markers(value)
         assert isinstance(markers, set)
 
     def test_self_referential_dict_does_not_crash(self) -> None:
@@ -1068,13 +1069,13 @@ class TestR32ScanDepthExceedRejects:
         for _ in range(5000):
             current["nested"] = {}
             current = current["nested"]
-        markers, depth_exceeded = LangflowAdapter._find_code_markers(value)
+        _markers, depth_exceeded = LangflowAdapter._find_code_markers(value)
         assert depth_exceeded is True
 
     def test_find_code_markers_reports_no_depth_exceed_for_normal(self) -> None:
         """A normal node must report depth_exceeded=False."""
         node = _lf_node("lf-x", "ChatInput")
-        markers, depth_exceeded = LangflowAdapter._find_code_markers(node)
+        _markers, depth_exceeded = LangflowAdapter._find_code_markers(node)
         assert depth_exceeded is False
 
 
@@ -1125,7 +1126,7 @@ class TestW22TriggerTranslation:
 class TestW22RetrieverTranslation:
     """W2-2: RETRIEVER nodes translate with ports, capabilities and config."""
 
-    def _import_single(self, component: str, template: dict[str, Any]):  # noqa: ANN001
+    def _import_single(self, component: str, template: dict[str, Any]):
         nodes = [_lf_node("lf-retr", component, template=template)]
         return LangflowAdapter.import_definition(
             _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
@@ -1170,7 +1171,7 @@ class TestW22RetrieverTranslation:
 class TestW22LlmTranslation:
     """W2-2: LLM nodes translate with ports, capabilities and config."""
 
-    def _import_single(self, template: dict[str, Any]):  # noqa: ANN001
+    def _import_single(self, template: dict[str, Any]):
         nodes = [_lf_node("lf-llm", "ChatOpenAI", template=template)]
         return LangflowAdapter.import_definition(
             _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
@@ -1782,7 +1783,8 @@ class TestW23RoundTripExport:
         assert by_id["e2"].condition_value is False
 
     def test_export_rejects_unmapped_node_type(self) -> None:
-        from workflow_engine import NodeSpec as NS, NodeType as NT
+        from workflow_engine import NodeSpec as NS
+        from workflow_engine import NodeType as NT
 
         definition = WorkflowDefinition(
             id="wf-x",
@@ -2436,3 +2438,320 @@ class TestB2PerPortDescriptions:
         node = result.nodes[0]
         assert node.input_ports[0].description == "Final answer value."
         assert node.output_ports[0].description == "Workflow output value."
+
+
+# ---------------------------------------------------------------------------
+# B-slice R1 remediation: never-crash + non-finite + list elements + dict drop
+# ---------------------------------------------------------------------------
+
+
+def _import_tool(template: dict[str, Any]) -> Any:
+    """Import a single Tool node with *template*."""
+    nodes = [_lf_node("lf-tool", "Tool", template=template)]
+    return LangflowAdapter.import_definition(
+        _flow(nodes, []), workflow_id="wf-1", workspace_id="ws-1"
+    )
+
+
+class TestBR1HugeIntegerNeverCrashes:
+    """B-R1-1: a hostile huge int must reject structurally, never crash.
+
+    CPython limits int -> str conversion (sys.int_max_str_digits), so an
+    unbounded ``repr()`` of a 100k-digit integer in a rejection reason raises
+    a raw ValueError out of ``import_definition``.
+    """
+
+    def test_max_tokens_100k_digits_is_structured_rejection(self) -> None:
+        huge = 10 ** 100_000
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(max_tokens={"value": huge}))
+        codes = {r["code"] for r in exc_info.value.rejections}
+        assert "INVALID_CONFIG_VALUE" in codes
+
+    def test_huge_integer_rejection_payload_bounded(self) -> None:
+        """The rejection itself must not become an unbounded error payload."""
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(max_tokens={"value": 10 ** 100_000}))
+        assert _max_rejection_size(exc_info.value) <= 300
+
+    def test_huge_integer_message_does_not_contain_full_digits(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(max_tokens={"value": 10 ** 100_000}))
+        message = " ".join(r["message"] for r in exc_info.value.rejections)
+        # No run of >32 digits may appear (the echo is digit-capped, and a
+        # 100k-digit string cannot survive the CPython conversion limit).
+        assert re.search(r"\d{33,}", message) is None
+        assert "digits" in message
+
+    def test_temperature_huge_integer_rejected_bounded(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(temperature={"value": 10 ** 100_000}))
+        assert _max_rejection_size(exc_info.value) <= 300
+
+    def test_negative_huge_integer_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(max_tokens={"value": -(10 ** 100_000)}))
+        assert "INVALID_CONFIG_VALUE" in {
+            r["code"] for r in exc_info.value.rejections
+        }
+
+    def test_31_digit_integer_reports_range_not_digit_ceiling(self) -> None:
+        """Inside the ceiling the range message is used (still bounded)."""
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(max_tokens={"value": 10 ** 31}))
+        message = " ".join(r["message"] for r in exc_info.value.rejections)
+        assert "digits" not in message
+        assert _max_rejection_size(exc_info.value) <= 300
+
+    def test_validate_config_value_direct_call_bounded(self) -> None:
+        reason = LangflowAdapter._validate_config_value(
+            "max_tokens", 10 ** 100_000
+        )
+        assert reason is not None
+        assert len(reason) <= 300
+
+    def test_huge_integer_never_reaches_hash(self) -> None:
+        """json.dumps on a huge int would itself raise: never get there."""
+        with pytest.raises(LangflowImportError):
+            LangflowAdapter.import_revision(
+                _flow(
+                    [
+                        _lf_node(
+                            "lf-llm",
+                            "ChatOpenAI",
+                            template=_llm_template(
+                                max_tokens={"value": 10 ** 100_000}
+                            ),
+                        )
+                    ],
+                    [],
+                ),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+
+
+class TestBR1NonFiniteRejected:
+    """B-R1-2: NaN / ±inf must never reach config or the revision hash."""
+
+    def test_nan_temperature_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(temperature={"value": float("nan")}))
+        assert "INVALID_CONFIG_VALUE" in {
+            r["code"] for r in exc_info.value.rejections
+        }
+
+    def test_nan_message_mentions_finite(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(temperature={"value": float("nan")}))
+        messages = " ".join(r["message"] for r in exc_info.value.rejections)
+        assert "finite" in messages
+
+    def test_positive_infinity_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            _import_llm(_llm_template(temperature={"value": float("inf")}))
+        assert "INVALID_CONFIG_VALUE" in {
+            r["code"] for r in exc_info.value.rejections
+        }
+
+    def test_negative_infinity_rejected(self) -> None:
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(temperature={"value": float("-inf")}))
+
+    def test_nan_in_integer_kind_rejected(self) -> None:
+        with pytest.raises(LangflowImportError):
+            _import_llm(_llm_template(max_tokens={"value": float("nan")}))
+
+    def test_nan_never_in_config(self) -> None:
+        with pytest.raises(LangflowImportError):
+            result = _import_llm(_llm_template(temperature={"value": float("nan")}))
+            assert "nan" not in str(result.nodes[0].config)
+
+    def test_validate_config_value_nan_reason(self) -> None:
+        reason = LangflowAdapter._validate_config_value("temperature", float("nan"))
+        assert reason is not None and "finite" in reason
+
+    def test_nan_never_reaches_revision_hash(self) -> None:
+        """json.dumps would emit non-standard NaN into the content hash."""
+        with pytest.raises(LangflowImportError):
+            LangflowAdapter.import_revision(
+                _flow(
+                    [
+                        _lf_node(
+                            "lf-llm",
+                            "ChatOpenAI",
+                            template=_llm_template(
+                                temperature={"value": float("nan")}
+                            ),
+                        )
+                    ],
+                    [],
+                ),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+
+
+class TestBR1RoutesElementValidation:
+    """B-R1-3: list elements are validated, not only the container."""
+
+    @staticmethod
+    def _condition_flow(conditions: Any) -> dict[str, Any]:
+        nodes = [
+            _lf_node(
+                "lf-cond",
+                "ConditionalRouter",
+                template={
+                    "input_value": {"value": "hi"},
+                    "conditions": {"value": conditions},
+                },
+            )
+        ]
+        return _flow(nodes, [])
+
+    def test_oversized_route_element_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                self._condition_flow(["x" * 10_000_000]),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+        assert "INVALID_CONFIG_VALUE" in {
+            r["code"] for r in exc_info.value.rejections
+        }
+
+    def test_oversized_route_rejection_bounded(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                self._condition_flow(["x" * 10_000_000]),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+        assert _max_rejection_size(exc_info.value) <= 300
+
+    def test_non_string_route_element_nan_rejected(self) -> None:
+        with pytest.raises(LangflowImportError) as exc_info:
+            LangflowAdapter.import_definition(
+                self._condition_flow([float("nan")]),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+        assert "INVALID_CONFIG_VALUE" in {
+            r["code"] for r in exc_info.value.rejections
+        }
+
+    def test_non_string_route_element_int_rejected(self) -> None:
+        with pytest.raises(LangflowImportError):
+            LangflowAdapter.import_definition(
+                self._condition_flow(["ok", 42]),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+
+    def test_normal_routes_accepted(self) -> None:
+        result = LangflowAdapter.import_definition(
+            self._condition_flow(["legal", "general"]),
+            workflow_id="wf-1",
+            workspace_id="ws-1",
+        )
+        assert result.nodes[0].config["routes"] == ["legal", "general"]
+
+    def test_route_at_length_boundary_accepted(self) -> None:
+        """Exactly ``_MAX_STRING_CHARS`` is accepted; one more is not."""
+        from workflow_engine.adapters.langflow_adapter import _MAX_STRING_CHARS
+
+        at_limit = "r" * _MAX_STRING_CHARS
+        result = LangflowAdapter.import_definition(
+            self._condition_flow([at_limit]),
+            workflow_id="wf-1",
+            workspace_id="ws-1",
+        )
+        assert result.nodes[0].config["routes"] == [at_limit]
+
+        with pytest.raises(LangflowImportError):
+            LangflowAdapter.import_definition(
+                self._condition_flow(["r" * (_MAX_STRING_CHARS + 1)]),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+
+    def test_empty_route_list_accepted(self) -> None:
+        result = LangflowAdapter.import_definition(
+            self._condition_flow([]),
+            workflow_id="wf-1",
+            workspace_id="ws-1",
+        )
+        assert result.nodes[0].config["routes"] == []
+
+    def test_too_many_routes_rejected(self) -> None:
+        from workflow_engine.adapters.langflow_adapter import _TOP_K_CEILING
+
+        with pytest.raises(LangflowImportError):
+            LangflowAdapter.import_definition(
+                self._condition_flow(["r"] * (_TOP_K_CEILING + 1)),
+                workflow_id="wf-1",
+                workspace_id="ws-1",
+            )
+
+
+class TestBR1DictValuedFieldDropped:
+    """B-R1-4: object payloads from templates are dropped, not silently kept."""
+
+    def test_dict_tool_metadata_template_dropped(self) -> None:
+        result = _import_tool(
+            template={
+                "input_value": {"value": "q"},
+                "tool_name": {"value": "web_search"},
+                "tool_metadata": {"value": {"k": "v", "n": 2}},
+            }
+        )
+        config = result.nodes[0].config
+        assert config["tool"] == "web_search"
+        assert "tool_metadata" not in config
+
+    def test_bare_dict_template_dropped(self) -> None:
+        result = _import_tool(
+            template={"input_value": {"value": "q"}, "tool_metadata": {"nested": 1}}
+        )
+        assert "tool_metadata" not in result.nodes[0].config
+
+    def test_nested_mapping_payload_not_hashed(self) -> None:
+        """A dropped payload must not influence the revision hash."""
+        revision = LangflowAdapter.import_revision(
+            _flow(
+                [
+                    _lf_node(
+                        "lf-tool",
+                        "Tool",
+                        template={
+                            "tool_name": {"value": "web_search"},
+                            "tool_metadata": {"value": {"a": 1}},
+                        },
+                    )
+                ],
+                [],
+            ),
+            workflow_id="wf-1",
+            workspace_id="ws-1",
+        )
+        baseline = LangflowAdapter.import_revision(
+            _flow(
+                [
+                    _lf_node(
+                        "lf-tool",
+                        "Tool",
+                        template={"tool_name": {"value": "web_search"}},
+                    )
+                ],
+                [],
+            ),
+            workflow_id="wf-1",
+            workspace_id="ws-1",
+        )
+        assert revision.content_hash == baseline.content_hash
+
+    def test_dict_rule_still_declared(self) -> None:
+        """The dict rule stays as defense-in-depth for non-template paths."""
+        from workflow_engine.adapters.langflow_adapter import _CONFIG_RULES
+
+        assert _CONFIG_RULES["tool_metadata"].kind == "dict"

@@ -40,6 +40,7 @@ Slice plan:
 
 from __future__ import annotations
 
+import math
 import re
 from collections import deque
 from collections.abc import Mapping, Sequence
@@ -518,6 +519,10 @@ _CONFIG_RULES: Mapping[str, _ConfigRule] = {
     ),
     "collection": _ConfigRule(kind="string", identifier=True, max_length=128),
     "stream": _ConfigRule(kind="boolean"),
+    # B-R1-4: ``tool_metadata`` is never populated from a Langflow template
+    # (``_template_value`` drops object payloads), so this rule guards only
+    # non-template paths.  It is kept as declared defense-in-depth rather
+    # than removed, and the drop is covered by a regression test.
     "tool": _ConfigRule(kind="string", identifier=True, max_length=128),
     "tool_metadata": _ConfigRule(kind="dict"),
     "instructions": _ConfigRule(kind="string", max_length=4096),
@@ -541,6 +546,48 @@ def _is_safe_identifier(value: str) -> bool:
     metacharacters from reaching name-like config fields.
     """
     return bool(_IDENTIFIER_RE.match(value)) and ".." not in value
+
+
+# ---------------------------------------------------------------------------
+# B-R1-1: bounded numeric echoes for rejection reasons
+# ---------------------------------------------------------------------------
+
+#: Digit ceiling for integers accepted in config, and the cap applied when a
+#: numeric value is echoed back inside a rejection reason.  Both exist for the
+#: same reason: CPython limits ``int`` -> ``str`` conversion
+#: (``sys.int_max_str_digits``, 4300 by default), so formatting a hostile
+#: 100k-digit integer with ``repr()`` raises a raw ``ValueError`` *inside* the
+#: rejection path and turns a structured rejection into a crash.
+_INT_DIGIT_CEILING = 32
+
+#: Pre-computed magnitude bound for the ceiling above — compared numerically,
+#: never via ``str()``/``repr()``, so the bound itself cannot raise.
+_INT_MAGNITUDE_CEILING = 10 **_INT_DIGIT_CEILING
+
+
+def _format_number(value: Any) -> str:
+    """Format a numeric value for a rejection reason — bounded, never raises.
+
+    Floats are rendered with ``.10g`` (10 significant digits) and non-finite
+    floats by name.  Integers at or beyond the digit ceiling are reported as
+    an approximate digit count computed through ``bit_length()``, so no
+    conversion on the untrusted value ever happens.
+    """
+    if isinstance(value, bool):  # pragma: no cover - guarded by callers
+        return repr(value)
+    if isinstance(value, float):
+        if math.isnan(value):
+            return "nan"
+        if math.isinf(value):
+            return "+inf" if value > 0 else "-inf"
+        return f"{value:.10g}"
+    if isinstance(value, int):
+        magnitude = abs(value)
+        if magnitude >= _INT_MAGNITUDE_CEILING:
+            approx_digits = int(magnitude.bit_length() * 0.30103) + 1
+            return f"<integer with ~{approx_digits} digits>"
+        return str(value)
+    return f"<{type(value).__name__}>"
 
 #: Canonical Langflow component used when exporting each product node type.
 _CANONICAL_COMPONENT: dict[NodeType, str] = {
@@ -1468,6 +1515,16 @@ class LangflowAdapter:
         stack, a depth cap (``MAX_TEMPLATE_DEPTH``) and cycle protection.
         Returns the ``_DEPTH_EXCEEDED`` sentinel when the chain is too deep
         or cyclic — the caller converts that into a structured rejection.
+
+        B-R1-4 (explicit): an object (mapping) value reached from a Langflow
+        template is **dropped** — the unwrap heuristic only follows the
+        ``value``/``default`` keys, so a bare mapping (whether the template
+        field value itself or its ``value``-unwrapped payload) yields
+        ``None``.  This is deliberate and fail-closed: guessing which nested
+        keys are meaningful data versus template metadata would let
+        unvalidated structure reach ``NodeSpec.config``.  Dict-typed config
+        rules therefore act as defense-in-depth for non-template paths; see
+        ``_check_config_values``.
         """
         visited: set[int] = set()
         stack: list[tuple[Any, int]] = [(entry, 0)]
@@ -1538,12 +1595,43 @@ class LangflowAdapter:
                     f"expected a number for '{config_key}', got "
                     f"{type(value).__name__}"
                 )
-            if rule.kind == "integer" and not float(value).is_integer():
-                return f"'{config_key}' must be an integer, got {value!r}"
+            # B-R1-2: non-finite values (NaN, ±inf) are legal in Python-parsed
+            # JSON but invalid under any numeric semantics, and both branches
+            # of a NaN range comparison are False — so they would otherwise
+            # reach NodeSpec.config and infect the revision hash
+            # (json.dumps emits non-standard ``NaN``).  Reject before the
+            # range checks.
+            if isinstance(value, float) and not math.isfinite(value):
+                return (
+                    f"'{config_key}' must be a finite number, got "
+                    f"{_format_number(value)}"
+                )
+            if rule.kind == "integer":
+                if isinstance(value, int):
+                    # B-R1-1 magnitude pre-reject: an integer beyond the digit
+                    # ceiling cannot be echoed (or hashed) without hitting the
+                    # CPython int->str conversion limit.
+                    if abs(value) >= _INT_MAGNITUDE_CEILING:
+                        return (
+                            f"'{config_key}' is outside the supported integer "
+                            f"range (±10^{_INT_DIGIT_CEILING} digits), got "
+                            f"{_format_number(value)}"
+                        )
+                elif not float(value).is_integer():
+                    return (
+                        f"'{config_key}' must be an integer, got "
+                        f"{_format_number(value)}"
+                    )
             if rule.minimum is not None and value < rule.minimum:
-                return f"'{config_key}' must be >= {rule.minimum}, got {value!r}"
+                return (
+                    f"'{config_key}' must be >= {rule.minimum}, got "
+                    f"{_format_number(value)}"
+                )
             if rule.maximum is not None and value > rule.maximum:
-                return f"'{config_key}' must be <= {rule.maximum}, got {value!r}"
+                return (
+                    f"'{config_key}' must be <= {rule.maximum}, got "
+                    f"{_format_number(value)}"
+                )
             return None
 
         if rule.kind == "boolean":
@@ -1564,6 +1652,21 @@ class LangflowAdapter:
                 return (
                     f"'{config_key}' has more than {_TOP_K_CEILING} entries"
                 )
+            # B-R1-3: validate elements, not just the container.  Route labels
+            # are strings capped at the shared ``_MAX_STRING_CHARS`` limit, so
+            # an oversized or wrongly-typed element cannot enter
+            # ``NodeSpec.config`` (and therefore the revision hash).
+            for index, element in enumerate(value):
+                if not isinstance(element, str):
+                    return (
+                        f"'{config_key}' entry #{index} must be a string, got "
+                        f"{type(element).__name__}"
+                    )
+                if len(element) > _MAX_STRING_CHARS:
+                    return (
+                        f"'{config_key}' entry #{index} exceeds "
+                        f"{_MAX_STRING_CHARS} characters"
+                    )
             return None
 
         if rule.kind == "dict":
@@ -1573,7 +1676,6 @@ class LangflowAdapter:
                     f"{type(value).__name__}"
                 )
             return None
-
         return f"unsupported config kind for '{config_key}'"
 
     @classmethod
@@ -1587,6 +1689,12 @@ class LangflowAdapter:
 
         Only allowlisted ``config_fields`` are inspected, so unknown template
         fields are ignored exactly as before (advisory A-1 still holds).
+
+        Dict-typed config fields (``tool_metadata``) are declared here as
+        defense-in-depth for non-template paths: values extracted from a
+        Langflow template are scalars or lists, because ``_template_value``
+        drops object payloads (see B-R1-4 note on ``_template_value``).  A
+        missing or dropped field simply never reaches config.
         """
         rejections: list[dict[str, Any]] = []
         template = cls._template(raw_node)
