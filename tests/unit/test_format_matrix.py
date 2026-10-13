@@ -508,6 +508,12 @@ def test_the_pipeline_actually_parks_a_partial_read_needs_review() -> None:
     inline (the T-V1-019 gate test pins that transition by source order, so it
     cannot be delegated without breaking that pin). This asserts the inline
     branch says the same thing for both cases.
+
+    T-V1-050: the READY status is no longer an ORM assignment — it is written
+    by the **fenced** UPDATE (``publish_job_if_generation_live``), which is
+    what closed the replace-vs-commit race. The branch is still inline in
+    ``process_job``, so the pin tracks that call instead of the assignment,
+    and now also forbids the assignment coming back.
     """
     import inspect
 
@@ -516,7 +522,10 @@ def test_the_pipeline_actually_parks_a_partial_read_needs_review() -> None:
     source = inspect.getsource(ingest_pipeline.process_job)
     assert "job.status = JobStatus.NEEDS_REVIEW.value" in source
     assert 'job.error_code = "NEEDS_REVIEW"' in source
-    assert "job.status = JobStatus.READY.value" in source
+    assert "publish_job_if_generation_live(" in source
+    assert "job.status = JobStatus.READY.value" not in source, (
+        "READY must only ever be written by the fenced UPDATE (T-V1-050)"
+    )
     assert "needs_review_reasons_for(lost_regions)" in source
 
 

@@ -57,7 +57,7 @@ from ingestion.persistence import (
     JobStage,
     JobStatus,
 )
-from sqlalchemy import delete, func, select, text
+from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from storage.interfaces import StorageError
 from storage.originals import (
@@ -267,6 +267,111 @@ async def assert_generation_is_publishable(
         f"refusing to publish at the {gate} gate: "
         + _FENCE_MESSAGES.get(reason, "this generation is no longer publishable")
         + f" (document {document_id}, generation {version_id})",
+        retryable=False,
+    )
+
+
+def _generation_still_live(version_id: uuid.UUID):
+    """The fence as a **SQL predicate**: this version is still the live one.
+
+    Same three conditions :func:`generation_publication_state` applies, reduced
+    to what the database can enforce in a single statement: the document is
+    not tombstoned, the version is not superseded, and the document still
+    points at this version (a NULL pointer makes no claim — the same
+    "no claim ⇒ not stale" rule the SELECT gate documents).
+    """
+    return (
+        select(DocumentVersion.id)
+        .join(Document, Document.id == DocumentVersion.document_id)
+        .where(
+            DocumentVersion.id == version_id,
+            Document.deleted_at.is_(None),
+            DocumentVersion.superseded_at.is_(None),
+            or_(
+                Document.current_version_id == DocumentVersion.id,
+                Document.current_version_id.is_(None),
+            ),
+        )
+        .exists()
+    )
+
+
+async def publish_job_if_generation_live(
+    session: AsyncSession,
+    *,
+    job: IngestionJob,
+    version_id: uuid.UUID,
+) -> bool:
+    """Publish this job **only if** its generation is still live (T-V1-050).
+
+    T-V1-019's gate is read-then-write: it SELECTs the authority, the pipeline
+    then keeps working (graph extraction, disclosure) and finally commits
+    READY. A replace or delete landing between that SELECT and this commit
+    publishes over a version the job never validated — T-V1-019 risk (1).
+
+    So the decision moves **into the database**. This is one ``UPDATE`` whose
+    ``WHERE`` clause re-asserts the fence (:func:`_generation_still_live`),
+    so Postgres evaluates the predicate and the status change as a single
+    atomic step — there is no window for a concurrent writer to slip through,
+    because the two are no longer separate operations.
+
+    Returns ``True`` when the row was updated. ``False`` means a concurrent
+    replace/delete won the race — **0 rows updated** — and the caller must
+    fail loudly: the job is never marked READY.
+    """
+    result = await session.execute(
+        update(IngestionJob)
+        .where(IngestionJob.id == job.id, _generation_still_live(version_id))
+        .values(
+            status=JobStatus.READY.value,
+            stage=JobStage.READY.value,
+            finished_at=datetime.now(UTC),
+        )
+        # The raw UPDATE owns the job row; leaving the identity map alone keeps
+        # SQLAlchemy from flushing a second, unpredicated UPDATE over it.
+        .execution_options(synchronize_session=False)
+    )
+    session.expire(job)
+    return bool(int(result.rowcount or 0))  # type: ignore[attr-defined]
+
+
+async def _refuse_raced_publication(
+    session: AsyncSession,
+    *,
+    job: IngestionJob,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+) -> None:
+    """Fail **loudly** after losing the T-V1-050 compare-and-swap.
+
+    The publish statement updated 0 rows, so a replace or delete committed
+    between T-V1-019's gate SELECT and this commit. The job must never read
+    READY: whatever this run wrote is unpublished and the fence is raised with
+    the reason the authority reports now (falling back to ``SUPERSEDED`` if it
+    oddly still reads live — refusing is the safe answer either way).
+    """
+    reason = (
+        await generation_publication_state(
+            session, document_id=document_id, version_id=version_id
+        )
+        or FENCE_SUPERSEDED
+    )
+    logger.warning(
+        "ingest_publication_race_lost",
+        extra={
+            "event": "ingest_publication_race_lost",
+            "job_id": str(job.id),
+            "document_id": str(document_id),
+            "document_version_id": str(version_id),
+            "error_code": reason,
+        },
+    )
+    await _unpublish_generation(session, document_id=document_id, version_id=version_id)
+    raise IngestPipelineError(
+        reason,
+        "refusing to publish: the document was replaced or deleted between the "
+        f"ready gate and the commit (document {document_id}, generation "
+        f"{version_id})",
         retryable=False,
     )
 
@@ -998,13 +1103,30 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         job.status = JobStatus.NEEDS_REVIEW.value
         job.error_code = "NEEDS_REVIEW"
         job.error_message = ("NEEDS_REVIEW: " + "; ".join(needs_review_reasons))[:2000]
+        job.stage = JobStage.READY.value
+        job.finished_at = datetime.now(UTC)
+        await session.commit()
     else:
-        # Full read: the T-V1-019 ready gate above is what authorises this
-        # transition, so it must come before it (pinned by test_ingest_pipeline).
-        job.status = JobStatus.READY.value
-    job.stage = JobStage.READY.value
-    job.finished_at = datetime.now(UTC)
-    await session.commit()
+        # Full read: the T-V1-019 ready gate above authorised this transition —
+        # but that gate is read-then-write (T-V1-019 risk 1), so a replace or
+        # delete landing after its SELECT and before this commit would publish
+        # over a version the job never validated. T-V1-050 moves the decision
+        # INTO the database: the publish statement re-asserts the fence in its
+        # own WHERE clause, so Postgres evaluates predicate and status change
+        # as one atomic step. Losing the race updates 0 rows and the job fails
+        # loudly below rather than silently publishing stale state.
+        job_document_id = job.document_id
+        published = await publish_job_if_generation_live(
+            session, job=job, version_id=version.id
+        )
+        if not published:
+            await _refuse_raced_publication(
+                session,
+                job=job,
+                document_id=job_document_id,
+                version_id=version.id,
+            )
+        await session.commit()
     stages.append(JobStage.READY.value)
     _log_stage(job, JobStage.READY.value)
 

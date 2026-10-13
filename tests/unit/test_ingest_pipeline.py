@@ -217,8 +217,13 @@ def test_publication_gate_covers_writes_and_status() -> None:
     assert source.count("await assert_generation_is_publishable(") == 2
     assert 'gate="write"' in source
     assert 'gate="ready"' in source
-    # The READY transition must come AFTER the ready gate, never before it.
-    assert source.index('gate="ready"') < source.index("job.status = JobStatus.READY.value")
+    # The READY transition must come AFTER the ready gate, never before it —
+    # and since T-V1-050 it is written by the *fenced* UPDATE, not by an ORM
+    # assignment, which is what closed the read-then-write window (an
+    # assignment here would re-open it, so the old pin is inverted).
+    assert source.index('gate="ready"') < source.index("publish_job_if_generation_live(")
+    assert "job.status = JobStatus.READY.value" not in source
+    assert "_refuse_raced_publication(" in source
     # The fence itself must be a generation compare, not a timing guard.
     gate = inspect.getsource(ingest_pipeline.generation_publication_state)
     assert "current_version_id" in gate and "superseded_at" in gate
