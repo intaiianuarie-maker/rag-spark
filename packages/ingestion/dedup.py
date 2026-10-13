@@ -288,6 +288,32 @@ async def supersede_other_versions(
     )
     if not older:
         return 0
+    # T-V2-003: capture superseded chunks' graph provenance *before* the
+    # ChunkRow delete, so the graph store can be tombstoned for those
+    # version-specific chunk ids. Reuses the store-purger seam pattern and
+    # the T-007 graph-purger precedent (read both before designing).
+    superseded_chunk_ids: list[str] = []
+    sup_ws_id: uuid.UUID | None = None
+    try:
+        if os.environ.get("GRAPH_MODE", "off").strip().lower() in ("rule", "llm"):
+            # Workspace for the document (needed for graph store scoping)
+            _doc = await session.get(Document, document_id)
+            if _doc is not None:
+                sup_ws_id = _doc.workspace_id
+                # ChunkRow.id IS the stable publication ID (graph's chunk_id)
+                _cids = await session.execute(
+                    select(ChunkRow.id).where(ChunkRow.document_version_id.in_(older))
+                )
+                superseded_chunk_ids = [str(cid) for cid in _cids.scalars().all()]
+    except Exception as exc:
+        logger.warning(
+            "superseded_graph_prep_failed",
+            extra={
+                "event": "superseded_graph_prep_failed",
+                "document_id": str(document_id),
+                "error": str(exc),
+            },
+        )
     # T-V1-017 (1): the superseded version's lexical rows leave in the SAME
     # transaction as its chunk rows, so Postgres can never hold a half-superseded
     # version (SQL here is implementation, not evidence — the test asserts via
@@ -323,6 +349,42 @@ async def supersede_other_versions(
                 "error": str(exc),
             },
         )
+    # T-V2-003: superseded-version graph rows must not ground citations.
+    # Reuses the store-purger seam pattern and the T-007 graph-purger
+    # precedent (read both before designing): the same tombstone path that
+    # purge uses, but scoped to version-specific chunk provenance rather
+    # than the whole document. If the graph store cannot be reached, the
+    # ingest still succeeds (new version is healthy); the failure is logged
+    # and the next supersede will retry via the same path.
+    if superseded_chunk_ids and sup_ws_id is not None:
+        try:
+            if os.environ.get("GRAPH_MODE", "off").strip().lower() in ("rule", "llm"):
+                from graph.factory import graph_db_path
+                from graph.sqlite_store import SQLiteGraphStore
+
+                gstore = SQLiteGraphStore(graph_db_path())
+                await gstore.tombstone_chunks(
+                    str(sup_ws_id), superseded_chunk_ids
+                )
+                gstore.close()
+                logger.info(
+                    "superseded_graph_cleaned",
+                    extra={
+                        "event": "superseded_graph_cleaned",
+                        "document_id": str(document_id),
+                        "superseded_chunk_ids": superseded_chunk_ids[:5],
+                        "count": len(superseded_chunk_ids),
+                    },
+                )
+        except Exception as exc:
+            logger.warning(
+                "superseded_graph_cleanup_failed",
+                extra={
+                    "event": "superseded_graph_cleanup_failed",
+                    "document_id": str(document_id),
+                    "error": str(exc),
+                },
+            )
     return len(older)
 
 

@@ -635,6 +635,62 @@ class SQLiteGraphStore(GraphStore):
         res = await self._run(_op)
         return int(res)
 
+    async def tombstone_chunks(
+        self, workspace_id: str, chunk_ids: list[str]
+    ) -> int:
+        """Tombstone graph rows whose provenance includes any of chunk_ids.
+
+        Used for superseded-version parity (T-V2-003): when a document version
+        is superseded, its chunks' graph rows must stop grounding citations.
+        Reuses the same tombstone + community-prune path as document tombstone,
+        but scoped to version-specific chunk provenance rather than the whole
+        document. Idempotent: tombstoning an already-tombstoned row is a no-op.
+        """
+
+        if not chunk_ids:
+            return 0
+        chunk_set = set(chunk_ids)
+
+        def _op() -> int:
+            count = 0
+            tombstoned_ent_ids: set[str] = set()
+            tombstoned_rel_ids: set[str] = set()
+            with self._connect() as conn:
+                for table, idcol, store in (
+                    ("graph_entities", "entity_id", tombstoned_ent_ids),
+                    ("graph_relationships", "relationship_id", tombstoned_rel_ids),
+                ):
+                    cur = conn.execute(
+                        "SELECT " + idcol + ", payload FROM " + table
+                        + " WHERE workspace_id=? AND tombstoned=0",
+                        (workspace_id,),
+                    )
+                    targets = [
+                        gid
+                        for gid, payload in cur.fetchall()
+                        if chunk_set.intersection(
+                            set(json.loads(payload).get("chunk_ids", []))
+                        )
+                    ]
+                    if targets:
+                        placeholders = ",".join("?" for _ in targets)
+                        conn.execute(
+                            "UPDATE " + table + " SET tombstoned=1"
+                            " WHERE workspace_id=? AND " + idcol
+                            + " IN (" + placeholders + ")",
+                            (workspace_id, *targets),
+                        )
+                        store.update(targets)
+                        count += len(targets)
+                self._prune_communities(
+                    conn, workspace_id, tombstoned_ent_ids, tombstoned_rel_ids
+                )
+                conn.commit()
+            return count
+
+        res = await self._run(_op)
+        return int(res)
+
     async def delete_workspace(self, workspace_id: str) -> int:
         def _op() -> int:
             total = 0

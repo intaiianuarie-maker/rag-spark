@@ -3283,3 +3283,47 @@ GIT SELF-REPORT (git status --short):
 
 METRICS: concurrent-claim write test green (4 workers x 5 extractions, zero busy-errors, zero partial reads); kill-mid-write leaves clean state (rollback, no partial entities).
 
+## 2026-10-13 T-V2-003 — Graph lifecycle parity (graph mirrors document states, no orphan rows) — code2
+
+TASK: T-V2-003 — lifecycle parity between document record and graph rows. Tombstone doc → graph rows tombstone/unresolve; supersede version → old version's graph rows stop grounding; re-ingest same doc → no duplicate entities. Start HEAD 635b6d4 → end HEAD 635b6d4 (UNMOVED). Allowed: packages/graph/ (lifecycle/purge/read-filter) + purge handoff in packages/ingestion/dedup.py (graph entry) + covering tests + this row. No retriever/rerank changes.
+
+CHANGE:
+- `packages/graph/sqlite_store.py` — added `tombstone_chunks(workspace_id, chunk_ids)` for version-scoped supersession parity (tombstones entities/relationships whose chunk_ids intersect superseded version's chunks, plus community prune). Reuses same tombstone + community-prune path as `tombstone_document` (T-007 precedent), but scoped to chunk provenance not whole document.
+- `packages/ingestion/dedup.py` — supersession parity: in `supersede_other_versions`, capture superseded chunk ids *before* ChunkRow delete (ChunkRow.id IS the stable publication ID = graph's chunk_id), after Qdrant cleanup and reconcile, call `SQLiteGraphStore.tombstone_chunks` for those chunk ids when `GRAPH_MODE` in (rule,llm). Best-effort, logged as `superseded_graph_cleaned` / `superseded_graph_cleanup_failed`, never fails the ingest (new version healthy). Reuses store-purger seam pattern and T-007 graph-purger precedent (read both before designing) — stated loudly: the seam is the same per-store report pattern, but called directly here because supersession is not a purge_document call.
+- `tests/unit/test_graph_lifecycle.py` — NEW 4 lifecycle tests (see VERIFY).
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: Every other store was forced into parity by V1 (T-058: FTS rows die with doc; T-055: originals deleted on purge). Graph had no proof: tombstoned doc's entities could still resolve, superseded version's graph could still ground citations — silent haunting.
+
+REUSED:
+- `packages/graph/sqlite_store.py` tombstone + `_prune_communities` (T-007 precedent) — same transaction, same community regeneration, no new dependency.
+- `packages/ingestion/dedup.py` store-purger seam (`register_store_purger`, `_STORE_PURGERS`) and supersession flow (`supersede_other_versions`, `reconcile_superseded_vectors`) — same pattern, same error handling (log, not silent).
+- `graph.sqlite_store.SQLiteGraphStore` WAL + `upsert_extraction` idempotency (T-V2-001/002) — deterministic IDs, `INSERT ... ON CONFLICT DO UPDATE` ensures re-ingest doesn't duplicate.
+
+BUILT:
+- `tombstone_chunks` — needed because `tombstone_document` is document-scoped (all entities for doc), while supersession is version-scoped (only old version's chunk provenance). No existing method could scope to version's chunk ids without over-tombstoning the new version's entities. The new method is the minimal version-aware complement.
+
+VERIFY:
+- `pytest tests/unit/test_graph_lifecycle.py -v` → 4 passed:
+  * `test_tombstoned_doc_has_zero_live_graph_rows` — live graph rows for tombstoned docs: **0** (entity after tombstone_document → None, find_entities_by_name → [])
+  * `test_superseded_version_graph_rows_do_not_ground` — superseded-version rows grounding citations: **0** (tombstone_chunks for v1 chunk, then verify v1 entity None, re-upsert v2 with same deterministic id → live again, proving idempotent + version-scoped)
+  * `test_reingest_same_doc_no_duplicate_entities` — duplicate entities on re-ingest: **0** (upsert same chunk twice, count via `SELECT COUNT(*) ... tombstoned=0` == len(result.entities), not doubled)
+  * `test_purge_uses_store_purger_seam` — purge reuses store-purger seam (T-007 precedent), report contains `graph` key
+- `pytest tests/unit/test_graph_store_concurrency.py tests/unit/test_graph_queued.py tests/unit/test_graph_factory.py tests/unit/test_graph_extractor.py -q` → 35 passed (including 5 concurrency + 3 queued)
+- `pytest tests/unit/test_graph_lifecycle.py tests/unit/test_graph_store_concurrency.py tests/unit/test_graph_queued.py -q` → 12 passed
+- `ruff check packages/graph/sqlite_store.py packages/ingestion/dedup.py tests/unit/test_graph_lifecycle.py` → All checks passed!
+- `mypy packages/graph/sqlite_store.py packages/ingestion/dedup.py` → Success: no issues found in 2 source files
+- Dev1 disjoint: `packages/agents/runtime.py` + `tests/unit/test_agents.py` are dev1's V3 approval gate — disjoint from our `packages/graph/*` + `packages/ingestion/dedup.py` graph seam + `tests/unit/test_graph_*`; confirmed via git status (our touched files are graph/sqlite_store.py, ingestion/dedup.py, test_graph_lifecycle.py; dev1's are agents/*).
+
+RISKS:
+- Supersession graph cleanup is best-effort: if SQLiteGraphStore is unreachable, ingest still succeeds and logs `superseded_graph_cleanup_failed`; the next supersede will retry via same path (no queued retry for graph supersession, unlike Qdrant's delayed queue). Acceptable because new version is healthy and old version's chunks are already deleted from Postgres/FTS, so graph orphan is the only residue.
+- `tombstone_chunks` is chunk-id scoped, not version-id scoped: if two versions share a chunk_id (same text chunk), tombstoning v1's chunk would also tombstone v2's entity that shares that chunk_id. However chunk_id is stable per version+chunk (uuid5 of version:chunk), so same text in different versions yields different publication IDs, so no cross-version collision.
+- Live knowledge collection is evidence — read-only retrieval, no test writes to it (scratch seam per T-071) — our tests use `tmp_path` SQLite file, never live Qdrant.
+- Foreign churn: dev1's V3 approval gate (packages/agents/*) is disjoint and untouched; no product DB migration, no compose restart, index empty.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD 635b6d4): 24 dirty paths, incl. dev1's V3 runtime (packages/agents/runtime.py etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD 635b6d4 UNMOVED): START's foreign set + exactly our 3 allowed paths (M packages/graph/sqlite_store.py, M packages/ingestion/dedup.py [graph entry for superseded], ?? tests/unit/test_graph_lifecycle.py [NEW] + this row). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+METRICS: live graph rows for tombstoned docs: **0**; superseded-version rows grounding citations: **0**; duplicate entities on re-ingest: **0**.
+
