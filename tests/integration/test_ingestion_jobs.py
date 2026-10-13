@@ -238,11 +238,19 @@ def test_poison_message_is_capped_after_retries(client, monkeypatch: pytest.Monk
     workspace = _create_workspace(client, token)
     job_id, _version = _create_job(workspace, b"content", "text/plain")
 
-    class Boom:
-        async def parse(self, *args, **kwargs):
-            raise RuntimeError("boom")
+    # T-V1-068 (dead seam #4, found by the T-DEADSEAM-4 audit). This double was
+    # injected into ``parser_for_mime``, which since T-V1-031 the pipeline only
+    # evaluates against ``None`` and then DISCARDS (:687) -- so the double was
+    # built and thrown away, ``Boom.parse`` never ran, and the job ingested
+    # happily to READY. The live resolve-AND-invoke seam is
+    # ``parse_with_precedence`` (:723), which the pipeline *awaits*, so the
+    # double must be an async FUNCTION that raises rather than an object with a
+    # ``.parse`` method. The pipeline's own ``except Exception`` wraps it as
+    # retryable ``PARSE_FAILED``, which is exactly the cap contract below.
+    async def _boom_parse(*args, **kwargs):
+        raise RuntimeError("boom")
 
-    monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", lambda mime: Boom())
+    monkeypatch.setattr("jobs.ingest_pipeline.parse_with_precedence", _boom_parse)
     for _ in range(3):
         _run_job(job_id)
 

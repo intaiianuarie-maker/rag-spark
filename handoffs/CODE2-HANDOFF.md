@@ -2047,3 +2047,105 @@ PROGRESS ROW — TASK: T-V1-061b live retrieval leg on real bge-m3 (embedder ver
 PROGRESS ROW — VERDICT: **(a) hits@5 = 6/7 = 85.7% — PASS** against a ≥80% bar declared before the run (hits@10 = 7/7; ranks 4,1,2,4,4,3,**10**; scores 0.591–0.921). **Noise share of all top-5 slots = 0.00** — the 1915 non-authentic points never intrude, so padded points could not have flattered the result. **(b) grounded 2/2 on verbatim-supporting queries (1 real citation each), abstained 3/3 on non-supporting ones (`CITATION_INVALID`/`NO_CLAIMS`)** — a verbatim control proved the path CAN ground, so the abstentions are correct fail-closed refusals, not a defect.
 PROGRESS ROW — HEADLINE CAVEAT (do not over-cite): the collection's vectors are mostly **not embeddings of their text** — of 492 "REAL" 1024-d points only **102** are authentic bge-m3 (cos>0.95 vs a fresh embedding of their own text); **373 are not** (median −0.0224) with **zero** points in between. Plus 1542 legacy padded. So the 85.7% is measured on a **5% authentic subset of a corpus that is entirely integration-test debris** (`version two of retry cleanup`, `live control <uuid> xylophone quasar`, `Hello world. Second paragraph.`) — it evidences that the bge-m3→Qdrant path is correctly wired, **not** retrieval quality, and not a corpus-level number. My **first** probe run scored **0/8 and was my error**: I trusted the padded/real label without verifying authenticity and asked random vectors to retrieve their own text; re-scoping to the verified-authentic points gave the real result. 373 non-authentic vectors are **filed, not fixed** (no product code in scope; determine how they were written before any re-index, or the same path reproduces them), along with 17 orphan `chunk_id`s.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-068 (dead seam #4: poison-message test re-pointed) — code2 (solo, allowlisted)
+
+TASK: fix the 4th dead `parser_for_mime` seam found by my T-DEADSEAM-4 audit — `test_poison_message_is_capped_after_retries`, `tests/integration/test_ingestion_jobs.py:245`. Start HEAD `43fa5a7` → end HEAD `43fa5a7` (**UNMOVED**). Allowed: **that ONE test function** + this row. **No product code touched.**
+
+### BEFORE — the exact failure mode, now unconfounded
+
+`/ready` reported **every dependency reachable including `infinity`**, so the embed blocker was CLEAR and the old red could be attributed to the dead seam alone:
+
+```
+FAILED tests/integration/test_ingestion_jobs.py::test_poison_message_is_capped_after_retries
+tests/integration/test_ingestion_jobs.py:250: AssertionError: assert 'ready' == 'failed'
+E         - failed
+E         + ready
+1 failed, 1 warning in 28.55s
+```
+
+The captured log shows the job **ingesting successfully end-to-end** — `ingest_stage` → `chunking_backend` → `store_write_verified` → `POST localhost:7997/embeddings 200` → `PUT localhost:6333/collections/knowledge/points` → `ingest_job_ready`. The `Boom` double was built and discarded; the job reached **READY** and wrote points, exactly as the audit predicted.
+
+**The persisted before-run job row is the smoking gun:** `job 39049996 status=ready attempts=3/3 error_code=None error_message=None` — a "poison" message that poisoned nothing.
+
+### CHANGE — 1 hunk, the one allowed test function
+
+`tests/integration/test_ingestion_jobs.py`, inside `test_poison_message_is_capped_after_retries` only:
+
+- **removed** `class Boom` (an object with `async def parse`) and `monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", lambda mime: Boom())`
+- **added** `async def _boom_parse(*args, **kwargs): raise RuntimeError("boom")` and `monkeypatch.setattr("jobs.ingest_pipeline.parse_with_precedence", _boom_parse)`
+
+The audit's constraint is honoured and load-bearing: `parse_with_precedence` is **awaited** at `ingest_pipeline.py:723`, so the double is an **async function that raises**. Copying the old `Boom`-with-`.parse` shape here would have been a *fifth* dead seam — an object whose `parse` is never called, this time on the live seam.
+
+`git diff -U0` → **1 hunk**. `grep "^[+-].*def test_"` → **no hits** (no other test function touched). `grep "^[+-].*assert "` → **no hits**: all three assertions are **byte-identical**, neither weakened nor strengthened. `ruff check` → **All checks passed!**; `py_compile` → OK.
+
+### AFTER — green, and the boom provably fired
+
+```
+1 passed, 1 warning in 10.07s        (run 1)
+1 passed, 1 warning in 10.00s        (run 2, reproduced)
+```
+
+**Boom-fired proof — from the database, not from a green test.** The pipeline's own `except Exception` at `ingest_pipeline.py:747` wraps any unexpected exception as retryable `PARSE_FAILED` carrying `f"{type(exc).__name__}: {exc}"`, so the injected message is persisted verbatim:
+
+| job | run | status | attempts | error_code | error_message |
+|---|---|---|---|---|---|
+| `39049996` | **BEFORE** | `ready` | 3/3 | `None` | `None` |
+| `b68216a2` | **AFTER run 1** | **`failed`** | **3/3** | **`PARSE_FAILED`** | **`'RuntimeError: boom'`** |
+| `492a1100` | **AFTER run 2** | **`failed`** | **3/3** | **`PARSE_FAILED`** | **`'RuntimeError: boom'`** |
+
+That is the before/after A/B pair living in the same table: before, the "poison" message reached READY with no error; after, it raises inside the pipeline, is classified `PARSE_FAILED`, retried, and **parks at exactly 3 of 3 attempts** — the cap the test names.
+
+**Negative checks — the run now writes nothing.** Counted in the after-run log: `ingest_job_ready` **0**, `store_write_verified` **0**, `POST .../embeddings` **0**, `PUT .../collections/knowledge/points` **0**. All were present in the before-run. Independently corroborated by the collection itself: **`knowledge` = 2035 points, exactly +1 over the T-061b census baseline of 2034** — that one point is the *before*-run's write, and neither after-run added anything.
+
+### METRIC
+
+`RuntimeError('boom')` raised in-pipeline: **yes** (persisted `error_message='RuntimeError: boom'`, 2/2 runs) · job fails **`PARSE_FAILED`**: **2/2** · attempts at park: **3/3, exactly the cap** · status `failed`: **2/2** · dead seams in this test: **1 → 0** · before-red → after-green: **yes** · assertions changed: **0** · other test functions touched: **0** · product-code changes: **0** · files changed: **1** · hunks: **1**.
+
+### WHY / REUSED / BUILT
+
+**WHY:** this test was the **only** guard on the poison-message retry-cap contract — that a parse failure is capped at 3 attempts and surfaces as a typed `PARSE_FAILED`. Since T-V1-031 it guarded nothing: it asserted a cap over a job that could never fail, so a regression in parse-failure classification or the attempts cap would have shipped green. The audit's follow-up is now closed.
+
+**REUSED:** the identical fix shape from my **T-V1-059** (dedup suite) and **T-V1-065** (crash worker) — re-point the injection from the resolve-only factory to the resolve-**and-invoke** seam. No new helper, no product change, no new fixture. The pipeline's existing `except Exception` → `PARSE_FAILED` and `record_failure`'s `attempts < max_attempts` park did all the work; neither needed touching.
+
+**BUILT: nothing.** One hunk replacing a dead double with a live one.
+
+### VERIFY — commands and outputs
+
+```
+curl localhost:8000/ready                                  → ready true; postgres/redis/qdrant/minio/infinity/llm_gateway/worker all true
+pytest ...::test_poison_message_is_capped_after_retries    → BEFORE: 1 failed 28.55s, "assert 'ready' == 'failed'" at :250
+                                                             + log shows /embeddings 200, PUT points, ingest_job_ready
+sed -n '718,775p' apps/worker/jobs/ingest_pipeline.py      → except Exception -> IngestPipelineError("PARSE_FAILED", retryable=True)
+grep -n "job.attempts < job.max_attempts" ingest_worker.py → :248 park-as-failed boundary
+pytest (same single test)                                  → AFTER run 1: 1 passed 10.07s ; run 2: 1 passed 10.00s
+select ... from ingestion_jobs order by created_at desc     → b68216a2 / 492a1100: failed 3/3 PARSE_FAILED 'RuntimeError: boom'
+                                                             39049996 (before): ready 3/3 None None
+grep -c on after-run log                                   → ingest_job_ready 0, store_write_verified 0, /embeddings 0, points PUT 0
+curl localhost:6333/collections/knowledge                  → 2035 points (+1 vs T-061b baseline 2034, from the BEFORE run only)
+git diff -U0 / grep test_ / grep assert                    → 1 hunk; no test-function signature change; no assertion change
+ruff check + py_compile                                    → All checks passed! / OK
+```
+
+Both runs attached in the foreground, **that single test only**, never the whole file.
+
+### RISKS / DISCLOSED
+
+- **(a) The before-run wrote 1 point into `knowledge`.** This test uploads `b"content"/text/plain` and ingests it, so a run that (wrongly) succeeds necessarily writes. `knowledge` is the corpus I censused for T-061b, so I am disclosing the exact drift: **2034 → 2035, +1, attributable solely to the before-run.** Neither after-run wrote anything. No data was deleted, altered, or cleaned; the collection is evidence and I left it that way apart from that one unavoidable test point.
+- **(b) I did not run the rest of `test_ingestion_jobs.py`.** Scoped to that one test on shared infra. The other tests in the file — including `test_pipeline_reaches_ready_with_chunks` and `test_charset_hint_round_trip`, which were red in the same T-049-era trio — are **untouched and unverified by me**; if the embed-blocker clear was meant to heal them too, that is a separate confirmation run I did not perform.
+- **(c) The 3-attempt expectation depends on the product's `max_attempts` default (3).** The park boundary is `job.attempts < job.max_attempts` (`ingest_worker.py:248`). If that default is ever raised, `assert status["attempts"] == 3` fails for a legitimate reason. Pre-existing coupling, not introduced here, and I left the assertion alone rather than loosening it.
+- **(d) Assertions were deliberately not touched.** The point of this ticket was to make an existing contract fire, not to renegotiate it. A stricter variant (asserting `error_message` contains `boom`) would pin the boom more directly, but it would change the test's contract, so I proved the boom from the database instead and left the contract byte-identical.
+- **(e) pytest's captured log contained no `ingest_job_retry`/`ingest_job_failed` events**, so log-scraping would have failed as a proof method; the DB row is the stronger artifact and is quoted verbatim above.
+- **(f) FOREIGN CHURN — not mine.** 24 dirty paths at start (V4/workflow-engine stream + `handoffs/*`); none opened, staged, edited or reverted. HEAD unmoved across the ticket.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1068_{start,end}_status.txt`):
+- **start** (HEAD `43fa5a7`): 24 dirty paths, **all FOREIGN**. Index empty.
+- **end** (HEAD `43fa5a7`, **UNMOVED**): the same foreign set **plus exactly my 1 allowed path** — `M tests/integration/test_ingestion_jobs.py` (+13/−5, 1 hunk).
+- 0 foreign paths added, modified or removed; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-068 dead seam #4 — re-point the poison-message test at the live parse seam.
+PROGRESS ROW — DONE: `test_poison_message_is_capped_after_retries` now injects an **async function that raises** at `jobs.ingest_pipeline.parse_with_precedence` (the awaited resolve-and-invoke site, `:723`) instead of the dead `parser_for_mime` factory (`:687`, is-None check only since T-031). The audit's constraint was load-bearing: copying the old `Boom`-with-`.parse` shape onto the live seam would have been a *fifth* dead seam. **1 hunk, 1 test function, 0 assertions changed, 0 product code, ruff + py_compile clean.**
+PROGRESS ROW — BEFORE/AFTER: before-run (embeddings CLEAR per /ready, so unconfounded) → `test_ingestion_jobs.py:250 AssertionError: assert 'ready' == 'failed'`, with the log showing `/embeddings 200`, `PUT .../points` and `ingest_job_ready` — the poison message ingested happily, DB row `39049996 status=ready error_code=None`. After → **1 passed in 10.07s, reproduced 1 passed in 10.00s**, DB rows `b68216a2` and `492a1100` both `status=failed attempts=3/3 error_code=PARSE_FAILED error_message='RuntimeError: boom'`. **Boom-fired proven from the database, not from green**: the pipeline's own `except Exception` (`:747`) wraps it as retryable `PARSE_FAILED` and persists `RuntimeError: boom`; the job retries and parks at exactly 3 of 3 — the cap the test names. Negative checks now zero (`ingest_job_ready` 0, `store_write_verified` 0, `/embeddings` 0, Qdrant PUT 0) and `knowledge` = 2035, **+1 over the T-061b baseline, from the before-run only**.
+PROGRESS ROW — RISKS: (a) disclosed — the before-run necessarily ingested and wrote **1 point** into the T-061b evidence corpus (2034→2035); nothing deleted or cleaned, and no after-run wrote; (b) I ran that ONE test only, so `test_pipeline_reaches_ready_with_chunks` / `test_charset_hint_round_trip` from the same T-049 trio remain unverified by me; (c) the `attempts == 3` expectation is coupled to the product's `max_attempts` default of 3 (`ingest_worker.py:248`) — pre-existing, left alone; (d) assertions deliberately untouched (the boom is proven from the DB instead) so the test's contract is byte-identical; (e) pytest captured no retry/fail events, so log-scraping would have been a failed proof method; (f) foreign churn disclosed, HEAD `43fa5a7` unmoved, index empty, no commit.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
