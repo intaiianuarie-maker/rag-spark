@@ -2122,3 +2122,354 @@ def test_cancel_wins_over_budget_and_is_monotonic() -> None:
     assert state.status == RunStatus.CANCELLED
     # Second cancel is also no-op
     assert state.request_cancel() is False
+
+# ======================================================================================
+# T-V3-008 — Approval / waiting_input gate (V3 plan trace V3 plan)
+# ======================================================================================
+
+from agents.runtime import _APPROVALS, _WAITING, _is_approved, approve_run  # noqa: E402
+
+
+class _WriteTool(Tool):
+    """Minimal WRITE tool for approval tests — name in write set so _tool_class_for => WRITE."""
+
+    name = "publish"  # in write_tools set => WRITE
+    description = "write tool for approval tests"
+    input_schema: ClassVar[dict] = {
+        "type": "object",
+        "properties": {"x": {"type": "integer"}},
+        "additionalProperties": False,
+    }
+
+    async def execute(self, workspace_id: str, **kwargs):
+        return {"ok": True}
+
+
+@pytest.mark.unit
+def test_reads_approval_free_search_and_reader_stay_green() -> None:
+    """Checklist 1: READS need no approval — T-002 search + T-003 reader stay approval-free."""
+    # Search (READ) — no approval, should succeed
+    from agents.tools import KnowledgeReadTool, KnowledgeSearchTool
+
+    # Fake search orchestrator that returns one hit
+    class _FakeSearchOrch:
+        async def retrieve(self, *, query, acl_scope, context_top_k=5, **kw):
+            from retrieval.interfaces import RetrievalMethod, RetrievedItem
+
+            return [
+                RetrievedItem(
+                    content="hello",
+                    score=0.9,
+                    method=RetrievalMethod.FUSED,
+                    workspace_id=acl_scope.workspace_ids[0] if acl_scope.workspace_ids else "ws-1",
+                    document_id="doc-1",
+                    chunk_id="chunk-1",
+                )
+            ]
+
+    search_tool = KnowledgeSearchTool(orchestrator=_FakeSearchOrch())
+    out = asyncio.run(search_tool.execute("ws-1", query="hello", top_k=5))
+    assert "results" in out and out["count"] == 1
+
+    # Reader (READ) — no approval, should succeed when ACL matches
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    ws = "ws-1"
+    row = _FakeChunkRow(cid, doc, ver, ws, text="hello world")
+    store = _FakeChunkStore([row])
+    reader = KnowledgeReadTool(chunk_reader=store)
+    out2 = asyncio.run(reader.execute(ws, document_id=doc, document_version_id=ver, chunk_id=cid))
+    assert out2["content"] == "hello world"
+    # Also direct check: READ tools are not gated by approval
+    assert _is_approved("any-run", "any-principal", "knowledge_search", "rev1") is False
+    # But READ should not be checked — the gate is only for WRITE
+    from agents.runtime import _is_write_tool
+
+    assert _is_write_tool("knowledge_search") is False
+    assert _is_write_tool("knowledge_read") is False
+    assert _is_write_tool("publish") is True
+    assert _is_write_tool("calculator") is False
+
+
+@pytest.mark.unit
+def test_approval_scoped_cross_run_and_cross_principal_both_fail() -> None:
+    """Checklist 2: approval scoped to (run + principal) — both replay directions fail."""
+    _APPROVALS.clear()
+    _WAITING.clear()
+    # Approve run-A by P
+    approve_run("run-A", "P", "publish", "rev1")
+    assert _is_approved("run-A", "P", "publish", "rev1") is True
+    # Cross-run: same P, same tool, same rev, but run-B → not approved
+    assert _is_approved("run-B", "P", "publish", "rev1") is False
+    # Cross-principal: same run-A, same tool, same rev, but Q → not approved
+    assert _is_approved("run-A", "Q", "publish", "rev1") is False
+    # Also via run_enforced integration: run-B should go to WAITING_APPROVAL
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+    _APPROVALS.clear()
+    _WAITING.clear()
+    # First, approve run-A
+    approve_run("run-A", "P", "publish", "rev1")
+    # Now try to run run-B with same P and same tool — should be WAITING, not dispatch
+    registry_b = ToolRegistry()
+    registry_b.register(_WriteTool())
+    llm_b = _ScriptedLLM(
+        [
+            'Thought: try write\nAction: publish\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt_b = AgentRuntime(llm_b, registry_b)
+    ctx_b = RunContext(
+        run_id="run-B",
+        workspace_id="ws-1",
+        principal_id="P",
+        authz_policy_revision="rev1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["publish"],
+    )
+    run_b = asyncio.run(rt_b.run_enforced(context=ctx_b, goal="cross-run"))
+    # Should be WAITING_APPROVAL, not tool executed
+    assert run_b.status == AgentRunStatus.MAX_STEPS_EXCEEDED or any(
+        s.type == AgentStepType.ERROR and "requires approval" in str(s.tool_output or "")
+        for s in run_b.steps
+    )
+    # Cross-principal via run_enforced: same run-A but Q
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+    _APPROVALS.clear()
+    _WAITING.clear()
+    approve_run("run-A", "P", "publish", "rev1")
+    registry_q = ToolRegistry()
+    registry_q.register(_WriteTool())
+    llm_q = _ScriptedLLM(
+        [
+            'Thought: try write\nAction: publish\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt_q = AgentRuntime(llm_q, registry_q)
+    ctx_q = RunContext(
+        run_id="run-A",
+        workspace_id="ws-1",
+        principal_id="Q",
+        authz_policy_revision="rev1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["publish"],
+    )
+    run_q = asyncio.run(rt_q.run_enforced(context=ctx_q, goal="cross-principal"))
+    assert any(s.type == AgentStepType.ERROR for s in run_q.steps)
+    assert not any(s.tool_name == "publish" and s.type == AgentStepType.TOOL_OUTPUT for s in run_q.steps)  # noqa: E501
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+
+@pytest.mark.unit
+def test_unapproved_write_never_executes() -> None:
+    """Metric: unapproved writes executed: 0."""
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+    calls: list[dict] = []
+
+    class _SpyWriteTool(Tool):
+        name = "publish"
+        description = "spy"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(_SpyWriteTool())
+    llm = _ScriptedLLM(
+        [
+            'Thought: try write\nAction: publish\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-unapproved",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="rev1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["publish"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="unapproved write"))
+    assert len(calls) == 0, f"unapproved WRITE must never execute, got {len(calls)} calls"
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+
+@pytest.mark.unit
+def test_approved_write_resumes_and_succeeds() -> None:
+    """Approved run resumes — WRITE executes after approval."""
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+    calls: list[dict] = []
+
+    class _SpyWriteTool2(Tool):
+        name = "publish"
+        description = "spy2"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(_SpyWriteTool2())
+    # First run: not approved → WAITING
+    llm1 = _ScriptedLLM(
+        [
+            'Thought: try write\nAction: publish\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt1 = AgentRuntime(llm1, registry)
+    ctx1 = RunContext(
+        run_id="run-approve-resume",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="rev1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["publish"],
+    )
+    asyncio.run(rt1.run_enforced(context=ctx1, goal="first"))
+    assert len(calls) == 0
+    # Approve
+    approve_run("run-approve-resume", "user-1", "publish", "rev1")
+    # Resume with same run_id+principal+rev → should dispatch
+    llm2 = _ScriptedLLM(['Thought: resume\nAction: publish\nAction Input: {"x": 1}', "Final Answer: done"])  # noqa: E501
+    # Need to use same registry and a new runtime but same persisted state
+    rt2 = AgentRuntime(llm2, registry)
+    # Re-use same context (same run_id, principal, rev)
+    run2 = asyncio.run(rt2.run_enforced(context=ctx1, goal="resume"))
+    assert len(calls) == 1, f"approved WRITE should execute, got {len(calls)}"
+    assert any(s.tool_name == "publish" and s.type == AgentStepType.TOOL_OUTPUT for s in run2.steps)
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+
+@pytest.mark.unit
+def test_resume_rechecks_acl_and_policy_revision_stale_approval_reblocks() -> None:
+    """Checklist 3: resume re-checks ACL and policy revision — stale approval re-blocks."""
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+    calls: list[dict] = []
+
+    class _SpyWriteTool3(Tool):
+        name = "publish"
+        description = "spy3"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs):
+            calls.append(dict(kwargs))
+            return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(_SpyWriteTool3())
+    # Step 1: initial run wants publish, not approved → WAITING
+    ctx_v1 = RunContext(
+        run_id="run-recheck",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="rev1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["publish"],
+    )
+    llm_v1 = _ScriptedLLM(
+        [
+            'Thought: try\nAction: publish\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt_v1 = AgentRuntime(llm_v1, registry)
+    run_v1 = asyncio.run(rt_v1.run_enforced(context=ctx_v1, goal="v1"))
+    assert len(calls) == 0
+    assert any("requires approval" in str(s.tool_output or "") for s in run_v1.steps)
+
+    # Approve at rev1
+    approve_run("run-recheck", "user-1", "publish", "rev1")
+    assert _is_approved("run-recheck", "user-1", "publish", "rev1") is True
+
+    # Simulate policy change/revocation: new context has rev2, same run and principal
+    ctx_v2 = RunContext(
+        run_id="run-recheck",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="rev2",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["publish"],
+    )
+    # Resume with rev2 — approval was for rev1, so must re-block (check-then-act across time, T-050 bug class)  # noqa: E501
+    rt_v2 = AgentRuntime(_ScriptedLLM(['Thought: resume\nAction: publish\nAction Input: {"x": 1}', "Final Answer: done"]), registry)  # noqa: E501
+    run_v2 = asyncio.run(rt_v2.run_enforced(context=ctx_v2, goal="v2"))
+    # Still waiting, not executed, because policy revision mismatch
+    assert len(calls) == 0, f"stale approval must not ride through revocation, got {len(calls)} calls"  # noqa: E501
+    assert any("still requires approval" in str(s.tool_output or "") or "requires approval" in str(s.tool_output or "") for s in run_v2.steps)  # noqa: E501
+
+    # Now approve at rev2 and resume with rev2 — should succeed
+    approve_run("run-recheck", "user-1", "publish", "rev2")
+    rt_v3 = AgentRuntime(
+        _ScriptedLLM(['Thought: resume rev2\nAction: publish\nAction Input: {"x": 1}', "Final Answer: done"]), registry  # noqa: E501
+    )
+    asyncio.run(rt_v3.run_enforced(context=ctx_v2, goal="v3"))
+    assert len(calls) == 1, f"after re-approval at rev2, should execute, got {len(calls)}"
+
+    _APPROVALS.clear()
+    _WAITING.clear()
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()

@@ -159,6 +159,32 @@ _PERSISTED_RUNS: dict[str, AgentRun] = {}
 _PERSISTED_STATES: dict[str, RunState] = {}
 _PERSISTED_USAGES: dict[str, Usage] = {}
 
+# T-V3-008: approval store — scoped to (run_id, principal_id, tool_name) and
+# policy revision. An approval for run A by P authorizes nothing for run B or Q.
+# Resume re-checks ACL and policy_revision — stale approval after revocation
+# must re-block (check-then-act across time, same bug class as T-050).
+_APPROVALS: dict[tuple[str, str, str], str] = {}  # (run_id, principal_id, tool_name) -> policy_revision  # noqa: E501
+_WAITING: dict[str, tuple[str, str, str, str]] = {}  # run_id -> (tool_name, raw_input, policy_revision, principal_id)  # noqa: E501
+
+
+def _is_approved(run_id: str, principal_id: str, tool_name: str, policy_revision: str) -> bool:
+    """Pure: is (run, principal, tool) approved at this policy revision?"""
+    key = (run_id, principal_id, tool_name)
+    return _APPROVALS.get(key) == policy_revision
+
+
+def _is_write_tool(tool_name: str) -> bool:
+    return _tool_class_for(tool_name) == ToolClass.WRITE
+
+
+def approve_run(run_id: str, principal_id: str, tool_name: str, policy_revision: str) -> None:
+    """Record an approval scoped to (run, principal, tool) at a policy revision."""
+    _APPROVALS[(run_id, principal_id, tool_name)] = policy_revision
+
+
+def _clear_approval(run_id: str, principal_id: str, tool_name: str) -> None:
+    _APPROVALS.pop((run_id, principal_id, tool_name), None)
+
 
 @dataclass(frozen=True)
 class ParsedAction:
@@ -599,6 +625,205 @@ class AgentRuntime:
             total_tokens = _existing_run.total_tokens
             tool_calls = len([st for st in _existing_run.steps if st.tool_name is not None])
 
+        # T-V3-008: if resuming a WAITING_APPROVAL run, re-check approval and ACL/policy
+        if state.status == RunStatus.WAITING_APPROVAL:
+            waiting = _WAITING.get(context.run_id)
+            if waiting is not None:
+                w_tool, w_input, _w_rev, w_principal = waiting
+                # Approval must be for this run+principal and this policy revision — cross-run/principal replay fails  # noqa: E501
+                # Also re-check policy revision matches current context (stale approval after revocation must re-block)  # noqa: E501
+                if not _is_approved(context.run_id, context.principal_id, w_tool, context.authz_policy_revision):  # noqa: E501
+                    # Still not approved or policy changed/revoked — stay WAITING_APPROVAL, no dispatches  # noqa: E501
+                    agent_run.steps.append(
+                        AgentStep(
+                            step_number=len(agent_run.steps) + 1,
+                            type=AgentStepType.ERROR,
+                            content="",
+                            tool_name=w_tool,
+                            tool_input={"raw": w_input},
+                            tool_output={
+                                "error": f"write tool {w_tool!r} still requires approval (policy or principal mismatch)",  # noqa: E501
+                                "error_code": AgentErrorCode.TOOL_NOT_ALLOWED.value,
+                            },
+                            timestamp=datetime.now(UTC).isoformat(),
+                        )
+                    )
+                    history.append(
+                        ChatMessage(
+                            role=MessageRole.USER,
+                            content="Observation: {'error': 'still requires approval'}",
+                        )
+                    )
+                    # Stay in WAITING_APPROVAL, don't dispatch
+                    # Ensure state remains WAITING_APPROVAL (don't transition)
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    _PERSISTED_RUNS[context.run_id] = agent_run
+                    # Return early — no further LLM/tool calls, no dispatches
+                    agent_run.finished_at = datetime.now(UTC).isoformat()
+                    return agent_run
+                # Also check that the waiting principal matches current principal (cross-principal replay)  # noqa: E501
+                if w_principal != context.principal_id:
+                    agent_run.steps.append(
+                        AgentStep(
+                            step_number=len(agent_run.steps) + 1,
+                            type=AgentStepType.ERROR,
+                            content="",
+                            tool_name=w_tool,
+                            tool_input={"raw": w_input},
+                            tool_output={
+                                "error": "approval principal mismatch",
+                                "error_code": AgentErrorCode.TOOL_NOT_ALLOWED.value,
+                            },
+                            timestamp=datetime.now(UTC).isoformat(),
+                        )
+                    )
+                    history.append(
+                        ChatMessage(role=MessageRole.USER, content="Observation: {'error': 'principal mismatch'}")  # noqa: E501
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    _PERSISTED_RUNS[context.run_id] = agent_run
+                    agent_run.finished_at = datetime.now(UTC).isoformat()
+                    return agent_run
+                # Approved and policy/ACL re-check passed — clear waiting and dispatch the waiting tool directly  # noqa: E501
+                # Remove waiting entry and transition back to RUNNING
+                _WAITING.pop(context.run_id, None)
+                try:
+                    # Transition from WAITING_APPROVAL back to RUNNING is not a valid terminal transition,  # noqa: E501
+                    # so we need to handle it: WAITING_APPROVAL is active, not terminal, so we can go to RUNNING  # noqa: E501
+                    # But RunState.transition_to enforces monotonic and will allow WAITING_APPROVAL -> RUNNING? Check _ACTIVE_STATUSES  # noqa: E501
+                    # WAITING_APPROVAL is active, so transitioning to RUNNING should be allowed if not terminal  # noqa: E501
+                    # However transition_to checks if current is terminal — WAITING_APPROVAL is not terminal, so it can go to RUNNING  # noqa: E501
+                    # But our RunState doesn't have a direct transition from WAITING_APPROVAL to RUNNING defined as allowed?  # noqa: E501
+                    # It checks is_terminal(self.status) — WAITING_APPROVAL is active, so not terminal, so it can transition  # noqa: E501
+                    # We need to transition to RUNNING
+                    state.transition_to(RunStatus.RUNNING)
+                except InvalidRunTransitionError:
+                    # If already running, ignore
+                    if state.status != RunStatus.RUNNING:
+                        state.status = RunStatus.RUNNING
+                # Now dispatch the waiting tool directly, without new LLM call, with retry and budget checks  # noqa: E501
+                # Reuse the same logic as for a normal tool_call but with the waiting tool's input
+                # For simplicity, we will run the dispatch for the waiting tool here
+                # Check budget/deadline before dispatch (same as normal)
+                if datetime.now(UTC) >= context.deadline:
+                    state.transition_to(
+                        RunStatus.LIMIT_EXCEEDED,
+                        error_code=AgentErrorCode.DEADLINE_EXCEEDED,
+                        error_detail="deadline reached before approved tool dispatch",
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    agent_run.finished_at = datetime.now(UTC).isoformat()
+                    return agent_run
+                if not can_reserve_tool_call(usage, context.budget):
+                    state.transition_to(
+                        RunStatus.LIMIT_EXCEEDED,
+                        error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                        error_detail=f"tool-call budget would be exceeded: {tool_calls}+1 > {context.budget.max_tool_calls}",  # noqa: E501
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    agent_run.finished_at = datetime.now(UTC).isoformat()
+                    return agent_run
+                # Resolve retry policy for the waiting tool
+                _tool_for_retry = self.registry.get(w_tool)
+                _retry_policy = (
+                    _tool_for_retry.retry_policy
+                    if _tool_for_retry is not None and hasattr(_tool_for_retry, "retry_policy")
+                    and isinstance(_tool_for_retry.retry_policy, RetryPolicy)
+                    else RetryPolicy()
+                )
+                attempt = 0
+                while True:
+                    attempt += 1
+                    tool_calls += 1
+                    usage = Usage(prompt_tokens=total_tokens, completion_tokens=0, tool_calls=tool_calls)  # noqa: E501
+                    _PERSISTED_USAGES[context.run_id] = usage
+                    _PERSISTED_RUNS[context.run_id] = agent_run
+                    output, status, error_code = await self._dispatch(
+                        context=context,
+                        tool_name=w_tool,
+                        raw_tool_input=w_input,
+                        policy=policy,
+                        state=state,
+                    )
+                    persisted_output: dict = dict(output)
+                    persisted_output["attempt"] = attempt
+                    if _retry_policy.max_attempts > 1:
+                        persisted_output["max_attempts"] = _retry_policy.max_attempts
+                    if error_code is not None:
+                        persisted_output["error_code"] = error_code.value
+                    agent_run.steps.append(
+                        AgentStep(
+                            step_number=len(agent_run.steps) + 1,
+                            type=AgentStepType.TOOL_OUTPUT if status is StepStatus.SUCCEEDED else AgentStepType.ERROR,  # noqa: E501
+                            content="",
+                            tool_name=w_tool,
+                            tool_input={"raw": w_input} if status is not StepStatus.SUCCEEDED else None,  # noqa: E501
+                            tool_output=persisted_output,
+                            timestamp=datetime.now(UTC).isoformat(),
+                        )
+                    )
+                    if error_code is not None:
+                        agent_run.error = f"{error_code.value}: {output.get('error', '')}"
+                    if status is StepStatus.SUCCEEDED:
+                        history.append(ChatMessage(role=MessageRole.USER, content=f"Observation: {output}"))  # noqa: E501
+                        break
+                    if not is_retryable(error_code, _retry_policy):
+                        history.append(ChatMessage(role=MessageRole.USER, content=f"Observation: {output}"))  # noqa: E501
+                        break
+                    if attempt >= _retry_policy.max_attempts:
+                        history.append(ChatMessage(role=MessageRole.USER, content=f"Observation: {output}"))  # noqa: E501
+                        state.transition_to(
+                            RunStatus.FAILED,
+                            error_code=error_code,
+                            error_detail=f"{error_code.value if error_code else 'unknown'}: tool {w_tool!r} failed after {attempt} attempts: {output.get('error', '')}",  # noqa: E501
+                        )
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        break
+                    delay = bounded_backoff(attempt, _retry_policy, context.deadline)
+                    if delay > 0:
+                        remaining = (context.deadline - datetime.now(UTC)).total_seconds()
+                        if remaining <= 0:
+                            break
+                        delay = min(delay, remaining)
+                        if delay > 0:
+                            try:
+                                await asyncio.sleep(min(delay, remaining))
+                            except asyncio.CancelledError:
+                                if not RunState.is_terminal(state.status):
+                                    try:
+                                        state.transition_to(RunStatus.CANCELLED, error_code=AgentErrorCode.CANCELLED, error_detail="run cancelled during backoff")  # noqa: E501
+                                        agent_run.status = _legacy_status(state.status)
+                                        agent_run.error = state.error_detail
+                                        _PERSISTED_STATES[context.run_id] = state
+                                        _PERSISTED_RUNS[context.run_id] = agent_run
+                                    except InvalidRunTransitionError:
+                                        pass
+                                break
+                    if not self._check_step_budget(state=state, context=context, tool_calls_used=tool_calls):  # noqa: E501
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        break
+                    if datetime.now(UTC) >= context.deadline:
+                        state.transition_to(RunStatus.LIMIT_EXCEEDED, error_code=AgentErrorCode.DEADLINE_EXCEEDED, error_detail="deadline reached during retry backoff")  # noqa: E501
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        break
+                    continue
+                if RunState.is_terminal(state.status):
+                    agent_run.finished_at = datetime.now(UTC).isoformat()
+                    return agent_run
+                # After handling the waiting tool, continue to normal LLM loop
+                # Fall through to for loop
+
         for _step_idx in range(1, context.budget.max_steps + 1):
             # T-V3-007: cancel wins — no further dispatches after cancel.
             if state.is_cancelled():
@@ -715,6 +940,44 @@ class AgentRuntime:
                 assert parsed.tool_name is not None
                 tool_name = parsed.tool_name
                 raw_input = parsed.raw_input or "{}"
+                # T-V3-008: approval gate for WRITE — unapproved → WAITING_APPROVAL, never exec
+                if _is_write_tool(tool_name):
+                    if not _is_approved(context.run_id, context.principal_id, tool_name, context.authz_policy_revision):  # noqa: E501
+                        _WAITING[context.run_id] = (tool_name, raw_input, context.authz_policy_revision, context.principal_id)  # noqa: E501
+                        try:
+                            state.transition_to(
+                                RunStatus.WAITING_APPROVAL,
+                                error_code=AgentErrorCode.TOOL_NOT_ALLOWED,
+                                error_detail=f"write tool {tool_name!r} requires approval",
+                            )
+                        except InvalidRunTransitionError:
+                            pass
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        _PERSISTED_STATES[context.run_id] = state
+                        _PERSISTED_RUNS[context.run_id] = agent_run
+                        _PERSISTED_USAGES[context.run_id] = usage
+                        agent_run.steps.append(
+                            AgentStep(
+                                step_number=len(agent_run.steps) + 1,
+                                type=AgentStepType.ERROR,
+                                content="",
+                                tool_name=tool_name,
+                                tool_input={"raw": raw_input},
+                                tool_output={
+                                    "error": f"write tool {tool_name!r} requires approval",
+                                    "error_code": AgentErrorCode.TOOL_NOT_ALLOWED.value,
+                                },
+                                timestamp=datetime.now(UTC).isoformat(),
+                            )
+                        )
+                        history.append(
+                            ChatMessage(
+                                role=MessageRole.USER,
+                                content=f"Observation: {{'error': 'requires approval', 'error_code': '{AgentErrorCode.TOOL_NOT_ALLOWED.value}'}}",  # noqa: E501
+                            )
+                        )
+                        break
                 # Resolve spec once for retry policy / timeout (tool may inject).
                 _tool_for_retry = self.registry.get(tool_name)
                 _retry_policy = (
@@ -775,12 +1038,12 @@ class AgentRuntime:
                     # Persist this attempt as a step — the last attempt's output
                     # is what the history sees, but all attempts are in the trace.
                     # Include attempt count and error_code for visibility (attempts persisted).
-                    persisted_output: dict = dict(output)
-                    persisted_output["attempt"] = attempt
+                    waiting_persisted: dict = dict(output)
+                    waiting_persisted["attempt"] = attempt
                     if _retry_policy.max_attempts > 1:
-                        persisted_output["max_attempts"] = _retry_policy.max_attempts
+                        waiting_persisted["max_attempts"] = _retry_policy.max_attempts
                     if error_code is not None:
-                        persisted_output["error_code"] = error_code.value
+                        waiting_persisted["error_code"] = error_code.value
                     agent_run.steps.append(
                         AgentStep(
                             step_number=len(agent_run.steps) + 1,
@@ -794,7 +1057,7 @@ class AgentRuntime:
                             tool_input=(
                                 {"raw": raw_input} if status is not StepStatus.SUCCEEDED else None
                             ),
-                            tool_output=persisted_output,
+                            tool_output=waiting_persisted,
                             timestamp=datetime.now(UTC).isoformat(),
                         )
                     )
