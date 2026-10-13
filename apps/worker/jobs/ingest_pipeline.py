@@ -169,6 +169,44 @@ async def generation_publication_state(
     return None
 
 
+async def _refuse_tombstoned_document_before_load(
+    session: AsyncSession, *, job: IngestionJob, version: DocumentVersion
+) -> None:
+    """T-V1-080: the **delete** fence outranks the originals load.
+
+    T-055/T-072 purge a tombstoned document's original, so for a job that
+    redelivers after a delete the pre-write fence never got to speak: the load
+    raised ``OriginalMissing`` first and the job disclosed ``INGESTION_ERROR`` —
+    "storage rot" for a document an operator deleted on purpose. Two different
+    events, one code; a tombstoned document reported as unreadable evidence.
+
+    A tombstoned document is terminal: its generation can never publish, so the
+    authority is asked **first** and the object store is only read for a
+    document that could still publish. The refusal is delegated to the existing
+    gate, so the compensation, the non-retryable code and the disclosure are
+    the gate's own rather than a second copy of them. The tombstone is read
+    **fresh** from the row for the reason
+    :func:`generation_publication_state` documents: the identity map holds the
+    copy taken at dequeue time, which is exactly the state that can be stale.
+
+    Scoped to the delete case on purpose. A superseded generation keeps its
+    current ordering, and storage rot on a live document keeps
+    ``INGESTION_ERROR`` — the distinction survives instead of collapsing.
+    """
+    deleted_at = await session.scalar(
+        select(Document.deleted_at).where(Document.id == job.document_id)
+    )
+    if deleted_at is None:
+        return
+    await assert_generation_is_publishable(
+        session,
+        job=job,
+        document_id=job.document_id,
+        version_id=version.id,
+        gate="load",
+    )
+
+
 async def _unpublish_generation(
     session: AsyncSession, *, document_id: uuid.UUID, version_id: uuid.UUID
 ) -> None:
@@ -675,7 +713,19 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     #: checksum-verified) only now that the attempt is recorded — an
     #: object-store outage becomes a failure on this job row instead of an
     #: error that never reaches one.
-    content = await load_original_bytes(version)
+    #:
+    #: T-V1-080: the delete fence is asked BEFORE that read. The delete path
+    #: purges the original, so loading first would raise ``OriginalMissing``
+    #: and disclose ``INGESTION_ERROR`` for a document that was deleted on
+    #: purpose. A tombstone that lands *while* the store is being read is the
+    #: same disclosure, so that failure re-checks the fence before it stands.
+    await _refuse_tombstoned_document_before_load(session, job=job, version=version)
+    try:
+        content = await load_original_bytes(version)
+    except IngestPipelineError as exc:
+        if exc.code == "INGESTION_ERROR":
+            await _refuse_tombstoned_document_before_load(session, job=job, version=version)
+        raise
 
     if not content:
         raise IngestPipelineError("EMPTY_DOCUMENT", "empty document", retryable=False)
