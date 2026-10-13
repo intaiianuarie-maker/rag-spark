@@ -3891,3 +3891,138 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4017_{start,end
   ` M handoffs/CODE2-HANDOFF.md`.
 - 0 foreign paths modified by me (verified by diffing START vs END snapshots);
   0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+---
+
+## T-V4-018 — W4 revision-persistence migration DRAFT (review-only)
+
+```text
+TASK: T-V4-018 (W4) — review the durable-backend migration BEFORE it is built.
+       Nothing applied: no alembic upgrade, no live-DB write, no schema change.
+CHANGE: packages/workflow_engine/migrations/0001_workflow_draft_revisions.up.sql (NEW)
+        packages/workflow_engine/migrations/0001_workflow_draft_revisions.down.sql (NEW)
+        packages/workflow_engine/migrations/README.md (NEW) — the reviewed draft:
+        schema statement, up/down, backfill story, rollback story, the one hazard,
+        and an applying-ticket checklist.
+        tests/unit/test_workflow_draft_migration.py (NEW) — 18 tests that apply both
+        directions to SCRATCH sqlite only.
+        NO product file modified. No alembic revision registered (deliberate: this
+        ticket must not touch alembic versions/applied state).
+WHY:    W4 approval gates (T-V4-019+) decide things about one specific revision,
+        and a revision that lives only in a process heap cannot be the object of
+        an approval — a restart would erase what the approval referred to. The
+        card requires the durable path be reviewed before it is built, so this
+        ticket is document + downgrade-tested SQL, not a backend.
+REUSED: The repo's store DDL precedent (packages/graph/sqlite_store.py):
+        IF NOT EXISTS everywhere, workspace-scoped tables, plain indexed
+        workspace_id with NO cross-domain FK (scope enforcement stays in the
+        store layer, per R-004). Up/down file pair mirrors the SQL shape my
+        T-V4-016 SqliteCheckpointStore already uses for its own table.
+BUILT:  The schema below; append-only enforced in STORAGE by the composite PK
+        rather than by caller discipline; a documented reason for every absent
+        constraint; the backfill argument (there is no durable corpus, so there
+        is nothing to migrate); a 4-step rollback story including
+        export-before-drop; the canonical-spec-serialisation hazard pinned by a
+        round-trip test; and an autouse monkeypatch guard that makes a live-DB
+        connection impossible in this suite.
+
+SCHEMA STATEMENT (one new table, purely additive, idempotent):
+  CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
+    workflow_id     TEXT NOT NULL,
+    revision        INTEGER NOT NULL,
+    workspace_id    TEXT NOT NULL,
+    content_hash    TEXT NOT NULL,
+    spec            TEXT NOT NULL,
+    summary         TEXT NOT NULL DEFAULT '',
+    parent_revision INTEGER,
+    parent_hash     TEXT,
+    created_at      TEXT NOT NULL,
+    PRIMARY KEY (workflow_id, revision),
+    CHECK (revision >= 1),
+    CHECK (length(workspace_id) > 0),
+    CHECK (length(content_hash) = 64),
+    CHECK (length(spec) > 0),
+    CHECK (json_valid(spec)),
+    CHECK (parent_revision IS NULL OR parent_revision < revision)
+  );
+  CREATE INDEX IF NOT EXISTS idx_wdr_workspace
+    ON workflow_draft_revisions (workspace_id, workflow_id, revision);
+  CREATE INDEX IF NOT EXISTS idx_wdr_identity
+    ON workflow_draft_revisions (workflow_id, content_hash);
+  Columns: workflow_id (definition id), revision (1-based monotonic, never
+  reused), workspace_id (ACL scope), content_hash (T-V4-008 canonical SHA-256),
+  spec (definition as canonical JSON), summary (bounded redacted projection),
+  parent_revision/parent_hash (the chain that makes tampering visible),
+  created_at (ISO-8601 UTC). PK is the append-only guarantee in storage; a
+  unique on (workflow_id, content_hash) is deliberately ABSENT because a revert
+  is legal history in the T-V4-017 store; no FK (repo precedent); no trigger.
+  Down drops both indexes then the table and nothing else.
+
+  BACKFILL: none needed, and the SQL proves it — the up file contains only
+  three CREATE statements. The T-V4-017 store is in-memory only, has never
+  written a row anywhere, so there is no durable corpus to migrate; the durable
+  backend starts empty and fills forward, and the in-memory store stays the
+  source of truth until cutover.
+  ROLLBACK: before apply = no-op; after apply, before rows = run the down file
+  (proven to restore the exact prior state); after apply with rows = export with
+  the provided read-only SELECT, then down. Never roll back by hand-editing rows.
+
+VERIFY: tests/unit/test_workflow_draft_migration.py → 18 passed (1.9s).
+        my three suites (migration + draft store + checkpoint) → 60 passed.
+        ruff + mypy on my test file → All checks passed / Success.
+        METRIC 1 — live-DB writes = 0: the up file is CREATE-only (asserted: the
+        set of statement verbs is exactly {CREATE}); the migrations dir holds no
+        .py file so alembic cannot import a revision from it (asserted); the
+        app's alembic versions contain no reference to this migration (asserted);
+        and every sqlite connection in the suite is monkeypatched to REFUSE any
+        path outside tmp_path (asserted, including a test that the guard fires).
+        METRIC 2 — downgrade clean = yes: applying up to a scratch DB adds exactly
+        {workflow_draft_revisions, its PK autoindex, idx_wdr_workspace,
+        idx_wdr_identity}, and applying down restores the FULL sqlite_master
+        snapshot (type, name, tbl_name AND sql of every object) to exactly its
+        pre-up value; down is idempotent, leaves an unrelated pre-existing table
+        and index untouched, and up/down/up reproduces an identical schema.
+RISKS:  1. Requires JSON1 in the target SQLite build (the json_valid CHECK). The
+        environment this draft was written in has it; the applying ticket must
+        confirm on the real target (checklist item 1).
+        2. THE ONE HAZARD (documented + pinned by test): a plain
+        model_dump(mode="json") serialises the workspace_capabilities SET in
+        seed-dependent order, so a backend that stores that dump could read a row
+        back "unchanged" yet fail a re-hash. The backend must store the canonical
+        form (json.dumps(WorkflowRevision._canonical_payload(...))). A round-trip
+        test runs the canonicaliser under PYTHONHASHSEED 0/1/777 in subprocesses
+        and requires one variant of (hash, spec).
+        3. SQL itself still permits UPDATE — append-only is PK + the store never
+        issuing an update, which is stated in the test's docstring so a reviewer
+        does not mistake the constraint for a full guard.
+        4. This ticket registers nothing with alembic on purpose; the applying
+        ticket must add the revision on top of 0010_drop_original_bytes (checklist).
+        5. Discovery: the migration draft is NOT re-exported at package level
+        (no __init__.py change — dev1 owns that file and was live-editing it), so
+        it is reachable as packages/workflow_engine/migrations/*.
+
+FOREIGN REDS (dev1's in-flight T-V4-009 executor work — NOT mine, NOT touched):
+  At the end of my runs, tests/unit had 3 failures, all in dev1's live area:
+  tests/unit/test_workflow_executor_honesty.py (2 — an UNTRACKED NEW file dev1
+  created at 00:45 DURING my ticket, failing against his uncommitted executor.py)
+  and tests/unit/test_workflow_fake_runtime.py::test_skipped_branch_skips_join
+  (his modified file).
+  Attribution evidence: committed HEAD ffbf378 in a throwaway read-only worktree
+  ran the same suite 3x = 492 passed, 0 failed; the failing honesty file does not
+  exist at HEAD at all. Failure counts MOVED while I worked (13 → 1 → 0 → 2 → 3)
+  because dev1 kept landing executor/interfaces/test edits mid-run (mtimes
+  00:26-00:45 during my ticket) — I report the final number, not a flattering one.
+  My suites were unaffected throughout: 60 passed every run.
+  Disclosed to museR; not fixed, not touched — outside my allowlist.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4018_{start,end}.txt):
+- START (HEAD `ffbf378`): 23 dirty paths — 5 modified handoffs + dev1's live
+  `executor.py`/`interfaces.py`. Index empty.
+- END (HEAD `ffbf378`): dev1's live set grew (his modified fake_runtime + a new
+  untracked `test_workflow_executor_honesty.py`), and my delta is exactly three:
+  `?? packages/workflow_engine/migrations/` (3 files: up.sql, down.sql, README.md),
+  `?? tests/unit/test_workflow_draft_migration.py`, and this handoff row
+  (` M handoffs/CODE2-HANDOFF.md`).
+- 0 foreign paths modified by me (START vs END diff shows no foreign path I touched);
+  0 commits, 0 alembic upgrades, 0 live-DB writes, 0 deploys, 0 restarts,
+  0 compose changes, index left empty. Attribution worktree /tmp/opencode/tv4018-base
+  used read-only at HEAD and removed afterwards.
