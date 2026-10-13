@@ -20,27 +20,40 @@ T-V1-014 — reindex through the REAL validated embedding provider (never zeros)
 * **``--dry-run`` reports and never writes.** It embeds every batch through
   the real provider to *measure* the dimensions actually returned (never
   assuming 1024), reports provider / model / dims / counts, and performs zero
-  store writes: no collection create, no FTS insert, no Qdrant upsert.
+  store writes: no collection create, no FTS insert, no Qdrant upsert, no
+  alias change.
+* **Build-then-switch recovery runs through the verified switch (T-V1-045).**
+  ``--replacement <name>`` builds the new index under ``<name>`` and hands the
+  switch to ``QdrantVectorStore.promote_replacement`` (T-V1-015): that call
+  verifies the replacement read-only first (exists / dense dims / point count)
+  and only then changes any alias, so nothing here can rename or delete a
+  collection before the replacement is proven. This script has no other
+  destructive route: without ``--replacement`` it does not switch at all.
 
-Failed-rebuild recovery (T-V1-014)
-----------------------------------
+Failed-rebuild recovery (T-V1-014, mechanised by T-V1-045)
+----------------------------------------------------------
 1. **Refused in-place run** (unknown or mismatched identity): nothing was
    written — the existing index still serves unchanged. Build a replacement
-   instead of repairing in place::
+   and let the script make the verified switch::
 
-       python scripts/reindex_all_chunks.py --collection knowledge_v2
+       python scripts/reindex_all_chunks.py --collection knowledge --replacement knowledge_v2
 
-   Verify the replacement before switching: a ``--dry-run`` against it
-   reports an ``action`` of ``build``/``keep`` (never ``refuse``) with the
-   identity matching this provider, and Qdrant
-   ``GET /collections/knowledge_v2`` shows ``points_count`` equal to the live
-   chunk count at the provider's dimensions. Only then switch the stack's
-   collection to the new name and drop the old one (coordinator-owned config
-   change — this script never deletes a collection).
+   Every write targets ``knowledge_v2``; the live ``knowledge`` is never
+   written to. When the build finishes, the script calls
+   ``promote_replacement(live="knowledge", replacement="knowledge_v2",
+   expected_points=<chunks written>)``, which verifies the replacement
+   read-only **before** any destructive call — so an interrupted or failed
+   rebuild, or a replacement that never reaches the expected point count,
+   leaves ``knowledge`` serving exactly as it did before. ``--dry-run``
+   prints the same switch plan (and, when the run would refuse, reports the
+   switch as blocked) with zero writes: no build, no alias change.
+   Without ``--replacement`` the script only reports the plan — the switch
+   stays an operator/coordinator config change.
 2. **Interrupted or failed rebuild**: writes only ever targeted the
    replacement collection, so the previous index is untouched and keeps
    serving. The half-written replacement is unusable — delete that collection
-   and re-run the rebuild; never finish it by writing a second model into it.
+   and re-run the rebuild (a refused replacement is reported, never written
+   into); never finish it by writing a second model into it.
 3. **Identity gap to close**: points ingested by the worker/API do not carry
    the identity stamp yet (that path is outside this script's allowlist), so
    they read as ``unknown`` and force the fresh-collection route above until
@@ -60,7 +73,7 @@ from core.config import get_settings
 from ingestion.persistence import get_session_factory
 from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
 from retrieval.adapters.pg_fts import PostgresLexicalStore
-from retrieval.adapters.qdrant_store import QdrantVectorStore
+from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreError
 from retrieval.interfaces import VectorRecord
 from sqlalchemy import text
 
@@ -288,7 +301,17 @@ async def reindex(
     dry_run: bool = False,
     batch_size: int = 100,
     collection: str = "knowledge",
+    replacement: str | None = None,
 ) -> int:
+    # T-V1-045 guard: a switch needs two different names, and "switch onto
+    # itself" would delete the live index for nothing.
+    if replacement is not None and (not replacement.strip() or replacement == collection):
+        raise ReindexRefused(
+            f"invalid replacement {replacement!r} for live collection {collection!r}: "
+            "it must be a different, non-empty name — promote_replacement verifies one "
+            "collection and switches it onto another, never onto itself"
+        )
+
     session_factory = get_session_factory()
     embed_provider = InfinityEmbeddingProvider()
 
@@ -320,13 +343,17 @@ async def reindex(
     logger.info("identity recorded on write: %s", identity)
 
     # 2) Read-only inspection + decision — BEFORE any write.
+    # With --replacement the REPLACEMENT is the decision target: the live
+    # collection is written by nothing here, so it is never inspected for a
+    # write decision (promote_replacement verifies it read-only at switch time).
+    target = collection if replacement is None else replacement
     qdrant_url = os.environ.get("QDRANT_URL") or get_settings().qdrant_url
-    inspection = await inspect_collection(qdrant_url, collection)
+    inspection = await inspect_collection(qdrant_url, target)
     action, reason = decide_action(inspection, observed_dim, identity)
     logger.info(
         "collection %r: exists=%s points=%s dims=%s checked=%s/%s models=%s revisions=%s "
         "recorded_dims=%s error=%s",
-        collection,
+        target,
         inspection["exists"],
         inspection["points"],
         inspection["dims"],
@@ -338,13 +365,26 @@ async def reindex(
         inspection["error"],
     )
     logger.info("plan: action=%s — %s", action, reason)
+    if replacement is not None and action != "refuse":
+        # Announced BEFORE any write: the operator sees the switch (and that it
+        # retires the live collection) while stopping is still free.
+        logger.info(
+            "switch plan (T-V1-015/T-V1-045): build/verify %r, then "
+            "promote_replacement(live=%r, replacement=%r, expected_points=<chunks written>) "
+            "— verification is read-only and runs first; %r is never written to here",
+            replacement,
+            collection,
+            replacement,
+            collection,
+        )
 
     if not dry_run and action == "refuse":
         raise ReindexRefused(
-            f"refusing to reindex into {collection!r}: {reason}. Never mix models to repair "
-            "an unknown-model index (T-V1-014). Recovery: rebuild into a fresh collection "
-            "(--collection <new_name>), verify it, then switch — see 'Failed-rebuild "
-            "recovery' in this module docstring."
+            f"refusing to reindex into {target!r}: {reason}. Never mix models to repair "
+            "an unknown-model index (T-V1-014). Recovery: build into a fresh collection and "
+            f"switch through promote_replacement — --replacement <new_name> (verified switch "
+            f"over {collection!r}), or --collection <new_name> to build only — see "
+            "'Failed-rebuild recovery' in this module docstring."
         )
 
     # 3) Counts (read-only).
@@ -376,8 +416,8 @@ async def reindex(
     lexical_store: PostgresLexicalStore | None = None
     if not dry_run:
         lexical_store = PostgresLexicalStore(session_factory=session_factory)
-        qdrant = QdrantVectorStore(collection=collection)
-        await qdrant.ensure_collection(collection=collection, dimension=observed_dim)
+        qdrant = QdrantVectorStore(collection=target)
+        await qdrant.ensure_collection(collection=target, dimension=observed_dim)
 
     total_indexed = 0
     total_validated = 0
@@ -411,19 +451,65 @@ async def reindex(
                 if lexical_store is None or qdrant is None:
                     raise RuntimeError("stores were not initialised for a real run")
                 await lexical_store.index(records=batch_records)
-                await qdrant.upsert(collection=collection, records=batch_records)
+                await qdrant.upsert(collection=target, records=batch_records)
                 logger.info("Indexed batch %d to %d", i, i + len(batch_records))
 
             total_indexed += len(batch_rows)
+        # T-V1-045 — build-then-switch, the only collection switch this script
+        # performs. promote_replacement verifies the replacement read-only
+        # (exists / dense dims / >= expected_points) and only switches after
+        # that passes, so a short or half-built replacement aborts here with
+        # the live collection still serving; nothing else in this file deletes
+        # or aliases a collection.
+        if not dry_run and replacement is not None:
+            if qdrant is None:
+                raise RuntimeError("stores were not initialised for a real run")
+            logger.info(
+                "promote_replacement(live=%r, replacement=%r, expected_points=%d) — "
+                "verify first, switch only if it passes",
+                collection,
+                replacement,
+                total_indexed,
+            )
+            if total_indexed == 0:
+                logger.warning(
+                    "expected_points=0 — verification covers existence and dimensions only "
+                    "(no chunks to count) before switching %r",
+                    collection,
+                )
+            await qdrant.promote_replacement(
+                live=collection, replacement=replacement, expected_points=total_indexed
+            )
+            logger.info("switch complete: %r now serves %r", collection, replacement)
     finally:
         if qdrant is not None:
             await qdrant.close()
 
     if dry_run:
+        if replacement is not None:
+            if action == "refuse":
+                # Honest dry-run: the real run would raise ReindexRefused here,
+                # so no switch is on offer and the live collection keeps serving.
+                logger.info(
+                    "[DRY RUN] switch plan: BLOCKED — the run would refuse to build %r "
+                    "(%s); promote_replacement is NOT called, live=%r keeps serving",
+                    replacement,
+                    reason,
+                    collection,
+                )
+            else:
+                logger.info(
+                    "[DRY RUN] switch plan: promote_replacement(live=%r, replacement=%r, "
+                    "expected_points=%d) — verified read-only first, then the alias switch; "
+                    "switch_writes=0",
+                    collection,
+                    replacement,
+                    total_indexed,
+                )
         logger.info(
             "[DRY RUN] done: provider=%s model=%s configured_dim=%d observed_dim=%d nonzero=%d "
             "live_chunks=%d validated=%d existing_points=%d action=%s WRITES=0 "
-            "(fts=0 qdrant=0 collections_created=0)",
+            "(fts=0 qdrant=0 collections_created=0 aliases_changed=0)",
             type(embed_provider).__name__,
             identity["embedding_model"],
             embed_provider.dimension,
@@ -454,15 +540,33 @@ async def main() -> None:
     parser.add_argument(
         "--collection", type=str, default="knowledge", help="Qdrant collection name"
     )
+    parser.add_argument(
+        "--replacement",
+        type=str,
+        default=None,
+        help="Build-then-switch recovery (T-V1-045): build everything into this collection "
+        "instead of --collection, then promote it over --collection with "
+        "promote_replacement (T-V1-015: read-only verification first, alias switch only "
+        "after it passes). Without this flag no switch happens at all",
+    )
     args = parser.parse_args()
 
     try:
         await reindex(
-            dry_run=args.dry_run, batch_size=args.batch_size, collection=args.collection
+            dry_run=args.dry_run,
+            batch_size=args.batch_size,
+            collection=args.collection,
+            replacement=args.replacement,
         )
     except ReindexRefused as exc:
         logger.error("%s", exc)
         raise SystemExit(2) from exc
+    except VectorStoreError as exc:
+        # promote_replacement's message already states whether the live
+        # collection is untouched; exit 3 keeps "refused" (2) and "switch/build
+        # failed at the store" distinguishable for callers.
+        logger.error("store error: %s", exc)
+        raise SystemExit(3) from exc
 
 
 if __name__ == "__main__":
