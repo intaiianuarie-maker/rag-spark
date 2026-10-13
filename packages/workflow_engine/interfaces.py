@@ -491,7 +491,8 @@ class NodeRun(BaseModel):
 
     ``error`` carries the failure reason for FAILED nodes and the honest
     skip reason for SKIPPED ones (T-V4-009: a skip is disclosed, never
-    silent).
+    silent).  ``attempts`` records how many bounded executions the node
+    took (T-V4-010: retries are capped, so this is 1..NODE_MAX_ATTEMPTS).
     """
 
     node_id: str
@@ -500,6 +501,7 @@ class NodeRun(BaseModel):
     output_data: Any = None
     error: str | None = None
     latency_ms: float = 0.0
+    attempts: int = 0
 
 
 class WorkflowRun(BaseModel):

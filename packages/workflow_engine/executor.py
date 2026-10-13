@@ -29,9 +29,11 @@ concrete ``NodeExecutor`` implementation in a later, reviewed change.
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
 from collections import deque
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
@@ -58,6 +60,65 @@ _SKIP_BARRIER = "barrier-incomplete"
 _SKIP_NO_INPUT = "no-active-inbound-edge"
 _SKIP_UPSTREAM = "upstream-skipped"
 _SKIP_CANCELLED = "cancelled"
+
+# ---------------------------------------------------------------------------
+# T-V4-010: per-node bounds — stated, with defaults and reasons.
+#
+# Every node executes inside all three bounds; a breach fails THE NODE (the
+# run then fails per the T-V4-009 terminal table) with a message naming the
+# node, the bound and the observed value.  The bounds are executor/deployment
+# level, never node-configurable: ``NodeSpec.config`` is untrusted imported
+# data, so a node must not be able to widen or shrink its own bounds.
+# ---------------------------------------------------------------------------
+
+#: Per-node wall-clock bound.  A hung node (an infinite loop, a deadlock, a
+#: never-answering tool) fails the node at this limit instead of hanging the
+#: run's liveness.  30 s is generous for a single node step and keeps a
+#: bounded run bounded: worst-case node cost is attempts x timeout.
+NODE_TIMEOUT_S = 30.0
+
+#: Per-node output cap (bytes of canonical JSON).  A flooding node (a full
+#: corpus dump, an unbounded generation) is refused before its output is
+#: stored in ``node_outputs``, fed downstream, or hashed — 1 MB is far above
+#: any legitimate node payload (a document chunk is KBs) and far below the
+#: OOM territory a hostile node would aim for.
+MAX_NODE_OUTPUT_BYTES = 1_048_576
+
+#: Retry cap per node (total attempts, including the first).  A transient
+#: failure is retried; a permanently failing node fails loudly after this
+#: many attempts — never an unbounded retry loop.
+NODE_MAX_ATTEMPTS = 3
+
+#: Retry backoff base (seconds); attempt n sleeps base * 2^(n-1), so the
+#: schedule is deterministic and the total retry delay is bounded by
+#: base * (2^attempts - 1) -- 0.15 s worst case at the defaults.
+NODE_RETRY_BASE_S = 0.05
+
+
+@dataclass(frozen=True)
+class _NodeOutcome:
+    """Result of one bounded node execution (success or named failure)."""
+
+    ok: bool
+    result: Any = None
+    error: str | None = None
+    attempts: int = 0
+    latency_ms: float = 0.0
+
+
+def _output_bytes(result: Any) -> int:
+    """Canonical output size in bytes — the measurement the cap is stated in.
+
+    Strings are measured on their UTF-8 bytes; anything else serialises the
+    same way the plan/hash paths do.  Never raises: a value that cannot be
+    serialised falls back to its ``str()`` size (still a bound).
+    """
+    if isinstance(result, str):
+        return len(result.encode("utf-8"))
+    try:
+        return len(json.dumps(result, default=str).encode("utf-8"))
+    except (TypeError, ValueError):
+        return len(str(result).encode("utf-8"))
 
 
 class FakeNodeExecutor:
@@ -203,6 +264,48 @@ class WorkflowExecutor:
     def __init__(self, node_executor: NodeExecutor) -> None:
         self._executor = node_executor
         self._cancel = asyncio.Event()
+        # T-V4-010: deployment-level bounds (see the constants above).  They
+        # are constructor knobs, never per-node config — a node's own config
+        # is untrusted imported data and must not widen its own bounds.
+        self._node_timeout_s = NODE_TIMEOUT_S
+        self._max_node_output_bytes = MAX_NODE_OUTPUT_BYTES
+        self._max_attempts = NODE_MAX_ATTEMPTS
+        self._retry_base_s = NODE_RETRY_BASE_S
+        self._sleep = asyncio.sleep
+
+    def configure_bounds(
+        self,
+        *,
+        node_timeout_s: float | None = None,
+        max_node_output_bytes: int | None = None,
+        max_attempts: int | None = None,
+        retry_base_s: float | None = None,
+        sleep: Any = None,
+    ) -> None:
+        """Narrow (or set) the bounds before execution; cannot widen past the
+        stated defaults implicitly — a caller must pass a value explicitly.
+
+        Values are validated: timeout/base must be > 0 and attempts >= 1,
+        so a misconfiguration fails at wiring time rather than at run time.
+        """
+        if node_timeout_s is not None:
+            if node_timeout_s <= 0:
+                raise ValueError("node_timeout_s must be > 0")
+            self._node_timeout_s = node_timeout_s
+        if max_node_output_bytes is not None:
+            if max_node_output_bytes < 1:
+                raise ValueError("max_node_output_bytes must be >= 1")
+            self._max_node_output_bytes = max_node_output_bytes
+        if max_attempts is not None:
+            if max_attempts < 1:
+                raise ValueError("max_attempts must be >= 1")
+            self._max_attempts = max_attempts
+        if retry_base_s is not None:
+            if retry_base_s < 0:
+                raise ValueError("retry_base_s must be >= 0")
+            self._retry_base_s = retry_base_s
+        if sleep is not None:
+            self._sleep = sleep
 
     def request_cancel(self) -> None:
         """Request cancellation; observed before the next node dispatch.
@@ -401,69 +504,45 @@ class WorkflowExecutor:
             )
             run.node_runs[node_id] = node_run
 
-            t_start = time.perf_counter()
-            try:
-                result = await self._executor.execute_node(
-                    node, node_input, revision.spec.workspace_id
+            outcome = await self._execute_within_bounds(
+                node, node_input, revision.spec.workspace_id
+            )
+            node_run.latency_ms = outcome.latency_ms
+            node_run.attempts = outcome.attempts
+            if not outcome.ok:
+                # T-V4-009 terminal honesty + T-V4-010 named bound breach:
+                # the node failed (timeout / output cap / retries exhausted /
+                # error payload) — the run fails naming it.
+                node_run.status = NodeRunStatus.FAILED
+                node_run.error = outcome.error
+                run.node_runs[node_id] = node_run
+                run.status = WorkflowRunStatus.FAILED
+                run.error = outcome.error
+                run.failed_node_id = node_id
+                run.finished_at = datetime.now(UTC).isoformat()
+                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                return run
+            result = outcome.result
+            node_run.status = NodeRunStatus.COMPLETED
+            node_run.output_data = result
+            run.node_runs[node_id] = node_run
+            node_outputs[node_id] = result
+
+            # Process outgoing edges.
+            newly_ready: list[str] = []
+            for edge in outgoing.get(node_id, []):
+                is_active = WorkflowExecutor._edge_is_active(
+                    edge, node, node_outputs
                 )
-                # T-V4-009: a returned error payload is a failure — never
-                # absorbed into the run's outputs.
-                if isinstance(result, dict) and _ERROR_PAYLOAD_KEY in result:
-                    node_run.status = NodeRunStatus.FAILED
-                    node_run.error = str(result[_ERROR_PAYLOAD_KEY])
-                    run.node_runs[node_id] = node_run
-                    run.status = WorkflowRunStatus.FAILED
-                    run.error = (
-                        f"node '{node_id}' returned an error payload: "
-                        f"{node_run.error}"
-                    )
-                    run.failed_node_id = node_id
-                    run.finished_at = datetime.now(UTC).isoformat()
-                    self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
-                    return run
-                node_run.status = NodeRunStatus.COMPLETED
-                node_run.output_data = result
-                node_outputs[node_id] = result
+                if is_active:
+                    active_count[edge.target_node_id] += 1
+                pending[edge.target_node_id] -= 1
+                if pending[edge.target_node_id] == 0 and \
+                   edge.target_node_id not in ready:
+                    newly_ready.append(edge.target_node_id)
 
-                # Process outgoing edges.
-                newly_ready: list[str] = []
-                for edge in outgoing.get(node_id, []):
-                    is_active = WorkflowExecutor._edge_is_active(
-                        edge, node, node_outputs
-                    )
-                    if is_active:
-                        active_count[edge.target_node_id] += 1
-                    pending[edge.target_node_id] -= 1
-                    if pending[edge.target_node_id] == 0 and \
-                       edge.target_node_id not in ready:
-                        newly_ready.append(edge.target_node_id)
-
-                for nid in sorted(newly_ready):
-                    ready.append(nid)
-
-            except NotImplementedError as exc:
-                node_run.status = NodeRunStatus.FAILED
-                node_run.error = str(exc)
-                run.node_runs[node_id] = node_run
-                run.status = WorkflowRunStatus.FAILED
-                run.error = f"node '{node_id}' failed: {exc}"
-                run.failed_node_id = node_id
-                run.finished_at = datetime.now(UTC).isoformat()
-                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
-                return run
-            except Exception as exc:
-                node_run.status = NodeRunStatus.FAILED
-                node_run.error = str(exc)
-                run.node_runs[node_id] = node_run
-                run.status = WorkflowRunStatus.FAILED
-                run.error = f"node '{node_id}' failed: {exc}"
-                run.failed_node_id = node_id
-                run.finished_at = datetime.now(UTC).isoformat()
-                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
-                return run
-            finally:
-                node_run.latency_ms = (time.perf_counter() - t_start) * 1000.0
-                run.node_runs[node_id] = node_run
+            for nid in sorted(newly_ready):
+                ready.append(nid)
 
             if node.type == NodeType.OUTPUT:
                 if isinstance(result, dict) and "output" in result:
@@ -502,6 +581,109 @@ class WorkflowExecutor:
             return run
 
         return self._finalize(run, plan, nodes_by_id, incoming_count)
+
+    # ------------------------------------------------------------------ #
+    # T-V4-010: bounded node execution (timeout, output cap, retry cap)
+    # ------------------------------------------------------------------ #
+    async def _execute_within_bounds(
+        self,
+        node: NodeSpec,
+        node_input: dict[str, Any] | Any,
+        workspace_id: str,
+    ) -> _NodeOutcome:
+        """Execute *node* inside all three bounds.
+
+        * timeout — ``asyncio.wait_for`` per attempt; a hung node fails the
+          node, never the run's liveness;
+        * output cap — the result's canonical byte size is checked before
+          it is stored or propagated;
+        * retry cap — a transient failure retries with bounded exponential
+          backoff up to ``max_attempts``; a permanent error
+          (``NotImplementedError``) does not retry; ``CancelledError``
+          propagates untouched (control flow, not a node failure).
+
+        Every breach message names the node, the bound and the observed
+        value; the outcome records the attempt count either way.
+        """
+        started = time.perf_counter()
+        attempts = 0
+        last_error: str | None = None
+        while attempts < self._max_attempts:
+            attempts += 1
+            attempt_started = time.perf_counter()
+            try:
+                result = await asyncio.wait_for(
+                    self._executor.execute_node(node, node_input, workspace_id),
+                    timeout=self._node_timeout_s,
+                )
+            except asyncio.CancelledError:
+                # Control flow: the caller settles the run (T-V4-009).
+                raise
+            except NotImplementedError as exc:
+                # Permanent — retrying cannot help.
+                return _NodeOutcome(
+                    ok=False,
+                    error=f"node '{node.id}' failed: {exc}",
+                    attempts=attempts,
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                )
+            except TimeoutError:
+                observed = time.perf_counter() - attempt_started
+                last_error = (
+                    f"node '{node.id}' exceeded the per-node timeout "
+                    f"({self._node_timeout_s}s bound; attempt {attempts} "
+                    f"timed out after {observed:.3f}s)"
+                )
+            except Exception as exc:
+                last_error = (
+                    f"node '{node.id}' failed (attempt {attempts}): {exc}"
+                )
+            else:
+                size = _output_bytes(result)
+                if size > self._max_node_output_bytes:
+                    return _NodeOutcome(
+                        ok=False,
+                        error=(
+                            f"node '{node.id}' returned {size} bytes of "
+                            f"output; the per-node cap is "
+                            f"{self._max_node_output_bytes} bytes"
+                        ),
+                        attempts=attempts,
+                        latency_ms=(time.perf_counter() - started) * 1000.0,
+                    )
+                # T-V4-009: a returned error payload is a failure — never
+                # absorbed into the run's outputs.
+                if isinstance(result, dict) and _ERROR_PAYLOAD_KEY in result:
+                    return _NodeOutcome(
+                        ok=False,
+                        error=(
+                            f"node '{node.id}' returned an error payload: "
+                            f"{result[_ERROR_PAYLOAD_KEY]}"
+                        ),
+                        attempts=attempts,
+                        latency_ms=(time.perf_counter() - started) * 1000.0,
+                    )
+                return _NodeOutcome(
+                    ok=True,
+                    result=result,
+                    attempts=attempts,
+                    latency_ms=(time.perf_counter() - started) * 1000.0,
+                )
+
+            # Bounded exponential backoff between attempts.
+            if attempts < self._max_attempts:
+                await self._sleep(self._retry_base_s * (2 ** (attempts - 1)))
+
+        return _NodeOutcome(
+            ok=False,
+            error=(
+                f"node '{node.id}' failed after {attempts} attempts "
+                f"(bounds: timeout {self._node_timeout_s}s, max attempts "
+                f"{self._max_attempts}): {last_error}"
+            ),
+            attempts=attempts,
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+        )
 
     # ------------------------------------------------------------------ #
     # T-V4-009: terminal-state finalization
