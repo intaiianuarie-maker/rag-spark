@@ -26,12 +26,21 @@ vector rejection (T-V1-015's typed ``VectorStoreInvalidVector``) becomes a
 terminal ``ZERO_VECTOR_REJECTED`` on the first attempt instead of being
 retried into the ground, while genuinely transient failures keep their
 retryable verdict and their backoff.
+
+T-V1-056 (liveness heartbeat): the loop renews a short-TTL broker key
+(:func:`write_heartbeat`) once per iteration, and ``/ready`` reads that key's
+freshness instead of hunting for a blocked ``BRPOP`` client — which the
+claim/ack model no longer holds, so the old probe reported a healthy worker as
+down. A stopped worker stops renewing and the key expires, so the check still
+fails closed.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import os
+import time
 import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
@@ -46,6 +55,7 @@ from ingestion.adapters.redis_queue import (
     Claim,
     ack,
     claim,
+    get_client,
     lease_seconds,
     recover_expired,
     renew,
@@ -71,6 +81,81 @@ _UNHANDLED_RETRY_SECONDS = 2.0
 #: fence token), not a bare popped id. The name is kept because existing
 #: worker-loop tests pin ``run_worker``'s consumption seam as ``dequeue``.
 dequeue = claim
+
+
+# T-V1-056 — worker liveness heartbeat --------------------------------------
+#
+# Before T-V1-020 the worker's entrypoint blocked on ``BRPOP``, so ``/ready``
+# could prove liveness by finding a blocked ``brpop`` client in ``CLIENT
+# LIST``. Durable claim/ack replaced that with short non-blocking polls, so a
+# **healthy** worker holds no standing list-pop consumer — the old probe read
+# it as down, a false red that would have masked a genuinely dead worker
+# behind a permanently red check.
+#
+# The honest observable is now a freshness signal the worker owns: it renews a
+# short-TTL key once per loop iteration, and ``/ready`` reads that key's
+# freshness. A stopped worker stops renewing, the key expires within the TTL,
+# and the probe fails closed.
+
+#: How long one heartbeat stays fresh. Comfortably above the ~1s idle loop
+#: tick, so a busy iteration cannot make the probe flap.
+_DEFAULT_HEARTBEAT_TTL_SECONDS = 15.0
+
+
+def heartbeat_key() -> str:
+    """Broker key carrying this worker's liveness timestamp (T-V1-056).
+
+    Namespaced exactly like the queue keys, so one ``INGEST_QUEUE_PREFIX``
+    scopes the worker, its queue and its heartbeat together. ``_prefix`` is
+    imported rather than re-derived so the writer and the ``/ready`` reader
+    cannot drift apart on the key.
+    """
+    from ingestion.adapters.redis_queue import _prefix
+
+    return f"ingest:{_prefix()}worker_heartbeat"
+
+
+def heartbeat_ttl_seconds() -> float:
+    """Heartbeat TTL; ``INGEST_WORKER_HEARTBEAT_TTL_SECONDS`` overrides it.
+
+    The same variable bounds the ``/ready`` probe's staleness (see
+    ``app.adapters.readiness``), so a deployment that shortens one side
+    shortens the other instead of leaving a window where a dead worker still
+    reads fresh.
+    """
+    raw = os.environ.get("INGEST_WORKER_HEARTBEAT_TTL_SECONDS")
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                return value
+        except ValueError:
+            pass
+    return _DEFAULT_HEARTBEAT_TTL_SECONDS
+
+
+async def write_heartbeat() -> None:
+    """Renew the liveness heartbeat. Never raises: a broker blip must not kill
+    the loop — if Redis is down the ``redis`` probe is red anyway, and this
+    worker's claim simply expires and recovers.
+    """
+    try:
+        await get_client().set(
+            heartbeat_key(),
+            f"{time.time():.3f}",
+            # Milliseconds, not seconds: a sub-second TTL (used by the live
+            # tests and available to operators) would truncate to ``EX 0``,
+            # which Redis rejects as an invalid expire time.
+            px=max(int(heartbeat_ttl_seconds() * 1000), 1),
+        )
+    except Exception as exc:
+        logger.warning(
+            "ingest_worker_heartbeat_failed",
+            extra={
+                "event": "ingest_worker_heartbeat_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
 
 
 # T-V1-046 — deterministic validation failures park, never retry -------------
@@ -293,6 +378,11 @@ async def run_worker(stop_event: asyncio.Event) -> None:
     """
     logger.info("ingest_worker_started", extra={"event": "ingest_worker_started"})
     while not stop_event.is_set():
+        # T-V1-056: renew liveness FIRST, every iteration, so the heartbeat
+        # stays fresh whether the tick goes on to promote, recover, claim or
+        # simply poll an empty queue — and so a stop mid-iteration leaves the
+        # last renewal to expire on its own.
+        await write_heartbeat()
         try:
             await promote_due()
         except IngestQueueUnavailable:

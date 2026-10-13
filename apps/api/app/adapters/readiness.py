@@ -26,7 +26,11 @@ probe                capability
                      is disclosed here instead of probed twice; that is
                      the optional fallback this map does not hide.
 ``llm_gateway``      the model (Ask generation)
-``worker``           the ingest queue consumer
+``worker``           the ingest queue consumer, observed by the freshness
+                     of the heartbeat key it renews each loop iteration
+                     (T-V1-056 — since T-V1-020's claim/ack it holds no
+                     standing ``BRPOP`` client, so a ``CLIENT LIST`` check
+                     would read a healthy worker as down)
 ``graph_store``      only when the graph mode is enabled
 ===================  =====================================================
 
@@ -203,19 +207,62 @@ class _ModelGatewayProbe:
             )
 
 
-class _WorkerConsumerProbe:
-    """Is a live ingest consumer attached to the broker ("worker")?
+def _worker_heartbeat_key() -> str:
+    """The broker key the worker renews as its liveness signal (T-V1-056).
 
-    The worker has no HTTP surface (M0 entrypoint: block on ``BRPOP``), so the
-    honest observable lives on the broker it consumes from: for its whole life
-    the worker holds a blocked ``BRPOP`` client, so ``CLIENT LIST`` naming a
-    ``brpop`` consumer means something is draining the queue, and no such client
-    means the worker is down — which must not read ready.
+    Imported rather than re-derived so the writer (``jobs.ingest_worker``) and
+    this reader cannot drift apart on the key or on the ``INGEST_QUEUE_PREFIX``
+    that scopes it.
+    """
+    from ingestion.adapters.redis_queue import _prefix
 
-    Disclosed fallback: the check identifies *a* blocked list-pop consumer on
-    that server, not a specific PID, so a second worker (or a queue consumer in
-    a test) would satisfy it too. The alternative — only checking Redis — would
-    report a dead worker as ready, which is exactly what T-V1-027 forbids.
+    return f"ingest:{_prefix()}worker_heartbeat"
+
+
+def _worker_heartbeat_bound() -> float:
+    """How old a heartbeat may be and still read as live.
+
+    Twice the worker's TTL: one missed refresh (a long job tick, a GC pause)
+    cannot flap the probe red, while a stopped worker still fails the check
+    within roughly two TTLs.
+    """
+    raw = os.environ.get("INGEST_WORKER_HEARTBEAT_TTL_SECONDS")
+    ttl = 15.0
+    if raw:
+        try:
+            value = float(raw)
+            if value > 0:
+                ttl = value
+        except ValueError:
+            pass
+    return ttl * 2
+
+
+class _WorkerLivenessProbe:
+    """Is a live ingest worker renewing its heartbeat (T-V1-056)?
+
+    The worker has no HTTP surface, so its liveness is observed on the broker
+    it consumes from. Since T-V1-020 the worker is a durable claim/ack loop of
+    short non-blocking polls, so it holds **no** standing blocked ``BRPOP``
+    client — the previous probe (``CLIENT LIST`` for a ``brpop`` consumer)
+    therefore reported a perfectly healthy worker as down: a false red that
+    would also mask a genuinely dead one behind a permanently red check.
+
+    The worker instead renews a short-TTL key once per loop iteration
+    (``jobs.ingest_worker.write_heartbeat``) and this probe reads its
+    freshness, failing closed on every non-fresh path:
+
+    * key **absent** — nothing renewed within the TTL ⇒ not reachable;
+    * key **stale** — the embedded timestamp is older than the bound ⇒
+      not reachable (covers a key whose TTL was written longer);
+    * key **unreadable / broker error** — not reachable.
+
+    The bound is twice the heartbeat TTL (``_worker_heartbeat_bound``), so one
+    missed refresh cannot flap the probe red, while a stopped worker still
+    fails within roughly two TTLs.
+
+    Disclosed limitation, unchanged in kind from before: the key proves *a*
+    worker is running against that broker and prefix, not a specific PID.
     """
 
     async def probe(self, redis_url: str, timeout_seconds: float) -> DependencyStatus:
@@ -228,24 +275,42 @@ class _WorkerConsumerProbe:
             decode_responses=True,
         )
         try:
-            rows = await asyncio.wait_for(client.client_list(), timeout=timeout_seconds)
-            # ``cmd`` is the last command: the worker re-issues BRPOP about
-            # once a second, so a mid-job window (no longer blocked) still
-            # reads as a consumer instead of flapping red.
-            consumers = [row for row in rows if str(row.get("cmd", "")).lower() == "brpop"]
+            raw = await asyncio.wait_for(
+                client.get(_worker_heartbeat_key()), timeout=timeout_seconds
+            )
             latency = (time.perf_counter() - start) * 1000
-            if not consumers:
+            if raw is None:
                 return DependencyStatus(
                     name=name,
                     reachable=False,
                     latency_ms=round(latency, 2),
-                    error="no BRPOP consumer attached to the broker (worker not draining)",
+                    error="no worker heartbeat on the broker (worker is not renewing)",
+                )
+            try:
+                age = time.time() - float(raw)
+            except (TypeError, ValueError):
+                return DependencyStatus(
+                    name=name,
+                    reachable=False,
+                    latency_ms=round(latency, 2),
+                    error="worker heartbeat is unreadable (not an epoch timestamp)",
+                )
+            bound = _worker_heartbeat_bound()
+            if age > bound:
+                return DependencyStatus(
+                    name=name,
+                    reachable=False,
+                    latency_ms=round(latency, 2),
+                    error=(
+                        f"worker heartbeat is stale ({age:.1f}s old, "
+                        f"bound {bound:.0f}s)"
+                    ),
                 )
             return DependencyStatus(
                 name=name,
                 reachable=True,
                 latency_ms=round(latency, 2),
-                detail=f"CLIENT LIST -> {len(consumers)} BRPOP consumer(s)",
+                detail=f"worker heartbeat renewed {max(age, 0.0):.1f}s ago",
             )
         except Exception as exc:
             latency = (time.perf_counter() - start) * 1000
@@ -322,7 +387,7 @@ class _GraphStoreProbe:
 
 
 model_gateway = _ModelGatewayProbe()
-worker_consumer = _WorkerConsumerProbe()
+worker_liveness = _WorkerLivenessProbe()
 graph_store = _GraphStoreProbe()
 
 
@@ -390,7 +455,7 @@ async def check_dependencies() -> dict[str, DependencyStatus]:
         "llm_gateway": model_gateway.probe(
             settings.litellm_url, settings.readiness_model_health_path, capability_timeout
         ),
-        "worker": worker_consumer.probe(settings.redis_url, capability_timeout),
+        "worker": worker_liveness.probe(settings.redis_url, capability_timeout),
         # The graph entry exists only when the mode is on (a coroutine built
         # unconditionally would never be awaited); an invalid GRAPH_MODE still
         # reports it — red — rather than dropping the dependency.
