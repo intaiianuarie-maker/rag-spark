@@ -27,8 +27,8 @@ SECRET_KEY = "admin"
 BUCKET = "knowledge-os"
 
 
-def apply() -> str:
-    """Make the compose object store usable from this process; return its URL."""
+def _defaults() -> str:
+    """Record the compose defaults where nothing is set; return the endpoint."""
     if not (os.getenv("S3_ENDPOINT_URL") or os.getenv("SEAWEEDFS_ENDPOINT")):
         os.environ["S3_ENDPOINT_URL"] = ENDPOINT
     for s3_name, seaweed_name, value in (
@@ -38,14 +38,38 @@ def apply() -> str:
         if not (os.getenv(s3_name) or os.getenv(seaweed_name)):
             os.environ[s3_name] = value
     os.environ.setdefault("S3_BUCKET", BUCKET)
-    endpoint = (
+    return (
         os.getenv("S3_ENDPOINT_URL")
         or os.getenv("SEAWEEDFS_ENDPOINT")
         or ""
     )
+
+
+def apply() -> str:
+    """Make the compose object store usable from this process; return its URL.
+
+    For tests that cannot do their job without the store: skips loudly (with
+    the command that starts it) rather than failing deep in a client stack.
+    """
+    endpoint = _defaults()
     require_service(
         endpoint,
         "SeaweedFS object store (document originals)",
         "docker compose up -d seaweedfs",
     )
     return endpoint
+
+
+def apply_if_reachable() -> str | None:
+    """Apply the defaults **only when a store is actually listening**.
+
+    For ``tests/conftest.py``: a host-side upload needs the object store after
+    T-V1-039, so every upload-driven test gets the same env — but only when
+    there is a store to talk to. Otherwise the harness's existing loud-skip
+    rules keep owning the "compose is down" case instead of turning a
+    service-dependent test into a hard failure.
+    """
+    from service_probe import tcp_open
+
+    endpoint = _defaults()
+    return endpoint if tcp_open(endpoint) else None

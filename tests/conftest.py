@@ -34,11 +34,19 @@ SCRIPTS_DIR = FIXTURES_DIR / "scripts"
 if str(FIXTURES_DIR) not in sys.path:
     sys.path.insert(0, str(FIXTURES_DIR))
 
+from object_store_env import apply_if_reachable  # noqa: E402 - same sys.path insert
 from service_probe import (  # noqa: E402 - must follow the sys.path insert above
     DEFAULT_API_BASE_URL,
     DEFAULT_WEB_BASE_URL,
     require_service,
 )
+
+# T-V1-039: document originals live in object storage, so a host-side call to
+# the upload endpoint needs the same S3 env docker-compose.yml gives the
+# containers. Applied only when a store is actually listening, so the
+# loud-skip rules below still own the "compose is down" case instead of
+# turning every upload-driven test into a hard failure.
+OBJECT_STORE_ENDPOINT = apply_if_reachable()
 
 # Host notes (handoffs/M0-003-*-test1.md):
 # - /tmp is a 100%-full tmpfs here; /root/.tmp lives on the root fs.
