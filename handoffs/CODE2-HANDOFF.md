@@ -1935,3 +1935,115 @@ PROGRESS ROW — VERDICT: **FOURTH INSTANCE = YES** — `tests/integration/test_
 PROGRESS ROW — NUANCE (not silent — latent): the test is **already recorded red at CODE2-HANDOFF.md:838** (T-V1-049 era: "5 passed, 3 failed", reproducing on pristine HEAD) and code1 named it at CODE1-HANDOFF.md:490. Its two sibling failures need live embeddings, so all three are red for overlapping reasons and the dead seam is **camouflaged behind the embed blocker**; when embeddings clear, this becomes the next failure on its own merits (b"content"/text/plain parses fine → READY → all three assertions fail). No skip/xfail on it. Follow-up filed, not fixed: re-point to `jobs.ingest_pipeline.parse_with_precedence` — note the replacement must be an **async function** that raises, not an object with `.parse`. Whoever takes it should capture the failure mode before/after, since the current red is confounded with the embed blocker.
 PROGRESS ROW — OTHER 11 HITS: all clean. `:687` is the one **live** use (the T-031 rejection gate — which is why the docs' `proven_by="parser_for_mime"` cells for the rejected xlsx/image rows are accurate). Everything else is (c) inert: the import, the `registry.py` definition/comment/docstring, `format_matrix.py`'s `proven_by` **string** metadata, the three unit files' direct factory assertions, and the two doc rows. T-059's and T-065's fixes **verified intact** — `test_dedup_versions.py:1471` and `t021_crash_worker.py:181` both patch `parse_with_precedence` now, with `parser_for_mime` surviving only in their explanatory comments. Zero untracked copies of the symbol anywhere in the repo.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-061b (live retrieval leg on real bge-m3) — code2 (solo, allowlisted)
+
+TASK: T-V1-061b — live retrieval leg: (a) pinned relevance probe, (b) groundedness through `answer()` on **retrieved** (not gold) context, (c) per-query hits@5 metric. Start HEAD `359a67e` → end HEAD `1281baf` (**moved by others; I committed nothing**). Allowed: a probe under `/tmp` + this row. **No repo file created or edited — every probe lives in `/tmp/opencode/`.**
+
+### VERDICT: **(a) hits@5 = 6/7 = 85.7% — PASS** (bar ≥80%, declared before the run; hits@10 = 7/7). **(b) grounded 2/2 on supporting queries, abstained 3/3 on non-supporting ones — fail-closed working as designed.**
+
+### PASS CRITERION, DECLARED BEFORE RUNNING
+
+"Known target chunk in the **top-5 corpus-wide** hits for **≥80%** of queries" (≥6 of 7). Corpus-wide, so a noise point cannot flatter the result by shrinking the pool — which matters here, because 440 of the 443 all-real documents sit in a **1-document workspace**, where a workspace-scoped top-5 is trivially true.
+
+### (a) RELEVANCE — per-query, corpus-wide, top-10
+
+| # | target chunk (verified in PG) | semantic query | rank | score | hits@5 |
+|---|---|---|---|---|---|
+| 1 | `probe content` | "a short placeholder probe text" | 4 | 0.5910 | ✅ |
+| 2 | `probe content one` | "probe text that is labelled with the number one" | 1 | 0.7184 | ✅ |
+| 3 | `probe content two` | "probe text that is labelled with the number two" | 2 | 0.7430 | ✅ |
+| 4 | `identical content` | "content that stayed identical between versions" | 4 | 0.7263 | ✅ |
+| 5 | `version two changed` | "the second version of the record was changed" | 4 | 0.8397 | ✅ |
+| 6 | `version two changed content` | "content of the second version was altered" | 3 | 0.9205 | ✅ |
+| 7 | `identical bytes for the A/B dedup test` | "byte identical input used for the deduplication test" | **10** | 0.8404 | ❌ (hits@10 ✅) |
+
+**6/7 = 85.7% → PASS.** The single miss is not a relevance failure: it retrieves at **rank 10 with score 0.8404** and is crowded out by 9 other authentic points, several of which are near-duplicate debris. Queries are semantic restatements, not verbatim copies, so this measures retrieval rather than string identity. Per-query judgment only — **no corpus-wide aggregate reported**.
+
+### THE MIXED-IDENTITY CAVEAT — handled by separating the populations, not by averaging
+
+Full census of all 2034 points (scroll, read-only):
+
+| population | count | identity |
+|---|---|---|
+| PADDED | **1542** | legacy 384-d zero-padded to 1024; head-384 L2 mean **0.1777**, min **0.0000** |
+| REAL-labelled | **492** | full 1024-d, norm exactly 1.0000 |
+| — of which **authentic** (cos vs fresh bge-m3 of its own text **>0.95**) | **102** | genuinely bge-m3-indexed |
+| — of which **not** an embedding of its text (cos **<0.1**, median **−0.0224**) | **373** | see the finding below |
+| — intermediate (0.1–0.95) | **0** | — |
+| qdrant `chunk_id`s with no row in PG `chunks` | 17 | orphans |
+
+Every one of the 7 probes targets an **authentic** chunk, and each top-5 slot is annotated with the identity of every hit: **noise share of all top-5 slots = 0.00**. The 1915 non-authentic points never intrude, because a genuine match scores 0.59–0.92 while the noise sits near 0. So padded points could not have flattered this result — they are absent from every top-5.
+
+### THE FINDING THAT MATTERS MOST — 94% of the collection's vectors are not embeddings of their text
+
+**373 of the 492 "REAL" points are not bge-m3 embeddings of the text attached to them.** Measured by embedding each chunk's Postgres text with fresh bge-m3 and comparing to the stored vector: mean **+0.197**, median **−0.0224**, with **zero** points in the 0.1–0.95 band. That bimodality with no gradient is the signature of two distinct populations, not of a drifting model.
+
+This is why my **first** probe run scored **0/8**, and I nearly reported that as a retrieval failure. It was not: my first targets were drawn from the "REAL" label without checking authenticity, so I was asking whether random vectors retrieve their own text. They cannot. **Only after re-scoping targets to the 102 verified-authentic points did the probe measure what it claims to measure.**
+
+Consequence, stated plainly: **hits@5 6/7 is evidence that live retrieval on real bge-m3 works over the 102 points that are genuinely bge-m3-indexed. It is NOT evidence about the other 1915 points, and it is not a corpus-level quality number.** Whoever relies on this must carry that.
+
+Separately, and worth knowing: **the entire collection is integration-test debris.** Sampled 400 chunks — `version two of retry cleanup`, `live control <uuid> xylophone quasar`, `Hello world. Second paragraph.`, `v1staled9a6a61a original`, `identical bytes for the A/B dedup test`. The "94-chunk documents" are `some bulk in-flight probe line…` repeated. **There is no user corpus on this host**, so no result here speaks to real-world retrieval quality; it speaks to whether the bge-m3 → Qdrant path is wired and correct.
+
+### (b) GROUNDEDNESS on live-retrieved context through `answer()`
+
+Context is whatever the live stack retrieves for the target workspace — explicitly **not** gold context.
+
+| case | query | status | reason_code | citations |
+|---|---|---|---|---|
+| control | `version two changed` (= chunk text) | **answered** | `None` | **1** |
+| control | `identical content` (= chunk text) | **answered** | `None` | **1** |
+| exploratory | "tell me about content that stayed identical" | insufficient_evidence | `CITATION_INVALID` | 0 |
+| exploratory | "what changed in version two of the record?" | insufficient_evidence | `NO_CLAIMS` | 0 |
+| exploratory | "describe the byte identical dedup test input" | insufficient_evidence | `CITATION_INVALID` | 0 |
+
+**Grounded 2/2 where the claim is verbatim supported; abstained 3/3 where it is not.** I ran the verbatim control specifically because a bare 0/4 abstention rate is unreadable — it is equally consistent with a broken verification path. The control separates the two: the path **does** ground and cite live-retrieved authentic content, so the abstentions are `ExtractiveGrounder` correctly refusing to let an unsupported claim ride on a citation. That is the fail-closed behaviour T-026/T-052 exist to produce, not a defect. Reported as such rather than as a 3/5 success rate, which would have been the flattering misreading.
+
+### WHY / REUSED / BUILT
+
+**WHY:** T-061a proved the answer layer hermetically but said nothing about retrieval, and its own caveat forbade citing it for embeddings. This is the other half — and it needed a population split and a vector-authenticity check before any number was worth reporting.
+
+**REUSED:** the live stack as-is — `InfinityEmbeddingProvider` (bge-m3, verified `dim=1024`), `QdrantVectorStore` (`dense`, Cosine), `build_answer_engine` + `ACLScope` for the answer leg, Postgres `chunks` for ground-truth text, `gpt-4o-mini` via the configured cloud gateway. No product code, no config, no migrations, no compose, no restarts.
+
+**BUILT:** four throwaway probes in `/tmp/opencode/` only — census, per-document identity, vector-authenticity, relevance, groundedness. **Zero repo files created or modified.**
+
+### VERIFY — commands and outputs
+
+```
+curl -s localhost:6333/collections/knowledge      → points 2034, dense 1024 Cosine, aliases null, status green
+scroll (2034 pts, with_vector)                     → 1542 PADDED / 492 REAL / 0 zero-norm; padded head-norm mean 0.1777
+fresh bge-m3 vs stored vector, 475 scored           → >0.95: 102 | 0.5–0.95: 0 | 0.1–0.5: 0 | <0.1: 373 ; median −0.0224
+InfinityEmbeddingProvider.embed_query('dimension probe') → BAAI/bge-m3 dim=1024, returned len 1024
+corpus-wide query_points(limit=10) x7               → ranks 4,1,2,4,4,3,10 → hits@5 6/7, hits@10 7/7
+build_answer_engine(model='gpt-4o-mini').answer()  → 2 answered (1 citation each) / 3 insufficient_evidence
+collections/knowledge AFTER the probe              → points 2034, status green   (UNCHANGED)
+git status --short at END                          → no new paths from me; HEAD 1281baf moved by others
+```
+
+**The collection was never written to** — point count 2034 before and after, `scroll`/`query_points`/`get` only. No ingests, no deletes, no fixture runs. Attached in the foreground throughout.
+
+### METRICS
+
+hits@5 **6/7 (85.7%)**; hits@10 **7/7**; noise share of top-5 slots **0.00**; authentic bge-m3 points **102/2034 (5.0%)**; non-authentic REAL points **373**; padded points **1542**; PG orphans **17**; grounded **2/2** control; abstained **3/3** non-supporting; collection point delta **0**; repo files changed **0**; commits **0**.
+
+### RISKS / DISCLOSED
+
+- **(a) The headline 85.7% is narrower than it looks.** It is measured on 7 queries against a **5% authentic subset** of a corpus that is **entirely test debris**. It demonstrates the bge-m3 → Qdrant path retrieves correctly. It is **not** a corpus quality number, not a user-relevance number, and must never be cited as "bge-m3 is good".
+- **(b) I got a 0/8 on the first probe run and it was my error, not the system's.** I trusted the padded/real label without verifying vector authenticity. Had I reported that first run, it would have been a fabricated "retrieval is broken" claim. Disclosed because the same mistake is available to the next person: **the padded/real label does not mean a point is a real embedding.**
+- **(c) 373 points carry vectors unrelated to their text — a live data defect, filed not fixed.** No product code is in scope to fix it, and the collection is evidence. Recommendation for a follow-up ticket: determine how those vectors were written (a placeholder/zero-fill path, or a failed embed that was persisted regardless) before anything is re-indexed, because re-running the same path would reproduce them.
+- **(d) n = 7 queries.** Small by design (a legibility probe). No confidence interval is claimed and no aggregate is reported, per the dispatch.
+- **(e) Two targets share near-identical text** (`probe content one` / `two`; `version two changed` / `… content`), so ranks are partly decided by which near-duplicate wins. I kept the 1-document-workspace cases in, because that congestion is itself the finding for query 7.
+- **(f) The answer leg used the cloud gateway** (`gpt-4o-mini`, `OPENROUTER_API_KEY`), not a local LLM — the local `d1` is gone per museR. So part (b) exercises verification/disclosure over live-retrieved context on a **cloud** generator; a local-generator run would still be unmeasured.
+- **(g) What a cloud-vs-local follow-up would still need**, since the switch is cancelled and nothing was substituted: (1) a corpus that is not test debris, or an explicit statement that V1 accepts debris-only evidence; (2) resolution of the 373 non-authentic vectors — until then no corpus-level retrieval number is defensible; (3) the 17 orphan `chunk_id`s reconciled; (4) a local-generator `answer()` run for the cloud/local axis; (5) the padded 1542 either re-embedded to 1024-d or excluded by filter, since they are 76% of the collection and currently unreachable by any query.
+- **(h) FOREIGN CHURN — not mine.** 25 dirty paths at start. HEAD moved `359a67e` → `1281baf` during the ticket by another agent; `handoffs/CODE1-HANDOFF.md` left the dirty set the same way. I staged, edited and reverted nothing.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1061b_{start,end}_status.txt`):
+- **start** (HEAD `359a67e`): 25 dirty paths, **all FOREIGN**. Index empty.
+- **end** (HEAD `1281baf`, moved by another agent): the same set minus `handoffs/CODE1-HANDOFF.md` (committed by them). **Zero new paths attributable to me** — all probe code is in `/tmp/opencode/`.
+- 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty, collection point count unchanged.
+
+PROGRESS ROW — TASK: T-V1-061b live retrieval leg on real bge-m3 (embedder verified BAAI/bge-m3 1024-d on infinity :7997; collection `knowledge` 2034 pts, aliases null).
+PROGRESS ROW — VERDICT: **(a) hits@5 = 6/7 = 85.7% — PASS** against a ≥80% bar declared before the run (hits@10 = 7/7; ranks 4,1,2,4,4,3,**10**; scores 0.591–0.921). **Noise share of all top-5 slots = 0.00** — the 1915 non-authentic points never intrude, so padded points could not have flattered the result. **(b) grounded 2/2 on verbatim-supporting queries (1 real citation each), abstained 3/3 on non-supporting ones (`CITATION_INVALID`/`NO_CLAIMS`)** — a verbatim control proved the path CAN ground, so the abstentions are correct fail-closed refusals, not a defect.
+PROGRESS ROW — HEADLINE CAVEAT (do not over-cite): the collection's vectors are mostly **not embeddings of their text** — of 492 "REAL" 1024-d points only **102** are authentic bge-m3 (cos>0.95 vs a fresh embedding of their own text); **373 are not** (median −0.0224) with **zero** points in between. Plus 1542 legacy padded. So the 85.7% is measured on a **5% authentic subset of a corpus that is entirely integration-test debris** (`version two of retry cleanup`, `live control <uuid> xylophone quasar`, `Hello world. Second paragraph.`) — it evidences that the bge-m3→Qdrant path is correctly wired, **not** retrieval quality, and not a corpus-level number. My **first** probe run scored **0/8 and was my error**: I trusted the padded/real label without verifying authenticity and asked random vectors to retrieve their own text; re-scoping to the verified-authentic points gave the real result. 373 non-authentic vectors are **filed, not fixed** (no product code in scope; determine how they were written before any re-index, or the same path reproduces them), along with 17 orphan `chunk_id`s.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
