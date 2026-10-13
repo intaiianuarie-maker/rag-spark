@@ -2537,3 +2537,102 @@ PROGRESS ROW — NON-VACUOUS BY CONSTRUCTION: I did not accept my first `abstent
 PROGRESS ROW — DISCLOSURE on a number I previously reported: I checked whether T-061a's `citation_validity 1.0000` was vacuous. **It is not wholly vacuous** — the `en` slice yields 9 supporting chunks and 9 surviving citations across 10 records, and the fabricated id never survives. But the metric is `not fabricated_survived AND all(c in items for c in citations)` and `all([])` is True, so the **one record with no surviving citation contributes a vacuous 1.0**. That is the T-061a definition, unchanged by me — **filed, not fixed**, since altering it would change numbers on an existing gate. Also disclosed: abstention measures the **claim gate's refusal**, not generator-side abstention (an LLM in the loop would break reproducibility), and factual/recall are wired+unit-tested but have no end-to-end runner yet (live recall needs a real retrieval run, and that corpus is test debris).
 PROGRESS ROW — VERIFY: bench exit 0 with abstention reported; **37 tests pass** (21 new + gate + T-075 integrity, incl. the negative control and a self-check-fails test); `test_benchmark_gate.py`'s per-slice gate made abstention-aware and **strictly stronger** (every answerable assertion unchanged, branch adds `abstention_rate>=0.95` and asserts `groundedness` absent) — nothing weakened to make it pass; ruff clean, **mypy Success (2 files)**; `q8_eval_slices.jsonl` **no diff** with the T-075 pin verifying (60 records); no product-code diff in `app/eval/metrics.py` or `answer/verification.py`. foreign churn disclosed (34 paths, dev1's T-071); my 4 files only; HEAD `ad5216f` unmoved, index empty, no commit.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-077 (web e2e: execute-or-rationale) — code2 (solo, allowlisted)
+
+TASK: settle T-036 **F4** — can the opt-in web e2e actually be executed for the acceptance record, or must the skip be justified? Read-only apart from this row. Start HEAD `3e43d8a` → end HEAD `3e43d8a` (**UNMOVED**). Allowed: `handoffs/CODE2-HANDOFF.md` only.
+
+### RESULT: **(a) GREEN.** `RUN_WEB_E2E=1 pytest tests/integration/test_web_e2e.py -q` → **2 passed in 84.42s.** No blocking reason, no fix needed, no env tweak required.
+
+**T-036 F4 is therefore RESOLVED as "executable"** — the runbook gains one required line:
+
+```
+RUN_WEB_E2E=1 pytest tests/integration/test_web_e2e.py -q
+```
+
+Prerequisites were all already satisfied — **no blocker of any kind**: `node v22.22.1` at `/usr/bin/node`, `npm 9.2.0`, `apps/web/node_modules` present, compose API `/ready true`, and both fixtures committed (`tests/fixtures/scripts/m004_proxy_branches.sh` 4739 B, `m004_stubs.py` 2554 B).
+
+### EVIDENCE — what actually executed
+
+**1. Production build** — `test_next_build_succeeds` ran `npm run build` and produced a real bundle:
+
+```
+apps/web/.next/BUILD_ID  →  JREQOnmvQe0wsmWkZBBmh
+```
+
+**2. Proxy-branch matrix** — all five cases the test asserts, captured directly:
+
+```
+PASS  A_healthy_passthrough  status=200 elapsed=0.15s
+PASS  B_backend_down_502      status=502 elapsed=0.16s
+PASS  C_non2xx_passthrough    status=503 elapsed=0.20s
+PASS  D_non_json_502          status=502 elapsed=0.32s
+PASS  E_timeout_502           status=502 elapsed=3.13s
+PROXY_BRANCHES_OK  (5/5)
+```
+
+`test_proxy_branch_matrix` asserts `PROXY_BRANCHES_OK`, exit 0, and each of the five `PASS  <case>` lines — so the test's own contract is met by the output above, not merely by a green tick.
+
+### THE FINDING THAT MATTERS FOR THE RECORD: the skip is SILENT, not loud
+
+This is the one thing the acceptance runbook must not get wrong:
+
+```
+$ pytest tests/integration/test_web_e2e.py -q -rs        # RUN_WEB_E2E unset
+ss
+SKIPPED [1] tests/integration/test_web_e2e.py:48: RUN_WEB_E2E!=1 …
+SKIPPED [1] tests/integration/test_web_e2e.py:56: RUN_WEB_E2E!=1 …
+2 skipped in 0.04s
+```
+
+**Exit code 0.** Forgetting the env variable produces a **skip that is indistinguishable from a pass** to any runner that only checks the exit status — which is precisely how "required checks executed (not skipped): 100%" would be satisfied on paper while 2 of the checks never ran.
+
+**Is the skip legitimate or technical debt?** — the card asked for that judgement explicitly. **Legitimate, and load-bearing by design**: the docstring states the default suites stay service-free per `tests/README.md`, and CI already runs `npm run build` in its frontend job, so the opt-in is about keeping the *local* default fast and hermetic, not about avoiding a failing test. But it is only legitimate **when it is explicit**, so the record must carry the env var *and* the skip count. Recommend the acceptance runbook assert **`-rs` with zero `SKIPPED` for this file**, not just a zero exit.
+
+### WHY / REUSED / BUILT
+
+**WHY:** F4 was flagged as a blocker against "required checks executed (not skipped): 100%". The cheap thing was to reason about it; the useful thing was to run it, because the answer changed the runbook from "explain a skip" to "here is the command, and here is the trap if you omit the env var".
+
+**REUSED:** everything — the committed e2e test, the M0-003 fixtures, the existing `subprocess_env`. Nothing built, nothing patched, no skip weakened, no assertion touched.
+
+**BUILT: nothing.** One handoff row. **No file outside this row was modified** — in particular `tests/integration/test_web_e2e.py` and `tests/conftest.py` were not touched by me.
+
+### VERIFY — exact commands and outputs
+
+```
+node -v / npm -v                                  → v22.22.1 / 9.2.0 ; apps/web/node_modules exists
+curl localhost:8000/ready                         → ready true
+ls -l tests/fixtures/scripts/m004_proxy_branches.sh, m004_stubs.py → both present
+RUN_WEB_E2E=1 pytest tests/integration/test_web_e2e.py -q
+                                                 → 2 passed in 84.42s (0:01:24)   exit 0
+cat apps/web/.next/BUILD_ID                       → JREQOnmvQe0wsmWkZBBmh
+bash tests/fixtures/scripts/m004_proxy_branches.sh (same env as subprocess_env)
+                                                 → 5 PASS lines + PROXY_BRANCHES_OK (5/5)  exit 0
+pytest tests/integration/test_web_e2e.py -q -rs    (RUN_WEB_E2E unset)
+                                                 → 2 skipped in 0.04s, exit 0  ← the silent-skip trap
+git check-ignore apps/web/.next                   → ignored; 0 apps/web paths in git status
+git status --short (start & end)                  → only dev1's T-071 conftest change differs
+```
+
+Attached in the foreground, bounded at 1500 s (under the test's own 1800 s cap), never detached. No commit, deploy, restart or compose change.
+
+### RISKS / DISCLOSED
+
+- **(a) The silent skip is the real risk, not the skip itself** — see above. The record should carry the command *and* an explicit zero-skips assertion for this file.
+- **(b) 84.42 s is not a cold-build figure.** `.next/` already existed, so `npm run build` ran incrementally. A first-ever build on a CI runner will be materially slower; do not budget 84 s for it. The proxy matrix itself is ~4 s of the total (per-case 0.15–3.13 s).
+- **(c) The card's premise "box is free" did not match the box.** Observed **load average 8.04 on 4 cores** with ~2 GB available (dev1 mid-T-071). The run still succeeded comfortably, so this is not tight — but the green result was obtained *at load 8*, and I would not claim the same margin holds on a loaded box for a cold build.
+- **(d) `tests/conftest.py` changed mid-run and is NOT mine** — dev1's T-V1-071 `pytest_sessionfinish` hook (28 added lines) landed between my start and end snapshots. I did not touch, stage or revert it. My run used whatever was on disk at the time; the e2e fixtures (`repo_root`, `subprocess_env`) it consumed were unaffected, so the result stands.
+- **(e) The e2e depends on the live compose API** (`:8000`) — so in the acceptance run it must be sequenced with the stack up, unlike the hermetic benches.
+- **(f) No blocker to report, so no follow-up filed.** Nothing was fixed, so nothing needs filing.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1077_{start,end}_status.txt`):
+- **start** (HEAD `3e43d8a`): 34 dirty paths, all FOREIGN (dev1 T-071 + V4/workflow-engine + `handoffs/*`). Index empty.
+- **end** (HEAD `3e43d8a`, **UNMOVED**): the same set **plus `M tests/conftest.py`, which is dev1's T-V1-071 hook, not mine** — confirmed by reading its diff (adds `pytest_sessionfinish`). **My only change is this handoff row**; the `next build` wrote only to the gitignored `apps/web/.next`.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+
+PROGRESS ROW — TASK: T-V1-077 web e2e execute-or-rationale (closes T-036 F4).
+PROGRESS ROW — RESULT: **GREEN — `RUN_WEB_E2E=1 pytest tests/integration/test_web_e2e.py -q` → 2 passed in 84.42s**, exit 0. **No blocker, no fix, no env tweak needed** — node v22.22.1, npm 9.2.0, `apps/web/node_modules`, API `/ready true` and both M0-003 fixtures were already present. **F4 RESOLVED AS EXECUTABLE; the T-036 runbook gains one required line: `RUN_WEB_E2E=1 pytest tests/integration/test_web_e2e.py -q`.** Evidence: production bundle produced (`apps/web/.next/BUILD_ID` = `JREQOnmvQe0wsmWkZBBmh`) and all five proxy branches passing (`A_healthy_passthrough 200/0.15s, B_backend_down_502 502/0.16s, C_non2xx_passthrough 503/0.20s, D_non_json_502 502/0.32s, E_timeout_502 502/3.13s, PROXY_BRANCHES_OK 5/5`), which is exactly what the test asserts.
+PROGRESS ROW — FINDING FOR THE RECORD (the thing to get right): **the skip is SILENT, not loud** — with `RUN_WEB_E2E` unset the file reports **2 skipped in 0.04s with EXIT CODE 0**, so a forgotten env var yields a skip indistinguishable from a pass to any runner checking only exit status. That is exactly how "required checks executed (not skipped) 100%" could be satisfied on paper while two checks never ran. **Judgement asked for by the card: the skip is legitimate and load-bearing by design** (default suites stay service-free per tests/README.md; CI already runs `npm run build` in its frontend job) **but only when explicit** — the record must carry the env var AND a zero-skips assertion (`-rs` with no SKIPPED for this file), not just a zero exit.
+PROGRESS ROW — DISCLOSURES: (a) **84.42 s is not a cold-build figure** — `.next/` already existed so the build ran incrementally; do not budget 84 s for a first build on CI, though the proxy matrix itself is only ~4 s; (b) **the card's "box is free" premise did not hold** — observed load average 8.04 on 4 cores with ~2 GB available (dev1 mid-T-071); the run still passed comfortably so this is not tight, but I am not claiming the same margin on a loaded box for a cold build; (c) **`M tests/conftest.py` appeared mid-run and is NOT mine** — dev1's T-V1-071 `pytest_sessionfinish` hook (28 added lines), confirmed by reading its diff; I did not touch, stage or revert it, and the fixtures my run consumed were unaffected; (d) the e2e needs the live compose API on :8000, so the acceptance runbook must sequence it with the stack up, unlike the hermetic benches; (e) the `next build` wrote only to the gitignored `apps/web/.next` — zero tree drift. Nothing fixed, so no follow-up filed.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.

@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -63,6 +64,33 @@ if "TMPDIR" not in os.environ and Path("/root/.tmp").is_dir():
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 os.environ.setdefault("LOG_JSON", "false")
 os.environ.setdefault("APP_ENV", "test")
+
+
+def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
+    """T-V1-071: drop the scratch vector collection a suite created, at session end.
+
+    Suites that run the real ingest pipeline export ``VECTOR_COLLECTION`` to a
+    ``knowledge_test_*`` name (see ``tests/fixtures/vector_collection_env.py``).
+    Without this the shared Qdrant accumulates one empty-ish index per run. Only
+    a name this harness generated is ever dropped — a run pointed at ``knowledge``
+    (or anything not prefixed ``knowledge_test_``) is left completely alone, so
+    this can never delete the live index.
+    """
+    name = os.environ.get("VECTOR_COLLECTION", "")
+    if not name.startswith("knowledge_test_"):
+        return
+    drop = getattr(session.config, "_knowledge_test_drop", None)
+    if drop is None:
+        try:
+            from vector_collection_env import QDRANT
+
+            req = urllib.request.Request(
+                f"{QDRANT}/collections/{name}", method="DELETE", data=b""
+            )
+            urllib.request.urlopen(req, timeout=30).close()
+            print(f"[T-V1-071] dropped scratch collection {name}")
+        except Exception as exc:  # never fail a green session over cleanup
+            print(f"[T-V1-071] could not drop {name}: {exc}")
 
 
 def pytest_configure(config: pytest.Config) -> None:

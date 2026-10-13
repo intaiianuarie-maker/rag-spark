@@ -42,10 +42,47 @@ from pathlib import Path
 
 import pytest
 
+# T-V1-071: this suite runs the REAL ingest pipeline, which used to write
+# into the live `knowledge` collection (T-V1-069: 373 flat vectors). Point it
+# at a scratch collection BEFORE any app module is imported — pydantic
+# settings cache on first read, so this must happen at import time.
+from vector_collection_env import (
+    assert_not_live,
+    use_scratch_collection,
+)
+
+VECTOR_COLLECTION = use_scratch_collection("crash")
+
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("LOG_JSON", "false")
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
+assert_not_live(VECTOR_COLLECTION)  # T-V1-071: never the live index
+
+
+def _ensure_scratch_collection() -> None:
+    """Create the scratch collection up-front, before any test runs.
+
+    This suite SIGKILLs jobs at stages that come *before* the vector stage, so
+    nothing ever reaches ``ensure_collection``. Against the live collection that
+    was invisible (it always pre-existed); against a scratch name the read side
+    404s on a missing collection. Creating it here keeps the suite's assertions
+    meaningful without touching the live index.
+    """
+    import asyncio
+
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    async def _run() -> None:
+        store = QdrantVectorStore(collection=VECTOR_COLLECTION)
+        try:
+            await store.ensure_collection(collection=VECTOR_COLLECTION, dimension=1024)
+        finally:
+            await store.close()
+
+    asyncio.run(_run())
+
+_ensure_scratch_collection()
 
 pytestmark = pytest.mark.integration
 
@@ -272,10 +309,10 @@ def _qdrant_version_points(version_id: str) -> int:
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
     async def run() -> int:
-        store = QdrantVectorStore(collection="knowledge")
+        store = QdrantVectorStore(collection=VECTOR_COLLECTION)
         try:
             points, _ = await store._client.scroll(
-                collection_name="knowledge",
+                collection_name=VECTOR_COLLECTION,
                 scroll_filter=Filter(
                     must=[
                         FieldCondition(

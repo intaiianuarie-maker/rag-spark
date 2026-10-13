@@ -46,7 +46,7 @@ from ingestion.adapters.registry import (
 )
 from ingestion.budget import ParseBudgetExceeded, budgets_from_env
 from ingestion.chunk import ChunkResult, chunk_document
-from ingestion.dedup import supersede_other_versions
+from ingestion.dedup import supersede_other_versions, vector_collection
 from ingestion.interfaces import DocumentElement, ParsedDocument
 from ingestion.normalize import MAX_DOCUMENT_BYTES, IngestionError
 from ingestion.persistence import (
@@ -197,10 +197,11 @@ async def _unpublish_generation(
         try:
             from retrieval.adapters.qdrant_store import QdrantVectorStore
 
-            qdrant = QdrantVectorStore(collection="knowledge")
+            collection = vector_collection()
+            qdrant = QdrantVectorStore(collection=collection)
             try:
                 await qdrant.delete_versions(
-                    collection="knowledge",
+                    collection=collection,
                     version_ids=[str(version_id)],
                     document_id=str(document_id),
                 )
@@ -901,7 +902,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
         from retrieval.adapters.qdrant_store import QdrantVectorStore
 
-        coll = "knowledge"
+        coll = vector_collection()
         embed_provider = InfinityEmbeddingProvider()
         qdrant = QdrantVectorStore(collection=coll)
         try:

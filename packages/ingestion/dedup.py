@@ -34,6 +34,8 @@ from ingestion.persistence import ChunkRow, Document, DocumentVersion, Ingestion
 if TYPE_CHECKING:
     from retrieval.interfaces import SearchFilter
 
+from core.config import vector_collection
+
 logger = logging.getLogger("knowledge_os.ingestion.dedup")
 
 StorePurger = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
@@ -236,10 +238,11 @@ async def _cleanup_superseded_vectors(
     try:
         from retrieval.adapters.qdrant_store import QdrantVectorStore
 
-        qdrant = QdrantVectorStore(collection="knowledge")
+        collection = vector_collection()
+        qdrant = QdrantVectorStore(collection=collection)
         try:
             removed = await qdrant.delete_versions(
-                collection="knowledge",
+                collection=collection,
                 version_ids=ids,
                 document_id=str(document_id),
             )
@@ -387,9 +390,10 @@ async def purge_document(
                 await store.delete(query_filter=filt)
 
             async def _purge_qdrant(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
-                qdrant = QdrantVectorStore(collection="knowledge")
+                collection = vector_collection()
+                qdrant = QdrantVectorStore(collection=collection)
                 filt = build_purge_filter(ws_id, doc_id)
-                await qdrant.delete(collection="knowledge", query_filter=filt)
+                await qdrant.delete(collection=collection, query_filter=filt)
                 await qdrant.close()
 
             register_store_purger("fts", _purge_fts)

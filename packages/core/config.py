@@ -50,6 +50,12 @@ class Settings(BaseSettings):
 
     # --- Qdrant (dense vectors; PD-002) ---
     qdrant_url: str = "http://localhost:6333"
+    #: T-V1-071: the ONE collection name the vector path uses. Production default
+    #: is ``knowledge`` (no behaviour change when unset); tests point it at a
+    #: scratch collection so a suite can never persist points into the live
+    #: index. Every writer AND reader must agree on it — the ingest pipeline,
+    #: the fence/supersession/purge cleanups and the search path.
+    vector_collection: str = "knowledge"
 
     # --- infinity (bge-m3 embeddings + rerank; PD-002, :7997) ---
     infinity_url: str = "http://localhost:7997"
@@ -100,6 +106,17 @@ class Settings(BaseSettings):
     def cors_origin_list(self) -> list[str]:
         """CORS origins parsed from a comma-separated string."""
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+
+def vector_collection() -> str:
+    """The one collection name every vector read/write must use (T-V1-071).
+
+    Resolved per call rather than frozen as a module constant, so a suite that
+    exports ``VECTOR_COLLECTION`` before the first call gets its own scratch
+    collection. Production never sets it and keeps ``knowledge`` — byte-identical
+    behaviour when the variable is absent.
+    """
+    return get_settings().vector_collection
 
 
 @lru_cache

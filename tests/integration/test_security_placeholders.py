@@ -23,6 +23,20 @@ import uuid
 
 import pytest
 
+# T-V1-071: run the REAL ingest pipeline, but never into the live
+# `knowledge` collection (T-V1-069). Export before any app import — pydantic
+# settings cache on first read, so this must happen at import time.
+from vector_collection_env import (
+    assert_not_live,
+    use_scratch_collection,
+)
+
+VECTOR_COLLECTION = use_scratch_collection("security")
+# ...and keep the compose worker off this suite's jobs entirely, so the only
+# process that runs them is this one (which points at the scratch name).
+os.environ.setdefault("INGEST_QUEUE_PREFIX", "t071-security-:")
+assert_not_live(VECTOR_COLLECTION)
+
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("LOG_JSON", "false")

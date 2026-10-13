@@ -19,7 +19,10 @@ from .engine import AnswerEngine
 from .hydration import CanonicalHydrator, HydratingOrchestrator
 from .verification import ExtractiveGrounder
 
-#: Collection the hybrid orchestrator reads/writes (single v1 collection).
+#: Production collection the hybrid orchestrator reads/writes (single v1
+#: collection). T-V1-071: the EFFECTIVE name is ``core.config.vector_collection()``,
+#: so the ingest writer, the purge/cleanup paths and this reader can never drift
+#: onto different collections; this constant stays the documented default.
 DEFAULT_COLLECTION = "knowledge"
 
 
@@ -39,7 +42,7 @@ def _llm_provider_for(model: str) -> LiteLLMProvider:
     return LiteLLMProvider()
 
 
-def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
+def create_orchestrator(*, collection: str | None = None):
     """Dense (Qdrant) + lexical (PG FTS) + rerank (infinity) hybrid orchestrator.
 
     G4 wiring: threads the optional graph retriever built by
@@ -47,6 +50,7 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
     the factory returns ``None`` and the orchestrator's graph leg no-ops, so
     retrieval behavior is byte-identical to v1.
     """
+    from core.config import vector_collection
     from graph.factory import create_graph_retriever
     from ingestion.persistence import get_session_factory
     from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
@@ -55,6 +59,9 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
     from retrieval.adapters.qdrant_store import QdrantVectorStore
     from retrieval.orchestrator import HybridRetrievalOrchestrator
 
+    # T-V1-071: resolve here, not as a default argument (those freeze at import
+    # time and would pin the production collection into the reader).
+    collection = collection or vector_collection()
     dense = QdrantVectorStore(collection=collection)
     lexical = PostgresLexicalStore(session_factory=get_session_factory())
     embedding = InfinityEmbeddingProvider()
@@ -69,7 +76,7 @@ def create_orchestrator(*, collection: str = DEFAULT_COLLECTION):
     )
 
 
-def build_answer_engine(*, model: str, collection: str = DEFAULT_COLLECTION) -> AnswerEngine:
+def build_answer_engine(*, model: str, collection: str | None = None) -> AnswerEngine:
     """Construct the answer engine from settings (lazy; safe to call per request).
 
     T-V1-028: ``model`` is a REQUIRED, explicit input — the factory holds **no**

@@ -9,10 +9,23 @@ import uuid
 
 import pytest
 
+# T-V1-071: this suite runs the REAL ingest pipeline, which used to write
+# into the live `knowledge` collection (T-V1-069: 373 flat vectors). Point it
+# at a scratch collection BEFORE any app module is imported — pydantic
+# settings cache on first read, so this must happen at import time.
+from vector_collection_env import (
+    assert_not_live,
+    use_scratch_collection,
+)
+
+VECTOR_COLLECTION = use_scratch_collection("dedup")
+
+os.environ.setdefault("INGEST_QUEUE_PREFIX", "t071-dedup-:")  # T-V1-071
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("LOG_JSON", "false")
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
+assert_not_live(VECTOR_COLLECTION)  # T-V1-071: never the live index
 
 pytestmark = pytest.mark.integration
 
@@ -196,10 +209,10 @@ def _qdrant_version_points(version_id: str) -> list[str]:
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
     async def run() -> list[str]:
-        store = QdrantVectorStore(collection="knowledge")
+        store = QdrantVectorStore(collection=VECTOR_COLLECTION)
         try:
             points, _ = await store._client.scroll(
-                collection_name="knowledge",
+                collection_name=VECTOR_COLLECTION,
                 scroll_filter=Filter(
                     must=[
                         FieldCondition(
@@ -354,10 +367,10 @@ def _qdrant_count(workspace_id: str, document_id: str) -> int:
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
     async def run() -> int:
-        store = QdrantVectorStore(collection="knowledge")
+        store = QdrantVectorStore(collection=VECTOR_COLLECTION)
         try:
             points, _ = await store._client.scroll(
-                collection_name="knowledge",
+                collection_name=VECTOR_COLLECTION,
                 scroll_filter=Filter(
                     must=[
                         FieldCondition(key="workspace_id", match=MatchAny(any=[workspace_id])),
@@ -1047,7 +1060,7 @@ def _gate_store(points: list, resolver):
 
     client = _ReadStubClient(points)
     store = QdrantVectorStore(
-        collection="knowledge",
+        collection=VECTOR_COLLECTION,
         client=client,  # type: ignore[arg-type]
         active_version_resolver=resolver,
     )
@@ -1059,7 +1072,7 @@ def _gate_search(store, top_k: int = 10) -> list:
 
     async def run() -> list:
         return await store.search(
-            collection="knowledge",
+            collection=VECTOR_COLLECTION,
             vector=[0.1] * 1024,
             top_k=top_k,
             query_filter=SearchFilter(workspace_ids=["ws-a"]),
@@ -1214,11 +1227,11 @@ def test_stale_generation_vector_is_never_returned_as_evidence(
     control_id = str(uuid.uuid5(uuid.NAMESPACE_URL, f"tv1-018-control:{v2_version}"))
     stale_vector = [1.0] + [0.0] * 1023  # the exact-match query vector below
     control_vector = [0.5, 0.5] + [0.0] * 1022
-    store = QdrantVectorStore(collection="knowledge")
+    store = QdrantVectorStore(collection=VECTOR_COLLECTION)
 
     async def _plant() -> int:
         return await store.upsert(
-            collection="knowledge",
+            collection=VECTOR_COLLECTION,
             records=[
                 VectorRecord(
                     id=stale_id,
@@ -1243,7 +1256,7 @@ def test_stale_generation_vector_is_never_returned_as_evidence(
 
     async def _search() -> list:
         return await store.search(
-            collection="knowledge",
+            collection=VECTOR_COLLECTION,
             vector=stale_vector,  # the planted stale copy is the top hit
             top_k=10,
             query_filter=SearchFilter(workspace_ids=[workspace]),
@@ -1275,12 +1288,12 @@ def test_stale_generation_vector_is_never_returned_as_evidence(
         return {}
 
     unfiltered_store = QdrantVectorStore(
-        collection="knowledge", active_version_resolver=_no_claim
+        collection=VECTOR_COLLECTION, active_version_resolver=_no_claim
     )
     try:
         unfiltered = asyncio.run(
             unfiltered_store.search(
-                collection="knowledge",
+                collection=VECTOR_COLLECTION,
                 vector=stale_vector,
                 top_k=10,
                 query_filter=SearchFilter(workspace_ids=[workspace]),
