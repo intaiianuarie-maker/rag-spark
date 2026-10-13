@@ -2990,3 +2990,126 @@ PROGRESS ROW — NEW RED FILED (not fixed, product code out of allowlist): `test
 PROGRESS ROW — STRONGEST RESULT + ANNEX: **live `knowledge` byte-identical before and after the whole run (2041 points, 114 orphans 67/7/0/40 both times)** — every live suite used scratch collections and dropped them, so T-071's isolation holds; **but PG grew, pointless chunks 546 → 627 (+81)**, which a Qdrant-only reconciliation would have missed. **F1 HEALED — the 6 known crash reds no longer fire** (step 6 is 107.36s, not the historical ~348s). **F9 passes** (corpus pin held). **F7 still unmeasured, so this record evidences 3 of RP-02's five targets, not five.** **T-V1-078's foreign-red is HEALED — test_originals_object_store 5 passed** after T-072's fix.
 PROGRESS ROW — DISCLOSED: CONDITIONAL not PASS (one unresolved new product red; "safety intact" is my characterisation, not a waiver); oracle caveat restated (Q9 is gold-context, says nothing about embeddings); **the box was NOT idle — load 5.70 on 4 cores against the runbook's E3 precondition, so these durations are not idle-box numbers and not a capacity plan**; step 3's 42.27s was an incremental build, not a CI cost; the crash step is the only place a safety-critical assertion is exercised AND the only non-green step, and its cost dropped because the harness is less broken — do not re-time on that basis; no product or test file touched, 0 commits, HEAD 5369d97 unmoved, index empty.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V2-009 (G5 multi-hop corpus SCOPE) — code2 (read-only)
+
+TASK: scope the G5 multi-hop corpus. **READ-ONLY: no downloads, no ingests, no corpus writes, no corpus runs.** Start HEAD `6227b8d` → end HEAD `6227b8d` (**UNMOVED**). Allowed: this row only.
+
+### HEADLINE — the direction's premise needs one correction
+
+**What we have in tree is not HotpotQA.** `rag-eval/ragbench-tests-v1/hotpotqa/` is the **`rungalileo/ragbench` subset** — a re-annotated, LLM-scored RAG benchmark, **CC-BY-4.0**, not original HotpotQA (CC-BY-SA-4.0). That is *good news* for licensing (BY has no share-alike) and *fine* for "take, don't build", but it must be named honestly: **G5 numbers from this corpus are not comparable to published HotpotQA numbers**, because RAGBench supplies its own sentence labels and precomputed trulens/ragas/gpt3 scores.
+
+### (1) DATASET CHOICE
+
+| | pick | verdict |
+|---|---|---|
+| **PRIMARY** | **`rungalileo/ragbench` `hotpotqa` test split — already in tree** | ✅ **Take it.** |
+| BACKUP | **2WikiMultihopQA** | structured evidence *paths* give a cleaner decomposition signal than sentence keys |
+| later/harder | MuSiQue | best decompositions, but same setup cost as 2Wiki |
+
+**Primary reasons (all verified in-tree):** our harness already speaks it — `evals/build_q8_slices.py:_hotpot_rows` reads exactly this parquet and Q8's `multi` slice is 10 of these rows; the gold is **sentence-addressable** (below); **368/390 rows (94.4%) have gold spanning ≥2 documents**, so it is genuinely multi-hop; **1557 paragraphs total** — a corpus small enough to ingest and audit in a sitting; CC-BY-4.0 with no share-alike.
+
+**Tradeoff, stated:** RAGBench is LLM-reannotated (`generation_model_name`, `annotating_model_name` columns present) and subsampled to **4 paragraphs/row** where HotpotQA's distractor setting uses 10. So it buys in-tree readiness and license cleanliness at the cost of comparability with published HotpotQA results and a smaller distractor load per question. **2Wiki/MuSiQue would each require a download (forbidden here) plus a new loader** — no in-tree precedent — which is why they are backup, not primary.
+
+### (2) LICENSE — verified where I could, flagged where I could not
+
+**Verified from two independent in-tree sources, which agree:**
+* `datasets/rag-eval/rag-eval-import-notes-20261009.md:3` — "`ragbench-tests-v1`: test split only, **license CC-BY-4.0** per included dataset card".
+* `datasets/rag-eval/ragbench-tests-v1/README.md` frontmatter — `license: cc-by-4.0`.
+
+**Internal-eval compliance:** CC-BY-4.0 grants copying/adaptation/redistribution **with attribution**; internal evaluation is a use, and the obligation that actually binds us is **retaining attribution in the acceptance record** (name RAGBench + CC-BY-4.0 alongside any reported number).
+
+**Redistribution boundary — what I could and could not verify.** I read `pira-v1/LICENSE-CC-BY-4.0.html`: it is the Creative Commons **summary page** ("Attribution 4.0 International", "Share your work / Use & remix"), **not the full legal code**. So: license *identity* is verified by two sources; **clause-level obligations (exact attribution format, database rights, termination, share-alike triggers) are NOT verified in-tree**, because the full code is not present and downloading is forbidden here. **Flagged: confirm the full text with legal/ops before any external publication or redistribution.** Do not treat this row as license sign-off.
+
+**The "we never redistribute" claim — partly verifiable, and I won't assert it as fact.** What I *can* show: the corpus sits at `../datasets/` **outside the repo and uncommitted**, and neither T-V1-073's reconcile tooling nor the T-V1-036 acceptance run published or shipped any of it. What I *cannot* show is an org-wide policy that nothing is ever redistributed. Note the asymmetry that makes this corpus the right choice anyway: our own xquad import (CC-BY-**SA**-4.0) carries share-alike terms and is correctly avoided for corpus reuse, while CC-BY has none.
+
+### (3) MAPPING DESIGN — and a correction to the direction
+
+**Verified on the real parquet (390 rows, read-only):** `documents_sentences` is 4 documents × ~10 sentences; gold keys address them as **`<doc-index><letter>`**:
+
+```
+all_relevant_sentence_keys : ['2a', '2b', '3a', '3b', '3c']   → docs 2 and 3  (true 2-hop)
+all_utilized_sentence_keys : ['2b', '3a', '3b']              → the subset the reference answer used
+```
+
+**⚠️ CORRECTION — do not use `sentence_support_information[].supporting_sentence_keys` as the multi-hop gold.** On the sampled row it was **`[]`** with `fully_supported: False`: that field annotates whether the *generated response* sentence is supported, not which corpus sentences answer the question. Using it would silently yield **empty gold sets**. The multi-hop gold is `all_relevant_sentence_keys`; `all_utilized_sentence_keys` is a stricter second metric.
+
+**Sentence → our chunk IDs.** Gold is **sentence**-level; our pipeline chunks **paragraph** text, so alignment must be span-based, never index-based:
+1. For each gold sentence, resolve its source paragraph (`documents[int(key[:-1])]`) and its exact sentence text (`documents_sentences[doc][letter]`).
+2. Ingest the paragraph through **our** pipeline; for each resulting chunk, locate the sentence as a **normalized contiguous span** (casefold + whitespace collapse). Chunks fully containing ≥1 gold sentence are **supporting chunks**; map `sentence_key → (doc, chunk_id, char_span)`.
+3. **Fallback fuzzy pass** (normalized token-overlap ≥ threshold) may propose a mapping, but those hits are **flagged `inferred`, never gold**.
+4. Any sentence with no confident chunk is **dropped and counted**. Coverage is reported *with* the metric, never silently.
+
+**Hand-audit ~50 cases:** stratified across hop-count (2-doc vs 3+ doc) and gold-count; a reviewer checks each `sentence → chunk` pair genuinely contains that sentence. Report **audit agreement %**; anything **< 100% is a mapping defect to fix before scoring**, not noise to average away.
+
+### (4) SAMPLE SIZE + COST
+
+| | value |
+|---|---|
+| rows in the in-tree test split | **390** |
+| **eligible multi-hop rows (gold spans ≥2 docs)** | **368 / 390 (94.4%)** |
+| paragraphs to ingest | **1557** (4/row, distribution `{4: 388, 3: 1, 2: 1}`) |
+| gold sentences per row | mean **3.11**, max **10** |
+| recommended v1 scale | **n = 100 questions** — enough to separate a clear pass from a clear fail, **not** enough to resolve 5pp differences; full 368 if compute allows |
+| hand-audit | ~50 cases × ~1 min ≈ **1 hour**, one reviewer |
+| expected chunks | **~1.5–2k** (our chunker splits paragraphs; T-V1-060 measured a comparable corpus peaking at 1933 chunks) |
+| embed batch / timeout | in-tree defaults `DEFAULT_BATCH_SIZE = 32`, `DEFAULT_TIMEOUT_SECONDS = 120` |
+
+**⚠️ COMPUTE — there is no clean measured bge-m3 throughput on this box, and I will not invent one.** The only recorded figure is **640 pts / ~30 min ≈ 21 pts/min**, and *that run stalled* under load 8.7–12.2 with a foreign llama-server at 74% — it is a **wedge-contaminated lower bound, not a rate**. Honest range for 1557 paragraphs: **~16 min at a plausible 100 pts/min, ~74 min at the only observed rate.** **Require a 50-document timing probe before committing to a schedule**, and record it so the next person inherits a real number instead of this caveat.
+
+### (5) HYGIENE — how this avoids the T-069 flat-vector trap (mechanism cited, not re-derived)
+
+1. **Scratch collection, per T-V1-071.** `tests/fixtures/vector_collection_env.py::use_scratch_collection(tag)` exports `VECTOR_COLLECTION` **before any app import**, namespacing the corpus away from `knowledge`. Proven effective: the T-V1-036 run left live `knowledge` **byte-identical (2041 → 2041)** while five live suites ingested and dropped scratch collections.
+2. **Real embedder only, asserted.** T-069's trap was the *harness's stubbed embedder* writing `dense = [0.03125]×1024` (a flat unit vector, `0.03125 = 1/√1024`) through the real pipeline into the **live** collection. G5 must run against the real `InfinityEmbeddingProvider` (bge-m3, 1024-d, `:7997`), assert `/ready` `infinity: true` **before** ingest, and assert no stub is installed in the embed path.
+3. **Authenticity census before scoring** — my T-V1-061b mechanism: for each stored point, embed its own Postgres text with a **fresh** bge-m3 call and take cosine against the stored vector; authentic = **cos > 0.95**. T-061b's bimodal signature (102 authentic / 373 at median **−0.0224** / **zero** points in the 0.1–0.95 band) is what makes the check decisive. **Any point below 0.95 invalidates the corpus for scoring** — re-embed, do not score around it.
+4. **Pin the corpus** (the T-V1-075 pin pattern) so it cannot drift silently between the hand-audit and the scored run.
+
+### WHY / REUSED / BUILT
+
+**WHY:** G5 is blocked purely on a labeled corpus, and the cheapest correct answer is the one already on disk with a loader we already run — provided its labels are read correctly and its vectors are proven real. The `sentence_support_information` trap would have produced a benchmark with **empty gold sets** that still looked green.
+
+**REUSED (nothing rebuilt, nothing downloaded):** the in-tree parquet, `evals/build_q8_slices.py:_hotpot_rows` (the existing reader), the import notes + dataset card for license, T-V1-071's `use_scratch_collection`, T-V1-061b's authenticity census, T-V1-075's pin pattern, T-V1-073's reconciliation (post-run hygiene).
+
+**BUILT: nothing.** One row.
+
+### VERIFY — sources read (all read-only)
+
+```
+head -3  datasets/rag-eval/rag-eval-import-notes-20261009.md   → ragbench-tests-v1, CC-BY-4.0, test split only
+head -8  datasets/rag-eval/ragbench-tests-v1/README.md         → license: cc-by-4.0 ; hotpotqa test=390
+read     datasets/rag-eval/pira-v1/LICENSE-CC-BY-4.0.html      → CC SUMMARY page (not full code) — flagged
+pyarrow  ragbench-tests-v1/hotpotqa/test-00000-of-00001.parquet (schema + 1 row + aggregates, read-only)
+         → columns incl. documents_sentences, sentence_support_information,
+           all_relevant_sentence_keys, all_utilized_sentence_keys
+         → row 0: 4 docs, keys ['2a','2b','3a','3b','3c'], ssi.supporting_sentence_keys == []
+         → aggregate: 390 rows, 1557 paragraphs, 368/390 span >=2 docs, gold mean 3.11
+grep     packages/retrieval/adapters/infinity_embed.py         → DIMENSION 1024, BATCH 32, TIMEOUT 120
+grep     tests/fixtures/vector_collection_env.py                → use_scratch_collection, exports VECTOR_COLLECTION
+grep     handoffs/*.md (throughput)                            → only the wedge-contaminated 640pts/~30min
+```
+
+**No download, no ingest, no corpus write, no corpus run.** The single parquet touch was a **read-only schema + one-row + aggregate inspection** — a file read, not an ingest — and it is disclosed as such because it is what turns the mapping from an assumption into a verified one.
+
+### RISKS
+
+- **(a) Not original HotpotQA.** LLM-reannotated, 4 paragraphs/row instead of 10, RAGBench's own sentence keys and precomputed scores. **Never cite a G5 number from this as a "HotpotQA result."**
+- **(b) License is identity-verified, clause-unverified.** The full CC-BY-4.0 legal code is not in tree and downloads are forbidden here. **Not license sign-off** — confirm with legal/ops before anything leaves the box.
+- **(c) "We never redistribute" is a policy claim I cannot verify org-wide.** I showed the corpus is uncommitted and unpublished by my own work; that is narrower than the claim.
+- **(d) Ceiling on n: 368 eligible rows** from a 390-row test split. n=100 cannot resolve 5pp differences — say so when the number is quoted.
+- **(e) No trustworthy throughput number exists**, so the compute figure is a range bounded by a wedge-contaminated observation. A 50-doc timing probe is a prerequisite, not an optimization.
+- **(f) Alignment is the real technical risk.** Our chunker chunks paragraphs; HotpotQA gold is sentence-level. A silently-wrong span match would produce a plausible, green, meaningless benchmark — which is why inferred matches are flagged and the hand-audit must reach 100% before scoring.
+- **(g) Only 1 audit reviewer**, and I authored both the mapping design and the audit criteria in the same slice — the same independence weakness I disclosed for the T-V1-075 authored unanswerables.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv2009_{start,end}_status.txt`):
+- **start** (HEAD `6227b8d`): 24 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `6227b8d`, **UNMOVED**): identical set **plus exactly `M handoffs/CODE2-HANDOFF.md`** (this row).
+- 0 foreign paths added, modified or removed; 0 downloads, 0 ingests, 0 corpus writes, 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V2-009 G5 multi-hop corpus SCOPE (read-only; no downloads/ingests/corpus writes).
+PROGRESS ROW — VERDICT: **PRIMARY = `rungalileo/ragbench` hotpotqa test split, already in tree** (390 rows; our `_hotpot_rows` already reads it; Q8's multi slice is 10 of these rows; CC-BY-4.0, no share-alike; 1557 paragraphs; small enough to ingest and audit in a sitting). **BACKUP = 2WikiMultihopQA** (structured evidence paths give a cleaner decomposition signal); **MuSiQue** later/harder. Tradeoff: RAGBench is LLM-reannotated and subsampled to **4 paragraphs/row** vs HotpotQA's 10, so it buys in-tree readiness and license cleanliness at the cost of comparability with published HotpotQA numbers — **never cite a G5 number from this as a HotpotQA result.** 2Wiki/MuSiQue each need a download (forbidden here) plus a new loader, which is why they are backup.
+PROGRESS ROW — LICENSE VERIFIED-WHERE-POSSIBLE: CC-BY-4.0 confirmed by **two independent in-tree sources** that agree — `rag-eval-import-notes-20261009.md:3` ("test split only, license CC-BY-4.0 per included dataset card") and `ragbench-tests-v1/README.md` frontmatter (`license: cc-by-4.0`). Internal-eval use complies with **attribution retained in the acceptance record**. **BOUNDARY FLAGGED, NOT SIGN-OFF: the only CC-BY text in tree (`pira-v1/LICENSE-CC-BY-4.0.html`) is the CC *summary* page, not the full legal code**, so license identity is verified but clause-level obligations (attribution format, database rights, termination) are **not** — confirm with legal/ops before anything leaves the box. **I do NOT assert "we never redistribute":** I can show the corpus is uncommitted at `../datasets/` and that neither T-073 nor the T-036 run published it, which is narrower than an org-wide policy claim. Note our xquad import is CC-BY-**SA**-4.0 (share-alike) and is correctly avoided for corpus reuse.
+PROGRESS ROW — MAPPING (verified on the real parquet, and a CORRECTION to the direction): gold keys address `documents_sentences` as **`<doc><letter>`** — row 0 gives `all_relevant_sentence_keys = ['2a','2b','3a','3b','3c']` spanning docs 2–3, with `all_utilized_sentence_keys = ['2b','3a','3b']` as a stricter second metric. **⚠️ Do NOT use `sentence_support_information[].supporting_sentence_keys` as the multi-hop gold — it was `[]` with `fully_supported: False` on the sampled row because it annotates the generated RESPONSE, not the corpus; using it would silently yield empty gold sets that still look green.** Alignment must be **span-based, never index-based** (our pipeline chunks paragraphs, gold is sentence-level): resolve each gold sentence's source paragraph + exact text, locate it as a normalized contiguous span inside the chunk, treat chunks fully containing a gold sentence as supporting chunks, allow a fuzzy fallback that is **flagged `inferred`, never gold**, and **drop+count** anything unmatched with coverage reported alongside the metric. Trust = a **~50-case stratified hand-audit** (2-doc vs 3+ doc, by gold-count); **agreement <100% is a mapping defect to fix before scoring, not noise.**
+PROGRESS ROW — SIZE + COST: 390 rows, **368/390 (94.4%) eligible multi-hop** (gold spans ≥2 docs), **1557 paragraphs**, gold mean 3.11 / max 10, expect ~1.5–2k chunks (T-060 saw a comparable corpus peak at 1933). Recommend **n=100** v1 — enough to separate clear pass from clear fail, **not** to resolve 5pp differences. Audit ≈ **1 hour**, one reviewer. **⚠️ NO CLEAN bge-m3 THROUGHPUT EXISTS ON THIS BOX and I will not invent one** — the only recorded figure is 640 pts/~30 min ≈ **21 pts/min**, and that run *stalled* at load 8.7–12.2 with a foreign llama-server at 74%, so it is a **wedge-contaminated lower bound**. Honest range for 1557 paragraphs: **~16 min at a plausible 100 pts/min, ~74 min at the only observed rate**; **require a 50-doc timing probe before committing to a schedule.** In-tree defaults: `BATCH_SIZE 32`, `TIMEOUT 120s`, `DIMENSION 1024`.
+PROGRESS ROW — HYGIENE (cites the mechanism, does not re-derive it): (1) **scratch collection per T-V1-071** — `use_scratch_collection(tag)` exports `VECTOR_COLLECTION` before any app import; proven by the T-036 run leaving live `knowledge` **byte-identical 2041 → 2041** while five suites ingested and dropped scratch collections; (2) **real embedder only, asserted** — T-069's trap was the *stubbed embedder* writing `dense = [0.03125]×1024` through the real pipeline into the LIVE collection, so assert `/ready infinity:true` before ingest and assert no stub in the embed path; (3) **authenticity census before scoring** via T-V1-061b — re-embed each point's own text and require **cos > 0.95**, using its bimodal signature (102 authentic / 373 at median −0.0224 / **zero** in the 0.1–0.95 band); **any point below 0.95 invalidates the corpus for scoring — re-embed, don't score around it**; (4) **pin the corpus** (T-075 pattern) so it cannot drift between hand-audit and scored run.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle; G5-build dispatches off this scope.
