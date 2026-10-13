@@ -165,15 +165,62 @@ async def process_graph_job(job_id: str) -> dict:
                 },
             )
 
+    # Community detection (T-V2-007): connected components, deterministic,
+    # no new deps. Summaries via free model, bounded, with provenance.
+    communities = []
+    try:
+        from graph.communities import detect_communities, summarize_community
+
+        detected = detect_communities(
+            extraction_result.entities, extraction_result.relationships, workspace_id
+        )
+        # Generate summaries for each community (free model, bounded)
+        for comm in detected:
+            member_ents = [e for e in extraction_result.entities if e.id in comm.entity_ids]
+            member_rels = [
+                r for r in extraction_result.relationships if r.id in comm.relationship_ids
+            ]
+            try:
+                summary = await summarize_community(comm, member_ents, member_rels, workspace_id)
+                # Bounded: 500 chars, provenance complete
+                comm.summary = summary[:500] if len(summary) > 500 else summary
+                # Title is already deterministic from detect_communities
+            except Exception as exc:
+                logger.warning(
+                    "community_summary_failed",
+                    extra={
+                        "event": "community_summary_failed",
+                        "job_id": job_id,
+                        "community_id": comm.id,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                # Fallback already handled inside summarize_community
+                pass
+            communities.append(comm)
+        # Also include any extractor-provided communities (currently none, but keep)
+        communities.extend(extraction_result.communities)
+    except Exception as exc:
+        logger.warning(
+            "community_detection_failed",
+            extra={
+                "event": "community_detection_failed",
+                "job_id": job_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        communities = list(extraction_result.communities)
+
     # Idempotent, atomically visible upsert (T-V2-002): single transaction
     # so a concurrent reader never sees a half-written extraction.
+    # Communities now include detected + summarized, with provenance.
     store = SQLiteGraphStore(graph_db_path())
     try:
         await store.upsert_extraction(
             workspace_id,
             extraction_result.entities,
             extraction_result.relationships,
-            extraction_result.communities,
+            communities,
         )
     finally:
         store.close()

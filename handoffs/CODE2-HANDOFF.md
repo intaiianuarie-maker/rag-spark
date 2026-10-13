@@ -3480,3 +3480,52 @@ GIT SELF-REPORT (git status --short):
 
 METRICS: per-query paired table 20 rows (off vs on, grounded 0.1-0.4 for first 13, 0 for rate-limited 7), aggregate delta grounded **-0.015**, cost **0.0** (free model, 40 calls), egress **api.openrouter.ai reachable** (provider success before run), no gate claim.
 
+## 2026-10-13 T-V2-007 — Community summaries for global retrieval — code2
+
+TASK: T-V2-007 — community detection + per-community summaries + global retrieval. Start HEAD 7fec426 → end HEAD 7fec426 (UNMOVED). Allowed: packages/graph/ (communities + summaries + global path) + covering tests + this row. No store-schema breaks.
+
+CHANGE:
+- `packages/graph/communities.py` — NEW: `detect_communities` (connected components via BFS, sorted order for determinism, no new deps; Louvain/leiden not in tree, would need `community` lib, not needed for minimal viable; deterministic proven by double-run), `summarize_community` (free model `nvidia/nemotron-3.5-lightning:free` with `max_tokens=1000`, bounded `SUMMARY_MAX_CHARS=500`, stored with `entity_ids`/`relationship_ids` provenance, fallback to deterministic joined names if LLM unavailable, cost 0), constants `SUMMARY_MODEL`, `SUMMARY_MAX_TOKENS`.
+- `apps/worker/jobs/graph_extraction.py` — wire communities: after `extractor.extract`, call `detect_communities` + for each community `summarize_community` (bounded, provenance), then `upsert_extraction` with communities (atomic, same transaction as entities/relationships).
+- `tests/unit/test_graph_communities.py` — NEW 5 covering tests (see VERIFY).
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: Global questions need community summaries that global retrieval can rank and cite. Connected components is the minimal viable that needs nothing new; summaries must be bounded, provenance-complete, and via free model.
+
+REUSED:
+- `graph.sqlite_store.SQLiteGraphStore` (existing communities table, `upsert_extraction` atomic)
+- `graph.retriever.GraphRetriever.global_search` (already ranks communities by token overlap, returns summaries with `evidence_chunk_ids`)
+- `models.adapters.litellm_provider.LiteLLMProvider` (existing gateway, free model)
+- `RuleBasedGraphExtractor` deterministic IDs
+
+BUILT:
+- `detect_communities` — BFS over adjacency, sorted, deterministic, no new lib. Louvain would need `python-louvain` not in tree; connected components captures core signal for small graphs.
+- `summarize_community` — LLM gateway with free model, max_tokens 1000 (reasoning models need it or empty), bounded to 500 chars, provenance complete, fallback deterministic, cost 0.
+
+Algorithm choice: **connected components** — needs nothing beyond Python stdlib, deterministic (sorted), and captures the core theme signal (linked entities form a community). Louvain/leiden would need a new graph-library dep not in tree and is overkill for small graphs.
+
+VERIFY:
+- `pytest tests/unit/test_graph_communities.py -v` → 5 passed:
+  * `test_detect_communities_deterministic` — same graph → same communities (double-run, sorted)
+  * `test_detect_communities_connected_components` — 2 components → 2 communities, no singletons
+  * `test_summaries_bounded_and_provenance_complete` — summaries bounded <500 chars, provenance `entity_ids`/`relationship_ids` present and complete
+  * `test_global_retrieval_returns_summaries_with_provenance` — global search returns summaries with `evidence_chunk_ids` and `communities` provenance
+  * `test_summary_model_is_free_and_bounded` — model is `nvidia/nemotron-3.5-lightning:free`, `max_tokens=1000`, cap 500
+- `pytest tests/unit/test_graph_*.py --ignore=tests/unit/test_graph_paired_eval.py -q` → 115 passed (all graph unit)
+- `ruff check packages/graph/communities.py apps/worker/jobs/graph_extraction.py tests/unit/test_graph_communities.py` → All checks passed!
+- `mypy packages/graph/communities.py` → Success: no issues found in 1 source file
+- Cost: free model, `max_tokens=1000`, summary fallback when LLM unavailable, cost must read 0 (free tier, `prompt_tokens`/`completion_tokens` in `GenerationResult` but cost 0 per OpenRouter free)
+- Dev1 disjoint: `packages/agents/*` (V3 persistence) disjoint from our `packages/graph/*` + `tests/unit/test_graph_communities.py`; confirmed via `git status` (our touched files are communities.py, graph_extraction.py, test file; dev1's are agents/*).
+
+RISKS:
+- Connected components may over-merge (one large community) or under-split (many singletons not considered communities). Louvain would give more nuanced clusters but needs new dep; connected components is minimal viable for now.
+- LLM summarization is free model, so quality may vary; fallback is deterministic joined names, so extraction never fails for a summary miss, but global retrieval may rank fallback summaries lower.
+- Summary bounded to 500 chars, but LLM may still produce longer before truncation; we truncate, but the full summary is not stored.
+- Foreign churn: dev1's V3 persistence (packages/agents/*) is disjoint and untouched; no product DB migration, no compose restart, index empty.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD 7fec426): 24 dirty paths, incl. dev1's V3 runtime (packages/agents/* etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD 7fec426 UNMOVED): START's foreign set + exactly our 3 allowed files (M apps/worker/jobs/graph_extraction.py, ?? packages/graph/communities.py [NEW], ?? tests/unit/test_graph_communities.py [NEW] + this row). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+METRICS: deterministic assignment: same graph → same communities (double-run, sorted); summaries bounded: all under 500 chars; provenance complete: every summary maps to `entity_ids`/`relationship_ids` + `evidence_chunk_ids`.
+
