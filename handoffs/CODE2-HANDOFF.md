@@ -1823,3 +1823,115 @@ PROGRESS ROW — TASK: T-V1-061a hermetic Q9 bench re-run (answer-layer half of 
 PROGRESS ROW — VERDICT: **GATE PASS — groundedness 0.9888 (>= 0.90), citation validity 1.0000 (== 1.0), exit 0, bit-identical to the 2026-10-12 baseline on all 6 rows (en 1.0000, ro 1.0000, pt 0.9853, tables 1.0000, multi 0.9586, OVERALL 0.9888 / 1.0000), zero drift, no per-slice failures.** Run attached in the foreground with a verbatim transcript at `handoffs/T-V1-061A-TRANSCRIPT.md` carrying UTC timestamp, HEAD `196c3ad`, and sha256 of both harness and the frozen slices file — closing T-061 FLAG-6's provenance gap.
 PROGRESS ROW — DISCLOSURE (most important): **this PASS must NOT be cited as T-052 evidence.** The premise that the re-run re-evidences T-052's all-paths `_finalize` rewrite does not hold: the bench imports `answer.models` + `answer.verification` and never imports `answer.engine` nor calls `answer()` (it calls `verify_claims` directly with in-memory items, `chunk_lookup=None`; `verification.py` imports `.hydration`, not `.engine`). Empirically, **`engine.py` changed 5× since the baseline (T-026/031/031b/051/052) and these six metrics moved by exactly zero.** T-052's gate stays `tests/unit/test_answer_lost_region_disclosure.py`. What this run *does* validly evidence: `verify_claims` + `ExtractiveGrounder` green on all 50 records with the fabricated `dead-fabricated-chunk` surviving zero times, plus a real post-baseline no-regression check — `verification.py` was changed by `8273fdb` (T-024) on 2026-10-13, after the baseline, with no metric movement. Per museR's ruling, says nothing about embeddings/retrieval (that is T-061b).
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle; T-061b dispatches post-switch.
+---
+
+## 2026-10-13 T-DEADSEAM-4 (repo-wide fourth-instance audit) — code2 (READ-ONLY)
+
+TASK: audit every remaining `parser_for_mime` reference repo-wide and classify each hit as **(a)** live seam, **(b)** dead wrapper (fourth instance), **(c)** inert mention. **READ-ONLY** — greps and file reads only; no edit, no run, no import, no test run. Start HEAD `76991ed` → end HEAD `76991ed` (**UNMOVED**). Allowed: this row only.
+
+### VERDICT: **YES — a fourth instance exists.** `tests/integration/test_ingestion_jobs.py:245`
+
+### FINDINGS — every hit, classified
+
+Grep used: `git grep -n "parser_for_mime" -- .` (all tracked files, full repo) plus a filesystem grep for untracked files → **every non-doc hit is tracked; zero untracked copies** (build caches `.mypy_cache/*.db` excluded).
+
+| # | file:line | code | verdict |
+|---|---|---|---|
+| 1 | `apps/worker/jobs/ingest_pipeline.py:45` | `parser_for_mime,` (import) | **(c)** inert import |
+| 2 | `apps/worker/jobs/ingest_pipeline.py:687` | `if parser_for_mime(version.mime_type) is None:` | **(a) LIVE** — the T-031 rejection gate. **Its return value is DISCARDED**; only the `None` test matters. This is the exact line that makes every wrapper below dead |
+| 3 | `packages/ingestion/adapters/registry.py:77` | `def parser_for_mime(...)` | **(c)** the definition itself |
+| 4 | `packages/ingestion/adapters/registry.py:42`, `:90` | comment / docstring | **(c)** prose |
+| 5 | `packages/ingestion/format_matrix.py:176`, `:198` | `proven_by="parser_for_mime"` + `proven_by_module="ingestion.adapters.registry"` | **(c)** inert **string** metadata on a `FormatRow`, not a callable reference |
+| 6 | `tests/fixtures/scripts/t021_crash_worker.py:165` | comment | **(c)** — and **T-V1-065's fix verified intact**: the live patch at `:181` is `ingest_pipeline.parse_with_precedence = _stalling_parse_with_precedence`. No `parser_for_mime` patch remains in this file |
+| 7 | `tests/integration/test_dedup_versions.py:1452` | comment | **(c)** — and **T-V1-059's fix verified intact**: the live patch at `:1471` is `monkeypatch.setattr("jobs.ingest_pipeline.parse_with_precedence", _deleting_parse)`. No `parser_for_mime` patch remains |
+| 8 | **`tests/integration/test_ingestion_jobs.py:245`** | `monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", lambda mime: Boom())` | **(b) DEAD WRAPPER — FOURTH INSTANCE** |
+| 9 | `tests/unit/test_format_matrix.py:57`, `:154` | import + `assert parser_for_mime(mime) is None` | **(c)** direct registry unit assertions |
+| 10 | `tests/unit/test_ingest_pipeline.py:13`, `:86-88` | import + 3 direct factory assertions | **(c)** direct factory assertions |
+| 11 | `tests/unit/test_parser_precedence.py:68`, `:76`, `:110-112` | `registry.parser_for_mime(...)` calls | **(c)** direct registry assertions |
+| 12 | `docs/ingestion/FORMAT-MATRIX.md:21`, `:22` | table cells naming `parser_for_mime` as the proof source for the rejected `xlsx`/`image` rows | **(c)** doc — and **accurate**: for those rows the factory really is the proof, because rejection is exactly what `:687` performs |
+
+### The fourth instance, in detail
+
+`tests/integration/test_ingestion_jobs.py:236-252`, `test_poison_message_is_capped_after_retries`:
+
+```python
+class Boom:
+    async def parse(self, *args, **kwargs):
+        raise RuntimeError("boom")
+
+monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", lambda mime: Boom())
+...
+assert status["status"] == "failed"
+assert status["attempts"] == 3
+assert status["error_code"] == "PARSE_FAILED"
+```
+
+The dead-seam shape, character for character the same as the three confirmed instances: a parser double with an instrumented `parse`, injected by patching the **factory**. It is doubly dead:
+
+1. `:687` evaluates `parser_for_mime(...)` **only** against `None` and throws the result away — `Boom()` is constructed and discarded, so `Boom.parse` is never called and `RuntimeError("boom")` never fires.
+2. The real parse runs at **`ingest_pipeline.py:723`** via `parse_with_precedence` (`registry.py:139`), which resolves through `PARSER_PRECEDENCE`/`PARSER_REGISTRY` **inside `registry`** — patching the name bound in the *`ingest_pipeline`* module cannot reach it even indirectly.
+
+The job under test is `b"content"` / `text/plain`, which parses cleanly, so absent a real failure the job reaches READY and all three assertions fail on their merits.
+
+### IMPORTANT — it is NOT silently green; it is currently red and *camouflaged*
+
+`test_poison_message_is_capped_after_retries` is already recorded as failing in **my own** earlier row, `handoffs/CODE2-HANDOFF.md:838` (T-V1-049 era): *"Upload suite → 5 passed, 3 failed; the 3 (`test_pipeline_reaches_ready_with_chunks`, `test_charset_hint_round_trip`, `test_poison_message_is_capped_after_retries`) reproduce identically on a pristine-HEAD checkout … baseline, not mine."* It was also named as a dead-seam victim by code1 at `handoffs/CODE1-HANDOFF.md:490`.
+
+So the honest status is **latent, not silent**, and the nuance matters for triage:
+
+- The two sibling failures in that trio need live embeddings, so right now **all three are red for overlapping reasons** and the dead seam is camouflaged behind the embed blocker.
+- **The moment the embed blocker clears, this test becomes the next failure on its own merits** — the job will parse `text/plain` successfully and reach READY, and `status == "failed"` / `attempts == 3` / `error_code == "PARSE_FAILED"` will all fail, because nothing ever raises.
+- No `skip`/`xfail` marker is present (the file's only `pytest.skip` is the pg/redis reachability guard at line 39).
+
+### Follow-up to ticket (filed here, NOT fixed — out of scope)
+
+- **File:** `tests/integration/test_ingestion_jobs.py`, function `test_poison_message_is_capped_after_retries`, seam at **line 245**.
+- **Shape:** identical to T-031/T-059/T-065 — parser double injected by patching the `parser_for_mime` factory.
+- **Never fires:** `Boom.parse()`; therefore `RuntimeError("boom")`, the 3-attempt cap, and the `PARSE_FAILED` assertion are all unexercised.
+- **Test it silently breaks:** itself — the poison-message retry-cap contract, i.e. that a parse failure is capped at 3 attempts and surfaces as a typed `PARSE_FAILED`. It is currently the only guard on that behaviour.
+- **Suggested fix shape (not applied):** re-point the injection to `jobs.ingest_pipeline.parse_with_precedence` (the resolve-**and-invoke** site, `:723`), matching what T-059 and T-065 did. `Boom` must keep an `async` `parse`-equivalent; since `parse_with_precedence` is an `async` module-level function, the replacement wrapper should be an async function that raises, not an object with a `.parse` method. **Assert-first caution:** whoever takes this should confirm the current failure mode before and after, because the failure is presently confounded with the embed blocker.
+
+### VERIFY — exact commands
+
+```
+git grep -n "parser_for_mime" -- .                                   # every tracked hit
+grep -rln "parser_for_mime" . --exclude-dir=.git --exclude-dir=node_modules \
+    --exclude-dir=.next --exclude-dir=__pycache__                    # untracked sweep
+sed -n '236,252p' tests/integration/test_ingestion_jobs.py            # the fourth instance
+sed -n '680,695p;718,730p' apps/worker/jobs/ingest_pipeline.py        # :687 is-None, :723 parse
+sed -n '77,100p;130,160p' packages/ingestion/adapters/registry.py     # factory + parse_with_precedence
+sed -n '170,180p' packages/ingestion/format_matrix.py                 # proven_by is a string
+grep -nE "setattr|monkeypatch|patch\(|parse_with_precedence" tests/fixtures/scripts/t021_crash_worker.py
+grep -nE "monkeypatch.*parser" tests/integration/test_dedup_versions.py
+grep -nE "skip|xfail" tests/integration/test_ingestion_jobs.py
+grep -rn "test_poison_message_is_capped_after_retries" handoffs/ reviews/ docs/
+```
+
+**Zero test runs, zero imports, zero stack use.** Every claim above is from file reads.
+
+### WHY / REUSED / BUILT
+
+**WHY:** museR closed the dead-seam class at 3 instances on the reasoning that three targeted greps had already missed one. This repo-wide sweep is that check, and it overturns the closure: the class has **4**, and the fourth sits in an upload-suite test that is *already red for a different reason*, which is exactly why targeted greps never surfaced it.
+
+**REUSED:** nothing. Audit only.
+
+**BUILT: nothing.** No file edited except this row.
+
+### RISKS
+
+- **(a) The headline is "4 instances", not "clean".** museR's `MUSER-LOOP-STATE.md:285` recorded "accept the residual risk, don't fund a fourth hunt" — this hunt found the fourth. That closure should be reopened.
+- **(b) I did not run the test** (read-only ticket), so I am reporting the dead seam **statically and from the code**, not from an observed failure. The causal claim "it will fail on its own merits once embeddings clear" is derived from reading `:687` and `:723`, not measured. Whoever tickets it should capture the failure mode before and after.
+- **(c) Attribution risk:** today this test is red and so are two siblings that need live embeddings. Fixing the seam will not turn it green by itself if the embed blocker is still in force; do not read a still-red result as a failed fix.
+- **(d) dev1's files untouched:** `scripts/reindex_all_chunks.py`, `packages/ingestion/dedup.py`, `tests/integration/test_dedup_versions.py` were **read only** (grep/sed, line 1452 and 1471) — the T-059 seam state was verified without editing.
+- **(e) FOREIGN CHURN — not mine.** 25 dirty paths (V4/workflow-engine stream + `handoffs/*`); none opened, staged, edited or reverted. HEAD unmoved. No commit, deploy, restart or compose.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/td4_{start,end}_status.txt`):
+- **start** (HEAD `76991ed`): 25 dirty paths, **all FOREIGN**. Index empty.
+- **end** (HEAD `76991ed`, **UNMOVED**): the same foreign set **plus exactly `handoffs/CODE2-HANDOFF.md`** (this row).
+- 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty. **No files outside this row were edited; no test was run.**
+
+PROGRESS ROW — TASK: T-DEADSEAM-4 repo-wide audit for a fourth `parser_for_mime` wrapper (read-only, 0 runs).
+PROGRESS ROW — VERDICT: **FOURTH INSTANCE = YES** — `tests/integration/test_ingestion_jobs.py:245` in `test_poison_message_is_capped_after_retries`: a `Boom` parser double injected via `monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", lambda mime: Boom())`. Doubly dead — `ingest_pipeline.py:687` evaluates the factory **only** against `None` and discards the result, and the real parse is `parse_with_precedence` at `:723`, resolved inside `registry`, unreachable by patching the `ingest_pipeline` binding. So `Boom.parse()` never fires, `RuntimeError("boom")` never raises, and the 3-attempt cap + `PARSE_FAILED` assertions are unexercised. **The 3-instance closure in MUSER-LOOP-STATE.md:285 should be reopened.**
+PROGRESS ROW — NUANCE (not silent — latent): the test is **already recorded red at CODE2-HANDOFF.md:838** (T-V1-049 era: "5 passed, 3 failed", reproducing on pristine HEAD) and code1 named it at CODE1-HANDOFF.md:490. Its two sibling failures need live embeddings, so all three are red for overlapping reasons and the dead seam is **camouflaged behind the embed blocker**; when embeddings clear, this becomes the next failure on its own merits (b"content"/text/plain parses fine → READY → all three assertions fail). No skip/xfail on it. Follow-up filed, not fixed: re-point to `jobs.ingest_pipeline.parse_with_precedence` — note the replacement must be an **async function** that raises, not an object with `.parse`. Whoever takes it should capture the failure mode before/after, since the current red is confounded with the embed blocker.
+PROGRESS ROW — OTHER 11 HITS: all clean. `:687` is the one **live** use (the T-031 rejection gate — which is why the docs' `proven_by="parser_for_mime"` cells for the rejected xlsx/image rows are accurate). Everything else is (c) inert: the import, the `registry.py` definition/comment/docstring, `format_matrix.py`'s `proven_by` **string** metadata, the three unit files' direct factory assertions, and the two doc rows. T-059's and T-065's fixes **verified intact** — `test_dedup_versions.py:1471` and `t021_crash_worker.py:181` both patch `parse_with_precedence` now, with `parser_for_mime` surviving only in their explanatory comments. Zero untracked copies of the symbol anywhere in the repo.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
