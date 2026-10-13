@@ -82,11 +82,12 @@ x-backend-env: &backend-env
   S3_ACCESS_KEY: ${S3_ACCESS_KEY:-admin}
   S3_SECRET_KEY: ${S3_SECRET_KEY:-admin}
   S3_BUCKET: ${S3_BUCKET:-knowledge-os}
-  # 2026-10-12 museR TEMPORARY OPT-IN (tracked by T-V1-043): the only served embedding
-  # model is bge-small-en-v1.5 (384-d) while Qdrant collections are 1024-d. Strict mode
-  # parks jobs STORE_WRITE_UNVERIFIED; adaptation restores pre-F5 behavior until a real
-  # BAAI/bge-m3 service lands and INFINITY_URL points at it. Revert to false in T-V1-043.
-  ALLOW_DIMENSION_ADAPTATION: ${ALLOW_DIMENSION_ADAPTATION:-true}
+  # T-V1-043 (2026-10-13 museR): DONE — BAAI/bge-m3 (1024-d) now served on the
+  # infinity-rerank model server alongside the reranker, so strict dimension
+  # enforcement is restored. Adapting/padding vectors to fit a collection is a
+  # manufactured vector (T-V1-015 boundary, review1 F5) and must stay off; the
+  # opt-in above existed only while the served model was 384-d bge-small.
+  ALLOW_DIMENSION_ADAPTATION: ${ALLOW_DIMENSION_ADAPTATION:-false}
   # PD-005 (2026-10-08): object storage is SeaweedFS (Apache-2.0), NOT MinIO.
   # The AGPLv3 MinIO community repackage is retired; compose now provides
   # SeaweedFS (optional external service) only. Adapter-only S3 access uses
@@ -235,8 +236,16 @@ services:
     image: michaelf34/infinity:latest
     restart: unless-stopped
     environment:
-      INFERENCE_MODEL: cross-encoder/ms-marco-MiniLM-L6-v2
-      INFERENCE_ENGINE: onnx
+      # T-V1-043: bge-m3 (1024-d, MIT) is THE embedding model — collections are
+      # 1024-d and the adapter pins BAAI/bge-m3 / 1024 by default. The reranker
+      # stays on the same server (multi-model); INFINITY_URL is unchanged.
+      # NB: this image (michaelf34/infinity:latest) reads INFINITY_MODEL_ID /
+      # INFINITY_ENGINE — the legacy INFERENCE_* names are silently ignored and
+      # the default bge-small loads instead (caught in T-V1-043 recon). The
+      # engine enum here is torch|ctranslate2|optimum|neuron (no 'onnx'), and
+      # multi-model lists are SEMICOLON-separated (a comma is kept as one id).
+      INFINITY_MODEL_ID: BAAI/bge-m3;cross-encoder/ms-marco-MiniLM-L6-v2
+      INFINITY_ENGINE: torch
       PORT: "7997"
     ports:
       # T-V1-037 — CLOSING the public infinity question (review 2026-10-09
