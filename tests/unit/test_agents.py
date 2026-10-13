@@ -3924,3 +3924,129 @@ def test_planner_uses_fake_gateway_no_external_call() -> None:
         assert llm.calls[0] in FREE_MODELS
 
     asyncio.run(_run())
+
+# ======================================================================================
+# T-V3-017 — Parallel subquestion fan-out with budget (bounded concurrency, aggregate-or-fail)
+# ======================================================================================
+
+from agents.fanout import (  # noqa: E402
+    MAX_FANOUT_CONCURRENCY,
+    FanoutBudget,
+    FanoutConfig,
+    fanout_questions,
+)
+
+
+class _TrackingExecutor:
+    """Deterministic fake executor — tracks active workers, no real sleeps."""
+
+    def __init__(self, fail_at: int | None = None) -> None:
+        self.fail_at = fail_at
+        self.active = 0
+        self.max_active = 0
+        self.order: list[int] = []
+
+    async def execute(self, question: str, index: int) -> str:
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        # Yield control deterministically — no wall-clock sleep
+        await asyncio.sleep(0)
+        # Record execution order
+        self.order.append(index)
+        if self.fail_at is not None and index == self.fail_at:
+            self.active -= 1
+            raise RuntimeError(f"fail-{index}")
+        self.active -= 1
+        return f"result-{index}:{question}"
+
+
+class _ReverseOrderExecutor:
+    """Completes in reverse order deterministically via extra yields."""
+
+    async def execute(self, question: str, index: int) -> str:
+        # More yields for lower indices so higher indices finish first deterministically
+        for _ in range((2 - index) % 3):
+            await asyncio.sleep(0)
+        return f"r{index}"
+
+
+@pytest.mark.unit
+def test_fanout_concurrency_cap_never_exceeds() -> None:
+    """Cap violations: 0 — active workers never exceed MAX_FANOUT_CONCURRENCY."""
+    async def _run() -> None:
+        cfg = FanoutConfig(max_concurrency=MAX_FANOUT_CONCURRENCY, max_questions=9)
+        budget = FanoutBudget(total=9)
+        questions = [f"q{i}" for i in range(6)]
+        exe = _TrackingExecutor()
+        agg = await fanout_questions(questions, exe, cfg, budget)
+        assert exe.max_active <= MAX_FANOUT_CONCURRENCY, f"cap violated: {exe.max_active} > {MAX_FANOUT_CONCURRENCY}"  # noqa: E501
+        assert exe.max_active == MAX_FANOUT_CONCURRENCY  # proves cap is exercised (6 Qs with cap 3)
+        assert len(agg.results) == 6
+        # No overrun
+        assert budget.used <= budget.total
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_fanout_aggregate_budget_stops_new_lets_inflight_finish_no_overrun() -> None:
+    """Budget exhaustion STOPS new dispatches but lets in-flight finish — no overruns."""
+    async def _run() -> None:
+        cfg = FanoutConfig(max_concurrency=2, max_questions=9)
+        budget = FanoutBudget(total=2)
+        questions = [f"q{i}" for i in range(5)]
+        exe = _TrackingExecutor()
+        agg = await fanout_questions(questions, exe, cfg, budget)
+        # Only 2 dispatched, 3 budget_exhausted
+        assert budget.used == 2
+        assert budget.used <= budget.total  # no overrun
+        ok = [r for r in agg.results if r.status == "ok"]
+        exhausted = [r for r in agg.results if r.status == "budget_exhausted"]
+        assert len(ok) == 2
+        assert len(exhausted) == 3
+        assert len(agg.results) == 5  # no dropped
+        assert agg.status == "partial_with_errors"
+        # In-flight finished: the 2 ok have outputs
+        assert all(r.output is not None for r in ok)
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_fanout_aggregation_order_independence() -> None:
+    """Results rejoin in plan order regardless of completion order."""
+    async def _run() -> None:
+        cfg = FanoutConfig(max_concurrency=2, max_questions=9)
+        budget = FanoutBudget(total=9)
+        questions = ["q0", "q1", "q2"]
+        exe = _ReverseOrderExecutor()
+        agg = await fanout_questions(questions, exe, cfg, budget)
+        # Plan order, not completion order
+        assert [r.question for r in agg.results] == questions
+        assert [r.index for r in agg.results] == [0, 1, 2]
+        assert [r.output for r in agg.results] == ["r0", "r1", "r2"]
+        assert agg.status == "completed"
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_fanout_failed_sibling_does_not_poison_others_partial_with_errors() -> None:
+    """Failed subquestion does not poison siblings but is recorded, aggregate partial."""
+    async def _run() -> None:
+        cfg = FanoutConfig(max_concurrency=3, max_questions=9)
+        budget = FanoutBudget(total=9)
+        questions = ["q0", "q1", "q2"]
+        exe = _TrackingExecutor(fail_at=1)
+        agg = await fanout_questions(questions, exe, cfg, budget)
+        assert len(agg.results) == 3  # dropped sibling results: 0
+        assert agg.results[0].status == "ok" and agg.results[0].output is not None
+        assert agg.results[1].status == "failed" and "fail-1" in (agg.results[1].error or "")
+        assert agg.results[2].status == "ok"
+        assert agg.succeeded == 2
+        assert agg.failed == 1
+        assert agg.status == "partial_with_errors"
+        # Order preserved
+        assert [r.index for r in agg.results] == [0, 1, 2]
+
+    asyncio.run(_run())
