@@ -4050,3 +4050,120 @@ def test_fanout_failed_sibling_does_not_poison_others_partial_with_errors() -> N
         assert [r.index for r in agg.results] == [0, 1, 2]
 
     asyncio.run(_run())
+
+# ======================================================================================
+# T-V3-018 — Gap analysis + unknowns retention (what evidence does NOT cover)
+# ======================================================================================
+
+from agents.gap import (  # noqa: E402
+    REASON_NO_EVIDENCE,
+    REASON_NOT_GROUNDED,
+    GapAnalyzer,
+)
+from agents.verifier import InMemoryChunkSource as _ChunkSource2  # noqa: E402
+
+
+def _gap_evidence(statement: str, chunk_id: str = "chk-1") -> EvidenceRecord:
+    return EvidenceRecord(
+        run_id="run-gap",
+        trace_id="trace-1",
+        workspace_id="ws-1",
+        statement=statement,
+        citations=[Citation(document_id="doc-1", chunk_id=chunk_id, quote=statement, source_hash="h")],  # noqa: E501
+        chunk_ids=[chunk_id],
+        verdict="SUPPORTED",
+        document_id="doc-1",
+        chunk_id=chunk_id,
+        source_hash="h",
+    )
+
+
+@pytest.mark.unit
+def test_gap_unsupported_questions_without_named_unknowns_zero() -> None:
+    """Unsupported questions without named unknowns: 0."""
+    async def _run() -> None:
+        source = _ChunkSource2({"chk-1": "The budget is 900 dollars."})
+        analyzer = GapAnalyzer(chunk_source=source)
+        questions = ["What is the budget?", "What is the deadline?", "What is the scope?"]
+        # Only first question has supporting evidence
+        ev = _gap_evidence("The budget is 900 dollars.", "chk-1")
+        report = await analyzer.analyze(
+            questions,
+            evidence_by_question={"What is the budget?": [ev], "What is the deadline?": [], "What is the scope?": []},  # noqa: E501
+            searched_by_question={"What is the deadline?": ["chk-2"], "What is the scope?": []},
+        )
+        assert len(report.unknowns) == 2
+        assert len(report.covered) == 1
+        assert "What is the budget?" in report.covered
+        # Every unsupported has a named Unknown with reason
+        for u in report.unknowns:
+            assert u.question
+            assert u.reason in (REASON_NO_EVIDENCE, REASON_NOT_GROUNDED, "CHUNK_MISSING")
+            # what was searched retained
+            assert isinstance(u.searched, list)
+            assert isinstance(u.tried_chunk_ids, list)
+        # No silent omission: total = covered + unknowns
+        assert report.total_questions == 3
+        assert len(report.covered) + len(report.unknowns) == 3
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_gap_adversarial_plausible_unrelated_all_rejected_unknown_retained_no_filler() -> None:
+    """Fabricated-gap-fillers: 0 — plausible-but-unrelated chunks all rejected, unknown retained."""
+    async def _run() -> None:
+        # Chunk contains plausible but unrelated content — grounder will reject
+        unrelated_content = "The project deadline is Friday. Budget unrelated."  # does not contain the statement verbatim  # noqa: E501
+        source = _ChunkSource2({"chk-unrelated": unrelated_content})
+        analyzer = GapAnalyzer(chunk_source=source)
+        questions = ["What is the budget?"]
+        # Evidence claims "The budget is 900 dollars." but chunk does not ground it
+        ev = _gap_evidence("The budget is 900 dollars.", "chk-unrelated")
+        report = await analyzer.analyze(
+            questions,
+            evidence_by_question={"What is the budget?": [ev]},
+            searched_by_question={"What is the budget?": ["chk-unrelated"]},
+        )
+        # Must be gap, not filler
+        assert len(report.unknowns) == 1
+        assert report.unknowns[0].reason == REASON_NOT_GROUNDED
+        assert len(report.covered) == 0
+        assert report.gaps == 1
+        # No fabricated answer — Unknown retained with what was searched
+        assert report.unknowns[0].tried_chunk_ids == ["chk-unrelated"]
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_gap_zero_supporting_chunks_produces_named_unknown_not_hole() -> None:
+    """Synthesis input with zero supporting chunks must produce named unknown."""
+    async def _run() -> None:
+        source = _ChunkSource2({})
+        analyzer = GapAnalyzer(chunk_source=source)
+        questions = ["What is X?", "What is Y?"]
+        report = await analyzer.analyze(questions, evidence_by_question={}, searched_by_question={})
+        assert len(report.unknowns) == 2
+        assert report.gaps == 2
+        assert report.covered == []
+        for u in report.unknowns:
+            assert u.reason == REASON_NO_EVIDENCE
+            assert u.question in questions
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_gap_uses_production_grounder_one_grounder_rule() -> None:
+    """Reuse verifier seam — one-grounder rule stands."""
+    import inspect
+
+    from agents import gap as gm
+
+    src = inspect.getsource(gm)
+    assert "from answer.verification import ExtractiveGrounder" in src
+    source = _ChunkSource2({"chk-1": "The budget is 900 dollars."})
+    analyzer = GapAnalyzer(chunk_source=source)
+    assert type(analyzer.grounder).__name__ == "ExtractiveGrounder"
+
