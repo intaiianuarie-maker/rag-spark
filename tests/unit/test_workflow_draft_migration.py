@@ -182,9 +182,9 @@ def test_up_migration_produces_documented_schema(scratch_db) -> None:
     cols = con.execute("PRAGMA table_info(workflow_draft_revisions)").fetchall()
     names = [c[1] for c in cols]
     assert names == [
+        "workspace_id",
         "workflow_id",
         "revision",
-        "workspace_id",
         "content_hash",
         "spec",
         "summary",
@@ -194,8 +194,12 @@ def test_up_migration_produces_documented_schema(scratch_db) -> None:
     ]
     # (cid, name, type, notnull, dflt_value, pk)
     by_name = {c[1]: c for c in cols}
-    assert [by_name["workflow_id"][5], by_name["revision"][5]] == [1, 2]
-    for required in ("workflow_id", "revision", "workspace_id", "content_hash",
+    # Workspace is part of the primary key (T-V4-020 / R-004).
+    pk_columns = [
+        name for name, col in sorted(by_name.items(), key=lambda kv: kv[1][5]) if col[5]
+    ]
+    assert pk_columns == ["workspace_id", "workflow_id", "revision"]
+    for required in ("workspace_id", "workflow_id", "revision", "content_hash",
                      "spec", "summary", "created_at"):
         assert by_name[required][3] == 1, f"{required} must be NOT NULL"
     for optional in ("parent_revision", "parent_hash"):
@@ -211,18 +215,19 @@ def test_up_migration_produces_documented_schema(scratch_db) -> None:
 def test_primary_key_blocks_rewrite_of_an_existing_revision(scratch_db) -> None:
     """Append-only in the storage layer: PK makes a rewrite a constraint error.
 
-    Note that SQL itself still permits ``UPDATE`` on a table; the guarantee is
-    the store never issues one, plus the PK that refuses a duplicate insert and
-    the CHECK chain that refuses a backwards revision. The store, not SQLite,
-    is the boundary that keeps history append-only.
+    Note that SQL itself still permits ``UPDATE`` on a table; the guarantee
+    is the store never issues one, plus the PK that refuses a duplicate
+    insert and the CHECK chain that refuses a backwards revision. The store,
+    not SQLite, is the boundary that keeps history append-only.
     """
     _, con = scratch_db
     _apply(UP_SQL, con)
     row = (
-        "wf-1", 1, "ws-1", "a" * 64, "{}", "", None, None, "2026-10-14T00:00:00+00:00",
+        "ws-1", "wf-1", 1, "a" * 64, "{}", "", None, None,
+        "2026-10-14T00:00:00+00:00",
     )
     con.execute(
-        "INSERT INTO workflow_draft_revisions (workflow_id, revision, workspace_id,"
+        "INSERT INTO workflow_draft_revisions (workspace_id, workflow_id, revision,"
         " content_hash, spec, summary, parent_revision, parent_hash, created_at)"
         " VALUES (?,?,?,?,?,?,?,?,?)",
         row,
@@ -232,7 +237,7 @@ def test_primary_key_blocks_rewrite_of_an_existing_revision(scratch_db) -> None:
     # Re-inserting an existing revision is refused by the primary key.
     with pytest.raises(sqlite3.IntegrityError):
         con.execute(
-            "INSERT INTO workflow_draft_revisions (workflow_id, revision, workspace_id,"
+            "INSERT INTO workflow_draft_revisions (workspace_id, workflow_id, revision,"
             " content_hash, spec, summary, parent_revision, parent_hash, created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
             row,
@@ -240,13 +245,37 @@ def test_primary_key_blocks_rewrite_of_an_existing_revision(scratch_db) -> None:
     # A backwards revision number is refused by the CHECK chain.
     with pytest.raises(sqlite3.IntegrityError):
         con.execute(
-            "INSERT INTO workflow_draft_revisions (workflow_id, revision, workspace_id,"
+            "INSERT INTO workflow_draft_revisions (workspace_id, workflow_id, revision,"
             " content_hash, spec, summary, parent_revision, parent_hash, created_at)"
-            " VALUES ('wf-1', 1, 'ws-1', ?, '{}', '', 2, NULL, '2026-10-14T00:00:00+00:00')",
+            " VALUES ('ws-1', 'wf-1', 1, ?, '{}', '', 2, NULL, '2026-10-14T00:00:00+00:00')",
             ("b" * 64,),
         )
     con.rollback()
     assert con.execute("SELECT COUNT(*) FROM workflow_draft_revisions").fetchone()[0] == 1
+
+
+@pytest.mark.unit
+def test_same_workflow_id_in_two_workspaces_coexists(scratch_db) -> None:
+    """T-V4-020: scope is part of the key, so ids cannot collide across workspaces."""
+    _, con = scratch_db
+    _apply(UP_SQL, con)
+    for workspace, name in (("ws-1", "alpha"), ("ws-2", "beta")):
+        con.execute(
+            "INSERT INTO workflow_draft_revisions (workspace_id, workflow_id, revision,"
+            " content_hash, spec, summary, parent_revision, parent_hash, created_at)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (workspace, "wf-shared", 1, "a" * 64, "{}", name, None, None, "t"),
+        )
+    con.commit()
+
+    # A cross-workspace read by workflow_id alone is ambiguous; by the full key
+    # each workspace sees only its own row.
+    rows = con.execute(
+        "SELECT workspace_id, summary FROM workflow_draft_revisions"
+        " WHERE workspace_id=? AND workflow_id=? ORDER BY revision",
+        ("ws-2", "wf-shared"),
+    ).fetchall()
+    assert rows == [("ws-2", "beta")]
 
 
 @pytest.mark.unit

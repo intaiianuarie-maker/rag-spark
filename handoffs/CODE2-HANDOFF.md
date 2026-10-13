@@ -4165,3 +4165,152 @@ file) in a `-k workflow` run that was concurrent with him editing executor.py.
 It passed 3/3 alone afterwards, 563/0 in two further in-suite runs, and the full
 unit suite was 1735 passed / 0 failed. I report it because I saw it, not because
 it stands: it is his area and it is currently green.
+---
+
+## T-V4-020 — W4 ACL + credential-reference hygiene
+
+```text
+TASK: T-V4-020 (W4) — every W4 surface carries workspace scoping end-to-end and
+       no credential material crosses any of them. Credentials travel by
+       REFERENCE (vault id / name), never by value; value-shaped credentials are
+       refused at every boundary — never stored, logged or echoed.
+CHANGE: packages/workflow_engine/credential_hygiene.py (NEW, ~330 lines) — the
+        single source of truth for the credential rule: deny vocabulary
+        (exact keys + tokens), reference-key suffixes, secret rewrites,
+        CredentialReference (with the grammar enforced IN THE MODEL),
+        is_credential_key / is_reference_key / find_secret_text /
+        find_credential_value / assert_references_only / redact_text.
+        packages/workflow_engine/store_discipline.py (MODIFIED) — deleted its
+        private deny-list and regex set; now imports the shared grammar, so
+        there is exactly one list in W4. StoreSecretError now subclasses
+        CredentialValueError (one catch for a handler screening every boundary).
+        packages/workflow_engine/draft_store.py (MODIFIED) — history re-keyed
+        (workspace_id, workflow_id); every read/write takes workspace_id first
+        on both the ABC and the implementation; cross-workspace reads return
+        nothing / refuse; credential rule via the shared module.
+        packages/workflow_engine/routes/schemas.py (MODIFIED) — request body now
+        refuses credential values (and reference-shaped keys carrying values) at
+        the API boundary via the same grammar; new DraftLookupScope so an
+        unscoped read is not expressible in a handler's signatures.
+        packages/workflow_engine/migrations/0001_workflow_draft_revisions.up.sql
+        (MODIFIED) — PK is now (workspace_id, workflow_id, revision) and a
+        workflow_id non-empty CHECK is added; down.sql untouched (drops the table).
+        packages/workflow_engine/migrations/README.md (MODIFIED) — documents the
+        new composite key as the scope guarantee.
+        tests: test_workflow_credential_hygiene.py (NEW, 17 tests — the hostile
+        battery) + updated draft_store (32) / route_schemas (32) /
+        draft_migration (19).
+WHY:    R-004 (ACL before ranking) applies to the storage and API surface, not
+        just retrieval. The T-V4-017 store keyed history by workflow_id alone,
+        so two workspaces using the same id collided and any read was
+        unscoped — that is a cross-workspace read waiting to happen. The
+        credential rule existed only in the store; a secret-bearing draft would
+        be refused at persistence but echoed by an API that validated shape
+        only. Both are exactly the "contracts leak nothing" question this ticket
+        asks, and both are fixed at every boundary from one grammar.
+REUSED: One grammar shared by store and API: credential_hygiene is pure (no
+        store import, no persistence), which is what lets routes/schemas.py
+        enforce the same rule T-V4-017 established without the T-V4-019
+        "no store import" rule being broken. V3 StepStore deny-list discipline
+        and the store's own 017 rules are the lineage; the repo's
+        graph/sqlite_store.py precedent keeps workspace_id an indexed plain
+        column rather than a cross-domain FK, and the composite PK gives the
+        isolation the FK would have.
+
+SCOPE TABLE (accepted scope -> what is reachable):
+  (workspace_id, workflow_id)            -> that workspace's revision history; reads and writes.
+  workspace_id alone                     -> workflow_ids() in that workspace only.
+  (workspace_id, workflow_id, revision) -> exactly one revision; anything else raises DraftNotFoundError.
+  cross-workspace id                     -> NOTHING: history [] / latest None / count 0 / get raises.
+  DraftRevision                          -> carries workspace_id, content_hash (64 hex), summary
+                                            (bounded+redacted), parent_revision/parent_hash, created_at.
+  credential value (any form)            -> REFUSED at store AND API boundary (422), nothing written.
+  credential reference (vault:/name)     -> ACCEPTED and stored verbatim; hash still verifies.
+  reference key + value                   -> REFUSED (a value wearing a reference's name).
+
+BUILT:  Composite-key scoping end-to-end (store keys, ABC signatures, SQL PK,
+        route paths, DraftLookupScope type); a `no_read_api_exists_without_a_
+        workspace` structural test; the shared credential module with the grammar
+        enforced in the pydantic model (not just in a predicate); deny-key
+        matching that catches api_key / private_key / client_secret /
+        auth_token while leaving sort_key / tokenizer_vocab / template alone; a
+        reference grammar that rejects secret-shaped material and >24-char
+        unbroken runs (so a short raw key cannot pass as a "name"); and redaction
+        that clears the whole value, not its first word.
+VERIFY: test_workflow_credential_hygiene.py → 17 passed.
+        W4 suites (draft store, migration, routes, credentials, checkpoint)
+        → 114 passed.
+        tests/unit -k workflow → 605 passed, 0 failed.
+        tests/unit (full) → 1777 passed, 0 failed.
+        ruff check packages/workflow_engine/ → All checks passed.
+        mypy packages/workflow_engine/ → Success, 15 source files.
+        METRIC 1 — unscoped W4 reads = 0. Cross-workspace: history() == [],
+        latest() is None, count() == 0, get() raises DraftNotFoundError, while
+        the same-workspace control returns 2 revisions / head 2 / revision 1.
+        Same workflow id in ws-1 and ws-2 coexists with independent histories.
+        A write into a workspace the caller is not scoped to raises
+        DraftWorkspaceError and leaves history untouched. Structurally: every
+        read method on the DraftStore ABC takes workspace_id as its first
+        parameter (asserted by signature inspection), and the API contract
+        exposes no lookup type without both scope fields.
+        METRIC 2 — credential values accepted at any W4 boundary = 0. A hostile
+        battery of 12 value forms (password, api_key, authorization, token,
+        client_secret, passwd, nested headers, nested private_key, and three
+        reference-shaped keys carrying values: api_key_ref: sk-…,
+        password_ref: Bearer …, secret_ref: "nope …") is refused at the store
+        AND at the route schema. A second battery of 7 reference forms
+        (api_key_ref: vault:prod/api-key, db_password_name, credential_id,
+        secret_ref: vault:team/infra/db-password, token_name,
+        authorization_ref, nested) is accepted at both, survives the round trip
+        verbatim, and still verifies its content_hash.
+RISKS:  1. Two REAL defects my own battery found in the new code, fixed here:
+        (a) is_credential_key() split keys on non-alphanumerics, so "api_key"
+        tokenised to ["api","key"] and could NEVER match a deny entry — the
+        original 017 guard only ever caught single-word keys like password/
+        authorization. Now matched exact-first then by token, which also lets
+        client_secret and auth_token be caught without adding a bare "key"
+        token that would refuse sort_key. (b) the reference grammar accepted
+        "sk-" + 30 chars as a bare name (letters+digits, <=128, no =/space), so
+        a short raw key passed as a reference. References now must reject
+        secret-shaped material and must be short separator-joined runs
+        (<=24 chars), because credential material is an unbroken blob.
+        (c) discoverable only by re-reading: DenyAssignment's value group was
+        \S+, so redaction cleared "Bearer" and left the token.
+        2. Auth keys are deliberately refused, not whitelisted: a config key
+        containing the token "auth" (auth_mode, auth_scheme) is refused. This
+        is the V3 deny-list posture, applied to config only — node ids, names
+        and descriptions are never screened, so a node named auth_check still
+        saves. Disclosed because it is a false-positive risk by design.
+        3. CredentialReference.parse() is the sanctioned way to validate a
+        reference from outside W4; it enforces the grammar in the model, so it
+        cannot be bypassed by a caller that forgets is_reference().
+        4. The store's in-memory history is now keyed by a tuple, so any code
+        reaching into `store._history` by workflow_id alone reads nothing. No
+        production code does (the ABC is the surface); a test that did would
+        fail loudly rather than silently reading the wrong bucket.
+        5. This ticket CHANGED the migration draft's PK. The migration was never
+        applied (T-V4-018 proved it), so changing the draft is safe; the
+        reviewer's sign-off is on the new composite key, and the README now
+        records that the change happened here and why.
+        6. Route schema imports credential_hygiene (pure). The T-V4-019
+        "no store import" test was updated to name this as the ONE allowed
+        non-model dependency and to still forbid draft_store /
+        store_discipline / checkpoint / executor — the line is now explicit
+        rather than implied by a shorter forbidden list.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4020_start.txt):
+- START (HEAD `d399d3d`): 25 dirty paths — 6 modified handoffs, dev1's live
+  executor.py/interfaces.py/fake_runtime, his untracked executor_bounds test,
+  16 untracked handoff docs. Index empty.
+- END (HEAD `ae662ce`): dev1's executor/interfaces/fake_runtime work was
+  committed mid-ticket and is no longer dirty; his executor_bounds test is also
+  gone (absorbed). MY delta is exactly 7 tracked modifications and 2 new files:
+  `?? packages/workflow_engine/credential_hygiene.py`, `?? tests/unit/
+  test_workflow_credential_hygiene.py`, plus ` M` on draft_store.py,
+  store_discipline.py, routes/schemas.py,
+  migrations/0001_workflow_draft_revisions.up.sql, migrations/README.md,
+  tests/unit/test_workflow_draft_store.py, test_workflow_route_schemas.py,
+  test_workflow_draft_migration.py, and this handoff row.
+- Every modified path is inside my W4 allowlist (packages/workflow_engine/
+  W4 files + covering tests + this handoff). 0 foreign paths modified by me;
+  0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.

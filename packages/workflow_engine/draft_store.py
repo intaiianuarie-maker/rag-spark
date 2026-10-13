@@ -121,18 +121,32 @@ class DraftStore(ABC):
 
     The surface is deliberately minimal — create, read, list — with no
     mutating write of any kind.
+
+    **Every read is workspace-scoped** (T-V4-020 / R-004). There is no
+    unscoped read on this ABC: ``get``, ``latest``, ``history``, ``count`` and
+    ``workflow_ids`` all take ``workspace_id`` first, and an implementation
+    that accepts a bare workflow id has no way to satisfy the contract. A
+    cross-workspace lookup returns nothing or refuses rather than disclosing
+    that another workspace has a draft with that id.
     """
 
     @abstractmethod
     async def save_draft(self, definition: WorkflowDefinition) -> DraftRevision:
-        """Store *definition* as revision 1 of a new workflow."""
+        """Store *definition* as revision 1 of a new workflow.
+
+        Scope comes from ``definition.workspace_id`` — there is no variant
+        that writes into a caller-chosen workspace.
+        """
         raise NotImplementedError
 
     @abstractmethod
     async def revise(
-        self, workflow_id: str, definition: WorkflowDefinition
+        self,
+        workspace_id: str,
+        workflow_id: str,
+        definition: WorkflowDefinition,
     ) -> DraftRevision:
-        """Append a new revision of *workflow_id* from *definition*.
+        """Append a new revision of *workflow_id* in *workspace_id*.
 
         Identical content to the current head returns that head unchanged
         (idempotent — no history growth, no rewrite).
@@ -140,28 +154,34 @@ class DraftStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
-    async def get(self, workflow_id: str, revision: int) -> DraftRevision:
-        """Read back revision *revision* of *workflow_id* verbatim."""
+    async def get(
+        self, workspace_id: str, workflow_id: str, revision: int
+    ) -> DraftRevision:
+        """Read back revision *revision* of *workflow_id* in *workspace_id*."""
         raise NotImplementedError
 
     @abstractmethod
-    async def latest(self, workflow_id: str) -> DraftRevision | None:
-        """Current head revision, or ``None`` if the workflow is unknown."""
+    async def latest(
+        self, workspace_id: str, workflow_id: str
+    ) -> DraftRevision | None:
+        """Current head revision, or ``None`` if none exists in this scope."""
         raise NotImplementedError
 
     @abstractmethod
-    async def history(self, workflow_id: str) -> list[DraftRevision]:
-        """Every revision of *workflow_id*, ascending, immutable."""
+    async def history(
+        self, workspace_id: str, workflow_id: str
+    ) -> list[DraftRevision]:
+        """Every revision of *workflow_id* in *workspace_id*, ascending."""
         raise NotImplementedError
 
     @abstractmethod
-    async def count(self, workflow_id: str) -> int:
-        """Number of revisions stored for *workflow_id*."""
+    async def count(self, workspace_id: str, workflow_id: str) -> int:
+        """Number of revisions stored for *workflow_id* in *workspace_id*."""
         raise NotImplementedError
 
     @abstractmethod
-    async def workflow_ids(self) -> list[str]:
-        """Every workflow id known to the store (ascending)."""
+    async def workflow_ids(self, workspace_id: str) -> list[str]:
+        """Every workflow id in *workspace_id* (ascending)."""
         raise NotImplementedError
 
 
@@ -200,10 +220,17 @@ class InMemoryDraftStore(DraftStore):
     Not concurrency-safe: this is the in-memory implementation behind the
     ABC seam for the W4 lane, and a durable backend will be the concurrent
     one. Callers must not interleave writes to one workflow id.
+
+    Workspace scoping (R-004, hardened in T-V4-020): every read and write is
+    keyed by ``(workspace_id, workflow_id)``, and no read API exists that is
+    not scoped. A cross-workspace read therefore cannot see another
+    workspace's draft: it returns nothing (``history``) or refuses
+    (``get``/``latest``), exactly as if the workflow did not exist in the
+    caller's scope — never "some other workspace's revision 1".
     """
 
     def __init__(self) -> None:
-        self._history: dict[str, list[DraftRevision]] = {}
+        self._history: dict[tuple[str, str], list[DraftRevision]] = {}
 
     # -- internal ------------------------------------------------------------------ #
 
@@ -213,7 +240,7 @@ class InMemoryDraftStore(DraftStore):
         *,
         parent: DraftRevision | None,
     ) -> DraftRevision:
-        # Identity, workspace, secret and size gates all run *before* the
+        # Identity, workspace, credential and size gates all run *before* the
         # record exists, so a refused write leaves history untouched.
         if parent is not None and definition.id != parent.workflow_id:
             raise DraftIdentityError(
@@ -229,7 +256,8 @@ class InMemoryDraftStore(DraftStore):
         assert_no_secret_config(definition)
         enforce_bounds(canonical_bytes(definition), limit=MAX_PAYLOAD_BYTES)
 
-        revisions = self._history.get(definition.id, [])
+        key = (definition.workspace_id, definition.id)
+        revisions = self._history.get(key, [])
         if parent is not None:
             # Defensive: the caller must pass the true head.
             if revisions and parent.number != revisions[-1].number:
@@ -258,26 +286,41 @@ class InMemoryDraftStore(DraftStore):
         )
         # Store a copy: the caller may keep mutating its own object.
         revisions.append(record.model_copy(deep=True))
-        self._history[definition.id] = revisions
+        self._history[key] = revisions
         return record.model_copy(deep=True)
+
+    def _revisions(
+        self, workspace_id: str, workflow_id: str
+    ) -> list[DraftRevision]:
+        """Scoped history lookup; never broadens beyond the caller's workspace."""
+        return self._history.get((workspace_id, workflow_id), [])
 
     # -- public API ---------------------------------------------------------------- #
 
     async def save_draft(self, definition: WorkflowDefinition) -> DraftRevision:
-        revisions = self._history.get(definition.id, [])
+        revisions = self._revisions(definition.workspace_id, definition.id)
         if revisions:
             raise DraftConflictError(
-                f"workflow {definition.id!r} already has {len(revisions)} "
+                f"workflow {definition.id!r} in workspace "
+                f"{definition.workspace_id!r} already has {len(revisions)} "
                 "revision(s); use revise() to append another"
             )
         return await self._append(definition, parent=None)
 
     async def revise(
-        self, workflow_id: str, definition: WorkflowDefinition
+        self,
+        workspace_id: str,
+        workflow_id: str,
+        definition: WorkflowDefinition,
     ) -> DraftRevision:
-        revisions = self._history.get(workflow_id, [])
+        if definition.workspace_id != workspace_id:
+            raise DraftWorkspaceError(
+                f"definition workspace {definition.workspace_id!r} does not "
+                f"match the caller's scope {workspace_id!r}"
+            )
+        revisions = self._revisions(workspace_id, workflow_id)
         if not revisions:
-            # Unknown workflow: initialise it as revision 1.
+            # Unknown workflow in this scope: initialise it as revision 1.
             return await self._append(definition, parent=None)
         if definition.id != workflow_id:
             raise DraftIdentityError(
@@ -286,32 +329,36 @@ class InMemoryDraftStore(DraftStore):
             )
         return await self._append(definition, parent=revisions[-1])
 
-    async def get(self, workflow_id: str, revision: int) -> DraftRevision:
-        revisions = self._history.get(workflow_id)
+    async def get(self, workspace_id: str, workflow_id: str, revision: int) -> DraftRevision:
+        revisions = self._revisions(workspace_id, workflow_id)
         if not revisions:
-            raise DraftNotFoundError(f"unknown workflow {workflow_id!r}")
+            raise DraftNotFoundError(
+                f"no draft {workflow_id!r} in workspace {workspace_id!r}"
+            )
         for record in revisions:
             if record.number == revision:
                 return record.model_copy(deep=True)
         raise DraftNotFoundError(
-            f"workflow {workflow_id!r} has no revision {revision} "
-            f"(has {revisions[0].number}..{revisions[-1].number})"
+            f"draft {workflow_id!r} in workspace {workspace_id!r} has no "
+            f"revision {revision} (has {revisions[0].number}..{revisions[-1].number})"
         )
 
-    async def latest(self, workflow_id: str) -> DraftRevision | None:
-        revisions = self._history.get(workflow_id)
+    async def latest(self, workspace_id: str, workflow_id: str) -> DraftRevision | None:
+        revisions = self._revisions(workspace_id, workflow_id)
         if not revisions:
             return None
         return revisions[-1].model_copy(deep=True)
 
-    async def history(self, workflow_id: str) -> list[DraftRevision]:
-        return [r.model_copy(deep=True) for r in self._history.get(workflow_id, [])]
+    async def history(self, workspace_id: str, workflow_id: str) -> list[DraftRevision]:
+        return [r.model_copy(deep=True) for r in self._revisions(workspace_id, workflow_id)]
 
-    async def count(self, workflow_id: str) -> int:
-        return len(self._history.get(workflow_id, []))
+    async def count(self, workspace_id: str, workflow_id: str) -> int:
+        return len(self._revisions(workspace_id, workflow_id))
 
-    async def workflow_ids(self) -> list[str]:
-        return sorted(self._history)
+    async def workflow_ids(self, workspace_id: str) -> list[str]:
+        return sorted(
+            wid for (ws, wid) in self._history if ws == workspace_id
+        )
 
 
 __all__ = [

@@ -172,7 +172,13 @@ def test_schema_module_declares_no_routes() -> None:
 
 @pytest.mark.unit
 def test_schema_module_imports_no_store() -> None:
-    """Card metric: no store import — contracts outlive the backend."""
+    """Card metric (T-V4-019/020): no store import — contracts outlive the backend.
+
+    The schema layer may import the shared *models* and the pure
+    ``credential_hygiene`` module (one rule, one list), never the store, its
+    discipline helpers or persistence. That is the line that keeps a schema
+    change from becoming a storage change.
+    """
     import ast
 
     tree = ast.parse(SCHEMAS.read_text(encoding="utf-8"))
@@ -182,12 +188,18 @@ def test_schema_module_imports_no_store() -> None:
             modules.add(node.module or "")
         elif isinstance(node, ast.Import):
             modules.update(a.name for a in node.names)
-    assert not {m for m in modules if m.endswith(("draft_store", "store_discipline"))}, (
-        modules
-    )
-    assert not {"InMemoryDraftStore", "SqliteCheckpointStore"} & {
-        n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
+
+    forbidden = {
+        m
+        for m in modules
+        if m.endswith(("draft_store", "store_discipline", "checkpoint", "executor"))
     }
+    assert not forbidden, f"schema module imports the store/persistence: {forbidden}"
+    # The one non-model dependency it is allowed to have, and it must be pure.
+    assert any(m.endswith("credential_hygiene") for m in modules), modules
+    assert {"InMemoryDraftStore", "SqliteCheckpointStore", "DraftStore"} & {
+        n.id for n in ast.walk(tree) if isinstance(n, ast.Name)
+    } == set()
 
 
 @pytest.mark.unit
@@ -403,6 +415,96 @@ def test_a_node_without_ports_is_still_legal() -> None:
     payload = _body()
     payload["nodes"][0]["output_ports"] = []
     payload["edges"] = []
+    assert DraftSaveRequest.model_validate(payload)
+
+
+# --------------------------------------------------------------------------- #
+# 4. Credential-reference hygiene at the API boundary (T-V4-020)
+# --------------------------------------------------------------------------- #
+
+
+def _body_with_config(**config: object) -> dict:
+    payload = _body()
+    payload["nodes"][1]["config"] = dict(config)
+    return payload
+
+
+@pytest.mark.unit
+def test_credential_by_value_is_refused_at_the_boundary() -> None:
+    """Card metric: credential values accepted at a W4 boundary = 0."""
+    hostile = {
+        "password": "hunter2",
+        "api_key": "sk-" + "a" * 30,
+        "authorization": "Bearer " + "z" * 24,
+        "token": "ghp_" + "b" * 30,
+        "headers": {"Authorization": "Bearer " + "q" * 24},
+        "client_secret": "supersecretvalue",
+        "auth": "none",
+    }
+    for key, value in hostile.items():
+        _rejects(DraftSaveRequest, _body_with_config(**{key: value}))
+        _rejects(DraftReviseRequest, _body_with_config(**{key: value}))
+
+
+@pytest.mark.unit
+def test_credential_by_reference_is_accepted_at_the_boundary() -> None:
+    """The sanctioned form: a reference (vault id / name), never the value."""
+    accepted = {
+        "api_key_ref": "vault:prod/api-key",
+        "db_password_name": "primary-db-credential",
+        "credential_id": "cred-7f3a9",
+        "secret_ref": "vault:team/infra/db-password",
+        "token_name": "svc-account-token",
+    }
+    for key, value in accepted.items():
+        assert DraftSaveRequest.model_validate(_body_with_config(**{key: value}))
+        assert DraftReviseRequest.model_validate(_body_with_config(**{key: value}))
+
+
+@pytest.mark.unit
+def test_a_reference_key_carrying_a_value_is_still_refused() -> None:
+    """``api_key_ref: sk-live-…`` is a value wearing a reference's name."""
+    _rejects(DraftSaveRequest, _body_with_config(api_key_ref="sk-" + "a" * 30))
+    _rejects(DraftSaveRequest, _body_with_config(password_ref="Bearer " + "z" * 24))
+    _rejects(DraftSaveRequest, _body_with_config(secret_ref="nope " * 12))
+    _rejects(DraftSaveRequest, _body_with_config(credential_id=""))
+
+
+@pytest.mark.unit
+def test_route_lookup_scope_requires_both_scopes() -> None:
+    """T-V4-020: an unscoped read is not expressible in the contract."""
+    from workflow_engine.routes.schemas import DraftLookupScope
+
+    assert DraftLookupScope.model_validate(
+        {"workspace_id": "ws-1", "workflow_id": "wf-api"}
+    )
+    _rejects(DraftLookupScope, {"workflow_id": "wf-api"})
+    _rejects(DraftLookupScope, {"workspace_id": "ws-1"})
+    _rejects(DraftLookupScope, {"workspace_id": " ", "workflow_id": "wf-api"})
+    _rejects(DraftLookupScope, {"workspace_id": "ws-1", "workflow_id": "wf-api",
+                                "extra": 1})
+
+
+@pytest.mark.unit
+def test_error_catalogues_reflect_scoped_reads() -> None:
+    """Every draft route is workspace-scoped by construction."""
+    for contract in ROUTE_CONTRACTS:
+        assert "{workspace_id}" in contract.path, contract.name
+        assert "drafts" in contract.path, contract.name
+        # Reads and writes are both gated by an explicit auth action.
+        assert contract.auth in {
+            DraftAuth.WORKSPACE_READ,
+            DraftAuth.WORKSPACE_WRITE,
+        }, contract.name
+
+
+@pytest.mark.unit
+def test_node_names_are_not_a_credential_channel() -> None:
+    """Only node *config* is screened; ids/names/descriptions are not."""
+    payload = _body()
+    payload["nodes"][1]["id"] = "token-refresh"
+    payload["nodes"][1]["name"] = "auth_check"
+    payload["edges"][0]["target_node_id"] = "token-refresh"
     assert DraftSaveRequest.model_validate(payload)
 
 

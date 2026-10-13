@@ -184,6 +184,22 @@ class DraftHistoryQuery(BaseModel):
     limit: int = Field(default=DEFAULT_HISTORY_LIMIT, ge=1, le=MAX_HISTORY_LIMIT)
 
 
+class DraftLookupScope(BaseModel):
+    """The scope a draft read is addressed by: workspace **and** workflow.
+
+    Exists so an unscoped read is not expressible in a handler's type
+    signatures (T-V4-020 / R-004): the store's read API takes
+    ``(workspace_id, workflow_id, …)``, and this is the wire-shaped mirror of
+    that requirement. A lookup scoped only by workflow id has no field to live
+    in, so it cannot be written by accident.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    workspace_id: NonBlankId
+    workflow_id: NonBlankId
+
+
 # --------------------------------------------------------------------------- #
 # Request bodies
 # --------------------------------------------------------------------------- #
@@ -195,8 +211,8 @@ class DraftDefinitionRequest(WorkflowDefinition):
     The payload **is** the engine's :class:`WorkflowDefinition`, so node/port/
     edge validation is inherited rather than re-implemented — a handler gets a
     validated definition, not a dict. What this body adds is the wire-level
-    caps and structural invariants that must fail at the boundary rather than
-    deeper in.
+    caps, structural invariants and the credential rule (T-V4-020), all of
+    which must fail at the boundary rather than deeper in.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -208,6 +224,31 @@ class DraftDefinitionRequest(WorkflowDefinition):
         if not stripped:
             raise ValueError("identifier must not be blank")
         return stripped
+
+    @model_validator(mode="after")
+    def _no_credential_values(self) -> DraftDefinitionRequest:
+        """Credentials travel by REFERENCE (vault id / name), never by value.
+
+        Shares one grammar with the draft store via :mod:`credential_hygiene`
+        (a pure module, so the schema layer does not import the store), so the
+        API refuses exactly what the store would refuse and accepts exactly the
+        reference forms the store accepts. A reference-shaped key carrying a
+        value — ``api_key_ref: sk-live-…`` — is refused too: that is a value
+        wearing a reference's name.
+        """
+        from ..credential_hygiene import (
+            CredentialHygieneError,
+            assert_references_only,
+        )
+
+        for node in self.nodes or []:
+            try:
+                assert_references_only(node.config, where=f"node {node.id!r} config")
+            except CredentialHygieneError as exc:
+                # Both a value-shaped credential and a reference-shaped key
+                # carrying a value are 422s at this boundary.
+                raise ValueError(str(exc)[:160]) from exc
+        return self
 
     @model_validator(mode="after")
     def _within_caps(self) -> DraftDefinitionRequest:
@@ -554,6 +595,7 @@ __all__ = [
     "DraftErrorSpec",
     "DraftHistoryQuery",
     "DraftHistoryResponse",
+    "DraftLookupScope",
     "DraftMutationResponse",
     "DraftReviseRequest",
     "DraftRevisionDetail",

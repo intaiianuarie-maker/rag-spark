@@ -7,8 +7,14 @@
 --
 -- Design notes for the reviewer:
 --   * Append-only is enforced by the database, not by convention: the primary key
---     (workflow_id, revision) makes an UPDATE or a re-INSERT of an existing
---     revision impossible, so history cannot be rewritten or dropped by a write.
+--     (workspace_id, workflow_id, revision) makes an UPDATE or a re-INSERT of an
+--     existing revision impossible, so history cannot be rewritten or dropped by a
+--     write.
+--   * Workspace scope is PART OF THE KEY (T-V4-020 / R-004): a revision is
+--     addressed by (workspace_id, workflow_id, revision), so two workspaces that
+--     use the same workflow id cannot collide, and a cross-workspace lookup
+--     returns no rows by construction. Scope is not a query someone may forget
+--     to write — the database cannot serve a revision outside the keyed scope.
 --   * There is deliberately NO unique constraint on (workflow_id, content_hash):
 --     a revert is legal history in the T-V4-017 store (revision 3 may carry the
 --     hash of revision 1), so forbidding it here would contradict the store.
@@ -26,18 +32,19 @@
 -- partial failure can be retried safely.
 
 CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
+  workspace_id    TEXT NOT NULL,
   workflow_id     TEXT NOT NULL,
   revision        INTEGER NOT NULL,
-  workspace_id    TEXT NOT NULL,
   content_hash    TEXT NOT NULL,
   spec            TEXT NOT NULL,
   summary         TEXT NOT NULL DEFAULT '',
   parent_revision INTEGER,
   parent_hash     TEXT,
   created_at      TEXT NOT NULL,
-  PRIMARY KEY (workflow_id, revision),
+  PRIMARY KEY (workspace_id, workflow_id, revision),
   CHECK (revision >= 1),
   CHECK (length(workspace_id) > 0),
+  CHECK (length(workflow_id) > 0),
   CHECK (length(content_hash) = 64),
   CHECK (length(spec) > 0),
   CHECK (json_valid(spec)),

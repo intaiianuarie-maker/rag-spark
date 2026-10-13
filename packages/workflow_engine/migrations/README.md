@@ -35,18 +35,19 @@ type, so this migration is purely **additive** and safe to re-run.
 
 ```sql
 CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
+  workspace_id    TEXT NOT NULL,
   workflow_id     TEXT NOT NULL,
   revision        INTEGER NOT NULL,
-  workspace_id    TEXT NOT NULL,
   content_hash    TEXT NOT NULL,
   spec            TEXT NOT NULL,
   summary         TEXT NOT NULL DEFAULT '',
   parent_revision INTEGER,
   parent_hash     TEXT,
   created_at      TEXT NOT NULL,
-  PRIMARY KEY (workflow_id, revision),
+  PRIMARY KEY (workspace_id, workflow_id, revision),
   CHECK (revision >= 1),
   CHECK (length(workspace_id) > 0),
+  CHECK (length(workflow_id) > 0),
   CHECK (length(content_hash) = 64),
   CHECK (length(spec) > 0),
   CHECK (json_valid(spec)),
@@ -58,9 +59,9 @@ CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
 
 | column | type | null | meaning |
 |---|---|---|---|
+| `workspace_id` | TEXT | no | owning workspace; the ACL scope (R-004) and **part of the key** |
 | `workflow_id` | TEXT | no | draft workflow identity (the `WorkflowDefinition.id`) |
 | `revision` | INTEGER | no | 1-based, monotonic per workflow, never reused |
-| `workspace_id` | TEXT | no | owning workspace; the ACL scope (R-004) |
 | `content_hash` | TEXT | no | canonical SHA-256 of `spec`, per T-V4-008; exactly 64 hex chars |
 | `spec` | TEXT | no | the definition as **canonical JSON** (see §5 hazard) |
 | `summary` | TEXT | no | bounded, redacted one-line projection from the store |
@@ -70,12 +71,16 @@ CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
 
 **Constraints**
 
-- `PRIMARY KEY (workflow_id, revision)` — this is the append-only guarantee at
-  the storage layer: an existing revision cannot be UPDATEd or re-INSERTed
-  without a constraint violation, so history cannot be rewritten or dropped by
-  an application bug. It also subsumes the monotonic-number invariant: a
-  duplicate or backwards revision number is refused by the database rather than
-  trusted to the caller.
+- `PRIMARY KEY (workspace_id, workflow_id, revision)` **hardened in T-V4-020** —
+  this is the append-only guarantee at
+  the storage layer *and* the workspace-isolation guarantee: an existing
+  revision cannot be UPDATEd or re-INSERTed without a constraint violation, so
+  history cannot be rewritten or dropped by an application bug. It also
+  subsumes the monotonic-number invariant: a duplicate or backwards revision
+  number is refused by the database rather than trusted to the caller. Because
+  `workspace_id` is part of the key, two workspaces that use the same workflow
+  id cannot collide, and a cross-workspace row is unreachable by construction —
+  scope is not a query someone may forget to write.
 - `CHECK (revision >= 1)` — no zero/negative revision numbers.
 - `CHECK (length(content_hash) = 64)` — a full SHA-256 digest, not a prefix.
 - `CHECK (json_valid(spec))` — `spec` is parseable JSON at write time. **The
@@ -84,12 +89,13 @@ CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
 - `CHECK (parent_revision < revision)` — the parent chain always points
   backwards, so a cycle or self-parent is impossible.
 - `CHECK (length(workspace_id) > 0)` — a revision may never be scope-less.
+- `CHECK (length(workflow_id) > 0)` — a revision may never be id-less.
 
 **Indexes**
 
 | index | columns | serves |
 |---|---|---|
-| `idx_wdr_workspace` | `(workspace_id, workspace_id` ordering)` | workspace-scoped history reads, ACL filter first (R-004) |
+| `idx_wdr_workspace` | `(workspace_id, workflow_id, revision)` | workspace-scoped history reads, ACL filter first (R-004) |
 | `idx_wdr_identity` | `(workflow_id, content_hash)` | identity lookups: is this content already stored? |
 
 **Deliberately absent**
@@ -189,7 +195,7 @@ because it is the one way a "working" backend could silently corrupt identity.
       state.
 - [ ] Apply up; verify the three post-apply queries in the up file.
 - [ ] Verify `PRAGMA table_info(workflow_draft_revisions)` shows the primary key
-      on `(workflow_id, revision)` and 9 columns.
+      on `(workspace_id, workflow_id, revision)` and 9 columns.
 - [ ] Confirm `alembic_version` advanced by exactly one revision and no other
       revision file was modified.
 - [ ] Build the durable `DraftStore` behind the T-V4-017 ABC (it must stay the

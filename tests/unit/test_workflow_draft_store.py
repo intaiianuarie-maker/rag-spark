@@ -1,6 +1,6 @@
-"""T-V4-017 — versioned draft/revision store (in-memory) tests.
+"""T-V4-017 — versioned draft/revision store tests.
 
-Pinned properties (card):
+Pinned properties (T-V4-017, hardened by T-V4-020):
 1. History is append-only: **no** update / delete / overwrite path exists on
    the store surface, and an early revision reads back byte-identical after
    later revisions are appended.
@@ -8,8 +8,11 @@ Pinned properties (card):
    identically (across processes, i.e. under a different ``PYTHONHASHSEED``)
    and any byte change changes the hash.
 3. Revisions are monotonic per workflow and never reused.
-4. Store discipline: bounded payloads, secrets refused at the boundary,
-   redacted bounded summaries, deep-copy immutability.
+4. Store discipline: bounded payloads, credential values refused at the
+   boundary, redacted bounded summaries, deep-copy immutability.
+5. **Workspace scoping (T-V4-020 / R-004):** every read and write is scoped,
+   and a cross-workspace read sees nothing while the same-workspace control
+   passes.
 """
 
 from __future__ import annotations
@@ -28,6 +31,7 @@ from workflow_engine import (
     PortSpec,
     WorkflowDefinition,
     WorkflowEdgeSpec,
+    WorkflowRevision,
 )
 from workflow_engine.draft_store import (
     DraftConflictError,
@@ -140,11 +144,11 @@ async def test_early_revision_reads_back_byte_identical_after_later_writes() -> 
     first = await store.save_draft(_defn(name="v1"))
     snapshot = _canonical(first.spec)
 
-    await store.revise("wf-draft", _defn(name="v2", node_name="fmt2"))
-    await store.revise("wf-draft", _defn(name="v3", extra_nodes=2))
-    await store.revise("wf-draft", _defn(name="v4"))
+    await store.revise("ws-1", "wf-draft", _defn(name="v2", node_name="fmt2"))
+    await store.revise("ws-1", "wf-draft", _defn(name="v3", extra_nodes=2))
+    await store.revise("ws-1", "wf-draft", _defn(name="v4"))
 
-    reread = await store.get("wf-draft", 1)
+    reread = await store.get("ws-1", "wf-draft", 1)
     assert _canonical(reread.spec) == snapshot
     assert reread.content_hash == first.content_hash
     assert reread.number == 1
@@ -156,12 +160,12 @@ async def test_stored_revision_is_not_mutable_through_a_returned_copy() -> None:
     """Mutating a returned revision cannot rewrite history."""
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
-    got = await store.get("wf-draft", 1)
+    got = await store.get("ws-1", "wf-draft", 1)
 
     got.spec.nodes[1].name = "TAMPERED"
     assert verify_revision(got.revision) is False  # the copy no longer matches
-    assert (await store.get("wf-draft", 1)).spec.nodes[1].name == "fmt"
-    assert verify_revision((await store.get("wf-draft", 1)).revision)
+    assert (await store.get("ws-1", "wf-draft", 1)).spec.nodes[1].name == "fmt"
+    assert verify_revision((await store.get("ws-1", "wf-draft", 1)).revision)
 
 
 @pytest.mark.unit
@@ -172,7 +176,7 @@ async def test_caller_mutation_after_save_does_not_change_the_store() -> None:
     await store.save_draft(defn)
     defn.nodes[1].name = "mutated after save"
 
-    assert (await store.get("wf-draft", 1)).spec.nodes[1].name == "fmt"
+    assert (await store.get("ws-1", "wf-draft", 1)).spec.nodes[1].name == "fmt"
 
 
 # --------------------------------------------------------------------------- #
@@ -185,11 +189,11 @@ async def test_identical_content_hashes_identically() -> None:
     """Same bytes -> same revision identity (and no history growth)."""
     store = InMemoryDraftStore()
     a = await store.save_draft(_defn())
-    again = await store.revise("wf-draft", _defn())
+    again = await store.revise("ws-1", "wf-draft", _defn())
 
     assert again.content_hash == a.content_hash
     assert again.number == a.number == 1
-    assert await store.count("wf-draft") == 1
+    assert await store.count("ws-1", "wf-draft") == 1
 
 
 @pytest.mark.unit
@@ -207,13 +211,13 @@ async def test_any_byte_change_changes_the_hash() -> None:
         "trailing space": _defn(description="a "),
     }
     for label, variant in variants.items():
-        got = await store.revise("wf-draft", variant)
+        got = await store.revise("ws-1", "wf-draft", variant)
         assert got.content_hash != base.content_hash, (
             f"{label} must change revision identity"
         )
         assert got.number != base.number
 
-    assert await store.count("wf-draft") == 1 + len(variants)
+    assert await store.count("ws-1", "wf-draft") == 1 + len(variants)
 
 
 @pytest.mark.unit
@@ -241,7 +245,9 @@ async def test_no_hash_collisions_across_distinct_definitions() -> None:
         )
         hashes[record.content_hash] = defn.id
         # Identity maps back to exactly this content.
-        assert _canonical((await store.get(defn.id, 1)).spec) == _canonical(defn)
+        assert _canonical((await store.get(defn.workspace_id, defn.id, 1)).spec) == (
+            _canonical(defn)
+        )
 
 
 @pytest.mark.unit
@@ -274,7 +280,7 @@ def test_hash_is_process_independent() -> None:
 
 
 @pytest.mark.unit
-def test_hash_changes_under_capability_set_reordering_only_if_bytes_change() -> None:
+def test_hash_ignores_member_order_of_capability_sets() -> None:
     """A capability-set reordering with the same members is NOT a change."""
     first = WorkflowDefinition(
         id="wf-h", workspace_id="ws", name="n",
@@ -284,8 +290,6 @@ def test_hash_changes_under_capability_set_reordering_only_if_bytes_change() -> 
         id="wf-h", workspace_id="ws", name="n",
         workspace_capabilities={"retrieval", "llm"},
     )
-    from workflow_engine import WorkflowRevision
-
     assert WorkflowRevision.create(first).content_hash == (
         WorkflowRevision.create(second).content_hash
     )
@@ -301,12 +305,12 @@ async def test_revisions_are_monotonic_and_never_reused() -> None:
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
     seq = [
-        (await store.revise("wf-draft", _defn(name=f"v{i}"))).number
+        (await store.revise("ws-1", "wf-draft", _defn(name=f"v{i}"))).number
         for i in range(2, 7)
     ]
     assert seq == [2, 3, 4, 5, 6]
 
-    history = await store.history("wf-draft")
+    history = await store.history("ws-1", "wf-draft")
     assert [h.number for h in history] == [1, 2, 3, 4, 5, 6]
     for earlier, later in pairwise(history):
         assert later.parent_revision == earlier.number
@@ -318,23 +322,23 @@ async def test_revert_to_old_content_is_a_new_revision_not_a_rewrite() -> None:
     """History is append-only even when content already existed."""
     store = InMemoryDraftStore()
     await store.save_draft(_defn(name="v1"))
-    await store.revise("wf-draft", _defn(name="v2"))
+    await store.revise("ws-1", "wf-draft", _defn(name="v2"))
 
     # Content that already exists as revision 1: a *new* revision, not a
     # rewrite of revision 1, and the earlier revision is undisturbed.
-    reverted = await store.revise("wf-draft", _defn(name="v1"))
+    reverted = await store.revise("ws-1", "wf-draft", _defn(name="v1"))
     assert reverted.number == 3
-    assert reverted.content_hash == (await store.get("wf-draft", 1)).content_hash
-    assert await store.count("wf-draft") == 3
+    assert reverted.content_hash == (await store.get("ws-1", "wf-draft", 1)).content_hash
+    assert await store.count("ws-1", "wf-draft") == 3
 
-    assert (await store.get("wf-draft", 1)).spec.name == "v1"
-    assert (await store.get("wf-draft", 2)).spec.name == "v2"
+    assert (await store.get("ws-1", "wf-draft", 1)).spec.name == "v1"
+    assert (await store.get("ws-1", "wf-draft", 2)).spec.name == "v2"
 
 
 @pytest.mark.unit
 async def test_revise_on_unknown_workflow_initialises_revision_one() -> None:
     store = InMemoryDraftStore()
-    record = await store.revise("wf-fresh", _defn(wid="wf-fresh"))
+    record = await store.revise("ws-1", "wf-fresh", _defn(wid="wf-fresh"))
     assert record.number == 1
     assert record.parent_revision is None
     assert record.parent_hash is None
@@ -349,60 +353,62 @@ async def test_save_draft_on_existing_workflow_refuses() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# Reads / errors
+# 4. Workspace scoping (T-V4-020 / R-004)
 # --------------------------------------------------------------------------- #
 
 
 @pytest.mark.unit
-async def test_get_unknown_workflow_or_revision_refuses() -> None:
+async def test_cross_workspace_reads_return_nothing() -> None:
+    """Card metric: unscoped W4 reads = 0 — cross-workspace sees nothing."""
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
+    await store.revise("ws-1", "wf-draft", _defn(name="v2"))
+
+    # Another workspace asks for a draft with the same id.
+    assert await store.history("ws-2", "wf-draft") == []
+    assert await store.latest("ws-2", "wf-draft") is None
+    assert await store.count("ws-2", "wf-draft") == 0
     with pytest.raises(DraftNotFoundError):
-        await store.get("wf-other", 1)
-    with pytest.raises(DraftNotFoundError):
-        await store.get("wf-draft", 99)
-    with pytest.raises(DraftNotFoundError):
-        await store.get("wf-draft", 0)
+        await store.get("ws-2", "wf-draft", 1)
+
+    # Same-workspace control passes.
+    head = await store.latest("ws-1", "wf-draft")
+    assert head is not None and head.number == 2
+    assert len(await store.history("ws-1", "wf-draft")) == 2
+    assert (await store.get("ws-1", "wf-draft", 1)).number == 1
 
 
 @pytest.mark.unit
-async def test_latest_and_workflow_ids() -> None:
+async def test_same_workflow_id_in_two_workspaces_coexists() -> None:
+    """A shared workflow id is not a cross-workspace leak, and not a collision."""
     store = InMemoryDraftStore()
-    assert await store.latest("nope") is None
-    assert await store.workflow_ids() == []
+    one = await store.save_draft(_defn(name="alpha"))
+    two = await store.save_draft(_defn(workspace="ws-2", name="beta"))
 
-    await store.save_draft(_defn(wid="wf-b"))
-    await store.save_draft(_defn(wid="wf-a", workspace="ws-1"))
-    latest = await store.revise("wf-a", _defn(wid="wf-a", name="v2"))
+    assert one.workspace_id == "ws-1" and two.workspace_id == "ws-2"
+    assert (await store.get("ws-1", "wf-draft", 1)).spec.name == "alpha"
+    assert (await store.get("ws-2", "wf-draft", 1)).spec.name == "beta"
+    assert await store.workflow_ids("ws-1") == ["wf-draft"]
+    assert await store.workflow_ids("ws-2") == ["wf-draft"]
+    assert await store.workflow_ids("ws-3") == []
 
-    assert (await store.latest("wf-a")).number == latest.number
-    assert await store.workflow_ids() == ["wf-a", "wf-b"]
+    # Each workspace's history is independent.
+    await store.revise("ws-1", "wf-draft", _defn(name="alpha-2"))
+    assert await store.count("ws-1", "wf-draft") == 2
+    assert await store.count("ws-2", "wf-draft") == 1
 
 
 @pytest.mark.unit
-async def test_history_returns_copies_ascending() -> None:
+async def test_write_into_the_wrong_workspace_refuses() -> None:
+    """A caller may not write into a workspace it is not scoped to."""
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
-    await store.revise("wf-draft", _defn(name="v2"))
-    history = await store.history("wf-draft")
+    before = await store.history("ws-1", "wf-draft")
 
-    assert all(isinstance(h, DraftRevision) for h in history)
-    assert [h.number for h in history] == [1, 2]
-    history[0].spec.nodes[0].name = "TAMPER"
-    assert (await store.history("wf-draft"))[0].spec.nodes[0].name == "Start"
-
-
-# --------------------------------------------------------------------------- #
-# Identity / workspace guards
-# --------------------------------------------------------------------------- #
-
-
-@pytest.mark.unit
-async def test_revise_with_mismatched_definition_id_refuses() -> None:
-    store = InMemoryDraftStore()
-    await store.save_draft(_defn())
-    with pytest.raises(DraftIdentityError):
-        await store.revise("wf-draft", _defn(wid="wf-something-else"))
+    with pytest.raises(DraftWorkspaceError):
+        await store.revise("ws-2", "wf-draft", _defn())
+    assert await store.history("ws-1", "wf-draft") == before
+    assert await store.history("ws-2", "wf-draft") == []
 
 
 @pytest.mark.unit
@@ -411,28 +417,87 @@ async def test_cross_workspace_revision_refuses() -> None:
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
     with pytest.raises(DraftWorkspaceError):
-        await store.revise("wf-draft", _defn(workspace="ws-2"))
+        await store.revise("ws-1", "wf-draft", _defn(workspace="ws-2"))
     # History is untouched by the refusal.
-    assert await store.count("wf-draft") == 1
+    assert await store.count("ws-1", "wf-draft") == 1
 
 
 @pytest.mark.unit
-async def test_refused_write_leaves_history_untouched() -> None:
-    store = InMemoryDraftStore()
-    await store.save_draft(_defn())
-    before = _canonical((await store.get("wf-draft", 1)).spec)
+async def test_no_read_api_exists_without_a_workspace() -> None:
+    """Structural: every read on the ABC takes workspace_id first."""
+    import inspect
 
-    bad = _defn()
-    bad.nodes[1].config = {"authorization": "Bearer abcdefghijklmnopqrst"}
-    with pytest.raises(StoreSecretError):
-        await store.revise("wf-draft", bad)
-
-    assert await store.count("wf-draft") == 1
-    assert _canonical((await store.get("wf-draft", 1)).spec) == before
+    for name in ("get", "latest", "history", "count", "workflow_ids"):
+        params = [
+            p
+            for p in inspect.signature(getattr(DraftStore, name)).parameters
+            if p != "self"
+        ]
+        assert params[0] == "workspace_id", (
+            f"{name} must be workspace-scoped, got {params}"
+        )
 
 
 # --------------------------------------------------------------------------- #
-# Store discipline: bounded, secrets, redacted summary
+# 5. Reads / errors
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.unit
+async def test_get_unknown_workflow_or_revision_refuses() -> None:
+    store = InMemoryDraftStore()
+    await store.save_draft(_defn())
+    with pytest.raises(DraftNotFoundError):
+        await store.get("ws-1", "wf-other", 1)
+    with pytest.raises(DraftNotFoundError):
+        await store.get("ws-1", "wf-draft", 99)
+    with pytest.raises(DraftNotFoundError):
+        await store.get("ws-1", "wf-draft", 0)
+
+
+@pytest.mark.unit
+async def test_latest_and_workflow_ids() -> None:
+    store = InMemoryDraftStore()
+    assert await store.latest("ws-1", "nope") is None
+    assert await store.workflow_ids("ws-1") == []
+
+    await store.save_draft(_defn(wid="wf-b"))
+    await store.save_draft(_defn(wid="wf-a", workspace="ws-1"))
+    latest = await store.revise("ws-1", "wf-a", _defn(wid="wf-a", name="v2"))
+
+    head = await store.latest("ws-1", "wf-a")
+    assert head is not None and head.number == latest.number
+    assert await store.workflow_ids("ws-1") == ["wf-a", "wf-b"]
+
+
+@pytest.mark.unit
+async def test_history_returns_copies_ascending() -> None:
+    store = InMemoryDraftStore()
+    await store.save_draft(_defn())
+    await store.revise("ws-1", "wf-draft", _defn(name="v2"))
+    history = await store.history("ws-1", "wf-draft")
+
+    assert all(isinstance(h, DraftRevision) for h in history)
+    assert [h.number for h in history] == [1, 2]
+    history[0].spec.nodes[0].name = "TAMPER"
+    assert (await store.history("ws-1", "wf-draft"))[0].spec.nodes[0].name == "Start"
+
+
+# --------------------------------------------------------------------------- #
+# 6. Identity / workspace guards
+# --------------------------------------------------------------------------- #
+
+
+@pytest.mark.unit
+async def test_revise_with_mismatched_definition_id_refuses() -> None:
+    store = InMemoryDraftStore()
+    await store.save_draft(_defn())
+    with pytest.raises(DraftIdentityError):
+        await store.revise("ws-1", "wf-draft", _defn(wid="wf-something-else"))
+
+
+# --------------------------------------------------------------------------- #
+# 7. Store discipline: bounded, credentials, redacted summary
 # --------------------------------------------------------------------------- #
 
 
@@ -440,16 +505,17 @@ async def test_refused_write_leaves_history_untouched() -> None:
 async def test_summary_is_bounded_and_redacted() -> None:
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
-    record = await store.get("wf-draft", 1)
+    record = await store.get("ws-1", "wf-draft", 1)
     assert 0 < len(record.summary) <= 1_024
     assert "wf-draft" in record.summary
 
     # A secret-shaped value in a *description* (not config) is redacted from
     # the summary projection rather than refused.
     sneaky = _defn(name="v2", description="api_key=" + "s" * 30)
-    await store.revise("wf-draft", sneaky)
-    summary = (await store.latest("wf-draft")).summary
-    assert "api_key=" + "s" * 30 not in summary
+    await store.revise("ws-1", "wf-draft", sneaky)
+    head = await store.latest("ws-1", "wf-draft")
+    assert head is not None
+    assert "api_key=" + "s" * 30 not in head.summary
 
 
 @pytest.mark.unit
@@ -470,21 +536,47 @@ async def test_oversized_definition_is_refused_not_truncated() -> None:
     store = InMemoryDraftStore()
     with pytest.raises(StoreBoundsError):
         await store.save_draft(big)
-    assert await store.count(big.id) == 0
-    assert (await store.latest(big.id)) is None
+    assert await store.count(big.workspace_id, big.id) == 0
+    assert (await store.latest(big.workspace_id, big.id)) is None
 
 
 @pytest.mark.unit
-async def test_secret_in_node_config_is_refused() -> None:
+async def test_credential_reference_in_config_is_accepted() -> None:
+    """T-V4-020: credentials travel by reference, and references are accepted."""
+    defn = _defn()
+    defn.nodes[1].config = {
+        "api_key_ref": "vault:prod/api-key",
+        "db_password_name": "primary-db-credential",
+    }
     store = InMemoryDraftStore()
-    sneaky = _defn()
-    sneaky.nodes[1].config["headers"] = {"authorization": "Bearer " + "z" * 24}
-    with pytest.raises(StoreSecretError):
-        await store.save_draft(sneaky)
+    await store.save_draft(defn)
+
+    stored = await store.get("ws-1", "wf-draft", 1)
+    # The reference survives verbatim; nothing was rewritten or stripped.
+    assert stored.spec.nodes[1].config == {
+        "api_key_ref": "vault:prod/api-key",
+        "db_password_name": "primary-db-credential",
+    }
+    assert verify_revision(stored.revision)
 
 
 @pytest.mark.unit
-def test_secret_guard_targets_config_only() -> None:
+async def test_refused_write_leaves_history_untouched() -> None:
+    store = InMemoryDraftStore()
+    await store.save_draft(_defn())
+    before = _canonical((await store.get("ws-1", "wf-draft", 1)).spec)
+
+    bad = _defn()
+    bad.nodes[1].config = {"authorization": "Bearer abcdefghijklmnopqrst"}
+    with pytest.raises(StoreSecretError):
+        await store.revise("ws-1", "wf-draft", bad)
+
+    assert await store.count("ws-1", "wf-draft") == 1
+    assert _canonical((await store.get("ws-1", "wf-draft", 1)).spec) == before
+
+
+@pytest.mark.unit
+async def test_secret_guard_targets_config_only() -> None:
     """A node *named* auth is not a secret channel; config keys are."""
     named = _defn()
     named.nodes[1].name = "auth_check"
@@ -505,7 +597,7 @@ def test_redact_text_clears_secret_material() -> None:
 
 
 # --------------------------------------------------------------------------- #
-# ABC seam
+# 8. ABC seam
 # --------------------------------------------------------------------------- #
 
 
@@ -515,13 +607,13 @@ def test_store_is_only_reachable_through_the_abc() -> None:
 
 
 @pytest.mark.unit
-async def test_abstract_methods_cannot_be_skipped() -> None:
+def test_abstract_methods_cannot_be_skipped() -> None:
     class HalfStore(DraftStore):
         async def save_draft(self, definition):
             ...
 
     with pytest.raises(TypeError):
-        HalfStore()
+        HalfStore()  # type: ignore[abstract]
 
 
 @pytest.mark.unit
@@ -530,7 +622,7 @@ async def test_store_concurrent_reads_stay_consistent() -> None:
     store = InMemoryDraftStore()
     await store.save_draft(_defn())
     results = await asyncio.gather(
-        *[store.get("wf-draft", 1) for _ in range(16)]
+        *[store.get("ws-1", "wf-draft", 1) for _ in range(16)]
     )
     assert all(r.number == 1 for r in results)
     assert all(verify_revision(r.revision) for r in results)
