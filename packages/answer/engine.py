@@ -44,6 +44,7 @@ Guarantees:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from core.auth import ACLScope
@@ -59,6 +60,7 @@ from retrieval.interfaces import (
     DEFAULT_CONTEXT_TOP_K,
     RetrievalMode,
     RetrievalOrchestrator,
+    RetrievedItem,
 )
 from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retrieval_outcome
 
@@ -134,18 +136,22 @@ class AnswerEngine:
                     "legs_failed": [failure.leg for failure in outcome.legs_failed],
                 },
             )
-            return Answer(
-                answer="I cannot answer this question right now.",
-                status=AnswerStatus.UNAVAILABLE,
-                reason_code=reason_code,
-                reason=outcome.reason,
-                confidence=Confidence(
-                    level=ConfidenceLevel.LOW,
-                    basis="A required retrieval leg was unavailable; nothing was searched",
+            return self._finalize(
+                Answer(
+                    answer="I cannot answer this question right now.",
+                    status=AnswerStatus.UNAVAILABLE,
+                    reason_code=reason_code,
+                    reason=outcome.reason,
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="A required retrieval leg was unavailable; nothing was searched",
+                    ),
+                    trace_id=trace_id,
+                    claims=[],
+                    citations=[],
                 ),
-                trace_id=trace_id,
-                claims=[],
-                citations=[],
+                items=items,
+                outcome=outcome,
             )
 
         prompt = build_prompt(query, items)
@@ -189,18 +195,22 @@ class AnswerEngine:
                     "trace_id": trace_id,
                 },
             )
-            return Answer(
-                answer="I cannot answer this question based on the provided documents.",
-                status=AnswerStatus.INSUFFICIENT_EVIDENCE,
-                reason_code="PARSE_FALLBACK",
-                reason="Model output was not valid JSON; no claims could be verified.",
-                confidence=Confidence(
-                    level=ConfidenceLevel.LOW,
-                    basis="Model output unparseable — no structure to verify",
+            return self._finalize(
+                Answer(
+                    answer="I cannot answer this question based on the provided documents.",
+                    status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    reason_code="PARSE_FALLBACK",
+                    reason="Model output was not valid JSON; no claims could be verified.",
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="Model output unparseable — no structure to verify",
+                    ),
+                    trace_id=trace_id,
+                    claims=[],
+                    citations=[],
                 ),
-                trace_id=trace_id,
-                claims=[],
-                citations=[],
+                items=items,
+                outcome=outcome,
             )
 
         claims = [Claim(text=c["text"], chunk_ids=c["chunk_ids"]) for c in parsed["claims"]]
@@ -230,55 +240,70 @@ class AnswerEngine:
         )
 
         if not items or is_refusal_phrase:
-            return Answer(
-                answer="I cannot answer this question based on the provided documents.",
-                status=AnswerStatus.INSUFFICIENT_EVIDENCE,
-                reason_code="EVIDENCE_MISSING",
-                reason="Accessible sources do not contain sufficient evidence to answer.",
-                confidence=Confidence(
-                    level=ConfidenceLevel.LOW,
-                    basis="No relevant documents retrieved or model declared missing evidence",
+            return self._finalize(
+                Answer(
+                    answer="I cannot answer this question based on the provided documents.",
+                    status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    reason_code="EVIDENCE_MISSING",
+                    reason="Accessible sources do not contain sufficient evidence to answer.",
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="No relevant documents retrieved or model declared missing evidence",
+                    ),
+                    trace_id=trace_id,
+                    claims=verified,
+                    citations=citations,
                 ),
-                trace_id=trace_id,
-                claims=verified,
-                citations=citations,
+                items=items,
+                outcome=outcome,
             )
 
         if not claims:
             # No structured claims produced by model — cannot verify anything.
-            return Answer(
-                answer="I cannot answer this question based on the provided documents.",
-                status=AnswerStatus.INSUFFICIENT_EVIDENCE,
-                reason_code="NO_CLAIMS",
-                reason="Model response did not include verifiable claims grounded in citations.",
-                confidence=Confidence(
-                    level=ConfidenceLevel.LOW,
-                    basis="No claims produced",
+            return self._finalize(
+                Answer(
+                    answer="I cannot answer this question based on the provided documents.",
+                    status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    reason_code="NO_CLAIMS",
+                    reason=(
+                        "Model response did not include verifiable claims "
+                        "grounded in citations."
+                    ),
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="No claims produced",
+                    ),
+                    trace_id=trace_id,
+                    claims=[],
+                    citations=[],
                 ),
-                trace_id=trace_id,
-                claims=[],
-                citations=[],
+                items=items,
+                outcome=outcome,
             )
 
         if claims and not verified:
-            return Answer(
-                answer="I cannot answer this question based on the provided documents.",
-                status=AnswerStatus.INSUFFICIENT_EVIDENCE,
-                reason_code="CITATION_INVALID",
-                reason="Generated claims lacked valid citations in accessible documents.",
-                confidence=Confidence(
-                    level=ConfidenceLevel.LOW,
-                    basis="Zero verified claims survived citation integrity check",
+            return self._finalize(
+                Answer(
+                    answer="I cannot answer this question based on the provided documents.",
+                    status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    reason_code="CITATION_INVALID",
+                    reason="Generated claims lacked valid citations in accessible documents.",
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="Zero verified claims survived citation integrity check",
+                    ),
+                    trace_id=trace_id,
+                    claims=[],
+                    citations=[],
                 ),
-                trace_id=trace_id,
-                claims=[],
-                citations=[],
+                items=items,
+                outcome=outcome,
             )
 
         if claims and len(verified) < len(claims):
             # Partial verification: render only from the verified claims.
             rendered_answer = " ".join(claim.text for claim in verified)
-            return self._disclose(
+            return self._finalize(
                 Answer(
                     answer=rendered_answer,
                     status=AnswerStatus.PARTIAL,
@@ -298,13 +323,14 @@ class AnswerEngine:
                     claims=verified,
                     citations=citations,
                 ),
-                outcome,
+                items=items,
+                outcome=outcome,
             )
 
         has_high_conf = bool(citations) and (len(verified) == len(claims) if claims else False)
         confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         rendered_answer = " ".join(claim.text for claim in verified)
-        return self._disclose(
+        return self._finalize(
             Answer(
                 answer=rendered_answer,
                 status=AnswerStatus.ANSWERED,
@@ -321,7 +347,8 @@ class AnswerEngine:
                 claims=verified,
                 citations=citations,
             ),
-            outcome,
+            items=items,
+            outcome=outcome,
         )
 
     @staticmethod
@@ -346,3 +373,120 @@ class AnswerEngine:
                 "reason": outcome.reason,
             }
         )
+
+    # --- lost-region disclosure (T-V1-031; made complete by T-V1-052) ------
+
+    @staticmethod
+    def _collect_lost_regions(items: Sequence[RetrievedItem]) -> list[dict]:
+        """Lost regions carried by the retrieved chunks (T-V1-031).
+
+        The ingestion pipeline writes them onto every chunk of a partially-read
+        source (``ingest_pipeline.parse_disclosure``); retrieval hands them
+        back on the items' metadata unchanged.
+        """
+        lost: list[dict] = []
+        for item in items:
+            for region in item.metadata.get("parse_lost_regions") or ():
+                if isinstance(region, dict) and region not in lost:
+                    lost.append(region)
+        return lost
+
+    @staticmethod
+    def _limitation_text(lost: Sequence[dict]) -> str:
+        page_summary = "; ".join(
+            f"pages {region.get('lost_pages')} of {region.get('page_count')}"
+            for region in lost
+        )
+        return (
+            f"Only part of the source was read: {page_summary} carried an image "
+            "and no text layer, so that content was NOT available to this answer."
+        )
+
+    @classmethod
+    def _disclose_source(cls, answer: Answer, items: Sequence[RetrievedItem]) -> Answer:
+        """Disclose partially-parsed sources; never let one read as confident (T-V1-031).
+
+        The pipeline parks a job ``needs_review`` when part of a source could not
+        be read (e.g. image-only PDF pages) and writes the lost regions onto
+        every chunk it published. Retrieval hands that metadata straight back on
+        the retrieved items, so the answer layer says the same thing the job
+        said — instead of answering over an omitted region as if the document
+        had been read in full.
+
+        Two rules, both hard:
+
+        * a **standing** answer is labelled ``needs_review`` and lists the
+          regions that were never read (an abstention keeps its own reason —
+          it is already not a claim to have read anything);
+        * confidence is capped at ``MEDIUM``. ``HIGH`` claims completeness, and
+          completeness is exactly what a partially-read source does not have.
+        """
+        lost = cls._collect_lost_regions(items)
+        if not lost:
+            return answer
+
+        limitation = cls._limitation_text(lost)
+        limitations = [*answer.limitations]
+        if limitation not in limitations:
+            limitations.append(limitation)
+
+        level = (
+            ConfidenceLevel.MEDIUM
+            if answer.confidence.level is ConfidenceLevel.HIGH
+            else answer.confidence.level
+        )
+        standing = answer.status in {AnswerStatus.ANSWERED, AnswerStatus.PARTIAL}
+        return answer.model_copy(
+            update={
+                "status": AnswerStatus.NEEDS_REVIEW if standing else answer.status,
+                "reason_code": (
+                    ReasonCode.NEEDS_REVIEW.value if standing else answer.reason_code
+                ),
+                "reason": (
+                    "A cited source was only partially parsed; see limitations."
+                    if standing
+                    else answer.reason
+                ),
+                "limitations": limitations,
+                "confidence": Confidence(
+                    level=level,
+                    basis=(
+                        f"{answer.confidence.basis} — capped at {level.value}: a "
+                        "partially-parsed source cannot ground a complete answer"
+                    ),
+                ),
+            }
+        )
+
+    def _finalize(
+        self,
+        answer: Answer,
+        *,
+        items: Sequence[RetrievedItem],
+        outcome: RetrievalResult | None,
+    ) -> Answer:
+        """The single funnel every ``answer()`` return path goes through (T-V1-052).
+
+        Before this ticket the lost-region disclosure was applied to the two
+        standing returns only, so the abstention returns (``PARSE_FALLBACK``,
+        ``EVIDENCE_MISSING``, ``NO_CLAIMS``, ``CITATION_INVALID``) and the
+        fail-closed ``UNAVAILABLE`` return answered over a partially-read
+        source without saying so. Every return now funnels through here, so
+        **undisclosing return paths: 0**.
+
+        Order matters and is deliberate:
+
+        1. :meth:`_disclose_source` first — it appends the lost-region
+           limitation and caps confidence, and relabels a *standing* answer
+           ``needs_review``;
+        2. :meth:`_disclose` second — an optional leg being down may still
+           override the status to ``degraded`` (T-V1-026's registered set),
+           but the lost-region **limitation is already appended and the
+           confidence already capped**, so nothing is lost: the user reads
+           both facts even when only one of them can own the status field.
+
+        Abstentions keep their own ``reason_code``/``reason`` —
+        :meth:`_disclose_source` only relabels standing answers — and still
+        disclose.
+        """
+        return self._disclose(self._disclose_source(answer, items), outcome)
