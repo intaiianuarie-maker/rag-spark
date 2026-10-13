@@ -123,6 +123,15 @@ class VectorStoreInvalidVector(VectorStoreError):
     results in zero writes rather than a partial or poisoned index.
     ``reason`` is one of the ``REJECT_*`` constants and ``record_id`` names the
     offending record.
+
+    Every ``REJECT_*`` reason is **deterministic** — a property of the vector
+    itself, never of the service — so retrying can only replay the same
+    rejection. The ingestion worker therefore maps this exception exactly
+    once, in its shared error handling, onto the registry's non-retryable
+    ``ZERO_VECTOR_REJECTED`` park (``core.errors``: INDEXING / 422 /
+    ``retryable=False``): such a job fails fast-and-final on the first attempt
+    instead of burning its retry budget (T-V1-046). Transient store failures
+    stay plain :class:`VectorStoreError` and keep their retryable verdict.
     """
 
     def __init__(self, reason: str, message: str, *, record_id: str | None = None) -> None:

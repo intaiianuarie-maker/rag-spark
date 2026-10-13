@@ -19,6 +19,13 @@ mid-job keeps its claim un-acked; the lease expires and
 publication is idempotent (T-V1-016 stable IDs) and fenced against dead
 generations (T-V1-019). A heartbeat (:func:`renew`) extends the lease while a
 healthy job runs past the base lease.
+
+T-V1-046 (deterministic failures park, never retry): :func:`record_failure`
+takes its verdict from :func:`classify_pipeline_failure`, so a storage-boundary
+vector rejection (T-V1-015's typed ``VectorStoreInvalidVector``) becomes a
+terminal ``ZERO_VECTOR_REJECTED`` on the first attempt instead of being
+retried into the ground, while genuinely transient failures keep their
+retryable verdict and their backoff.
 """
 
 from __future__ import annotations
@@ -26,9 +33,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections.abc import Iterator
 from datetime import UTC, datetime
 
-from core.errors import normalize_code
+from core.errors import ReasonCode, normalize_code
 from core.logging import request_id_ctx, set_request_id
 
 # T-V1-020: claim/ack/lease live behind the adapter's typed surface. They are
@@ -65,10 +73,82 @@ _UNHANDLED_RETRY_SECONDS = 2.0
 dequeue = claim
 
 
+# T-V1-046 — deterministic validation failures park, never retry -------------
+#
+# The storage boundary (T-V1-015, ``retrieval.adapters.qdrant_store``) rejects
+# an invalid embedding *before* any point is built or sent, raising the typed
+# ``VectorStoreInvalidVector`` with one of the stable ``REJECT_*`` reasons
+# (``dimension_mismatch`` / ``non_finite`` / ``zero_vector``). Every one of
+# those is a property of the *data*, not of the service: a retry replays the
+# exact same vector, so the retry is doomed by construction.
+#
+# The pipeline's generic ``except Exception`` on the upsert leg wraps that
+# rejection as a retryable ``QDRANT_INDEXING_FAILED`` (the nuance T-V1-044
+# disclosed and asked to be ruled on), so the job burned its whole retry
+# budget before parking anyway. :func:`classify_pipeline_failure` is the ONE
+# place that puts the verdict back — the shared error handling, not a
+# per-caller guard in the pipeline, which is what keeps "single boundary, not
+# per-caller checks" (T-V1-044) true. The job then fails fast-and-final under
+# the registry's own non-retryable code (``ZERO_VECTOR_REJECTED``:
+# ``core.errors`` → INDEXING / 422 / retryable=False), with the precise
+# ``REJECT_*`` reason preserved in the message. Genuinely transient failures
+# (Qdrant unreachable, a 5xx, a timeout) keep the pipeline's verdict and are
+# still retried.
+
+
+def _exception_chain(exc: BaseException) -> Iterator[BaseException]:
+    """Yield ``exc`` plus everything it caused, without looping on a cycle.
+
+    Both ``__cause__`` (explicit ``raise … from``) and ``__context__`` (a bare
+    re-raise inside an ``except`` block) count as "caused by", so a rejection
+    is recognised no matter which of the two a wrapping leg preserved.
+    """
+    seen: set[int] = set()
+    current: BaseException | None = exc
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def classify_pipeline_failure(exc: IngestPipelineError) -> IngestPipelineError:
+    """Final (code, retryable) verdict for one pipeline failure.
+
+    Returns the failure unchanged unless a storage-boundary vector rejection
+    is found anywhere in its cause chain, in which case it is re-issued as the
+    canonical non-retryable ``ZERO_VECTOR_REJECTED``. Everything else — every
+    transient store/dependency failure — keeps the pipeline's own verdict, so
+    retry behaviour for those is byte-identical to before.
+
+    The adapter import is lazy on purpose, matching ``ingest_pipeline`` and
+    ``ingestion.dedup``: importing the store at module scope would pull the
+    Qdrant SDK into every ``import jobs.ingest_worker``, including the
+    test-only seams that never touch a vector store.
+    """
+    from retrieval.adapters.qdrant_store import VectorStoreInvalidVector
+
+    for chained in _exception_chain(exc):
+        if isinstance(chained, VectorStoreInvalidVector):
+            return IngestPipelineError(
+                ReasonCode.ZERO_VECTOR_REJECTED.value,
+                f"storage boundary rejected the embedding ({chained.reason}): {chained}",
+                retryable=False,
+            )
+    return exc
+
+
 async def record_failure(
     session: AsyncSession, job_id: uuid.UUID, exc: IngestPipelineError
 ) -> None:
-    """Retry retryable failures with backoff; park poison messages as failed."""
+    """Retry retryable failures with backoff; park poison messages as failed.
+
+    T-V1-046: the verdict is taken once, up front, by
+    :func:`classify_pipeline_failure`, so the code persisted below and the
+    retry/park decision taken after it can never disagree — a deterministic
+    boundary rejection is neither parked under a retryable code nor retried
+    under a non-retryable one.
+    """
+    exc = classify_pipeline_failure(exc)
     job = await session.get(IngestionJob, job_id)
     if job is None:
         return

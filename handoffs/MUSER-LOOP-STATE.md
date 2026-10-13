@@ -68,6 +68,9 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   test line 125 update added to T-039 acceptance. Stale errors.py docstring: doc follow-up.
 - T-V1-051 reviewer: APPROVE (both surfaces replaced, kept sites confirmed safe, pin test
   comment-aware, 18 green) → DONE.
+- T-V1-039 reviewer: APPROVE (readability signed, live DB triple-confirmed, T-053
+  preserved, 24 green) → DONE. Duplicate episode closed: verify-only worked, freeze-window
+  rule stands.
 - T-V1-012 reviewer: APPROVE (4-file scope, no materialization, boundary verbatim, 413 +
   cancel paths, 78 green, byte-identity re-proven) → DONE. T-V1-013 dispatched (dev2).
 - T-V1-010 committed d134e64 (70/70 vitest, tsc clean; second stringify is 502-synthesis,
