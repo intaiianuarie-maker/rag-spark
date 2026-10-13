@@ -170,6 +170,15 @@ async def test_verify_claims_store_lookup_scoped_positive() -> None:
                 workspace_id="ws-a",
             )
 
+        async def get_many(self, chunk_ids):
+            # T-V1-047: ChunkLookup gained the bulk seam; delegate to `get` so
+            # this fake's per-id semantics stay identical.
+            return {
+                chunk_id: cit
+                for chunk_id in dict.fromkeys(chunk_ids)
+                if (cit := await self.get(chunk_id)) is not None
+            }
+
     items = _items()
     claims = [Claim(text="x", chunk_ids=["c-9"])]
     verified, citations = await verify_claims(
@@ -192,6 +201,14 @@ async def test_verify_claims_store_lookup_foreign_lookup_negative() -> None:
                 page=4,
                 workspace_id="ws-b",
             )
+
+        async def get_many(self, chunk_ids):
+            # T-V1-047: bulk seam delegated to `get` (identical semantics).
+            return {
+                chunk_id: cit
+                for chunk_id in dict.fromkeys(chunk_ids)
+                if (cit := await self.get(chunk_id)) is not None
+            }
 
     items = _items()
     claims = [Claim(text="x", chunk_ids=["c-9"])]
@@ -1086,6 +1103,14 @@ async def test_citation_content_guarantee_is_grounder_gated() -> None:
                 page=3,
                 workspace_id="ws-a",
             )
+
+        async def get_many(self, chunk_ids):
+            # T-V1-047: bulk seam delegated to `get` (identical semantics).
+            return {
+                chunk_id: cit
+                for chunk_id in dict.fromkeys(chunk_ids)
+                if (cit := await self.get(chunk_id)) is not None
+            }
 
     items = _items()
     claims = [Claim(text="x", chunk_ids=["c-9"])]

@@ -134,7 +134,10 @@ class CanonicalHydrator:
     def __init__(self, lookup: ChunkLookup | None) -> None:
         self._lookup = lookup
         self._cache: dict[str, HydratedChunk] = {}
-        #: Number of store reads actually issued (the T-V1-022 metric).
+        #: Refs actually resolved from the store (the T-V1-022 metric). Since
+        #: T-V1-047 one store *pass* may cover a whole batch, this counts refs
+        #: read rather than queries issued — 16 refs are 16 lookups in ONE
+        #: query, not 16 queries.
         self.lookups = 0
 
     @property
@@ -148,6 +151,22 @@ class CanonicalHydrator:
             return None
         self.lookups += 1
         return await self._lookup.get(chunk_id)
+
+    async def get_many(self, chunk_ids: Sequence[str]) -> dict[str, Citation]:
+        """Bulk read; satisfies the ``ChunkLookup`` protocol (T-V1-047).
+
+        One store pass for the whole batch, counted once per distinct ref in
+        ``lookups`` — the same accounting :meth:`get` applies per call. No
+        scope filtering here: exactly as with :meth:`get`, scoping is the
+        caller's job (:meth:`hydrate` applies it), so the protocol surface
+        stays a plain store read and a shared hydrator still cannot be used to
+        widen a caller's scope.
+        """
+        if self._lookup is None:
+            return {}
+        ids = list(dict.fromkeys(chunk_ids))
+        self.lookups += len(ids)
+        return await self._lookup.get_many(ids)
 
     async def hydrate(
         self,
@@ -165,16 +184,30 @@ class CanonicalHydrator:
         if self._lookup is None:
             return {}
         resolved: dict[str, HydratedChunk] = {}
+        missing: list[str] = []
+        seen: set[str] = set()
         for ref in refs:
-            if not ref or ref in resolved:
+            if not ref or ref in seen:
                 continue
+            seen.add(ref)  # one read per distinct ref, cache hit or miss
             if not fresh and ref in self._cache:
                 cached = self._cache[ref]
                 if allowed_workspace_ids is None or cached.workspace_id in allowed_workspace_ids:
                     resolved[ref] = cached
                 continue
-            self.lookups += 1
-            citation = await self._lookup.get(ref)
+            missing.append(ref)
+
+        # T-V1-047: ONE store pass for the whole batch instead of one read per
+        # ref (the N+1 that cost ~16 round-trips per /ask). `lookups` still
+        # counts the refs read from the store — the T-V1-022 metric — so its
+        # value is unchanged; only the number of queries collapses to one.
+        found: dict[str, Citation] = {}
+        if missing:
+            self.lookups += len(missing)
+            found = await self._lookup.get_many(missing)
+
+        for ref in missing:
+            citation = found.get(ref)
             if citation is None:
                 # Missing / deleted / superseded: forget any earlier read.
                 self._cache.pop(ref, None)
