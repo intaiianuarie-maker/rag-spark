@@ -35,6 +35,7 @@ async def test_concurrent_writers_no_busy_errors(tmp_path: Path) -> None:
     # Pre-create to avoid race on schema init
     store0 = SQLiteGraphStore(db)
     await store0.ensure_graph("ws-1")
+    await store0.set_enabled("ws-1", True)
     store0.close()
 
     async def worker(worker_id: int) -> int:
@@ -86,6 +87,7 @@ async def test_atomic_visibility_no_partial_reads(tmp_path: Path) -> None:
     db = tmp_path / "graph.db"
     store = SQLiteGraphStore(db)
     await store.ensure_graph("ws-1")
+    await store.set_enabled("ws-1", True)
 
     # Prepare a large extraction
     extractor = RuleBasedGraphExtractor()

@@ -26,6 +26,7 @@ async def test_idempotent_double_run(tmp_path) -> None:
 
     db = tmp_path / "graph.db"
     store = SQLiteGraphStore(db)
+    await store.set_enabled("ws-1", True)
     extractor = RuleBasedGraphExtractor()
 
     chunk = GraphChunk(

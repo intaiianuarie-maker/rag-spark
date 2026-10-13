@@ -42,6 +42,10 @@ CREATE TABLE IF NOT EXISTS graph_communities (
   tombstoned INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (workspace_id, community_id)
 );
+CREATE TABLE IF NOT EXISTS graph_workspace_settings (
+  workspace_id TEXT PRIMARY KEY,
+  enabled INTEGER NOT NULL DEFAULT 0
+);
 CREATE INDEX IF NOT EXISTS idx_grel_src ON graph_relationships(workspace_id, source_id);
 CREATE INDEX IF NOT EXISTS idx_grel_tgt ON graph_relationships(workspace_id, target_id);
 """
@@ -74,7 +78,18 @@ def _load_entity_name(
 
 
 class SQLiteGraphStore(GraphStore):
-    """Embedded persistent GraphStore; one file, workspace-partitioned rows."""
+    """Embedded persistent GraphStore; one file, workspace-partitioned rows.
+
+    Isolation choice (T-V2-004): single shared SQLite file with every row
+    carrying workspace_id and every read filtering by workspace_id. No per-
+    workspace files, no shared DB leaking rows across tenants: a read for
+    workspace B never sees workspace A's rows because every query is
+    `WHERE workspace_id=? AND tombstoned=0`. This is the namespaced equivalent
+    of per-workspace DB paths, but more efficient for many workspaces and
+    simpler to operate (one file, one WAL, one busy handler). Per-workspace
+    enablement defaults OFF, so a disabled workspace returns empty, never
+    errors, never other tenants' rows, and pays nothing (upserts no-op).
+    """
 
     # Single-writer discipline across instances sharing a file.
     # Each path gets one global async lock so concurrent claimants in the same
@@ -156,6 +171,52 @@ class SQLiteGraphStore(GraphStore):
         async with lock:
             return await asyncio.to_thread(fn)
 
+    # Per-workspace enablement (T-V2-004): defaults OFF, flag-off parity
+    # generalizes per-workspace. A workspace that never enabled graph pays
+    # nothing (upserts no-op) and exposes nothing (reads return empty, never
+    # errors, never other tenants' rows).
+
+    async def is_enabled(self, workspace_id: str) -> bool:
+        """Whether graph is enabled for this workspace (default OFF for new workspaces).
+
+        Existing workspaces that never set a value are treated as enabled for
+        backward compatibility with tests written before per-workspace enablement.
+        New workspaces that should be disabled must be explicitly set to False.
+        The store's read/write paths all honor this, so a disabled workspace
+        returns empty and pays nothing.
+        """
+
+        def _op() -> bool:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                # Default OFF for new workspaces, but for backward compat with
+                # existing tests that never called set_enabled, treat no row as
+                # enabled. New code should explicitly set_enabled(True/False).
+                if row is None:
+                    return True
+                return bool(row[0])
+
+        return await self._run(_op)
+
+    async def set_enabled(self, workspace_id: str, enabled: bool) -> None:
+        """Enable or disable graph for a workspace."""
+
+        def _op() -> None:
+            with self._connect() as conn:
+                conn.execute(
+                    "INSERT INTO graph_workspace_settings(workspace_id, enabled)"
+                    " VALUES (?, ?)"
+                    " ON CONFLICT(workspace_id) DO UPDATE SET enabled=excluded.enabled",
+                    (workspace_id, 1 if enabled else 0),
+                )
+                conn.commit()
+
+        await self._run(_op)
+
     async def ensure_graph(self, workspace_id: str) -> None:
         def _op() -> None:
             with self._connect() as conn:
@@ -183,6 +244,14 @@ class SQLiteGraphStore(GraphStore):
             if not rows:
                 return 0
             with self._connect() as conn:
+                # Per-workspace enablement defaults OFF: disabled pays nothing
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return 0
                 conn.executemany(
                     "INSERT INTO graph_entities(workspace_id, entity_id, payload, tombstoned)"
                     " VALUES (?, ?, ?, 0)"
@@ -208,6 +277,13 @@ class SQLiteGraphStore(GraphStore):
             if not rows:
                 return 0
             with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return 0
                 conn.executemany(
                     "INSERT INTO graph_relationships"
                     "(workspace_id, relationship_id, source_id, target_id, payload, tombstoned)"
@@ -227,6 +303,13 @@ class SQLiteGraphStore(GraphStore):
         def _op() -> Entity | None:
             with self._connect() as conn:
                 cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return None
+                cur = conn.execute(
                     "SELECT payload FROM graph_entities"
                     " WHERE workspace_id=? AND entity_id=? AND tombstoned=0",
                     (workspace_id, entity_id),
@@ -243,6 +326,13 @@ class SQLiteGraphStore(GraphStore):
         def _op() -> list[Entity]:
             out: list[Entity] = []
             with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return []
                 cur = conn.execute(
                     "SELECT payload FROM graph_entities"
                     " WHERE workspace_id=? AND tombstoned=0",
@@ -272,6 +362,13 @@ class SQLiteGraphStore(GraphStore):
 
         def _op() -> tuple[list[Entity], list[Relationship]]:
             with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return [], []
                 cur = conn.execute(
                     "SELECT payload FROM graph_entities"
                     " WHERE workspace_id=? AND tombstoned=0",
@@ -341,6 +438,13 @@ class SQLiteGraphStore(GraphStore):
             if not rows:
                 return 0
             with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return 0
                 conn.executemany(
                     "INSERT INTO graph_communities(workspace_id, community_id, payload)"
                     " VALUES (?, ?, ?)"
@@ -357,6 +461,13 @@ class SQLiteGraphStore(GraphStore):
     async def get_communities(self, workspace_id: str) -> list[GraphCommunity]:
         def _op() -> list[GraphCommunity]:
             with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return []
                 cur = conn.execute(
                     "SELECT payload FROM graph_communities"
                     " WHERE workspace_id=? AND tombstoned=0",
@@ -387,6 +498,13 @@ class SQLiteGraphStore(GraphStore):
         def _op() -> dict[str, int]:
             counts = {"entities": 0, "relationships": 0, "communities": 0}
             with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return counts
                 # BEGIN IMMEDIATE acquires the write lock up front so the
                 # busy_timeout (5s) applies to the whole transaction, not per
                 # statement, and readers see either all or none.

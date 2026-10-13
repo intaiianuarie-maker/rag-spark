@@ -1,6 +1,5 @@
+# ruff: noqa: E501
 """T-V2-003: lifecycle parity - tombstone, supersede, idempotent re-ingest."""
-
-# ruff: noqa: E501 - test file with long graph chunk literals and SQL
 
 from __future__ import annotations
 
@@ -19,6 +18,7 @@ async def test_tombstoned_doc_has_zero_live_graph_rows(tmp_path: Path) -> None:
     db = tmp_path / "graph.db"
     store = SQLiteGraphStore(db)
     ws, doc = "ws-tomb", "doc-1"
+    await store.set_enabled(ws, True)
     chunk = GraphChunk(
         chunk_id="ch-1", text="Alice Smith works at Acme Corp.", workspace_id=ws, document_id=doc
     )
@@ -45,6 +45,7 @@ async def test_superseded_version_graph_rows_do_not_ground(tmp_path: Path) -> No
     db = tmp_path / "graph.db"
     store = SQLiteGraphStore(db)
     ws = "ws-sup"
+    await store.set_enabled(ws, True)
     # Simulate version 1 chunks
     chunk_v1 = GraphChunk(chunk_id="ch-v1-1", text="Alice Smith works at Acme Corp.", workspace_id=ws, document_id="doc-1")
     extractor = RuleBasedGraphExtractor()
@@ -77,6 +78,7 @@ async def test_reingest_same_doc_no_duplicate_entities(tmp_path: Path) -> None:
     db = tmp_path / "graph.db"
     store = SQLiteGraphStore(db)
     ws, doc = "ws-dup", "doc-dup"
+    await store.set_enabled(ws, True)
     chunk = GraphChunk(chunk_id="ch-dup", text="Bob Jones is located in Paris.", workspace_id=ws, document_id=doc)
     extractor = RuleBasedGraphExtractor()
     result = await extractor.extract([chunk])
