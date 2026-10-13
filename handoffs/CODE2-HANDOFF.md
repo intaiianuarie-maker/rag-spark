@@ -4026,3 +4026,142 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4018_{start,end
   0 commits, 0 alembic upgrades, 0 live-DB writes, 0 deploys, 0 restarts,
   0 compose changes, index left empty. Attribution worktree /tmp/opencode/tv4018-base
   used read-only at HEAD and removed afterwards.
+---
+
+## T-V4-019 — W4 workspace draft API route contracts (schemas ONLY, no handlers)
+
+```text
+TASK: T-V4-019 (W4) — request/response schemas for the four workspace draft
+       endpoints (save draft, revise, get revision, history) as pure contract
+       types: field-by-field validation, auth scope per route, error shapes.
+       NO handlers, NO router wiring, NO store calls.
+CHANGE: packages/workflow_engine/routes/__init__.py (NEW) — re-exports the
+        contract table + lookups only.
+        packages/workflow_engine/routes/schemas.py (NEW, ~470 lines) — the
+        contracts: DraftWorkflowPath/DraftRevisionPath/DraftHistoryQuery,
+        DraftDefinitionRequest (+ DraftSaveRequest/DraftReviseRequest),
+        DraftRevisionMeta/DraftRevisionDetail/DraftMutationResponse/
+        DraftHistoryResponse, ApiErrorDetail/ApiErrorBody/DraftErrorBody,
+        DraftErrorCode, DraftAuth, RouteContract + ROUTE_CONTRACTS +
+        contract_for()/schemas_for_route(), assert_path_scope_matches().
+        tests/unit/test_workflow_route_schemas.py (NEW) — 26 tests incl. a
+        hostile payload battery.
+        NO product file modified. No router, no handler, no store import.
+WHY:    Contracts before handlers: an approval gate (018+) and the draft store
+        (017) decide things about specific revisions, and the API surface that
+        carries them must be fixed before anyone writes a handler — otherwise
+        each handler invents its own field names, caps and error codes.
+        Reuse-first: the request body IS the engine's WorkflowDefinition, so
+        node/port/edge validation is inherited, not re-implemented; the error
+        envelope is the app's own {"detail": {"error","message"}}; and drafts
+        need NO new auth actions — they are workspace-scoped, so the existing
+        workspace.manage/workspace.read actions apply.
+REUSED: apps/api/app/auth/workspaces/schemas.py (M1-001b) house style: flat
+        BaseModel bodies with explicit bounds, nested {"detail": {"error",
+        "message"}} errors, lean redacted 422s, extra="forbid".
+        workflow_engine.interfaces.WorkflowDefinition as the payload model.
+        app.authz Action values ("workspace.manage"/"workspace.read") referenced
+        as literals so packages/ never imports apps/ (layering intact).
+        Store payload cap mirrored as a constant (NOT imported) — card forbids a
+        store import in the schema file, so the boundary states its own caps.
+
+        CONTRACT TABLE (the table a handler must satisfy; importing it
+        registers nothing — it is data, not wiring):
+
+        route         | method | path                                              | auth             | request → response
+        --------------|--------|---------------------------------------------------|------------------|---------------------------
+        save_draft    | POST   | /v1/workspaces/{workspace_id}/drafts              | workspace.manage | DraftSaveRequest → DraftMutationResponse
+        revise_draft  | POST   | /v1/workspaces/{workspace_id}/drafts/{workflow_id}/revisions | workspace.manage | DraftReviseRequest → DraftMutationResponse
+        get_revision  | GET    | /v1/workspaces/{workspace_id}/drafts/{workflow_id}/revisions/{revision} | workspace.read | (none) → DraftRevisionDetail
+        list_history  | GET    | /v1/workspaces/{workspace_id}/drafts/{workflow_id}/revisions | workspace.read | DraftHistoryQuery → DraftHistoryResponse
+
+        Payload = the WorkflowDefinition itself (flat, house style): id,
+        workspace_id, name, description, nodes, edges, workspace_capabilities.
+        Responses carry revision + content_hash (64 hex) + summary (bounded,
+        redacted) + parent_revision/parent_hash (tamper-visible chain) +
+        created_at, and DraftMutationResponse adds `idempotent` so a caller can
+        tell a real append from the T-V4-017 "same content, same revision" no-op.
+        Errors: 403 draft_forbidden; 409 draft_conflict (save onto an existing
+        workflow — revise instead); 413 draft_too_large; 422
+        draft_validation_failed / draft_identity_mismatch /
+        draft_workspace_mismatch / draft_secret_refused; 404 draft_not_found.
+        R-004: every route requires the caller's scope to match the path's
+        workspace_id, checked before the store is touched.
+
+BUILT:  The route-contract table (verb/path/auth/schemas/error catalogue) so a
+        drifting handler is visibly wrong; wire-level caps the shared model
+        cannot express (262144-byte payload, 200 name, 4096 description, 200
+        nodes, 500 edges, 200 revision max, 200 limit max); structural wire
+        integrity at the boundary (≥1 node, unique node ids, unique edge ids,
+        edges reference declared nodes); blank-identifier and strict-revision
+        rules; assert_path_scope_matches() as the one path-aware check, pure
+        (no I/O, no store, no router) so it is testable and handler-agnostic.
+VERIFY: tests/unit/test_workflow_route_schemas.py → 26 passed (0.34s).
+        tests/unit -k workflow → 563 passed, 0 failed (2 consecutive runs).
+        tests/unit (full) → 1735 passed, 0 failed.
+        ruff check packages/workflow_engine/routes + my test → All checks passed.
+        mypy on my 3 files → Success; mypy packages/workflow_engine/ (14 files)
+        → Success.
+        METRIC 1 — unwired surface = 0 handlers/routers, proven by AST (not by
+        string search, which my first attempt got wrong): the schema module
+        imports nothing from fastapi/app/apps, references none of
+        {APIRouter, FastAPI, HTTPException, Depends, include_router} as a Name or
+        Attribute anywhere, and carries no route decorator (@classmethod and
+        friends are excluded explicitly). It also imports neither draft_store
+        nor store_discipline and names neither store class.
+        METRIC 2 — invalid payloads accepted = 0, from a hostile battery: missing
+        fields (empty body, empty definition, no name/id, no nodes); wrong types
+        (nodes as string, id as int, workspace_id as list, revision as
+        str/float/bool/None, limit as non-numeric, created_at as int); oversized
+        spec (60 x 8KB blobs → >262144 bytes; name 201; description 4097; 201
+        nodes); bad revision numbers (0, -1, 1000001, 1.5, "1", True, None);
+        bad hashes (empty, 63/65 chars, uppercase, non-hex); missing response
+        metadata; blank/whitespace ids; structural garbage (edge to a ghost node,
+        duplicate node ids, duplicate edge ids); unknown fields
+        (extra="forbid"); and scope disagreement via assert_path_scope_matches.
+        Every one of those raises ValidationError/ValueError.
+RISKS:  1. Deliberate layering choice, disclosed: the API does NOT screen for
+        secrets itself — the store's deny-list gate (T-V4-017) is the single
+        place secrets are screened, and its StoreSecretError maps to 422
+        draft_secret_refused in this catalogue. Duplicating the deny-list here
+        would create two lists that must stay in sync, and the card forbids a
+        store import. Consequence: a secret-bearing draft is accepted by the
+        schema and refused by the store, not at the first boundary.
+        2. Strictness is applied where identity is at stake, not everywhere:
+        a path revision rejects bools/floats/numeric strings (StrictInt alone
+        still coerces "1" under lax validation — my own battery proved that), a
+        query limit still coerces "50"→50 because FastAPI delivers query params
+        as strings. That asymmetry is deliberate and pinned by a test.
+        3. `revise` on an UNKNOWN workflow initialises it as revision 1
+        (T-V4-017's verified behaviour) instead of 404 — stated in the contract
+        docstring so a handler never writes a 404 it will not get; a reviewer
+        who wants a 404 must change the STORE semantics first, and that is a
+        deliberate choice, not an omission.
+        4. History is complete (no cursor pagination) because the append-only
+        store returns every revision — the contract refuses to promise cursor
+        pagination the backend cannot honour.
+        5. Nothing here is exercised against a live FastAPI app; the contract is
+        type-checked and battery-tested only. Wiring is the follow-up handler
+        ticket, which must import these models unchanged (that is the point).
+        6. Type aliases use PEP 695 `type` (ruff UP040, target py312); my older
+        TypeAlias spelling was rewritten to satisfy lint rather than left
+        inconsistent with the toolchain.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4019_{start,end}.txt):
+- START (HEAD `dece808`): 25 dirty paths — 5 modified handoffs, dev1's live
+  executor.py/interfaces.py, his fake_runtime, his untracked
+  test_workflow_executor_honesty.py, 16 untracked handoff docs. Index empty.
+- END (HEAD `4257643`, moved as the coordinator landed work): dev1's set changed
+  (fake_runtime + executor_honesty resolved, his dirty executor.py/interfaces.py
+  and a new untracked executor_bounds test remain) PLUS exactly mine:
+  `?? packages/workflow_engine/routes/` (2 files), `?? tests/unit/
+  test_workflow_route_schemas.py`, and this handoff row.
+- 0 foreign paths modified by me (START/END diff shows only dev1's churn and my
+  3 files); 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+FOREIGN NOTES (dev1's in-flight executor work, not mine, not touched): one
+transient failure appeared in `test_workflow_executor_bounds.py` (his untracked
+file) in a `-k workflow` run that was concurrent with him editing executor.py.
+It passed 3/3 alone afterwards, 563/0 in two further in-suite runs, and the full
+unit suite was 1735 passed / 0 failed. I report it because I saw it, not because
+it stands: it is his area and it is currently green.
