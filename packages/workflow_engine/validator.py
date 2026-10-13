@@ -3,11 +3,20 @@
 Validates a ``WorkflowDefinition`` against a ``CapabilityManifest`` and returns
 a ``ValidationResult``.  The validator is a pure function: it never touches
 the filesystem, network, or any external state.
+
+T-V4-006 adds the resource-bounds layer: graph node/edge counts, per-node
+fan-out and total config size are capped so an oversized definition is
+refused *before* the structural checks spend quadratic time on it.  The
+bounds run as a pre-pass and short-circuit — the remaining checks are
+O(n·m) in the hostile size, which is exactly what a fast refusal avoids.
 """
 
 from __future__ import annotations
 
+import json
 from collections import Counter, deque
+from collections.abc import Mapping
+from typing import Any
 
 from .interfaces import (
     PORT_TYPE_ANY,
@@ -17,6 +26,65 @@ from .interfaces import (
     ValidationResult,
     WorkflowDefinition,
 )
+
+# ---------------------------------------------------------------------------
+# T-V4-006: resource bounds — every cap stated with its reason.
+#
+# A definition that passes these caps has a bounded validate/compile/hash
+# cost: the structural checks below are at most O(n·m) with n ≤ 200 nodes
+# and m ≤ 500 edges, and the revision hash serialises at most 1 MB of
+# config.  The first two mirror the import-time caps in the Langflow adapter
+# (``LangflowAdapter.MAX_NODES``/``MAX_EDGES``) so one policy governs both
+# layers; the rest close the paths import-time caps cannot see (fan-out
+# hubs and config totals across many nodes).
+# ---------------------------------------------------------------------------
+
+#: Node-count cap.  200 is already a very large authored workflow; the
+#: structural checks (cycle DFS, per-edge node scans) are quadratic in it.
+MAX_GRAPH_NODES = 200
+
+#: Total edge-count cap, matching the adapter's import-time ``MAX_EDGES``.
+#: 500 edges over ≤200 nodes is a dense DAG already.
+MAX_GRAPH_EDGES = 500
+
+#: Per-node fan-out (out-degree) cap.  Every catalog node declares at most
+#: two output ports, and even a shared upstream node in a 200-node graph
+#: fans out to at most a few dozen targets; 64 is generous for real DAGs
+#: while refusing a 1:M hub whose adjacency work is linear in M every visit.
+MAX_EDGES_PER_NODE = 64
+
+#: Per-node config cap (bytes of canonical JSON).  Import caps string length
+#: per field, not the sum; a node carrying many large-but-legal strings
+#: would bloat the revision hash, which serialises the whole spec.
+MAX_CONFIG_BYTES_PER_NODE = 32_768
+
+#: Definition-wide config cap (bytes).  Layered above the per-node cap:
+#: 200 nodes at the per-node cap would reach 6.4 MB, so the total keeps the
+#: canonical JSON (recomputed on every hash verification) bounded.
+MAX_CONFIG_BYTES_TOTAL = 1_048_576
+
+#: Bound on echoed identifiers inside rejection messages, so an oversized
+#: id cannot turn a rejection into an unbounded payload (B-slice practice).
+_ECHO_CHARS = 64
+
+
+def _echo(value: str) -> str:
+    """Bounded echo of an untrusted identifier inside a rejection message."""
+    return value if len(value) <= _ECHO_CHARS else value[:_ECHO_CHARS] + "…(truncated)"
+
+
+def _config_bytes(container: Mapping[str, Any]) -> int:
+    """Serialize *container* the way the revision-hash path does and size it.
+
+    ``default=str`` keeps the measurement total (a value JSON cannot encode is
+    rendered as its repr, mirroring how the hash path would carry it).  A
+    circular reference — which the hash path cannot encode either — reports
+    over the per-node cap so the node fails closed rather than measuring 0.
+    """
+    try:
+        return len(json.dumps(container, sort_keys=True, default=str).encode("utf-8"))
+    except ValueError:
+        return MAX_CONFIG_BYTES_PER_NODE + 1
 
 
 def _types_compatible(source_type: str, target_type: str) -> bool:
@@ -54,7 +122,18 @@ class WorkflowValidator:
         definition: WorkflowDefinition,
         manifest: CapabilityManifest,
         ) -> ValidationResult:
-        """Validate *definition* against *manifest*. Returns all errors found."""
+        """Validate *definition* against *manifest*. Returns all errors found.
+
+        T-V4-006: the resource bounds run first and short-circuit.  Past a
+        cap the structural checks below are quadratic in the hostile size
+        (cycle DFS, per-edge node scans, per-node config serialisation), so
+        refusing immediately is what keeps an oversized definition from
+        hanging the caller; undersized definitions behave exactly as before.
+        """
+        resource_errors = WorkflowValidator._check_resource_bounds(definition)
+        if resource_errors:
+            return ValidationResult(valid=False, errors=resource_errors)
+
         errors: list[ValidationError] = []
 
         errors.extend(WorkflowValidator._check_duplicate_node_ids(definition))
@@ -73,6 +152,82 @@ class WorkflowValidator:
             valid=(len(errors) == 0),
             errors=errors,
         )
+
+    # ------------------------------------------------------------------ #
+    # T-V4-006: resource bounds (pre-pass — see ``validate``)
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _check_resource_bounds(
+        definition: WorkflowDefinition,
+    ) -> list[ValidationError]:
+        """Refuse oversized graphs fast: node/edge counts, fan-out, config size.
+
+        Every check is O(n + m) in the definition itself and never grows the
+        input: counts are ``len()``, fan-out is one Counter pass over the
+        edges, and config size is measured with a single serialisation per
+        node (the same serialisation the revision hash performs).
+        """
+        errors: list[ValidationError] = []
+        node_count = len(definition.nodes)
+        edge_count = len(definition.edges)
+
+        if node_count > MAX_GRAPH_NODES:
+            errors.append(ValidationError(
+                code="TOO_MANY_NODES",
+                message=(
+                    f"workflow has {node_count} nodes; the limit is "
+                    f"{MAX_GRAPH_NODES}"
+                ),
+            ))
+        if edge_count > MAX_GRAPH_EDGES:
+            errors.append(ValidationError(
+                code="TOO_MANY_EDGES",
+                message=(
+                    f"workflow has {edge_count} edges; the limit is "
+                    f"{MAX_GRAPH_EDGES}"
+                ),
+            ))
+
+        if edge_count:
+            out_degree: Counter[str] = Counter()
+            for edge in definition.edges:
+                out_degree[edge.source_node_id] += 1
+            for source_id in sorted(out_degree):
+                degree = out_degree[source_id]
+                if degree > MAX_EDGES_PER_NODE:
+                    errors.append(ValidationError(
+                        code="NODE_FAN_OUT_TOO_HIGH",
+                        message=(
+                            f"node '{_echo(source_id)}' has {degree} outgoing "
+                            f"edges; the limit is {MAX_EDGES_PER_NODE}"
+                        ),
+                        node_id=source_id,
+                    ))
+
+        total_config = 0
+        for node in definition.nodes:
+            size = _config_bytes(node.config)
+            total_config += size
+            if size > MAX_CONFIG_BYTES_PER_NODE:
+                errors.append(ValidationError(
+                    code="NODE_CONFIG_TOO_LARGE",
+                    message=(
+                        f"node '{_echo(node.id)}' carries {size} bytes of "
+                        f"config; the limit is {MAX_CONFIG_BYTES_PER_NODE}"
+                    ),
+                    node_id=node.id,
+                ))
+        if total_config > MAX_CONFIG_BYTES_TOTAL:
+            errors.append(ValidationError(
+                code="GRAPH_CONFIG_TOO_LARGE",
+                message=(
+                    f"workflow carries {total_config} bytes of config in "
+                    f"total; the limit is {MAX_CONFIG_BYTES_TOTAL}"
+                ),
+            ))
+
+        return errors
+
 
     # ------------------------------------------------------------------ #
     @staticmethod
