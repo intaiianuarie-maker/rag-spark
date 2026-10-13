@@ -3612,3 +3612,130 @@ def test_evidence_verifier_version_and_timestamp_present() -> None:
             assert r.chunk_ids or r.citations
 
     asyncio.run(_run())
+
+# ======================================================================================
+# T-V3-015 — Claim/citation verifier (re-verify via production grounder)
+# ======================================================================================
+
+from agents.verifier import (  # noqa: E402
+    CAUSE_CHUNK_TOMBSTONED,
+    CAUSE_GROUNDED,
+    CAUSE_NOT_GROUNDED,
+    EvidenceVerifier,
+    InMemoryChunkSource,
+)
+
+
+def _grounded_evidence(run_id: str, chunk_id: str = "chk-1") -> tuple[EvidenceRecord, str]:
+    """Helper: statement appears verbatim in chunk -> ExtractiveGrounder agrees."""
+    statement = "The budget is 900 dollars."
+    content = "The budget is 900 dollars."
+    rec = EvidenceRecord(
+        run_id=run_id,
+        trace_id="trace-1",
+        workspace_id="ws-1",
+        statement=statement,
+        citations=[Citation(document_id="doc-1", chunk_id=chunk_id, quote=statement, source_hash="h")],  # noqa: E501
+        chunk_ids=[chunk_id],
+        verdict="SUPPORTED",
+        document_id="doc-1",
+        chunk_id=chunk_id,
+        source_hash="h",
+    )
+    return rec, content
+
+
+@pytest.mark.unit
+def test_verifier_agreement_on_fresh_evidence_100_percent() -> None:
+    """Agreement on fresh evidence: 100% — re-verify immediately-stored -> all AGREE."""
+    async def _run() -> None:
+        store = InMemoryEvidenceStore()
+        run_id = f"run-v-{uuid.uuid4().hex[:6]}"
+        rec, content = _grounded_evidence(run_id, "chk-fresh")
+        written = await store.write(rec)
+        # Chunk source still has the canonical text — same bar as production
+        source = InMemoryChunkSource({"chk-fresh": content})
+        verifier = EvidenceVerifier(chunk_source=source)
+        # Direct re-verify
+        result = await verifier.reverify_record(written)
+        assert result.agree is True
+        assert result.cause == CAUSE_GROUNDED
+        assert result.old_verdict == "SUPPORTED"
+        assert result.new_verdict == "SUPPORTED"
+        # Via store round-trip
+        listed = await store.list_for_run(run_id)
+        results = await verifier.reverify_run(listed)
+        assert len(results) == 1 and all(r.agree for r in results)
+        stale = await verifier.stale_report(listed)
+        assert stale == []
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_verifier_injected_stale_tombstone_flags_disagree_with_cause() -> None:
+    """Injected-stale detection: tombstone a chunk post-store -> DISAGREE with right cause."""
+    async def _run() -> None:
+        store = InMemoryEvidenceStore()
+        run_id = f"run-v-{uuid.uuid4().hex[:6]}"
+        rec, content = _grounded_evidence(run_id, "chk-stale")
+        written = await store.write(rec)
+        source = InMemoryChunkSource({"chk-stale": content})
+        verifier = EvidenceVerifier(chunk_source=source)
+        # Fresh -> AGREE
+        r1 = await verifier.reverify_record(written)
+        assert r1.agree is True
+        # Tombstone post-store
+        source.tombstone("chk-stale")
+        r2 = await verifier.reverify_record(written)
+        assert r2.agree is False
+        assert r2.cause == CAUSE_CHUNK_TOMBSTONED
+        assert r2.old_verdict == "SUPPORTED"
+        assert r2.new_verdict == "REFUTED"
+        # Stale report surfaces visibly with run_id/claim/old/new/cause
+        report = await verifier.stale_report([written])
+        assert len(report) == 1
+        assert report[0].run_id == run_id
+        assert report[0].statement == rec.statement
+        assert report[0].old_verdict == "SUPPORTED"
+        assert report[0].new_verdict == "REFUTED"
+        assert report[0].cause == CAUSE_CHUNK_TOMBSTONED
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_verifier_not_grounded_content_flags_disagree() -> None:
+    """Chunk present but statement not grounded -> DISAGREE with NOT_GROUNDED."""
+    async def _run() -> None:
+        run_id = f"run-v-{uuid.uuid4().hex[:6]}"
+        rec, _ = _grounded_evidence(run_id, "chk-mismatch")
+        # Writer stores SUPPORTED, but chunk has unrelated text -> grounder will NOT ground
+        source = InMemoryChunkSource({"chk-mismatch": "Unrelated content about cats."})
+        verifier = EvidenceVerifier(chunk_source=source)
+        result = await verifier.reverify_record(rec)
+        assert result.agree is False
+        assert result.cause == CAUSE_NOT_GROUNDED
+        assert result.old_verdict == "SUPPORTED"
+        assert result.new_verdict == "REFUTED"
+
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_verifier_uses_production_grounder() -> None:
+    """One-grounder rule: verifier imports ExtractiveGrounder from answer.verification."""
+    import inspect
+
+    from agents import verifier as vm
+
+    src = inspect.getsource(vm)
+    assert "from answer.verification import ExtractiveGrounder" in src
+    # Grounder is the production one, not a second implementation
+    source = InMemoryChunkSource({"chk-1": "The budget is 900 dollars."})
+    v = EvidenceVerifier(chunk_source=source)
+    assert type(v.grounder).__name__ == "ExtractiveGrounder"
+    assert hasattr(v.grounder, "score")
+    assert hasattr(v.grounder, "threshold")
+
