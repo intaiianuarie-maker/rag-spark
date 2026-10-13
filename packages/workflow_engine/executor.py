@@ -264,6 +264,14 @@ class WorkflowExecutor:
     def __init__(self, node_executor: NodeExecutor) -> None:
         self._executor = node_executor
         self._cancel = asyncio.Event()
+        # T-V4-011: the AGENT-node seam.  ``None`` (the default) means AGENT
+        # nodes route to the injected ``node_executor`` exactly as before —
+        # flag-off is byte-identical by construction.  Production wiring
+        # injects the W3 ``V3NodeExecutor`` (from
+        # ``workflow_engine.adapters.v3_adapter``); the executor never imports
+        # the adapter or the V3 product itself — seam-only, no direct v3
+        # imports (adapters import the executor, never the reverse).
+        self._agent_executor: NodeExecutor | None = None
         # T-V4-010: deployment-level bounds (see the constants above).  They
         # are constructor knobs, never per-node config — a node's own config
         # is untrusted imported data and must not widen its own bounds.
@@ -272,6 +280,34 @@ class WorkflowExecutor:
         self._max_attempts = NODE_MAX_ATTEMPTS
         self._retry_base_s = NODE_RETRY_BASE_S
         self._sleep = asyncio.sleep
+
+    # ------------------------------------------------------------------ #
+    # T-V4-011: AGENT routing (executor -> injected seam, never around it)
+    # ------------------------------------------------------------------ #
+    def configure_agent_executor(self, agent_executor: NodeExecutor | None) -> None:
+        """Wire the executor AGENT nodes route through (T-V4-011).
+
+        ``None`` restores the default routing (AGENT nodes go to the injected
+        ``node_executor``).  The value must satisfy the ``NodeExecutor``
+        Protocol — a misconfiguration fails at wiring time.
+        """
+        if agent_executor is not None and not isinstance(agent_executor, NodeExecutor):
+            raise TypeError(
+                "agent_executor must satisfy the NodeExecutor Protocol"
+            )
+        self._agent_executor = agent_executor
+
+    @property
+    def agent_executor(self) -> NodeExecutor | None:
+        return self._agent_executor
+
+    def _executor_for(self, node: NodeSpec) -> NodeExecutor:
+        """Routing rule (stated): AGENT nodes go to the injected seam when one
+        is wired; every other node (and AGENT with no seam wired) goes to the
+        injected executor.  There is no third path."""
+        if node.type is NodeType.AGENT and self._agent_executor is not None:
+            return self._agent_executor
+        return self._executor
 
     def configure_bounds(
         self,
@@ -608,12 +644,14 @@ class WorkflowExecutor:
         started = time.perf_counter()
         attempts = 0
         last_error: str | None = None
+        # T-V4-011: this node's executor — the seam for AGENT nodes when wired.
+        executor = self._executor_for(node)
         while attempts < self._max_attempts:
             attempts += 1
             attempt_started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
-                    self._executor.execute_node(node, node_input, workspace_id),
+                    executor.execute_node(node, node_input, workspace_id),
                     timeout=self._node_timeout_s,
                 )
             except asyncio.CancelledError:
