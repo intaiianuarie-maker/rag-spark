@@ -56,12 +56,43 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 CRASH_WORKER = REPO_ROOT / "tests" / "fixtures" / "scripts" / "t021_crash_worker.py"
 
 #: Unique per run so the live compose worker (default prefix) and this test
-#: can never see each other's jobs. Set BEFORE any enqueue in this process.
+#: can never see each other's jobs. Computed at import (harmless — it is just
+#: a constant); the *environment* that consumes it is set per-test by
+#: ``_queue_namespace`` below, never at import time (T-V1-057).
 QUEUE_PREFIX = f"t021-{uuid.uuid4().hex[:12]}:"
-os.environ["INGEST_QUEUE_PREFIX"] = QUEUE_PREFIX
-os.environ["INGEST_QUEUE_LEASE_SECONDS"] = LEASE_SECONDS
 
 _MATRIX: list[RecoveryRow] = []
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _queue_namespace() -> Generator[None, None, None]:
+    """Install this module's queue namespace, then take it back out.
+
+    T-V1-057: both assignments used to sit at module level, i.e. they ran the
+    moment pytest *imported* this file — before a single test executed. Every
+    test collected earlier in the same session therefore ran against a queue
+    prefix it never expected, which is what turned two unrelated
+    queue-namespacing assertions red in every full-suite run (they passed in
+    isolation). Scoping the mutation to this module's tests keeps the
+    isolation guarantee it exists for — the compose worker on the default
+    prefix still never sees these jobs — without leaking into anyone else.
+
+    The child worker does not rely on this: ``_CrashedWorker.start`` copies
+    ``os.environ`` and then sets both keys explicitly, so it gets the same
+    values whether or not the parent's environment is currently mutated.
+    """
+    keys = ("INGEST_QUEUE_PREFIX", "INGEST_QUEUE_LEASE_SECONDS")
+    saved = {key: os.environ.get(key) for key in keys}
+    os.environ["INGEST_QUEUE_PREFIX"] = QUEUE_PREFIX
+    os.environ["INGEST_QUEUE_LEASE_SECONDS"] = LEASE_SECONDS
+    try:
+        yield
+    finally:
+        for key, value in saved.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
 
 
 # --------------------------------------------------------------------------------------
