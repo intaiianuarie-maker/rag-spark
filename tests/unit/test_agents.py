@@ -391,7 +391,7 @@ def test_enforced_dispatch_denies_unlisted_tool() -> None:
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
     assert any(
         s.tool_output is not None
-        and "not allowed by the run policy" in str(s.tool_output.get("error", ""))
+        and "not allowed by the run policy" in str((s.tool_output or {}).get("error", ""))
         for s in run.steps
     )
 
@@ -451,7 +451,7 @@ def test_enforced_dispatch_validates_strict_schema() -> None:
     # scalar error.
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
     assert any(
-        s.tool_output is not None and "undeclared" in str(s.tool_output.get("error", "")).lower()
+        s.tool_output is not None and "undeclared" in str((s.tool_output or {}).get("error", "")).lower()  # noqa: E501
         for s in run.steps
     )
 
@@ -569,7 +569,7 @@ def test_enforced_dispatch_enforces_output_size_bound() -> None:
     assert run.error is None
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
     assert any(
-        s.tool_output is not None and "exceeded" in str(s.tool_output.get("error", "")).lower()
+        s.tool_output is not None and "exceeded" in str((s.tool_output or {}).get("error", "")).lower()  # noqa: E501
         for s in run.steps
     )
 
@@ -1337,3 +1337,188 @@ def test_knowledge_read_uses_adapter_boundary() -> None:
     assert "from qdrant_client" not in text
     # Must use persistence seam, not direct SQL string with workspace scan
     assert "ChunkRow" in text or "chunk_reader" in text
+
+# ======================================================================================
+# T-V3-004 — Bounded typed-action parsing (V3 plan trace runtime)
+# ======================================================================================
+
+import time as _time  # noqa: E402
+
+from agents.runtime import MAX_ACTION_TEXT_CHARS, MAX_PARSE_TIME_S, _parse_action_sync  # noqa: E402
+
+
+@pytest.mark.unit
+def test_typed_parser_bounded_size_and_time() -> None:
+    """Checklist 1: parse bounded — size + wall-clock, with why."""
+    # Size bound: overlong is BLOCKED without parsing
+    long_text = "x" * (MAX_ACTION_TEXT_CHARS + 1)
+    parsed = _parse_action_sync(long_text)
+    assert parsed.kind == "invalid"
+    assert "exceeds" in (parsed.error or "")
+    assert parsed.error_code == AgentErrorCode.SCHEMA_INVALID
+    # Time bound is real: parsing 10KB garbage must complete well within 0.5s
+    garbage = "x" * 10_240
+    start = _time.perf_counter()
+    parsed = _parse_action_sync(garbage)
+    elapsed = _time.perf_counter() - start
+    assert elapsed < MAX_PARSE_TIME_S, f"10KB parse took {elapsed:.3f}s > {MAX_PARSE_TIME_S}s"
+    assert parsed.kind == "invalid"
+    # Bounds are sane: real action still parses
+    real = "Thought: ok\nAction: calculator\nAction Input: {\"expression\": \"1+1\"}"
+    parsed = _parse_action_sync(real, allowed_tools={"calculator"})
+    assert parsed.kind == "tool_call"
+    assert parsed.tool_name == "calculator"
+
+
+@pytest.mark.unit
+def test_unknown_action_blocked_never_exec() -> None:
+    """Checklist 2: unknown action → BLOCKED SCHEMA_INVALID, never exec."""
+    from agents.tools import CalculatorTool
+
+    calls: list[str] = []
+
+    class _TrackingTool(CalculatorTool):
+        async def execute(self, workspace_id: str, **kwargs):
+            calls.append(kwargs.get("expression", ""))
+            return await super().execute(workspace_id, **kwargs)
+
+    registry = ToolRegistry()
+    registry.register(_TrackingTool())
+    llm = _ScriptedLLM(
+        [
+            'Thought: try unknown\nAction: unknown_tool\nAction Input: {"query": "hello"}',
+            "Final Answer: done after block",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t304-unk",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["calculator"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="unknown"))
+    # Unknown must be BLOCKED, never exec (policy or unknown)
+    assert any(s.type == AgentStepType.ERROR for s in run.steps), run.steps
+    assert calls == [], f"unknown action executed tool: {calls}"
+    # Metric: unknown actions executed: 0
+    assert not any(
+        s.tool_name == "unknown_tool" and s.type == AgentStepType.TOOL_OUTPUT for s in run.steps
+    )
+
+
+@pytest.mark.unit
+def test_fuzz_10kb_garbage_blocked_no_hang() -> None:
+    """Metric: fuzz inputs hung: 0 — 10KB garbage BLOCKED within wall-clock bound."""
+    registry = ToolRegistry()
+    registry.register(CalculatorTool())
+    garbage = "x" * 10_240 + "\n" + "y" * 500
+    llm = _ScriptedLLM(
+        [
+            garbage,
+            "Final Answer: recovered",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t304-fuzz",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["calculator"],
+    )
+    start = _time.perf_counter()
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="fuzz"))
+    elapsed = _time.perf_counter() - start
+    assert elapsed < 2.0, f"fuzz run hung: {elapsed:.3f}s"
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    # First step should be BLOCKED SCHEMA_INVALID, not a hang
+    first_error = next(s for s in run.steps if s.type == AgentStepType.ERROR)
+    assert "exceeds" in str((first_error.tool_output or {}).get("error", "")).lower() or "invalid" in str(  # noqa: E501
+        (first_error.tool_output or {}).get("error", "")
+    ).lower()
+    # Also directly test bounded parser wall-clock guard
+
+    async def _bounded():
+        return await _parse_action_bounded(garbage, allowed_tools={"calculator"})
+
+    # Need to import the bounded parser
+    from agents.runtime import _parse_action_bounded
+
+    start = _time.perf_counter()
+    parsed = asyncio.run(_parse_action_bounded(garbage, allowed_tools={"calculator"}))
+    elapsed = _time.perf_counter() - start
+    assert elapsed < MAX_PARSE_TIME_S + 0.2, f"bounded parse hung: {elapsed:.3f}s"
+    assert parsed.kind == "invalid"
+
+
+@pytest.mark.unit
+def test_prose_never_persisted_as_evidence() -> None:
+    """Checklist 3: model prose is untrusted input to parser, never ground truth."""
+    registry = ToolRegistry()
+    registry.register(CalculatorTool())
+    llm = _ScriptedLLM(
+        [
+            "Thought: just thinking without Action or Final Answer markers, prose only",
+            "Thought: now answer\nFinal Answer: the real answer",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t304-prose",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["calculator"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="prose test"))
+    # Prose must not become final_output
+    assert run.final_output == "the real answer"
+    assert run.final_output != "just thinking without Action or Final Answer markers, prose only"
+    # Prose step must be BLOCKED, not evidence
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    # No step should have persisted prose as evidence content
+    for s in run.steps:
+        if s.type == AgentStepType.ERROR:
+            assert "just thinking" not in str(s.tool_output)
+
+
+@pytest.mark.unit
+def test_no_regex_dispatch_surviving() -> None:
+    """Grep-prove: no re.search/match on model output for control flow in runtime."""
+    import pathlib
+
+    text = pathlib.Path("packages/agents/runtime.py").read_text()
+    # The file may still import re, but must not use it for dispatch on model output
+    assert "re.search" not in text, "re.search surviving for dispatch — use bounded parser"
+    assert "re.match" not in text, "re.match surviving for dispatch"
+    # Also ensure the bounded parser's constants are present and sane
+    assert "MAX_ACTION_TEXT_CHARS" in text
+    assert "MAX_PARSE_TIME_S" in text
+
+
+@pytest.mark.unit
+def test_fuzz_garbage_completes_or_blocked_within_bound() -> None:
+    """Time bound must be REAL timeout — fuzz completes or BLOCKED within bound."""
+    from agents.runtime import _parse_action_bounded
+
+    # 10KB of alternating braces/brackets that would stress a naive regex
+    garbage = ("{ " * 2000 + "} " * 2000)[:10240]
+    start = _time.perf_counter()
+    parsed = asyncio.run(_parse_action_bounded(garbage, allowed_tools={"calculator"}))
+    elapsed = _time.perf_counter() - start
+    assert elapsed < MAX_PARSE_TIME_S + 0.5, (
+        f"garbage parse took {elapsed:.3f}s, not wall-clock bounded"
+    )
+    assert parsed.kind == "invalid"
+    assert parsed.error_code == AgentErrorCode.SCHEMA_INVALID

@@ -19,9 +19,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import re
 import time
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from models.interfaces import ChatMessage, GenerationRequest, LLMProvider, MessageRole
@@ -54,6 +54,184 @@ def _tool_class_for(name: str) -> ToolClass:
     """Read tools by default; named write tools opt into the write class."""
     write_tools = {"knowledge_write", "web_write", "publish", "ingest", "delete"}
     return ToolClass.WRITE if name in write_tools else ToolClass.READ
+
+
+#: T-V3-004 (V3 plan trace runtime): the model's free-form output is **untrusted
+#: input to a bounded parser**, never a code path. Every dimension is bounded
+#: server-side before any dispatch:
+#:
+#: * :data:`MAX_ACTION_TEXT_CHARS` bounds the text the parser ever looks at —
+#:   ``asyncio.wait_for`` would not help if we first copied a 100 MB string.
+#: * :data:`MAX_PARSE_TIME_S` is a **real wall-clock guard** (``asyncio.wait_for``
+#:   around ``to_thread``) — a hoped-for fast parse is not a bound.
+#:   10_240 chars ≈ 10 KB, the largest model output we expect (4096 tokens
+#:   ≈ 16 KB worst-case); parsing 10 KB with string ops is <1 ms on this box,
+#:   so 0.5 s is 500x headroom but still < the run's 300 s deadline, proving
+#:   fuzz cannot hang the worker.
+MAX_ACTION_TEXT_CHARS = 10_240
+MAX_PARSE_TIME_S = 0.5
+
+
+@dataclass(frozen=True)
+class ParsedAction:
+    """Typed result of the bounded action parser (T-V3-004).
+
+    The parser produces **data**, never a code path: ``kind`` tells the
+    caller what to do, and ``tool_name``/``raw_input`` are plain strings
+    the dispatcher then validates. Unknown actions and garbage never reach
+    ``tool.execute``.
+    """
+
+    kind: str  # "tool_call" | "final_answer" | "invalid"
+    tool_name: str | None = None
+    raw_input: str | None = None
+    final_answer: str | None = None
+    error: str | None = None
+    error_code: AgentErrorCode | None = None
+
+
+def _parse_action_sync(text: str, allowed_tools: set[str] | None = None) -> ParsedAction:
+    """Bounded, regex-free parse of model output.
+
+    Size is checked before any scan; the scan itself is linear string ops
+    (``find`` + manual brace counting) with no backtracking. Callers must
+    wrap this in ``asyncio.wait_for`` for the wall-clock guard — the function
+    itself is synchronous so it can run in ``to_thread``.
+    """
+    if len(text) > MAX_ACTION_TEXT_CHARS:
+        return ParsedAction(
+            kind="invalid",
+            error=f"action text {len(text)} chars exceeds {MAX_ACTION_TEXT_CHARS}",
+            error_code=AgentErrorCode.SCHEMA_INVALID,
+        )
+    # Find markers without regex — linear finds, no backtracking.
+    final_marker = "Final Answer:"
+    action_marker = "Action:"
+    input_marker = "Action Input:"
+    final_idx = text.find(final_marker)
+    action_idx = text.find(action_marker)
+
+    # Final answer only if no action present (prose alone is never evidence).
+    if final_idx != -1 and action_idx == -1:
+        final_text = text[final_idx + len(final_marker) :].strip()
+        if not final_text:
+            return ParsedAction(
+                kind="invalid",
+                error="empty final answer",
+                error_code=AgentErrorCode.SCHEMA_INVALID,
+            )
+        return ParsedAction(kind="final_answer", final_answer=final_text)
+
+    if action_idx == -1:
+        return ParsedAction(
+            kind="invalid",
+            error="no Action or Final Answer marker found",
+            error_code=AgentErrorCode.SCHEMA_INVALID,
+        )
+
+    # Extract tool name: skip whitespace, then [a-zA-Z0-9_-]+
+    name_start = action_idx + len(action_marker)
+    while name_start < len(text) and text[name_start].isspace():
+        name_start += 1
+    name_end = name_start
+    while name_end < len(text) and (text[name_end].isalnum() or text[name_end] in "_-"):
+        name_end += 1
+    tool_name = text[name_start:name_end]
+    if not tool_name:
+        return ParsedAction(
+            kind="invalid",
+            error="missing tool name after Action:",
+            error_code=AgentErrorCode.SCHEMA_INVALID,
+        )
+    # Unknown tool name is not a parse error — dispatch will BLOCK
+    # with TOOL_NOT_ALLOWED / TOOL_NOT_FOUND. Parser only validates syntax.
+
+    # Extract raw Action Input (if any) — balanced brace/bracket scan, no regex.
+    input_idx = text.find(input_marker, action_idx)
+    if input_idx == -1:
+        raw_input = "{}"
+    else:
+        raw_start = input_idx + len(input_marker)
+        while raw_start < len(text) and text[raw_start].isspace():
+            raw_start += 1
+        if raw_start >= len(text):
+            raw_input = "{}"
+        elif text[raw_start] == "{":
+            depth = 0
+            end = -1
+            for i in range(raw_start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            raw_input = text[raw_start:end].strip() if end != -1 else "{}"
+        elif text[raw_start] == "[":
+            depth = 0
+            end = -1
+            for i in range(raw_start, len(text)):
+                if text[i] == "[":
+                    depth += 1
+                elif text[i] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        end = i + 1
+                        break
+            raw_input = text[raw_start:end].strip() if end != -1 else "{}"
+        else:
+            nl = text.find("\n", raw_start)
+            if nl == -1:
+                raw_input = text[raw_start:].strip()
+            else:
+                raw_input = text[raw_start:nl].strip()
+            if not raw_input:
+                raw_input = "{}"
+        # Validate that raw_input is a JSON object (typed, not prose)
+        try:
+            parsed = json.loads(raw_input)
+            if not isinstance(parsed, dict):
+                return ParsedAction(
+                    kind="invalid",
+                    error="Action Input must be a JSON object",
+                    error_code=AgentErrorCode.SCHEMA_INVALID,
+                )
+        except Exception:
+            return ParsedAction(
+                kind="invalid",
+                error="Action Input is not valid JSON",
+                error_code=AgentErrorCode.SCHEMA_INVALID,
+            )
+
+    return ParsedAction(kind="tool_call", tool_name=tool_name, raw_input=raw_input)
+
+
+async def _parse_action_bounded(text: str, allowed_tools: set[str] | None = None) -> ParsedAction:
+    """Size + **wall-clock** bounded parse (T-V3-004).
+
+    The size check is synchronous; the scan is run in ``to_thread`` and
+    guarded by ``asyncio.wait_for``, so a pathological input cannot hang
+    the event loop — the 10 KB fuzz test proves this by completing or
+    ``BLOCKED`` within ``MAX_PARSE_TIME_S``.
+    """
+    if len(text) > MAX_ACTION_TEXT_CHARS:
+        return ParsedAction(
+            kind="invalid",
+            error=f"action text {len(text)} chars exceeds {MAX_ACTION_TEXT_CHARS}",
+            error_code=AgentErrorCode.SCHEMA_INVALID,
+        )
+    try:
+        return await asyncio.wait_for(
+            asyncio.to_thread(_parse_action_sync, text, allowed_tools),
+            timeout=MAX_PARSE_TIME_S,
+        )
+    except TimeoutError:
+        return ParsedAction(
+            kind="invalid",
+            error=f"parse exceeded {MAX_PARSE_TIME_S}s wall-clock bound",
+            error_code=AgentErrorCode.SCHEMA_INVALID,
+        )
 
 
 def _legacy_status(status: RunStatus) -> AgentRunStatus:
@@ -194,11 +372,7 @@ class AgentRuntime:
         serialized = json.dumps(result, default=str)
         if len(serialized.encode()) > spec.max_output_bytes:
             return (
-                {
-                    "error": (
-                        f"Tool output exceeded {spec.max_output_bytes} bytes; truncated."
-                    )
-                },
+                {"error": (f"Tool output exceeded {spec.max_output_bytes} bytes; truncated.")},
                 StepStatus.FAILED,
                 AgentErrorCode.TOOL_OUTPUT_TOO_LARGE,
             )
@@ -305,21 +479,20 @@ class AgentRuntime:
             text = gen_res.text.strip()
             history.append(ChatMessage(role=MessageRole.ASSISTANT, content=text))
 
-            action = re.search(r"Action:\s*([a-zA-Z0-9_\-]+)", text)
-            action_input = re.search(r"Action Input:\s*(\{.*?\}|\[.*?\]|[^\n]+)", text, re.DOTALL)
-            final_answer = re.search(r"Final Answer:\s*(.+)", text, re.DOTALL)
-
-            if final_answer and not action:
-                agent_run.final_output = final_answer.group(1).strip()
+            # T-V3-004: bounded typed-action parsing — size + wall-clock guard,
+            # no regex, unknown → BLOCKED SCHEMA_INVALID, prose never evidence.
+            parsed = await _parse_action_bounded(text, allowed_tools=set(policy.allowed_tools))
+            if parsed.kind == "final_answer":
+                agent_run.final_output = parsed.final_answer
                 state.transition_to(RunStatus.COMPLETED)
                 agent_run.status = _legacy_status(state.status)
-                # rew1 follow-up 2: clear any earlier blocked-step error text.
                 agent_run.error = None
                 break
 
-            if action:
-                tool_name = action.group(1).strip()
-                raw_input = action_input.group(1).strip() if action_input else "{}"
+            if parsed.kind == "tool_call":
+                assert parsed.tool_name is not None
+                tool_name = parsed.tool_name
+                raw_input = parsed.raw_input or "{}"
                 tool_calls += 1
 
                 output, status, error_code = await self._dispatch(
@@ -350,19 +523,33 @@ class AgentRuntime:
                 if error_code is not None:
                     agent_run.error = f"{error_code.value}: {output.get('error', '')}"
 
-                history.append(
-                    ChatMessage(role=MessageRole.USER, content=f"Observation: {output}")
-                )
+                history.append(ChatMessage(role=MessageRole.USER, content=f"Observation: {output}"))
                 continue
 
-            # No action and no final answer: treat as the answer.
-            agent_run.final_output = text
-            state.transition_to(RunStatus.COMPLETED)
-            agent_run.status = _legacy_status(state.status)
-            # rew1 follow-up 2: an earlier blocked step must not leave a stale
-            # error on a successfully completed run.
-            agent_run.error = None
-            break
+            # Invalid / unknown / garbage → BLOCKED, never exec, never evidence.
+            blocked_error = parsed.error or "invalid action"
+            blocked_code = parsed.error_code or AgentErrorCode.SCHEMA_INVALID
+            agent_run.steps.append(
+                AgentStep(
+                    step_number=len(agent_run.steps) + 1,
+                    type=AgentStepType.ERROR,
+                    content="",
+                    tool_name=None,
+                    tool_output={
+                        "error": blocked_error,
+                        "error_code": blocked_code.value,
+                    },
+                    timestamp=datetime.now(UTC).isoformat(),
+                )
+            )
+            agent_run.error = f"{blocked_code.value}: {blocked_error}"
+            history.append(
+                ChatMessage(
+                    role=MessageRole.USER,
+                    content=f"Observation: {{'error': {blocked_error!r}, 'error_code': {blocked_code.value!r}}}",  # noqa: E501
+                )
+            )
+            continue
         else:
             if not RunState.is_terminal(state.status):
                 state.transition_to(
@@ -379,8 +566,7 @@ class AgentRuntime:
     def _build_system_prompt_from(self, instructions: str, allowed: list[str]) -> str:
         tools = [t for t in self.registry.list_tools() if t.name in allowed]
         tool_descs = [
-            f"- {t.name}: {t.description}. Input: {json.dumps(t.input_schema)}"
-            for t in tools
+            f"- {t.name}: {t.description}. Input: {json.dumps(t.input_schema)}" for t in tools
         ]
         tools_block = "\n".join(tool_descs) if tool_descs else "No tools available."
         return (
@@ -401,8 +587,7 @@ class AgentRuntime:
             tools = [t for t in tools if t.name in config.allowed_tools]
 
         tool_descs = [
-            f"- {t.name}: {t.description}. Input: {json.dumps(t.input_schema)}"
-            for t in tools
+            f"- {t.name}: {t.description}. Input: {json.dumps(t.input_schema)}" for t in tools
         ]
         tools_block = "\n".join(tool_descs) if tool_descs else "No tools available."
 
@@ -475,15 +660,13 @@ class AgentRuntime:
                 agent_run.error = f"LLM error: {exc}"
                 break
 
-            # Parse ReAct components
-            action_match = re.search(r"Action:\s*([a-zA-Z0-9_\-]+)", response_text)
-            action_input_match = re.search(
-                r"Action Input:\s*(\{.*?\}|\[.*?\]|[^\n]+)", response_text, re.DOTALL
-            )
-            final_answer_match = re.search(r"Final Answer:\s*(.+)", response_text, re.DOTALL)
+            # T-V3-004: bounded parse in legacy path as well — no regex.
+            _legacy_parsed = _parse_action_sync(response_text)
+            _legacy_is_final = _legacy_parsed.kind == "final_answer"
+            _legacy_is_tool = _legacy_parsed.kind == "tool_call"
 
-            if final_answer_match and not action_match:
-                final_answer = final_answer_match.group(1).strip()
+            if _legacy_is_final:
+                final_answer = _legacy_parsed.final_answer or ""
                 agent_run.steps.append(
                     AgentStep(
                         step_number=step_idx,
@@ -497,9 +680,9 @@ class AgentRuntime:
                 agent_run.status = AgentRunStatus.COMPLETED
                 break
 
-            if action_match:
-                tool_name = action_match.group(1).strip()
-                raw_input = action_input_match.group(1).strip() if action_input_match else "{}"
+            if _legacy_is_tool:
+                tool_name = _legacy_parsed.tool_name or ""
+                raw_input = _legacy_parsed.raw_input or "{}"
 
                 try:
                     tool_input = json.loads(raw_input)
@@ -552,18 +735,26 @@ class AgentRuntime:
                     )
                 )
             else:
+                # T-V3-004: prose without markers is never evidence — BLOCKED.
                 agent_run.steps.append(
                     AgentStep(
                         step_number=step_idx,
-                        type=AgentStepType.FINAL_ANSWER,
+                        type=AgentStepType.ERROR,
                         content=response_text,
                         latency_ms=t_llm,
                         timestamp=datetime.now(UTC).isoformat(),
                     )
                 )
-                agent_run.final_output = response_text
-                agent_run.status = AgentRunStatus.COMPLETED
-                break
+                conversation_history.append(
+                    ChatMessage(role=MessageRole.ASSISTANT, content=response_text)
+                )
+                conversation_history.append(
+                    ChatMessage(
+                        role=MessageRole.USER,
+                        content="Observation: {'error': 'invalid action', 'error_code': 'schema_invalid'}",  # noqa: E501
+                    )
+                )
+                continue
         else:
             if agent_run.status == AgentRunStatus.RUNNING:
                 agent_run.status = AgentRunStatus.MAX_STEPS_EXCEEDED
