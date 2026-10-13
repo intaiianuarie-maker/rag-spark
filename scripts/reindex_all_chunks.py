@@ -123,18 +123,29 @@ async def probe_provider(provider: InfinityEmbeddingProvider) -> tuple[int, int]
     return len(vector), sum(1 for x in vector if x != 0.0)
 
 
-#: One batch is one synchronous ``POST /embeddings``. T-V1-060 measured the tail:
-#: 32 ordinary chunk texts completed in 9-30 s for 11 consecutive batches, then one
-#: of the same shape (median 30 chars, longest 1279 — the corpus maximum is 1933,
-#: nothing oversized) went unanswered past the adapter's 120 s client timeout and
-#: killed a 40-minute rebuild at batch 11. The server kept answering 200s for the
-#: next requests, so that batch was slow, not hung, and no text needed splitting —
-#: the failure is provider latency tail, and the honest response is to retry *this
-#: batch* (embedding is pure: no store write happens until it returns), not to
-#: raise the ceiling for every call and not to fragment the corpus.
-_EMBED_BATCH_ATTEMPTS = 3
-#: Backoff between retries of one batch (seconds): 5 s, 10 s.
-_EMBED_BATCH_BACKOFF_SECONDS = (5.0, 10.0)
+#: One batch is one synchronous ``POST /embeddings``. T-V1-060 lost two rebuilds
+#: to the provider and the two failures are different, so both are covered here:
+#:
+#: * **latency tail** — 32 ordinary chunk texts completed in 9-30 s for 11
+#:   consecutive batches, then one of the same shape (median 30 chars, longest
+#:   1279, against a corpus maximum of 1933 with nothing oversized) went
+#:   unanswered past the adapter's 120 s client timeout;
+#: * **provider restart** — the server process died mid-rebuild (infinity
+#:   ``RestartCount`` 0 -> 1, ``ExitCode=0``) and needed ~45 s to load both models
+#:   again, which is longer than a short backoff: the client saw ``ReadError`` on
+#:   the in-flight request and every retry inside 15 s of that.
+#:
+#: Neither is a text-shape problem (no chunk needs splitting) and neither should
+#: be answered by a bigger global ceiling, so the response is a bounded retry of
+#: *this* call — embedding is pure, no store write happens until it returns — with
+#: a backoff wide enough to ride out one model reload. Still bounded and still
+#: loud: exhausting it raises, the run stops, and the half-built replacement is
+#: refused by ``promote_replacement``.
+_EMBED_BATCH_ATTEMPTS = 4
+#: Backoff between retries of one batch (seconds): 15 s, 30 s, 45 s — the model's
+#: own load time on this box is ~35 s, so the third retry can catch a restarted
+#: server; the fourth attempt has no further wait.
+_EMBED_BATCH_BACKOFF_SECONDS = (15.0, 30.0, 45.0)
 
 
 async def embed_batch_with_retry(

@@ -458,7 +458,7 @@ async def test_a_slow_batch_is_retried_and_the_run_finishes(
 
     assert vectors == [[0.25] * _DIM, [0.25] * _DIM]
     assert provider.calls == 2, "one failure, one retry — never a silent success"
-    assert delays == [5.0], "one bounded backoff, not an unbounded spin"
+    assert delays == [15.0], "one bounded backoff, not an unbounded spin"
 
 
 async def test_a_persistently_slow_batch_fails_loudly_and_stops_the_run(
@@ -474,10 +474,17 @@ async def test_a_persistently_slow_batch_fails_loudly_and_stops_the_run(
     assert provider.calls == reindex_mod._EMBED_BATCH_ATTEMPTS
 
 
-async def test_the_retry_budget_is_bounded_and_the_backoff_grows() -> None:
-    """The ceiling is a constant, not an open-ended retry-until-success."""
-    assert reindex_mod._EMBED_BATCH_ATTEMPTS == 3
-    assert reindex_mod._EMBED_BATCH_BACKOFF_SECONDS == (5.0, 10.0)
+async def test_the_retry_budget_is_bounded_and_rides_out_a_provider_restart() -> None:
+    """Bounded, and wide enough to outlast one model reload (~35 s on this box).
+
+    T-V1-060 lost a rebuild to exactly that: the server restarted mid-run and the
+    old 3-attempt / 5 s+10 s budget expired while it was still loading.
+    """
+    assert reindex_mod._EMBED_BATCH_ATTEMPTS == 4
+    assert reindex_mod._EMBED_BATCH_BACKOFF_SECONDS == (15.0, 30.0, 45.0)
+    assert sum(reindex_mod._EMBED_BATCH_BACKOFF_SECONDS) >= 35.0, (
+        "the budget must cover a full model reload before the last attempt"
+    )
 
 
 async def test_a_failing_batch_prevents_the_switch(
