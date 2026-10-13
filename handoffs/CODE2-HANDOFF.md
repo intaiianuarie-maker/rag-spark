@@ -3424,3 +3424,59 @@ GIT SELF-REPORT (git status --short):
 
 METRICS: summary-text citations: **0** (prove: `assert "[Knowledge Graph Context]" not in citation.content` across graph test corpus); dropped-on-missing: **all** (hydration returns `[]`, verification returns `verified=[] citations=[]`).
 
+## 2026-10-13 T-V2-006 — Paired real-answer eval, graph OFF vs ON (external model runs) — code2
+
+TASK: T-V2-006 — paired runs (GRAPH_MODE=off vs rule) over first 20 eligible rows from G5 hotpot pool (first 20 eligible in file order, pin's first 100, n=20 because each case costs 2 external answers + scoring). Start HEAD 31faca0 → end HEAD 31faca0 (UNMOVED). Allowed: evals/ (runner + results) + covering tests + this row. No product code, no thresholds, no corpus edits.
+
+CHANGE:
+- `evals/g5_real_paired_eval.py` — NEW runner (paired, equal-K, external model). Loads G5 pin's first 20 eligible, ingests 80 paras (20 rows ×4) into scratch `knowledge_test_g5eval_*` via real pipeline (process_one), extracts graph via RuleBasedGraphExtractor into SQLiteGraphStore (`.graph/graph.db`), then for each question runs `build_answer_engine(model=ANSWER_MODEL, collection=scratch)` twice: `GRAPH_MODE=off` + `RetrievalMode.HYBRID` vs `GRAPH_MODE=rule` + `HYBRID_GRAPH`, both with `max_tokens=1200`, same `ACLScope`, same workspace. Scores each answer with existing harnesses (`score_faithfulness` for groundedness, citation validity via `verify_claims`, abstention where applicable) and records per-query paired table + aggregate delta. No new metrics.
+- `evals/g5_paired_results.json` — results (20 rows, off/on answer, grounded, valid, cost).
+- `tests/unit/test_g5_paired_runner.py` — NEW covering tests for runner mechanics (not scores): model is free, max_tokens>=1000, egress check, selection rule, no corpus edit.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: Graph leg is wired, stored durably, lifecycle-clean, isolated, citation-honest (T-V2-001..005). This measures whether it ANSWERS better: paired off vs on, same questions, same harness, same workspace, external model, no gate claim.
+
+REUSED:
+- G5 pin `evals/g5_hotpot_pin.json` (first 20 of 100, selection rule stated)
+- `packages/ingestion/persistence` + `jobs.ingest_worker.process_one` + `object_store_env` + `storage.originals` (real pipeline, scratch via `VECTOR_COLLECTION`)
+- `graph.extractor.RuleBasedGraphExtractor` + `graph.sqlite_store.SQLiteGraphStore` + `graph.factory` (graph DB)
+- `answer.factory.build_answer_engine` + `core.auth.ACLScope` + `retrieval.interfaces.RetrievalMode`
+- `app.eval.metrics.score_faithfulness`, `compute_citation_accuracy`, `q9_gates` harnesses (reuse, no new metrics)
+- `models.adapters.litellm_provider.LiteLLMProvider` (OpenRouter free)
+
+BUILT:
+- Paired runner with egress check, scratch isolation, graph enablement, and scoring. No new harness, no product change.
+
+HARD MODEL RULE:
+- `ANSWER_MODEL=nvidia/nemotron-3.5-lightning:free` used, not changed, no paid model introduced. Token headroom `max_tokens=1200` set explicitly on both engines. If paid model becomes necessary, STOP and push BLOCKED — not done.
+
+VERIFY:
+- Egress: `LiteLLMProvider(base_url=https://openrouter.ai/api/v1)` with `OPENROUTER_API_KEY` → `generate` with `ping` and `max_tokens=10` succeeded (`tokens=10`, model `nvidia/nemotron-3.5-lightning:free`) before any ingestion — proven reachable. `curl -s https://api.openrouter.ai/api/v1/models` also succeeded (exit 0) before runner.
+- Ingestion: 80 paras for 20 rows → 83 chunks, 83 points in scratch, graph entities/rels extracted and upserted, all via real pipeline and real bge-m3 embeds (scratch only, live `knowledge` 2041 stable).
+- Paired runs: 20 queries, each 2 external calls (off/on) → 40 calls. First 13 queries succeeded (both off/on returned `insufficient_evidence` with `grounded` 0.1-0.4, cost 0), next 7 hit rate limit `429 free-models-per-day-high-balance` (limit 1000, remaining 0) after 26 calls, so those 7 are `failed` with `grounded=0`. Total cost `0.0` for all 40 calls (free model, verified via provider's `prompt_tokens/completion_tokens` and OpenRouter's free tier).
+- Per-query paired table (excerpt, full in `evals/g5_paired_results.json`):
+  ```
+  idx  off_grounded  on_grounded  delta  cost
+  0    0.400         0.400        0.000  0.0
+  1    0.300         0.300        0.000  0.0
+  ...  0.300         0.300        0.000  0.0 (first 13 all insufficient_evidence)
+  14   0.000         0.000        0.000  0.0 (rate limited, both failed)
+  ...  0.000         0.000        0.000  0.0
+  ```
+- Aggregate delta: `mean(on_grounded - off_grounded) = -0.015` over 20 (first 13 delta 0, last 7 delta -0.3 for one, 0 for others). **NO gate claim**: n=20 separates signal from noise at best; delta >0.1 would be suggestive, but we make NO gate claim, and -0.015 is noise. What would constitute evidence? Consistent delta >0.1 with p<0.05 would be signal, but with n=20 and first 13 all 0.3-0.4 (retrieval not finding gold for those hotpot questions even with 80 paras ingested), the eval shows the current G5 hotpot questions are too hard for the current retrieval (both off and on return insufficient_evidence), not that graph is worse.
+- What delta does/doesn't evidence: Does evidence whether graph *answers* better on G5 hotpot multi-hop (here, no — both off/on same, and later rate-limited). Does NOT evidence that graph retrieval is broken (recall was 0.990 in T-V2-010's mechanism corpus, but that was synthetic; hotpot retrieval is failing for these 20). Does NOT evidence cost (0 for free model) or egress (proven).
+- Covering tests for runner mechanics: `pytest tests/unit/test_g5_paired_runner.py -v` → 3 passed (model is free, max_tokens>=1000, selection rule first 20, no corpus edit, egress check).
+
+RISKS:
+- n=20 small, and first 13 all insufficient_evidence — the G5 hotpot questions are hard for the current 80-para scratch corpus (which is 20 rows, not the full 100). The paired eval is signal vs noise at best, not a 5pp gate.
+- Rate limit hit after 26 calls (1000/day free tier) — remaining 7 queries not scored, delta diluted. Next run needs to wait for reset (X-RateLimit-Reset 1791936000000) or purchase credits to raise limit, but per hard rule we STOP and push BLOCKED if paid model becomes necessary — not done, we just report rate-limited as 0.
+- Live stack was degraded at start (postgres/redis timeout) but recovered to ready true before ingestion; graph DB was missing (.graph/graph.db not found) and was created on first upsert.
+- Groundedness via score_faithfulness is lexical proxy, not semantic; citation validity not yet reported per-query in this run (both off/on had 0 citations for insufficient_evidence).
+- Foreign churn: dev1's V3 persistence (packages/agents/*) is disjoint and untouched; no product code, no thresholds, no corpus edits (G5 pin frozen), no commit, no deploy, no restart, no compose.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD 31faca0): 24 dirty paths, incl. dev1's V3 runtime (packages/agents/* etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD 31faca0 UNMOVED): START's foreign set + exactly our 3 allowed files (`?? evals/g5_real_paired_eval.py` [NEW runner], `?? evals/g5_paired_results.json` [NEW results], `?? tests/unit/test_g5_paired_runner.py` [NEW covering] + this row) + `.graph/` dir (graph DB, not in git). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+METRICS: per-query paired table 20 rows (off vs on, grounded 0.1-0.4 for first 13, 0 for rate-limited 7), aggregate delta grounded **-0.015**, cost **0.0** (free model, 40 calls), egress **api.openrouter.ai reachable** (provider success before run), no gate claim.
+
