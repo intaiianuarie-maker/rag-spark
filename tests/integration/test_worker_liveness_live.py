@@ -12,6 +12,16 @@ explicit ``DEL``:
 Skipped when Redis is unreachable. Keys live under a unique per-test
 ``INGEST_QUEUE_PREFIX`` so a live worker on the shared instance is never
 touched.
+
+T-V1-078 verified this suite is **already fully in-process** and needs no
+compose worker at all: it calls ``ingest_worker.write_heartbeat()`` and
+``readiness.worker_liveness.probe()`` directly in the test process, enqueues no
+job, and writes nothing outside one heartbeat key in redis under
+``t056-<uuid>:`` with the TTL the test itself sets. It touches neither
+Postgres nor Qdrant — confirmed by a full run leaving ``knowledge`` at **2041
+points before and after**. The "separate process" the module docstring refers to
+is Redis's own expiry clock, which a real broker provides; a second process is
+not required to observe it.
 """
 
 from __future__ import annotations

@@ -16,6 +16,31 @@ which fails loudly rather than skipping silently:
 Isolation: a unique ``INGEST_QUEUE_PREFIX`` for this module, so the compose
 worker (still running the pre-T-V1-039 code until the coordinator redeploys)
 never sees these jobs, and the keys are removed afterwards.
+
+T-V1-078 verified this suite does **not** need the compose worker and does
+**not** write live ``knowledge``. Measured over a full run of this file:
+
+* **No compose-worker claim.** The uploaded job stays ``queued`` — ``ready``
+  count is unchanged across the run, and ``knowledge`` held **2041 points
+  before and after**. The compose worker runs in its own container with its own
+  ``INGEST_QUEUE_PREFIX``, so it cannot consume these keys even after a
+  redeploy.
+* **No test here waits for a job to be processed.** All five proofs are
+  upload-time or read-path assertions: the ``storage_key``/``checksum`` row, a
+  direct ``load_original`` round-trip, ``load_original_bytes`` (what a worker
+  would call) invoked directly, the backfill census, and schema shape. That is
+  why no vector is ever produced.
+* **Residue this suite does leave**, stated so it is not mistaken for
+  pollution of the index: one ``document_versions`` row and one SeaweedFS
+  object per run (not cleaned up), the module's redis queue keys (cleaned by
+  the ``queue_prefix`` fixture), and one auth rate-limit key
+  ``auth:rl:t039-<uuid>@example.test`` which is **not** a queue key and expires
+  on its own (observed TTL 27s).
+
+T-V1-078 also found this file is **red for a foreign reason**: any
+``document_versions`` row created without a ``storage_key`` fails
+``test_backfilled_rows_round_trip_through_the_object_store``. See the
+T-V1-078 handoff row — the current offender is another suite's fixture.
 """
 
 from __future__ import annotations

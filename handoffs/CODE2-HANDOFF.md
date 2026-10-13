@@ -2805,3 +2805,97 @@ PROGRESS ROW — THRESHOLDS, ALL SOURCED AND RE-VERIFIED BY READING THE FILES: g
 PROGRESS ROW — ANNEX, so the run phase can tell known-red from new-red: **F1 crash 6 (T-064/T-066, all `wait_stalled` timeouts, never a product assertion), F2 373 non-authentic vectors (T-069/T-071), F3 ~114 orphans incl. 40 unexplained 'other' + 546 pointless chunks (T-072/T-073), F4 web-e2e cold-build timing (84.42s was INCREMENTAL), F5 1 FTS row survives delete (T-058), F6 acceptance_5 multilingual UNVERIFIED since embeddings cleared, F7 factual/Recall@20 have harnesses but NO runner so the record cannot claim 5-of-5, F8 citation_validity partially vacuous (`all([])` is True; T-076), F9 corpus hash-pinned so a pin error is a CORPUS failure not a product one, F10 live corpus is test debris (102 of 2034 authentic) so probes can go green without evidencing real retrieval quality.**
 PROGRESS ROW — RISKS (what could rot): (a) **the deepest assumption — every recorded result is second-hand; I ran nothing**, so a wrong handoff figure would be inherited as a baseline (E5 transcript capture exists to stop that propagating); (b) durations are marked **NOT RECORDED** for steps 1–2 rather than estimated, so the budget is only real for steps 3–6; (c) the annex rots fastest — F2/F3 are counts over a collection the suites keep writing to, and F6 is unverified rather than known-green; (d) the pinned baselines are a **tripwire** — a legitimate T-072/T-073-driven change needs the test pin AND the runbook updated together, a two-place edit that can rot; (e) the runbook cites line numbers, so any edit above them silently invalidates citations; (f) F7 means the run still cannot claim RP-02's five targets — stated explicitly rather than letting a 3-of-5 gate read as 5-of-5; (g) dev1's T-071/T-072 are actively changing suite plumbing, so the recorded `19 passed, 2 xfailed` and `17 passed` may already be stale; (h) 84.42s is incremental, not a CI budget; (i) /ready's dependency set can grow, so record the block rather than assert a fixed list.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle; the T-036 RUN phase dispatches after T-069/T-072 land.
+---
+
+## 2026-10-13 T-V1-078 (compose-worker test isolation: convert or document) — code2
+
+TASK: settle T-071's gap for `test_originals_object_store.py` and `test_worker_liveness_live.py` — convert to in-process, or document why the compose worker is required. Start HEAD `24f3569` → end HEAD `24f3569` (**UNMOVED**). Allowed: the two test files (+ their fixtures) + this row. **No product code, no compose file, no restarts, no worker-env change.**
+
+### VERDICT: **2/2 ALREADY ISOLATED — no compose decision needed. T-071's premise is FALSE for both suites.**
+
+Neither hands a job to the compose worker, and **neither writes live `knowledge`** — measured, not asserted:
+
+```
+knowledge points  BEFORE 2041  →  AFTER 2041  (two full runs)
+ingestion_jobs    ready 2244   →  2244        (unchanged: the new job stays QUEUED)
+                  queued 1681  →  1682        (+1 = this suite's upload, never processed)
+```
+
+| suite | verdict | evidence |
+|---|---|---|
+| `test_originals_object_store.py` | **(a) already** — needs no compose worker | Its job is **never claimed** (stays `queued`; `ready` unchanged). **No test in the file waits for a job to run**: all five proofs are upload-time or read-path assertions — the `storage_key`/`checksum` row, a direct `load_original` round-trip, `load_original_bytes` (what a worker *would* call) invoked directly, the backfill census, and schema shape. That is why no vector is ever produced |
+| `test_worker_liveness_live.py` | **(a) already** — fully in-process | Calls `ingest_worker.write_heartbeat()` and `readiness.worker_liveness.probe()` **directly in the test process**. Enqueues no job; writes one heartbeat key in redis under `t056-<uuid>:` with the TTL the test sets. Touches neither Postgres nor Qdrant |
+
+**Why the compose worker cannot claim these jobs, and why that survives a redeploy:** the prefix is set in the *test process*; the compose worker runs in its own container with its own `INGEST_QUEUE_PREFIX`. Different keys by construction — not a timing or load accident. The originals docstring's claim that the compose worker "never sees these jobs" is **verified true**, and it stays true after the coordinator's pre-T-V1-039 worker is redeployed.
+
+### WHAT STILL WRITES (nothing writes `knowledge`; the residue is elsewhere)
+
+| what | where | cleaned? |
+|---|---|---|
+| 1 `document_versions` row + 1 SeaweedFS object per run | PG / object store | **no** — accumulates |
+| module redis queue keys | redis | **yes** — the `queue_prefix` fixture deletes them |
+| `auth:rl:t039-<uuid>@example.test` | redis | self-expiring — **not a queue key**; observed TTL **27s** |
+| 1 heartbeat key per liveness test | redis | self-expiring (TTL is what the test asserts) |
+
+**Explicit answer to "what still writes live, if anything does": nothing writes live `knowledge`.** The residue is one PG row + one object per run of the originals suite, which is ordinary test data, not index pollution.
+
+### CHANGE — documentation only, +35 insertions / **0 deletions**, no code line touched
+
+- `tests/integration/test_originals_object_store.py` — docstring records the verified isolation, the measured point/ready counts, the residue table, and the foreign-red note below.
+- `tests/integration/test_worker_liveness_live.py` — docstring records that it is already fully in-process and that the "separate process" the docstring refers to is **Redis's own expiry clock**, which a real broker provides; a second process is not needed to observe it.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+**I chose documentation over conversion because there is nothing to convert.** Converting a suite that already runs in-process would have been churn, and editing behaviour to "prove" isolation would have been worse.
+
+### FINDING — the suite is red for a FOREIGN reason, and it will block the T-036 run
+
+`test_originals_object_store.py::test_backfilled_rows_round_trip_through_the_object_store` fails:
+
+```
+AssertionError: 4 row(s) have no storage_key — the backfill is incomplete
+assert 4490 == 4486
+```
+
+The four rows are **not** a T-V1-039 backfill gap and **not** mine: all four are `t1072.txt` with `mime_type = NULL`, created **2026-10-13 11:38Z** — i.e. **dev1's in-flight T-072 fixture** creates `document_versions` rows without a `storage_key`. My own upload in the same run stored `storage_key` correctly (4490 total, 4486 with, and the 4 are all `t1072`).
+
+**This is real cross-suite interference and it is not mine to fix** (dev1 owns those files). It is **filed, not fixed**, and it will make the T-036 acceptance run red until dev1's fixture sets `storage_key` or the backfill is re-run. Added to the T-V1-036 runbook's known-failure family in substance — I did not edit the runbook (not in this ticket's allowlist).
+
+### VERIFY — commands and outputs
+
+```
+pytest tests/integration/test_originals_object_store.py tests/integration/test_worker_liveness_live.py -q
+    → 1 failed, 7 passed in 14.93s     (before my edit)
+    → 1 failed, 7 passed in 8.48s      (after my edit — identical, so behaviour unchanged)
+GET /collections/knowledge   → 2041 before, 2041 after run 1, 2041 before, 2041 after run 2
+select status,count(*) from ingestion_jobs group by status
+    → BEFORE {failed 852, queued 1681, ready 2244, running 8}
+    → AFTER  {failed 852, queued 1682, ready 2244, running 8}      ← ready unchanged = no claim
+redis keys matching t039/t056 → 1, and it is `auth:rl:…` (a rate-limit key), type string, TTL 27
+select … from document_versions where storage_key is null
+    → 4 rows, all `t1072.txt`, mime_type NULL, created 2026-10-13 11:38Z  (dev1 T-072)
+ruff check (both files)      → All checks passed!
+py_compile (both files)      → OK
+git diff --stat              → 2 files changed, 35 insertions(+), 0 deletions
+```
+
+### RISKS / DISCLOSED
+
+- **(a) I did not verify the compose worker's own environment**, only that it cannot see these keys by prefix. If someone later points the worker's prefix at `t039-*`/`t056-*`, or configures it to consume a wildcard, the isolation argument breaks. That is a compose decision, and it is the only one this ticket implies — and on today's evidence **none is needed**.
+- **(b) The originals suite still accumulates 1 PG row + 1 SeaweedFS object per run.** Small, but it means `document_versions` grows every run, and it is what makes a *global* assertion (`count(*) == count(storage_key)`) sensitive to other suites. That fragility is the real lesson: a suite-wide invariant plus other suites' fixtures = cross-suite red.
+- **(c) The foreign-red could be transient.** If dev1's T-072 fixture changes, this failure may disappear on its own; I have not verified whether their fixture intentionally omits `storage_key` or is mid-edit. **Not my file, not my call.**
+- **(d) "No compose dependency" is scoped to how these suites run today.** If the compose worker is later redeployed with a different queue contract (e.g. prefix-agnostic), the originals suite's jobs could start being claimed and *then* it would write vectors. Re-verify after any worker redeploy.
+- **(e) I did not run the rest of the integration suites**, so I cannot say whether other files share this pattern. The T-036 runbook's step 4/5 remain the place that would surface it.
+- **(f) FOREIGN CHURN.** `packages/ingestion/dedup.py` and `tests/integration/test_dedup_versions.py` are dev1's T-072 and became dirty during this ticket; neither opened, staged, edited or reverted by me. My 3 files: the two test files (docstrings) + this row.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1078_{start,end}_status.txt`):
+- **start** (HEAD `24f3569`): 26 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `24f3569`, **UNMOVED**): the foreign set plus dev1's `test_dedup_versions.py`, **plus exactly my 2 allowed test files** (+ this row).
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty. **`knowledge` 2041 points before and after every run.**
+
+PROGRESS ROW — TASK: T-V1-078 compose-worker test isolation for test_originals_object_store.py + test_worker_liveness_live.py (test-only; no restarts, no worker-env change).
+PROGRESS ROW — VERDICT: **2/2 ALREADY ISOLATED — NO COMPOSE DECISION NEEDED, and T-071's premise is FALSE for both.** Neither hands a job to the compose worker and **neither writes live `knowledge`**: measured `knowledge` **2041 → 2041** across two full runs, and `ingestion_jobs.ready` **2244 → 2244 unchanged** while `queued` went 1681 → 1682, i.e. the uploaded job is enqueued and **never claimed**. originals is (a)-equivalent because **no test in it waits for a job to run** — all five proofs are upload-time/read-path assertions (storage_key/checksum row, direct `load_original` round-trip, `load_original_bytes` invoked directly, backfill census, schema shape), which is why no vector is ever produced. liveness is (a) because it calls `ingest_worker.write_heartbeat()` and `readiness.worker_liveness.probe()` **directly in-process**, enqueues nothing, and touches neither Postgres nor Qdrant. Isolation holds **by construction, not by luck** (test-process prefix vs the worker's own container prefix) and therefore survives the coordinator's pre-T-V1-039 worker redeploy.
+PROGRESS ROW — WHAT STILL WRITES (nothing writes live knowledge): **1 `document_versions` row + 1 SeaweedFS object per run of the originals suite (not cleaned)**, module redis queue keys (cleaned by the `queue_prefix` fixture), and **1 `auth:rl:t039-<uuid>@example.test` key which is NOT a queue key and self-expires (observed TTL 27s)**; the liveness suite leaves 1 heartbeat key with the TTL it asserts. Ordinary test data, not index pollution.
+PROGRESS ROW — CHANGE: **documentation only, +35 insertions / 0 deletions, no code line touched** — each file's docstring now records the verified isolation, the measured counts, the residue, and (for originals) the foreign-red. I chose documentation over conversion because **there is nothing to convert**; converting an already-in-process suite would be churn, and editing behaviour to "prove" isolation would be worse. Re-ran both suites after the edit: **identical result (1 failed, 7 passed)**, points still 2041, ruff clean, py_compile OK.
+PROGRESS ROW — FOREIGN-RED FILED (will block the T-036 run, not mine to fix): `test_originals_object_store.py::test_backfilled_rows_round_trip_through_the_object_store` fails `AssertionError: 4 row(s) have no storage_key (assert 4490 == 4486)`. All four rows are **`t1072.txt` with `mime_type = NULL`, created 2026-10-13 11:38Z — dev1's in-flight T-072 fixture**, not a T-V1-039 backfill gap and not mine (my own upload in the same run stored `storage_key` correctly). Real cross-suite interference: a **global** invariant (`count(*) == count(storage_key)`) plus another suite's fixture = red in a suite I do not own. Filed, not fixed; the runbook is not in this ticket's allowlist so it is reported here instead.
+PROGRESS ROW — RISKS: (a) I verified the compose worker cannot see these keys **by prefix**, not its env — if anyone points the worker's prefix at t039-*/t056-* or makes it consume a wildcard, the argument breaks; that is a compose decision and on today's evidence **none is needed**; (b) the originals suite accumulates 1 PG row + 1 object per run, which is what makes the global count assertion sensitive to other suites; (c) the foreign-red may be transient if dev1's fixture is mid-edit — I did not open their files; (d) "no compose dependency" is scoped to today's queue contract — re-verify after any worker redeploy; (e) I ran only these two suites, so I cannot say whether other files share the pattern. dev1's dedup.py + test_dedup_versions.py became dirty mid-ticket and were never touched by me. HEAD 24f3569 unmoved, index empty, no commit, knowledge 2041 before and after every run.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
