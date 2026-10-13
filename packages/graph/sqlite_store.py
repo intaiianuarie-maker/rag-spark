@@ -46,8 +46,22 @@ CREATE TABLE IF NOT EXISTS graph_workspace_settings (
   workspace_id TEXT PRIMARY KEY,
   enabled INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS graph_attributions (
+  workspace_id TEXT NOT NULL,
+  trace_id TEXT NOT NULL,
+  answer_id TEXT NOT NULL,
+  retrieval_mode TEXT NOT NULL,
+  entity_ids TEXT NOT NULL,
+  relationship_ids TEXT NOT NULL,
+  community_ids TEXT NOT NULL,
+  scores TEXT NOT NULL,
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, trace_id)
+);
 CREATE INDEX IF NOT EXISTS idx_grel_src ON graph_relationships(workspace_id, source_id);
 CREATE INDEX IF NOT EXISTS idx_grel_tgt ON graph_relationships(workspace_id, target_id);
+CREATE INDEX IF NOT EXISTS idx_gattr_trace ON graph_attributions(trace_id);
+CREATE INDEX IF NOT EXISTS idx_gattr_workspace ON graph_attributions(workspace_id);
 """
 
 
@@ -813,14 +827,145 @@ class SQLiteGraphStore(GraphStore):
         def _op() -> int:
             total = 0
             with self._connect() as conn:
-                for table in ("graph_entities", "graph_relationships", "graph_communities"):
+                for table in ("graph_entities", "graph_relationships", "graph_communities", "graph_attributions"):  # noqa: E501
                     cur = conn.execute(
                         "DELETE FROM " + table + " WHERE workspace_id=?",
                         (workspace_id,),
                     )
                     total += cur.rowcount
+                # Also clean workspace settings
+                conn.execute("DELETE FROM graph_workspace_settings WHERE workspace_id=?", (workspace_id,))  # noqa: E501
                 conn.commit()
             return total
 
         res = await self._run(_op)
         return int(res)
+
+    # Attribution record (T-V2-008): one row per answered ask, workspace-scoped
+    # so cross-workspace reads are rejected by the same filter discipline.
+    # Bound: one row per answer, no per-chunk fan-out.
+
+    async def record_attribution(
+        self,
+        workspace_id: str,
+        trace_id: str,
+        answer_id: str,
+        retrieval_mode: str,
+        entity_ids: list[str],
+        relationship_ids: list[str],
+        community_ids: list[str],
+        scores: dict[str, float],
+    ) -> None:
+        """Write one attribution row per answered ask (T-V2-008).
+
+        Workspace-scoped: the row is keyed by (workspace_id, trace_id) and
+        every read filters by workspace_id, so cross-workspace attribution
+        reads are rejected (0 foreign rows, proven by test).
+        """
+
+        def _op() -> None:
+            with self._connect() as conn:
+                # Respect per-workspace enablement: disabled workspaces pay nothing
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return
+                conn.execute(
+                    "INSERT INTO graph_attributions("
+                    "workspace_id, trace_id, answer_id, retrieval_mode, "
+                    "entity_ids, relationship_ids, community_ids, scores, created_at"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"
+                    " ON CONFLICT(workspace_id, trace_id) DO UPDATE SET "
+                    "answer_id=excluded.answer_id, retrieval_mode=excluded.retrieval_mode, "
+                    "entity_ids=excluded.entity_ids, relationship_ids=excluded.relationship_ids, "
+                    "community_ids=excluded.community_ids, scores=excluded.scores",
+                    (
+                        workspace_id,
+                        trace_id,
+                        answer_id,
+                        retrieval_mode,
+                        json.dumps(entity_ids),
+                        json.dumps(relationship_ids),
+                        json.dumps(community_ids),
+                        json.dumps(scores),
+                        __import__("datetime").datetime.now(__import__("datetime").UTC).isoformat(),
+                    ),
+                )
+                conn.commit()
+
+        await self._run(_op)
+
+    async def get_attribution(self, workspace_id: str, trace_id: str) -> dict | None:
+        """Fetch one attribution row, workspace-scoped (cross-workspace rejected)."""
+
+        def _op() -> dict | None:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return None
+                cur = conn.execute(
+                    "SELECT workspace_id, trace_id, answer_id, retrieval_mode, "
+                    "entity_ids, relationship_ids, community_ids, scores, created_at "
+                    "FROM graph_attributions WHERE workspace_id=? AND trace_id=?",
+                    (workspace_id, trace_id),
+                )
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "workspace_id": row[0],
+                    "trace_id": row[1],
+                    "answer_id": row[2],
+                    "retrieval_mode": row[3],
+                    "entity_ids": json.loads(row[4]),
+                    "relationship_ids": json.loads(row[5]),
+                    "community_ids": json.loads(row[6]),
+                    "scores": json.loads(row[7]),
+                    "created_at": row[8],
+                }
+
+        return await self._run(_op)
+
+    async def list_attributions(self, workspace_id: str) -> list[dict]:
+        """List all attribution rows for a workspace (for eval queries)."""
+
+        def _op() -> list[dict]:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                row = cur.fetchone()
+                if row is not None and not row[0]:
+                    return []
+                cur = conn.execute(
+                    "SELECT workspace_id, trace_id, answer_id, retrieval_mode, "
+                    "entity_ids, relationship_ids, community_ids, scores, created_at "
+                    "FROM graph_attributions WHERE workspace_id=?",
+                    (workspace_id,),
+                )
+                out = []
+                for r in cur.fetchall():
+                    out.append(
+                        {
+                            "workspace_id": r[0],
+                            "trace_id": r[1],
+                            "answer_id": r[2],
+                            "retrieval_mode": r[3],
+                            "entity_ids": json.loads(r[4]),
+                            "relationship_ids": json.loads(r[5]),
+                            "community_ids": json.loads(r[6]),
+                            "scores": json.loads(r[7]),
+                            "created_at": r[8],
+                        }
+                    )
+                return out
+
+        return await self._run(_op)

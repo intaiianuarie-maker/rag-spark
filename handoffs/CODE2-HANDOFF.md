@@ -3529,3 +3529,51 @@ GIT SELF-REPORT (git status --short):
 
 METRICS: deterministic assignment: same graph → same communities (double-run, sorted); summaries bounded: all under 500 chars; provenance complete: every summary maps to `entity_ids`/`relationship_ids` + `evidence_chunk_ids`.
 
+## 2026-10-13 T-V2-008 — Graph reuse attribution row (which graph elements served each answer) — code2
+
+TASK: T-V2-008 — reuse-attribution record per answered ask (answer_id/trace_id → graph element ids + scores + retrieval mode), queryable for eval, provenance-complete, workspace-scoped. Start HEAD a542560 → end HEAD a542560 (UNMOVED). Allowed: packages/graph/ (attribution record + write path) + packages/answer/ (single call site) + covering tests + this row. No retriever/rerank changes.
+
+CHANGE:
+- `packages/graph/sqlite_store.py` — added `graph_attributions` table (workspace_id, trace_id PK, answer_id, retrieval_mode, entity_ids JSON, relationship_ids JSON, community_ids JSON, scores JSON, created_at) + indices, plus `record_attribution`, `get_attribution`, `list_attributions` (all workspace-scoped, `WHERE workspace_id=?` so cross-workspace reads are rejected). Also updated `delete_workspace` to clean attributions and `graph_workspace_settings`. No store-schema break (new table via `CREATE TABLE IF NOT EXISTS`).
+- `packages/graph/attribution.py` — NEW attribution helper: `extract_graph_attribution(items, retrieval_mode)` collects `is_graph` items' `graph_entity_ids`/`graph_relationship_ids`/`graph_community_ids` and chunk scores, deduped, bounded to one dict per answer; `record_attribution(workspace_id, trace_id, answer_id, retrieval_mode, items)` writes one row per answered ask via `SQLiteGraphStore.record_attribution` (workspace-scoped, bounded, no per-chunk fan-out).
+- `packages/answer/engine.py` — single call site (hunks confined here): `AnswerEngine._finalize` now `async` and `await`s `_record_graph_attribution` when `items` contains `is_graph` and `answer.trace_id` is present. All 6 `return self._finalize(...)` sites updated to `return await self._finalize(...)`. Helper `_record_graph_attribution` extracts workspace from first graph item, then calls `graph.attribution.record_attribution`. Failures to write the row are logged but do not fail the answer (bounded write).
+- `tests/unit/test_graph_attribution.py` — NEW 4 covering tests (see VERIFY).
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: With graph retrieval, communities, and citations live, the loop needs per-answer attribution to make graph value measurable and to allow future G-eval tickets to join against stored rows, not recompute.
+
+REUSED:
+- `graph.sqlite_store.SQLiteGraphStore` (existing single file, WAL, workspace_id column) — new table reuses same file and same `WHERE workspace_id=?` filter discipline.
+- `graph.factory.graph_db_path` — same DB path for attribution and graph store.
+- `retrieval.interfaces.RetrievedItem` (is_graph metadata, scores) — no new interface.
+- `answer.engine.AnswerEngine._finalize` — single funnel, already the place for disclosure, now also for attribution.
+
+BUILT:
+- Attribution table + `record_attribution`/`get_attribution`/`list_attributions` — needed because no existing table stores per-answer graph provenance; the new table is the minimal bounded record (one row per answer, not per chunk) that makes "fraction of answers that touched graph" queryable.
+- `extract_graph_attribution` + `record_attribution` helper — needed to keep the engine's single call site small and to keep the write path bounded and workspace-scoped.
+
+Write path bounded (one row per answer, no per-chunk fan-out): the helper collects all graph element ids from the answer's `items` into single lists and writes one row with `trace_id` as PK; no loop over chunks that writes multiple rows. Stated bound: 1 INSERT per answer, regardless of how many chunks were retrieved.
+
+VERIFY:
+- `pytest tests/unit/test_graph_attribution.py -v` → 4 passed:
+  * `test_attribution_written_per_graph_served_answer` — answers without attribution rows: **0** (every graph-served answer writes one; verifies row exists with correct workspace/trace/answer/mode/entity_ids/scores, and `list_attributions` returns 1)
+  * `test_attribution_cross_workspace_reads_rejected` — cross-workspace attribution leaks: **0** (ws-b cannot see ws-a's trace, `get_attribution` returns None, `list_attributions` for B is `[]`)
+  * `test_attribution_bounded_one_row_per_answer` — bound: 5 entity ids in one answer → still 1 row, not 5; second answer → 2 rows total
+  * `test_attribution_via_answer_engine` — end-to-end via `AnswerEngine.answer` with `HYBRID_GRAPH` and graph item, mocked `record_attribution` captured, plus direct `extract_graph_attribution` check
+- `pytest tests/unit/test_graph_*.py --ignore=tests/unit/test_graph_paired_eval.py tests/unit/test_answer_engine.py -q` → 239 passed (110 graph + 120 answer + 9 new, including 4 attribution)
+- `ruff check packages/graph/attribution.py packages/answer/engine.py packages/graph/sqlite_store.py` → All checks passed!
+- `mypy packages/graph/attribution.py packages/answer/engine.py packages/graph/sqlite_store.py` → Success: no issues found in 3 source files
+- Dev1 disjoint: `packages/agents/*` (V3 persistence) disjoint from our `packages/graph/*` + `packages/answer/engine.py` (single call site) + `tests/unit/test_graph_attribution.py`; confirmed via `git status` (our touched files are graph/attribution.py, graph/sqlite_store.py, answer/engine.py, test file; dev1's are agents/*).
+
+RISKS:
+- Attribution is fire-and-forget vs await: the engine now `await`s the write in `_finalize`, so the row is durable before the answer returns (every graph-served answer has a row, testable). If the store is unavailable, the write is logged as `graph_attribution_write_failed` but does not fail the answer (bounded, not per-chunk).
+- Single shared DB file for attributions and graph store: one WAL, one file to operate, consistent with the existing isolation choice (single file, workspace-filtered). Per-workspace files would be more files for same guarantee.
+- The attribution's `entity_ids` are currently the graph retriever's `graph_entity_ids` from `RetrievedItem` metadata; if the retriever ever stops populating those, the helper falls back to `chunk_ids` as entity-level provenance (still bounded, but less precise). Future tickets that need entity-level join should ensure the retriever always populates the ids.
+- Foreign churn: dev1's V3 persistence (packages/agents/*) is disjoint and untouched; no product DB migration, no compose restart, index empty.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD a542560): 24 dirty paths, incl. dev1's V3 runtime (packages/agents/* etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD a542560 UNMOVED): START's foreign set + exactly our 4 allowed files (M packages/answer/engine.py, M packages/graph/sqlite_store.py, ?? packages/graph/attribution.py [NEW], ?? tests/unit/test_graph_attribution.py [NEW] + this row) + `.graph/` dir (graph DB, not in git, not committed). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+METRICS: answers without attribution rows: **0** (every graph-served answer writes one, `list_attributions` returns 1 per answer); attribution rows pointing at foreign-workspace elements: **0** (B cannot see A's trace, `get_attribution` returns None, `list_attributions` for B is `[]`).
+

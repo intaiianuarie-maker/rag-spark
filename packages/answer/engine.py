@@ -72,6 +72,82 @@ from .verification import ClaimGrounder, ExtractiveGrounder, verify_claims
 logger = logging.getLogger("knowledge_os.answer")
 
 
+async def _record_graph_attribution(
+    workspace_id: str,
+    trace_id: str,
+    items: list[RetrievedItem],
+) -> None:
+    """Write one graph reuse attribution row per answered ask (T-V2-008).
+
+    Extracts graph element ids and scores from the retrieved items' metadata
+    and scores, then writes a single row to the graph store's attribution
+    table. Workspace-scoped, so cross-workspace reads are rejected. Bounded:
+    one row per answer, no per-chunk fan-out. Failures are logged but do not
+    fail the answer.
+    """
+    try:
+        # Collect graph element ids from items' metadata (added by retriever)
+        entity_ids: set[str] = set()
+        relationship_ids: set[str] = set()
+        community_ids: set[str] = set()
+        scores: dict[str, float] = {}
+        for item in items:
+            meta = item.metadata or {}
+            for eid in meta.get("graph_entity_ids", []) or []:
+                entity_ids.add(str(eid))
+            for rid in meta.get("graph_relationship_ids", []) or []:
+                relationship_ids.add(str(rid))
+            for cid in meta.get("graph_community_ids", []) or []:
+                community_ids.add(str(cid))
+            # Also collect chunk-level provenance and scores
+            if item.chunk_id and "graph" in (item.scores or {}):
+                scores[item.chunk_id] = item.scores["graph"]
+            elif item.chunk_id and item.score:
+                scores[item.chunk_id] = item.score
+
+        # If no graph element ids found, fall back to chunk_ids as entity-level
+        # provenance (the retriever's evidence_chunk_ids are chunk-level)
+        if not entity_ids and not relationship_ids and not community_ids:
+            # Use chunk_ids as the attribution's entity-equivalent
+            for item in items:
+                if item.chunk_id:
+                    entity_ids.add(item.chunk_id)
+
+        # Determine retrieval mode: if any graph item, it's graph-served
+        retrieval_mode = "hybrid_graph" if entity_ids or relationship_ids or community_ids else "hybrid"  # noqa: E501
+
+        # Generate answer_id as trace_id (or new UUID if trace_id is same as answer_id)
+        answer_id = trace_id
+
+        from graph.factory import graph_db_path
+        from graph.sqlite_store import SQLiteGraphStore
+
+        store = SQLiteGraphStore(graph_db_path())
+        try:
+            await store.record_attribution(
+                workspace_id=workspace_id,
+                trace_id=trace_id,
+                answer_id=answer_id,
+                retrieval_mode=retrieval_mode,
+                entity_ids=sorted(entity_ids),
+                relationship_ids=sorted(relationship_ids),
+                community_ids=sorted(community_ids),
+                scores=scores,
+            )
+        finally:
+            store.close()
+    except Exception as exc:
+        logger.warning(
+            "graph_attribution_write_failed",
+            extra={
+                "event": "graph_attribution_write_failed",
+                "workspace_id": workspace_id,
+                "trace_id": trace_id,
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+
+
 class AnswerEngineError(RuntimeError):
     """Raised when the answer engine cannot produce an answer."""
 
@@ -136,7 +212,7 @@ class AnswerEngine:
                     "legs_failed": [failure.leg for failure in outcome.legs_failed],
                 },
             )
-            return self._finalize(
+            return await self._finalize(
                 Answer(
                     answer="I cannot answer this question right now.",
                     status=AnswerStatus.UNAVAILABLE,
@@ -195,7 +271,7 @@ class AnswerEngine:
                     "trace_id": trace_id,
                 },
             )
-            return self._finalize(
+            return await self._finalize(
                 Answer(
                     answer="I cannot answer this question based on the provided documents.",
                     status=AnswerStatus.INSUFFICIENT_EVIDENCE,
@@ -240,7 +316,7 @@ class AnswerEngine:
         )
 
         if not items or is_refusal_phrase:
-            return self._finalize(
+            return await self._finalize(
                 Answer(
                     answer="I cannot answer this question based on the provided documents.",
                     status=AnswerStatus.INSUFFICIENT_EVIDENCE,
@@ -260,7 +336,7 @@ class AnswerEngine:
 
         if not claims:
             # No structured claims produced by model — cannot verify anything.
-            return self._finalize(
+            return await self._finalize(
                 Answer(
                     answer="I cannot answer this question based on the provided documents.",
                     status=AnswerStatus.INSUFFICIENT_EVIDENCE,
@@ -282,7 +358,7 @@ class AnswerEngine:
             )
 
         if claims and not verified:
-            return self._finalize(
+            return await self._finalize(
                 Answer(
                     answer="I cannot answer this question based on the provided documents.",
                     status=AnswerStatus.INSUFFICIENT_EVIDENCE,
@@ -303,7 +379,7 @@ class AnswerEngine:
         if claims and len(verified) < len(claims):
             # Partial verification: render only from the verified claims.
             rendered_answer = " ".join(claim.text for claim in verified)
-            return self._finalize(
+            return await self._finalize(
                 Answer(
                     answer=rendered_answer,
                     status=AnswerStatus.PARTIAL,
@@ -330,7 +406,7 @@ class AnswerEngine:
         has_high_conf = bool(citations) and (len(verified) == len(claims) if claims else False)
         confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         rendered_answer = " ".join(claim.text for claim in verified)
-        return self._finalize(
+        return await self._finalize(
             Answer(
                 answer=rendered_answer,
                 status=AnswerStatus.ANSWERED,
@@ -458,7 +534,7 @@ class AnswerEngine:
             }
         )
 
-    def _finalize(
+    async def _finalize(
         self,
         answer: Answer,
         *,
@@ -488,5 +564,42 @@ class AnswerEngine:
         Abstentions keep their own ``reason_code``/``reason`` —
         :meth:`_disclose_source` only relabels standing answers — and still
         disclose.
+
+        T-V2-008: graph reuse attribution (one row per answered ask, bounded).
+        After disclosure, the answer's trace_id and the retrieved graph items'
+        provenance are used to write a single attribution row per answer, if
+        graph-served. The row is workspace-scoped and queryable for eval
+        (e.g. fraction of answers that touched graph). Failures to write the
+        row are logged but do not fail the answer (bounded write, not per-chunk
+        fan-out).
         """
+        # T-V2-008: record graph reuse attribution if this answer was graph-served.
+        # This is the single call site that emits the row (hunks confined here).
+        # We await the write here (one row per answer, no per-chunk fan-out) so
+        # the row is durable before the answer returns - every graph-served answer
+        # has a row, and tests can assert without racing a background task.
+        try:
+            graph_items = [item for item in items if (item.metadata or {}).get("is_graph")]
+            if graph_items and answer.trace_id:
+                ws_id = graph_items[0].workspace_id
+                if ws_id:
+                    try:
+                        await _record_graph_attribution(
+                            workspace_id=ws_id,
+                            trace_id=answer.trace_id,
+                            items=graph_items,
+                        )
+                    except Exception as exc:
+                        logger.warning(
+                            "graph_attribution_write_failed",
+                            extra={
+                                "event": "graph_attribution_write_failed",
+                                "workspace_id": ws_id,
+                                "trace_id": answer.trace_id,
+                                "error": f"{type(exc).__name__}: {exc}",
+                            },
+                        )
+        except Exception:
+            pass
+
         return self._disclose(self._disclose_source(answer, items), outcome)
