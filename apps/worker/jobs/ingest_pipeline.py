@@ -59,6 +59,12 @@ from ingestion.persistence import (
 )
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
+from storage.interfaces import StorageError
+from storage.originals import (
+    OriginalChecksumMismatch,
+    OriginalMissing,
+    load_original,
+)
 
 logger = logging.getLogger("knowledge_os.worker.ingest")
 
@@ -466,6 +472,75 @@ def terminal_job_state(lost_regions: list[dict]) -> tuple[str, str | None, str |
     )
 
 
+async def load_original_bytes(version: DocumentVersion) -> bytes:
+    """Fetch this version's original bytes from object storage (T-V1-039).
+
+    Postgres keeps ``storage_key`` + ``checksum`` only, so every parse starts
+    with a fetch through the storage seam and a SHA-256 gate. Three verdicts,
+    and none of them is a guess:
+
+    - **no key** -> ``b""``: a row that never had bytes (pre-object-store rows
+      with ``content IS NULL``). The caller's existing ``EMPTY_DOCUMENT`` check
+      then refuses it — the same verdict this pipeline gave that state before
+      the column moved, so nothing changed for it;
+    - **object gone / bytes that do not hash to the row's checksum** ->
+      terminal ``INGESTION_ERROR``. Retrying cannot restore bytes that were
+      never written or that rotted, so burning the retry budget would only
+      delay an honest failure;
+    - **store unreachable** -> ``DEPENDENCY_UNAVAILABLE``, retryable — object
+      storage is a backing dependency and a blip is a blip.
+
+    Vendor detail (endpoint, host, SDK error) is logged and never makes it
+    into ``ingestion_jobs.error_message`` (AGENTS safe-user-reason).
+    """
+    if not version.storage_key:
+        return b""
+    try:
+        return await load_original(version.storage_key, checksum=version.checksum)
+    except OriginalChecksumMismatch as exc:
+        logger.warning(
+            "ingest_original_checksum_mismatch",
+            extra={
+                "event": "ingest_original_checksum_mismatch",
+                "version_id": str(version.id),
+                "error": str(exc),
+            },
+        )
+        raise IngestPipelineError(
+            "INGESTION_ERROR",
+            "original failed SHA-256 verification against the stored checksum",
+            retryable=False,
+        ) from exc
+    except OriginalMissing as exc:
+        logger.warning(
+            "ingest_original_missing",
+            extra={
+                "event": "ingest_original_missing",
+                "version_id": str(version.id),
+                "error": str(exc),
+            },
+        )
+        raise IngestPipelineError(
+            "INGESTION_ERROR",
+            "original object is missing from object storage",
+            retryable=False,
+        ) from exc
+    except StorageError as exc:
+        logger.warning(
+            "ingest_original_unavailable",
+            extra={
+                "event": "ingest_original_unavailable",
+                "version_id": str(version.id),
+                "error": str(exc),
+            },
+        )
+        raise IngestPipelineError(
+            "DEPENDENCY_UNAVAILABLE",
+            "object storage unavailable while reading the original",
+            retryable=True,
+        ) from exc
+
+
 async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResult:
     job = await session.get(IngestionJob, job_id)
     if job is None:
@@ -474,7 +549,6 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     if version is None:
         raise IngestPipelineError("VERSION_NOT_FOUND", "document version missing", retryable=False)
     document = await session.get(Document, job.document_id)
-    content = version.content or b""
 
     job.status = JobStatus.RUNNING.value
     job.stage = JobStage.PARSING.value
@@ -485,6 +559,12 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     await session.commit()
     stages = [JobStage.PARSING.value]
     _log_stage(job, JobStage.PARSING.value)
+
+    #: T-V1-039: the original comes from object storage, fetched (and
+    #: checksum-verified) only now that the attempt is recorded — an
+    #: object-store outage becomes a failure on this job row instead of an
+    #: error that never reaches one.
+    content = await load_original_bytes(version)
 
     if not content:
         raise IngestPipelineError("EMPTY_DOCUMENT", "empty document", retryable=False)

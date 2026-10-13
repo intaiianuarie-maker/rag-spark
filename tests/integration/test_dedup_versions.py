@@ -273,8 +273,11 @@ async def _replace_document_mid_flight(document_id: str, data: bytes) -> tuple[s
         JobStatus,
         get_session_factory,
     )
+    from object_store_env import apply as apply_object_store_env
     from sqlalchemy import func, select
+    from storage.originals import put_original
 
+    apply_object_store_env()
     async with get_session_factory()() as session:
         document = await session.get(Document, uuid.UUID(document_id))
         assert document is not None
@@ -288,13 +291,26 @@ async def _replace_document_mid_flight(document_id: str, data: bytes) -> tuple[s
             ).scalar_one()
             + 1
         )
+        # T-V1-039: the original bytes live in object storage — a row keeps
+        # storage_key + checksum, never the bytes themselves.
+        checksum = hashlib.sha256(data).hexdigest()
+        version_id = uuid.uuid4()
+        storage_key = await put_original(
+            workspace_id=document.workspace_id,
+            document_id=document.id,
+            version_id=version_id,
+            data=data,
+            checksum=checksum,
+            filename=document.source_filename,
+        )
         version = DocumentVersion(
+            id=version_id,
             document_id=document.id,
             version_number=next_number,
-            checksum=hashlib.sha256(data).hexdigest(),
+            checksum=checksum,
             size_bytes=len(data),
             mime_type="text/plain",
-            content=data,
+            storage_key=storage_key,
         )
         session.add(version)
         await session.flush()

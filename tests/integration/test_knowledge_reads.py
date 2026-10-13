@@ -98,13 +98,30 @@ def _create_job(
             )
             session.add(document)
             await session.flush()
+            # T-V1-039: the original bytes live in object storage — a row keeps
+            # storage_key + checksum, never the bytes themselves.
+            from object_store_env import apply as apply_object_store_env
+            from storage.originals import put_original
+
+            apply_object_store_env()
+            checksum = hashlib.sha256(data).hexdigest()
+            version_id = uuid.uuid4()
+            storage_key = await put_original(
+                workspace_id=document.workspace_id,
+                document_id=document.id,
+                version_id=version_id,
+                data=data,
+                checksum=checksum,
+                filename=filename,
+            )
             version = DocumentVersion(
+                id=version_id,
                 document_id=document.id,
                 version_number=1,
-                checksum=hashlib.sha256(data).hexdigest(),
+                checksum=checksum,
                 size_bytes=len(data),
                 mime_type=mime_type,
-                content=data,
+                storage_key=storage_key,
             )
             session.add(version)
             await session.flush()

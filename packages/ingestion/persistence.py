@@ -3,8 +3,15 @@
 Lives in ``packages/`` so the API upload endpoint and the worker pipeline share
 one schema without importing each other's ``app`` packages (the worker image
 does not ship ``apps/api``). Tables: documents, document_versions, chunks,
-ingestion_jobs. The original bytes are stored here (``content``) as an interim
-until PD-005 moves originals to MinIO in M2-001d.
+ingestion_jobs.
+
+Originals (T-V1-039, closing PD-005): **no bytes are stored here.**
+``document_versions`` keeps ``storage_key`` (the object-store key the storage
+adapter reads) plus ``checksum`` (the SHA-256 every read is verified against);
+the bytes themselves live behind ``storage.originals`` in the S3/SeaweedFS
+store. Migrations ``0009_originals_storage_key`` (backfill) and
+``0010_drop_original_bytes`` (drop the ``content`` bytea column) moved the
+rows that predate this change.
 """
 
 from __future__ import annotations
@@ -19,7 +26,6 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Integer,
-    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -90,8 +96,11 @@ class DocumentVersion(Base):
     size_bytes: Mapped[int] = mapped_column(Integer, nullable=False)
     mime_type: Mapped[str | None] = mapped_column(String(255), nullable=True)
     charset: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    #: Interim original bytes (moves to MinIO behind a ref in M2-001d/PD-005).
-    content: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    #: Originals live in object storage (T-V1-039, PD-005): this is the key
+    #: the storage adapter reads the bytes back with, and `checksum` above is
+    #: the SHA-256 every read must reproduce — Postgres keeps no bytes. Null
+    #: only for a row that never had any (nothing to parse, `EMPTY_DOCUMENT`).
+    storage_key: Mapped[str | None] = mapped_column(String(512), nullable=True)
     #: M2-001d: set when a newer version supersedes this one (chunks removed).
     superseded_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(

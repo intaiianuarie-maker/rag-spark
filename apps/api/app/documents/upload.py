@@ -1,19 +1,22 @@
 """Document upload + ingestion-job status (M2-001c).
 
-The API never parses: it stores the original bytes (interim, in
-``document_versions.content`` until PD-005 moves them to MinIO), creates a
-``queued`` ingestion job, enqueues the job id on Redis, and returns in one
-round-trip. Parsing/chunking happen in the worker.
+The API never parses: it stores the original bytes **in object storage**
+(S3/SeaweedFS behind the storage seam — Postgres keeps only ``storage_key`` +
+``checksum``, T-V1-039 / PD-005), creates a ``queued`` ingestion job, enqueues
+the job id on Redis, and returns in one round-trip. Parsing/chunking happen in
+the worker, which reads the original back through the same seam.
 """
 
 from __future__ import annotations
 
 import codecs
 import hashlib
+import logging
 import uuid
 from datetime import UTC, datetime
 
 from core.auth import Principal
+from core.errors import ReasonCode, error_detail
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 from ingestion.dedup import find_document_by_filename, latest_job_for_version, latest_version
 from ingestion.normalize import MAX_DOCUMENT_BYTES
@@ -27,10 +30,14 @@ from ingestion.persistence import (
 from ingestion.queue import IngestQueueUnavailable, enqueue
 from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
+from storage.interfaces import StorageError
+from storage.originals import OriginalChecksumMismatch, put_original
 
 from app.auth.db import get_session
 from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
+
+logger = logging.getLogger("knowledge_os.api.documents")
 
 router = APIRouter(
     prefix="/v1/workspaces/{workspace_id}/documents", tags=["documents"]
@@ -232,14 +239,49 @@ async def upload_document(
         await session.flush()
         version_number = 1
 
+    # Originals go to object storage BEFORE the row commits: an object with no
+    # row is inert, a row with no object is a document that can never be parsed
+    # again (T-V1-039). Both refusals are storage-side, never a client error,
+    # and their messages come from the registry so no vendor/endpoint text can
+    # reach a response (AGENTS safe-user-reason).
+    version_id = uuid.uuid4()
+    try:
+        storage_key = await put_original(
+            workspace_id=workspace_id,
+            document_id=document.id,
+            version_id=version_id,
+            data=data,
+            checksum=checksum,
+            filename=filename,
+        )
+    except OriginalChecksumMismatch as exc:
+        logger.warning(
+            "original_integrity_failure",
+            extra={"event": "original_integrity_failure", "document_id": str(document.id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=error_detail(ReasonCode.INTERNAL_ERROR),
+        ) from exc
+    except StorageError as exc:
+        logger.warning(
+            "original_store_unavailable",
+            extra={"event": "original_store_unavailable", "document_id": str(document.id)},
+        )
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=error_detail(ReasonCode.DEPENDENCY_UNAVAILABLE),
+        ) from exc
+
     version = DocumentVersion(
+        id=version_id,
         document_id=document.id,
         version_number=version_number,
         checksum=checksum,
         size_bytes=len(data),
         mime_type=file.content_type,
         charset=charset,
-        content=data,
+        storage_key=storage_key,
     )
     session.add(version)
     await session.flush()
