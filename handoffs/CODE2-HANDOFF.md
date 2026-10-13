@@ -2358,3 +2358,89 @@ PROGRESS ROW — RUNBOOK + DISPOSABLE: card at `MICRO-TICKETS-V1.md:536` (QUEUED
 PROGRESS ROW — RED BASELINES (from records, NOT runs): crash recovery **6 remaining** (harness timeouts, not product assertions; T-065 cleared `parse`); `test_acceptance_5_multilingual_cross_language_retrieval` was red for missing embeddings which are now CLEAR → **must be re-verified, asserted neither way**; **correcting my own stale note**, the two queue-key-namespacing tests were recorded **PASSING** post-T-057 (CODE2-HANDOFF:1167-1168) and are no longer carried as known failures; T-V1-058 (1 FTS row survives delete) still filed; dev1's T-069 pending (F8).
 PROGRESS ROW — DISCLOSURE THE RECORD MUST CARRY (F6): acceptance **#1 and #5 can go green without evidencing real multilingual retrieval quality** — per my T-061b census (museR spot-confirmed) `knowledge` is 1542 legacy padded + 492 "real" of which **only 102 are authentic bge-m3** and **373 are not embeddings of their text** (median cos −0.0224), and the corpus is **entirely integration-test debris**. Also a correction to my T-061 FLAG-5: `V1-Q8-Q9-BENCHMARK.md` **does exist**, at `../rag-fork-solution/tasks/` — my earlier grep was repo-scoped, not fork-scoped.
 PROGRESS ROW — NEXT: push DONE-readiness to w5:p4 (plain prompt, no --wait) and go idle; the RUN phase dispatches after T-069.
+---
+
+## 2026-10-13 T-V1-075 (unanswerables slice + hash-pin enforcement) — code2 (solo, allowlisted)
+
+TASK: close T-V1-036 readiness **F2** (no unanswerables slice existed) and **F3** (`content_sha256` was derived, never compared — "frozen" was a claim). Data-only. Start HEAD `d362802` → end HEAD `d362802` (**UNMOVED**). Allowed: the JSONL (append only), the loader/check code, directly covering tests, this row.
+
+### ⚠️ THE HEADLINE IS NOT A CLEAN WIN — read this first
+
+**Adding the unanswerables slice flips the Q9 bench from PASS to FAIL, and breaks one existing gate test.** Both are consequences of the T-036 **F1** gap (no abstention concept in the harness), both are *filed not fixed* per the card's data-only scope, and I am reporting them rather than absorbing them silently:
+
+```
+GATE: FAIL
+  - unanswerable: groundedness 0.0000 < 0.9
+```
+`test_benchmark_gate.py::test_q9_benchmark_gate_holds_per_slice` → `AssertionError: slice unanswerable has no scored records` (it asserts every registered slice has `n > 0`).
+
+**What did NOT change:** the five answerable slices and OVERALL are **untouched** — `0.9888 / 1.0000` still, byte-identical to the T-061a baseline. The existing 50 records are provably unmodified. So no previously-recorded evidence is invalidated; only the per-slice gate now has a slice the harness cannot score. That is the honest state: the corpus is now correct, and the harness is now visibly incomplete.
+
+### CHANGE (3 files)
+
+1. **`evals/q8_eval_slices.jsonl` — APPEND ONLY, +10 −0.** Ten `unanswerable` records in the file's exact 7-field format (`slice`, `source_id`, `source_path`, `question`, `context`, `gold_answer`, `content_sha256`), `gold_answer` empty by construction. Contexts are drawn from the same domains as the extracted slices (finance tables, climate, city description, film synopsis) across EN/RO/PT so abstention is exercised over the same language spread. Authored rather than extracted because no public dataset ships questions unanswerable *from a specific context*; `source_path` records that honestly as `authored://t-v1-075/unanswerables`.
+2. **`evals/build_q8_slices.py` — loader/check code only.** `SLICES`/`SEEDS` gain `unanswerable`; `UNANSWERABLE_ROWS` + `_unanswerable_rows()` so `build_slices()` can regenerate the slice; and the **enforcement**: `PINNED_SLICES_SHA256`, `PINNED_SLICE_COUNTS`, `SliceIntegrityError`, `verify_pinned_slices()`, called from **`load_slices()`** — the path the Q9 bench itself uses, not a script nobody calls. An explicit non-default `path` is a deliberate alternative corpus and is returned unverified (documented + tested).
+3. **`tests/unit/test_q8_slice_integrity.py` — new, 13 tests.**
+
+**`evals/q9_run_benchmark.py` has NO diff** — benchmark logic, metrics and thresholds are untouched, as the card required.
+
+### WHY THE PIN IS A WHOLE-FILE HASH, NOT THE PER-RECORD FINGERPRINT
+
+`content_sha256 = sha256(question + "\n" + context)[:16]` — it **does not cover `gold_answer` or `source_id`**. So recomputing it alone would leave the most consequential field unprotected: a tampered gold answer scores silently. The whole-file sha256 covers every byte of every record, and is backed by the per-record check and the per-slice counts as independent second and third lines of defence. The count check specifically exists to catch the "re-pin the hash without thinking" failure — proven by a test.
+
+The error message quotes `REPIN_INSTRUCTIONS`, including *"Never edit the pin to make a failing check disappear"*, so a legitimate corpus change has an explicit path and a legitimate excuse does not.
+
+### VERIFY
+
+- **Slice count:** `unanswerable = 10` (**≥8 required**); per-slice `{en:10, ro:10, pt:10, tables:10, multi:10, unanswerable:10}` = 60.
+- **APPEND-ONLY, proven two ways:** `git diff --numstat` → **`+10 −0`, zero removed lines**; `sha256(first 50 lines)` = `5004ddc2fa3d86a1ff2a7bbcbb29e9e8e65f2e39910d4c8daacd8da8a8b7ddff` **before and after** — asserted as a frozen constant inside the test file, so a future edit to an existing record cannot pass unnoticed.
+- **Tamper-evident** (all on `/tmp` copies; the tracked file was never written — verified by hash after):
+  | mutation | detected by |
+  |---|---|
+  | one character flipped in a `context` | whole-file sha256 |
+  | **`gold_answer` swapped** (invisible to `content_sha256`) | whole-file sha256 |
+  | one record dropped | whole-file sha256 (+ counts) |
+  | record dropped **and the hash re-pinned to match** | **slice counts** |
+  | question edited, fingerprint not recomputed | per-record `content_sha256` |
+  Live demo: pristine copy `93d8f9562c96cf8d` → after a 1-char flip `3e2ba91aaf49007a` → `SliceIntegrityError: ... is not the pinned corpus`.
+- **Tests:** `pytest tests/unit/test_q8_slice_integrity.py -q` → **13 passed**. Benign note: `load_slices()` returns unverified for a non-default path, covered by `test_non_default_path_is_not_pinned`.
+- **Bench loader path:** `q9_run_benchmark.load_slices()` → **60 records, enforcement PASSED**.
+- **Lint/compile:** `py_compile` on all three touched files → OK; `ruff check evals/build_q8_slices.py tests/unit/test_q8_slice_integrity.py` → **All checks passed!**
+
+### THREE OF MY OWN ERRORS, DISCLOSED
+
+1. **The module constant drifted from the data.** Re-typing `UNANSWERABLE_ROWS` into the module silently ASCII-folded one Romanian context and reworded one PT question — a rebuild would have produced different bytes. Caught by `test_module_authored_rows_reproduce_the_file_records`, fixed by **regenerating the constant from the JSONL** (the file is the artifact of record). Now **10/10 exact match**, including order.
+2. **The fixup itself was wrong first time.** My line-wrapper put the joining space *outside* the string literal, so adjacent literals concatenated to `currentportion`. It produced **0/10 matches** — loudly visible rather than silently plausible. Fixed by putting the space inside the string.
+3. **One of my own tests was wrong** (`test_slice_count_drift...` used all 60 records, so counts legitimately matched and nothing raised). Fixed to actually drop a record before repinning.
+
+### WHY / REUSED / BUILT
+
+**WHY:** F2 made an entire RP-02 requirement unimplementable and F3 made "frozen" unfalsifiable — a silently drifted corpus would have produced a green acceptance record citing numbers measured on data nobody was looking at. Both are now enforced at the single choke point every benchmark consumer already passes through.
+
+**REUSED:** the file's own `_sha()` for fingerprints, `load_slices()` as the enforcement seam, `verify_pinned_slices` reusing the existing hashlib dependency. No new dependency, no new file, no product code, no metric or threshold change.
+
+**BUILT:** ten authored records; the pin constants + `SliceIntegrityError` + `verify_pinned_slices`; one 13-test file.
+
+### METRICS
+
+unanswerable records **10 (≥8)** · existing 50 modified **0 bytes** (`+10 −0`, hash-verified) · slices **6** · pinned records **60** · independent drift checks **5** · mutation classes detected **5/5** · covering tests **13 passed** · ruff findings **0** · `q9_run_benchmark.py` diff **empty** · product-code changes **0**.
+
+### RISKS / DISCLOSED
+
+- **(a) Q9 gate is now FAIL and one existing gate test fails** — see the headline. **Filed, not fixed.** Resolution is T-036 **F1** (an abstention-aware scorer), which is harness/metric work this card forbids. Coordinator decision needed: either build the abstention scorer, or scope the Q9 gate to the five answerable slices and score `unanswerable` with a dedicated abstention harness. I did **not** weaken `test_benchmark_gate.py` or adjust a threshold to hide it — that assertion is the very thing that made the gap visible.
+- **(b) The unanswerable records are authored, not drawn from a public benchmark.** They are honest about their own provenance (`source_path`) and every context is corpus-shaped with a genuinely absent answer, but they are not independently validated as "unanswerable" by an external adjudicator. A reviewer should spot-check that each question is truly unanswerable from its context — I authored and asserted them in the same ticket, which is a real weakness in the independence of that judgement.
+- **(c) The pin makes deliberate corpus growth more expensive.** Any future append requires updating `PINNED_SLICES_SHA256`/`PINNED_SLICE_COUNTS`. That is the intended trade (and the error message says so), but it will surprise whoever next adds a slice if they have not read it.
+- **(d) Pin constants are duplicated in the test** (`BASELINE_FIRST_50_SHA256`) — deliberate: it is the pre-T-V1-075 anchor, so it must not move when the pin is re-pinned. Worth a comment if someone finds it redundant.
+- **(e) A digest check cannot detect a *jointly* re-pinned corpus** — anyone who edits the data and updates both constants passes. This makes drift detectable by accident and by a reviewer, not tamper-proof against a motivated editor. Stated plainly: it is an integrity check, not a signature.
+- **(f) FOREIGN CHURN — not mine.** At start: 24 dirty paths (handoffs + workflow-engine). By end, dev1's concurrent T-069 work had added `apps/worker/jobs/ingest_pipeline.py`, `packages/answer/factory.py`, `packages/core/config.py`, `packages/ingestion/dedup.py`, `tests/integration/test_crash_recovery.py`, `tests/integration/test_dedup_versions.py`, `?? tests/fixtures/vector_collection_env.py`. **None opened, staged, edited or reverted by me** — my three files are `evals/build_q8_slices.py`, `evals/q8_eval_slices.jsonl`, `tests/unit/test_q8_slice_integrity.py`. HEAD unmoved.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1075_{start,end}_status.txt`):
+- **start** (HEAD `d362802`): 24 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `d362802`, **UNMOVED**): the same foreign set plus dev1's concurrent additions, **plus exactly my 3 allowed paths**.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty. **No suite beyond the covering tests + the bench loader path + the single gate test was run.**
+
+PROGRESS ROW — TASK: T-V1-075 unanswerables slice + hash-pin enforcement for the Q8 slices (data-only, closes T-036 F2+F3).
+PROGRESS ROW — DONE: (1) appended **10** `unanswerable` records (**≥8 required**) to `evals/q8_eval_slices.jsonl` in the existing 7-field format with computed `content_sha256` and empty `gold_answer`, **APPEND-ONLY PROVEN TWICE** (`git diff --numstat` = `+10 −0`, zero removed lines; `sha256(first 50 lines)` identical before/after = `5004ddc2fa3d86a1…`, and that anchor is frozen as a constant inside the test file). Slice registered in `SLICES`/`SEEDS` with `UNANSWERABLE_ROWS` + loader so `build_slices()` regenerates it (10/10 byte-exact vs the file, order included). (2) Drift now **ENFORCED in `load_slices()`** — the path the Q9 bench itself uses, not a standalone script nobody calls — via `verify_pinned_slices()` with three independent checks: whole-file sha256 (covers `gold_answer`/`source_id`, which the per-record `content_sha256` does NOT), per-slice counts, and per-record fingerprint recompute; raises `SliceIntegrityError` whose message quotes `REPIN_INSTRUCTIONS` ("never edit the pin to make a failing check disappear"). Non-default paths deliberately unpinned + tested. **METRIC: 5/5 mutation classes detected** — 1-char flip, **`gold_answer` swap (invisible to content_sha256, caught only by the file pin)**, dropped record, dropped-record-plus-hash-repin (caught by counts), and fingerprint drift — all on /tmp copies, tracked file never written. 13 covering tests pass, ruff clean, `q9_run_benchmark.py` diff **empty** (no metric/threshold change).
+PROGRESS ROW — ⚠️ DISCLOSURE (the headline, not a clean win): **adding the slice flips Q9 from PASS to FAIL** — `unanswerable: groundedness 0.0000 < 0.9` (n=0, because the harness has no abstention concept) — and `test_benchmark_gate.py::test_q9_benchmark_gate_holds_per_slice` now fails with "slice unanswerable has no scored records". **Filed, NOT fixed**: resolution is T-036 F1 (abstention-aware scorer), which is harness/metric work this data-only card forbids; needs your call between building the scorer or scoping the Q9 gate to the five answerable slices. **I did not weaken that assertion or adjust a threshold to hide it — it is the thing that made the gap visible.** The five answerable slices and OVERALL are untouched at `0.9888 / 1.0000`, so no previously-recorded evidence is invalidated.
+PROGRESS ROW — THREE OF MY OWN ERRORS, DISCLOSED: (1) re-typing `UNANSWERABLE_ROWS` into the module silently ASCII-folded one Romanian context and reworded one PT question, so a rebuild would have produced different bytes — caught by a test, fixed by regenerating the constant FROM the JSONL; (2) that fixup was itself wrong first time (joining space placed outside the string literal → "currentportion", **0/10 matches**), fixed by putting the space inside; (3) one of my own tests asserted against all 60 records so nothing raised, fixed to drop a record before repinning. Also disclosed: the unanswerable records are **authored** (no public dataset ships questions unanswerable from a given context) and I authored and asserted them in the same ticket — a reviewer should spot-check that each is genuinely unanswerable; and a digest check detects drift by accident/review, **not tamper-proof against a motivated editor who re-pins both constants**.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
