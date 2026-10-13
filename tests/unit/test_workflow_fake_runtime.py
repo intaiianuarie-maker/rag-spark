@@ -8,8 +8,11 @@ LLM/model/tool calls; no LangGraph/Langflow integration.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
+from typing import Any
 
 import pytest
 from workflow_engine import (
@@ -477,3 +480,206 @@ async def test_trigger_passes_initial_input() -> None:
     assert trigger_out["output"] == payload
     # Final output should be the payload (passed through trigger→output).
     assert run.final_output == payload
+
+
+# ---------------------------------------------------------------------------
+# V3-backed NodeExecutor adapter skeleton (T-V4-015) — flagged off by default
+#
+# Appended by T-V4-015. These tests pin the adapter's three card rules: no
+# direct v3 imports, flag-off never dispatches, missing capability → explicit
+# failure — plus the flag-off parity property.
+# ---------------------------------------------------------------------------
+
+from workflow_engine.adapters.v3_adapter import (  # noqa: E402
+    ADAPTER_FLAG_ENV,
+    V3AdapterDisabled,
+    V3NodeExecutor,
+    adapter_enabled,
+    resolve_node_executor,
+)
+
+
+class _DelegationSpy:
+    """Stand-in for the V3 agents runtime: records every delegated request."""
+
+    def __init__(self, outputs: dict[str, Any] | None = None) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self._outputs = outputs if outputs is not None else {"out": "v3"}
+
+    async def __call__(self, request: Mapping[str, Any]) -> dict[str, Any]:
+        self.calls.append(dict(request))
+        return dict(self._outputs)
+
+
+def _agent_node(**caps: Any) -> NodeSpec:
+    return NodeSpec(
+        id="v3node",
+        type=NodeType.AGENT,
+        name="V3",
+        input_ports=[PortSpec(name="input", type="any")],
+        output_ports=[PortSpec(name="out", type="any")],
+        required_capabilities=list(caps),
+    )
+
+
+def test_v3_adapter_implements_protocol() -> None:
+    """The adapter must be usable as a NodeExecutor (runtime_checkable)."""
+    assert isinstance(V3NodeExecutor(agent_runner=_DelegationSpy()), NodeExecutor)
+
+
+def test_v3_adapter_flag_off_refuses_and_never_dispatches() -> None:
+    """Card metric: flag-off dispatches: 0.
+
+    A disabled adapter refuses explicitly (V3AdapterDisabled) and never touches
+    the runner, so its dispatches counter stays at 0.
+    """
+    spy = _DelegationSpy()
+    adapter = V3NodeExecutor(agent_runner=spy)  # enabled=False by default
+    assert adapter.enabled is False
+    node = _agent_node()
+
+    with pytest.raises(V3AdapterDisabled):
+        asyncio.run(adapter.execute_node(node, {"x": 1}, "ws-1"))
+
+    assert adapter.dispatches == 0, "flag-off dispatches must be 0"
+    assert spy.calls == [], "the V3 authority must never be reached while disabled"
+
+
+def test_v3_adapter_delegates_every_call_to_the_v3_authority() -> None:
+    """Card metric: every adapter call reaches the V3 authority.
+
+    Each routed node arrives at the runner once, carrying the full delegation
+    request (node id, type, config, workspace, inputs, capabilities).
+    """
+    spy = _DelegationSpy()
+    adapter = V3NodeExecutor(agent_runner=spy, enabled=True)
+
+    node = NodeSpec(
+        id="v3node",
+        type=NodeType.AGENT,
+        name="V3",
+        config={"model": "x"},
+        input_ports=[PortSpec(name="input", type="any")],
+        output_ports=[PortSpec(name="out", type="any")],
+    )
+    outputs = asyncio.run(adapter.execute_node(node, {"q": "hi"}, "ws-42"))
+
+    assert adapter.dispatches == 1
+    assert len(spy.calls) == 1
+    req = spy.calls[0]
+    assert req["node_id"] == "v3node"
+    assert req["node_type"] == str(NodeType.AGENT)
+    assert req["node_config"] == {"model": "x"}
+    assert req["workspace_id"] == "ws-42"
+    assert req["input_data"] == {"q": "hi"}
+    assert req["required_capabilities"] == []
+    # The adapter returns the authority's outputs, not a local fabrication.
+    assert outputs == {"out": "v3"}
+
+
+def test_v3_adapter_does_not_transform_authority_output() -> None:
+    """Whatever the authority returns is returned unchanged (no mock success)."""
+    authority_output = {"out": {"nested": [1, 2, 3]}, "extra": None}
+    spy = _DelegationSpy(outputs=authority_output)
+    adapter = V3NodeExecutor(agent_runner=spy, enabled=True)
+    got = asyncio.run(adapter.execute_node(_agent_node(), {}, "ws-1"))
+    assert got == authority_output
+
+
+def test_v3_adapter_missing_capability_fails_explicitly() -> None:
+    """Missing capability → explicit failure, never a silent downgrade."""
+    spy = _DelegationSpy()
+    manifest = CapabilityManifest(
+        supported_node_types={NodeType.AGENT},
+        enabled_capabilities={"llm"},
+    )
+    adapter = V3NodeExecutor(agent_runner=spy, manifest=manifest, enabled=True)
+
+    with pytest.raises(NotImplementedError, match="unavailable capabilities"):
+        asyncio.run(adapter.execute_node(_agent_node(retrieval=None), {}, "ws-1"))
+
+    assert adapter.dispatches == 0, "a refused node must never be dispatched"
+
+
+def test_v3_adapter_flag_reads_env_and_defaults_off() -> None:
+    """The flag comes from the environment and defaults to off."""
+    assert adapter_enabled({}) is False
+    assert adapter_enabled({ADAPTER_FLAG_ENV: ""}) is False
+    assert adapter_enabled({ADAPTER_FLAG_ENV: "0"}) is False
+    assert adapter_enabled({ADAPTER_FLAG_ENV: "1"}) is True
+    assert adapter_enabled({ADAPTER_FLAG_ENV: " true "}) is True
+    assert adapter_enabled({ADAPTER_FLAG_ENV: "FALSE"}) is False
+
+
+def test_resolve_node_executor_flag_off_returns_default_executor() -> None:
+    """Seam: flag off → the existing default executor (no V3 in the path)."""
+    resolved = resolve_node_executor(env={})
+    assert isinstance(resolved, FakeNodeExecutor)
+
+
+def test_resolve_node_executor_flag_on_requires_a_runner() -> None:
+    """Enabling without a runner is a configuration error, not a silent fallback."""
+    with pytest.raises(V3AdapterDisabled, match="no agent_runner"):
+        resolve_node_executor(env={ADAPTER_FLAG_ENV: "1"})
+
+
+def test_resolve_node_executor_flag_on_wires_the_adapter() -> None:
+    """Flag on → a V3NodeExecutor wired to the supplied runner."""
+    spy = _DelegationSpy()
+    resolved = resolve_node_executor(agent_runner=spy, env={ADAPTER_FLAG_ENV: "1"})
+    assert isinstance(resolved, V3NodeExecutor)
+    assert resolved.enabled is True
+    assert resolved.dispatches == 0
+
+
+def _norm_run(run: Any) -> dict[str, Any]:
+    """Drop run identity + timing so two runs can be compared byte-for-byte."""
+    data = run.model_dump(mode="json")
+    for volatile in ("id", "created_at", "finished_at"):
+        data.pop(volatile, None)
+    for node_run in data.get("node_runs", {}).values():
+        node_run.pop("latency_ms", None)
+    return data
+
+
+@pytest.mark.unit
+async def test_flag_off_default_path_is_byte_identical() -> None:
+    """Flag-off parity: resolving through the seam is identical to the default.
+
+    With the flag off the seam yields the default executor, so a compiled
+    workflow executes exactly as it does today — byte-identical modulo run
+    identity and timing — and the V3 adapter is never consulted.
+    """
+    defn = WorkflowDefinition(
+        id="wf-parity", workspace_id="ws", name="Parity",
+        nodes=[
+            NodeSpec(id="start", type=NodeType.TRIGGER, name="Start",
+                     output_ports=[PortSpec(name="output", type="dict")]),
+            NodeSpec(id="fmt", type=NodeType.TRANSFORM, name="Format",
+                     config={"template": "Hi {name}!"},
+                     input_ports=[PortSpec(name="input", type="any")],
+                     output_ports=[PortSpec(name="output", type="string")]),
+            NodeSpec(id="end", type=NodeType.OUTPUT, name="End",
+                     input_ports=[PortSpec(name="input", type="any")]),
+        ],
+        edges=[
+            WorkflowEdgeSpec(id="e1", source_node_id="start", source_port="output",
+                             target_node_id="fmt", target_port="input"),
+            WorkflowEdgeSpec(id="e2", source_node_id="fmt", source_port="output",
+                             target_node_id="end", target_port="input"),
+        ],
+    )
+    rev = _make_revision(defn)
+    plan = WorkflowCompiler.compile(rev, allow_unvalidated=True)
+
+    spy = _DelegationSpy()
+    default_run = await WorkflowExecutor(FakeNodeExecutor()).execute(plan, rev, {"name": "Alice"})
+    seam_run = await WorkflowExecutor(
+        resolve_node_executor(agent_runner=spy, env={})
+    ).execute(plan, rev, {"name": "Alice"})
+
+    assert _norm_run(default_run) == _norm_run(seam_run), (
+        "flag-off default path must be byte-identical to the current behaviour"
+    )
+    assert spy.calls == [], "the V3 authority must never be reached with the flag off"
+    assert seam_run.status == WorkflowRunStatus.COMPLETED

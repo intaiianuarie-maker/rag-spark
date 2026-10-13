@@ -3632,3 +3632,64 @@ GIT SELF-REPORT (`git status --short`; snapshots in /tmp):
 - END (HEAD 4bcb76a UNMOVED): START's foreign set **plus exactly `?? apps/web/src/app/research/`** (my 3 new files) **plus `M handoffs/CODE2-HANDOFF.md`** (this row). No other files touched.
 - 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
 
+## 2026-10-13 T-V4-015 — W3 V3-backed NodeExecutor adapter skeleton (flagged off) — code2
+
+TASK: T-V4-015 (`../rag-fork-solution/tasks/MICRO-TICKETS-V4.md:168`, trace V4 plan W3, depends T-V4-014). A structural ``NodeExecutor`` whose node execution delegates to the V3 agents runtime, **flagged off by default**, with flag-off parity proven. Start HEAD `0d23253` → end HEAD `f97929e` (moved by dev1's concurrent T-V4-005 commit, not mine).
+
+**FILE LIST (announced per the dispatch's collision rule):**
+- `packages/workflow_engine/adapters/v3_adapter.py` — **NEW** (mine only)
+- `tests/unit/test_workflow_fake_runtime.py` — **APPENDED** (mine: 12 tests + 3 import lines at the very end; all pre-existing W0/W1 content untouched)
+
+**Disjointness from dev1's T-V4-005:** dev1 landed `packages/workflow_engine/validator.py` (M) + `tests/unit/test_workflow_resource_limits.py` (new) **during** this ticket — different files, no overlap with my adapter or my test hunks. My dependents were re-run at the new HEAD to confirm no interference (below). No pause/BLOCKED was needed. `packages/agents/adapters/` was consulted **read-only** for reference only and is **not touched** — no shared interface was required, see the design note below.
+
+### CHANGE
+- `packages/workflow_engine/adapters/v3_adapter.py` (NEW) —:
+  - `V3NodeExecutor` — ``NodeExecutor`` implementation. Refuses every node with ``V3AdapterDisabled`` while the flag is off (so ``dispatches`` stays 0), refuses nodes whose ``required_capabilities`` fall outside the injected ``CapabilityManifest`` with ``NotImplementedError``, and otherwise delegates: it builds one request mapping (`node_id`, `node_type`, ``node_config``, ``workspace_id``, ``input_data``, ``required_capabilities``), increments ``dispatches``, calls the injected runner and returns **exactly** the runner's output — no local fabrication, no transformation.
+  - `AgentRunner` — the ``Protocol`` seam. Production wiring supplies an async callable; the module imports **nothing from ``packages/agents``**, so there are zero direct v3 imports and zero new runtime deps (card rule 1).
+  - `resolve_node_executor(...)` — the seam callers use. Flag off (**default**) → returns the existing ``FakeNodeExecutor``, so the default path never constructs or consults the V3 adapter. Flag on → returns a wired ``V3NodeExecutor``; enabling **without** a runner raises ``V3AdapterDisabled`` rather than silently falling back to the default.
+  - `adapter_enabled(env)` / `ADAPTER_FLAG_ENV = ``WORKFLOW_V3_ADAPTER``` — flag reader; truthy spellings `1`/**`true`**/`yes`/**`on`**, case-insensitive and whisker-trimmed, **default off**.
+- `tests/unit/test_workflow_fake_runtime.py` — 12 appended tests (list in VERIFY) + ``asyncio``/``Mapping``/``Any`` imports.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+**Design note on the ``packages/agents/adapters/`` question.** I did **not** touch it, and did not need to: the adapter reaches the V3 runtime through an injected ``AgentRunner`` callable rather than a shared interface, so nothing in ``packages/agents`` has to change and the two packages keep their current (nonexistent) import relationship. That is also what the card's "no direct v3 imports" rule points at. Had the adapter needed to import a V3 type I would have stopped and pushed BLOCKED rather than editing that package.
+
+### WHY (trace W3)
+Workflow-node execution must eventually be able to route through the V3 agents runtime, but a workflow that silently executes through an untested adapter is the failure honesty this package is built to prevent. So the seam lands **flagged off**: it is reviewable, testable and wired-shaped now, and cannot dispatch until someone deliberately flips the flag. That also keeps T-V4-016 (resume/evidence) work unblocked on the seam shape while production wiring stays honest.
+
+### REUSED
+- ``workflow_engine.executor.FakeNodeExecutor`` (W0/W1 default) — the flag-off target; also the delegation-spy pattern used by the tests.
+- ``workflow_engine.interfaces`` — ``NodeExecutor`` Protocol, ``NodeSpec``, ``CapabilityManifest``, ``NodeType``. No interface change.
+- Capability-refusal semantics from the existing fake runtime (unsupported node type / capability → ``NotImplementedError``), kept consistent rather than re-invented.
+- ``pytest.raises``/monkeypatch conventions already used in this file.
+
+### BUILT
+- ``V3NodeExecutor`` + ``AgentRunner`` + ``resolve_node_executor`` + flag reader. Small by design: the adapter is a router, the V3 runtime is the authority, and the manifest is the gate.
+- ``_norm_run`` test helper (drops run identity/timing so two runs compare byte-for-byte).
+
+### VERIFY
+- `timeout 600 pytest tests/unit/test_workflow_fake_runtime.py -q` → **22 passed** (10 pre-existing untouched + 12 new). Re-run at the new HEAD `f97929e` (with dev1's validator change landed) → **22 passed**.
+- `timeout 900 pytest tests/unit/ -q -k workflow` → **358 passed, 1172 deselected**.
+- `timeout 600 pytest tests/unit/test_workflow_langflow_adapter.py -q` → **212 passed** (dev1's area, run read-only, untouched by me).
+- `timeout 600 ruff check packages/workflow_engine/adapters/v3_adapter.py tests/unit/test_workflow_fake_runtime.py` → **All checks passed!**
+- `timeout 400 mypy packages/workflow_engine/adapters/v3_adapter.py` → **Success: no issues found in 1 source file.**
+
+New tests (12): protocol conformance; **flag-off refuses + ``dispatches == 0``** (spy never called); **delegation of every call** with the full request payload; **no transformation of authority output**; missing capability → ``NotImplementedError`` and still 0 dispatches; flag parsing (unset/`""`/`0`/`FALSE` → off; `1`/`` true `` → on); seam returns default when off; seam requires a runner when on; seam wires the adapter when on; and **flag-off parity** (a compiled workflow produces byte-identical runs through the seam and through the default executor, with the spy never called).
+
+No commit, deploy, restart or compose.
+
+### METRICS
+Flag-off dispatches: **0** (adapter refuses before touching the runner; proven by both the counter and the empty spy log). Delegation: every routed node reaches the injected authority exactly once, with its full request, and the adapter returns it unchanged. Existing W0/W1 tests: **10/10 untouched and green**. Suite: 22/22 green.
+
+### RISKS
+- This is a **skeleton**: the production ``AgentRunner`` that bridges into the real V3 agents runtime is not supplied here (the card asks for the adapter, flagged off). Wiring it is follow-up; until then the flag cannot be safely flipped because ``resolve`` refuses without a runner, which is the fail-closed behaviour we want.
+- No direct v3 import means no shared request object: the runner contract is a plain mapping, so a real bridging callable must translate it into the V3 ``RunContext``/``AgentRun`` types. That translation is exactly where a future wiring bug would live, so it deserves a review gate rather than being folded in silently.
+- Parity is asserted modulo run identity and timing (``run id``, ``created_at``/``finished_at``, ``latency_ms``). The workflow itself — statuses, node outputs, final output — is compared byte-for-byte.
+- Tests appended to a card-named file that T-V4-016 also lists; my hunks are appended at the end and my only edit to pre-existing content is the 3 import lines, so a later append stays disjoint.
+- F9-headroom note: `V3AdapterDisabled` derives from ``RuntimeError``, not the taxonomy's reason codes; it surfaces as a refusal message on the node error, consistent with the package's fail-loud conventions, and I did not add a new reason code to ``core.errors``.
+- FOREIGN CHURN: dev1's T-V4-005 (``workflow_engine/validator.py`` + ``tests/unit/test_workflow_resource_limits.py``) landed mid-ticket and is untouched by me; my graphs are re-verified green on top of it.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv4015_{start,end}.txt`):
+- START (HEAD `0d23253`): 22 dirty paths (foreign handoffs + a foreign untracked `tests/unit/test_workflow_config_enforcement.py`). Index empty.
+- END (HEAD `f97929e`): foreign set (now incl. dev1's ``validator.py``/``resource_limits.py``; `config_enforcement` was absorbed by dev1's commit) **plus exactly**: ``?? packages/workflow_engine/adapters/v3_adapter.py`` (new), ``M tests/unit/test_workflow_fake_runtime.py`` (appended), and this handoff row.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+
