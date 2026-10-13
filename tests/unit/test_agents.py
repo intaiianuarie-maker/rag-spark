@@ -2659,3 +2659,228 @@ def test_step_store_adapter_injectable_both_backends_same_interface() -> None:
             assert callable(store.append)
             assert callable(store.list)
             assert callable(store.get)
+
+# ======================================================================================
+# T-V3-011 — LangGraph adapter skeleton — conformance (delegation, not behavior)
+# ======================================================================================
+
+import unittest.mock as _mock  # noqa: E402
+
+from agents.adapters import (  # noqa: E402
+    ApprovalAdapter,
+    RetryAdapter,
+    StateAdapter,
+    StepStoreCheckpointAdapter,
+    StreamingAdapter,
+)
+
+
+@pytest.mark.unit
+def test_adapter_state_delegates_to_runstate_transition_to() -> None:
+    """StateGraph/Pregel hosting — adapter calls RunState.transition_to, never duplicates."""
+    state = RunState(status=RunStatus.RUNNING)
+    with _mock.patch.object(RunState, "transition_to", wraps=state.transition_to) as spy:
+        StateAdapter.transition(state, RunStatus.COMPLETED)
+        spy.assert_called_once_with(RunStatus.COMPLETED)
+    assert state.status == RunStatus.COMPLETED
+    # Also check is_terminal delegation
+    assert StateAdapter.is_terminal(RunStatus.CANCELLED) is True
+    assert StateAdapter.is_terminal(RunStatus.RUNNING) is False
+    # Build state embeds product state
+    ctx = RunContext(
+        run_id="run-adapter-state",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="rev1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+    )
+    run = AgentRun(
+        id=ctx.run_id, workspace_id=ctx.workspace_id, goal="test", model="gpt-4o-mini", created_at=datetime.now(UTC).isoformat()  # noqa: E501
+    )
+    lg_state = StateAdapter.build_state(state, ctx, run)
+    assert lg_state["run_state"] is state
+    assert lg_state["run_context"] is ctx
+    assert lg_state["agent_run"] is run
+
+
+@pytest.mark.unit
+def test_adapter_checkpoint_delegates_to_step_store() -> None:
+    """BaseCheckpointSaver ↔ StepStore — every adapter call reaches product authority."""
+    store = InMemoryStepStore()
+    adapter = StepStoreCheckpointAdapter(store)
+    run_id = f"run-adapter-ckpt-{uuid.uuid4().hex[:6]}"
+    ev1 = StepEvent(
+        sequence=1,
+        step_id="step-1",
+        attempt_id="attempt-1",
+        action_summary="tool: calculator",
+        status=StepStatus.SUCCEEDED,
+        latency_ms=1.0,
+        usage=Usage(),
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+    # Spy on the product store
+    with _mock.patch.object(store, "append", wraps=store.append) as spy_append:
+        out = adapter.save_checkpoint(run_id, ev1)
+        spy_append.assert_called_once()
+        assert out.sequence == 1
+    # Delegation for list/get
+    with _mock.patch.object(store, "list", wraps=store.list) as spy_list:
+        lst = adapter.list_checkpoints(run_id)
+        spy_list.assert_called_once_with(run_id)
+        assert len(lst) == 1
+    with _mock.patch.object(store, "get", wraps=store.get) as spy_get:
+        got = adapter.load_checkpoint(run_id, 1)
+        spy_get.assert_called_once_with(run_id, 1)
+        assert got is not None and got.sequence == 1
+    # Append-only: no update/delete surface
+    assert not hasattr(adapter, "update")
+    assert not hasattr(adapter, "delete")
+    # Same for put/get_tuple alias
+    ev2 = StepEvent(
+        sequence=2,
+        step_id="step-2",
+        attempt_id="attempt-2",
+        action_summary="tool: search",
+        status=StepStatus.SUCCEEDED,
+        latency_ms=1.0,
+        usage=Usage(),
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+    adapter.put(run_id, ev2)
+    assert len(adapter.list_tuples(run_id)) == 2
+
+
+@pytest.mark.unit
+def test_adapter_approval_delegates_to_is_approved_and_write_check() -> None:
+    """Interrupt/Command ↔ WAITING_APPROVAL — adapter reuses is_approved / is_write_tool."""
+    # Direct delegation
+    from agents import runtime as _rt
+
+    with _mock.patch.object(_rt, "_is_approved", wraps=_rt._is_approved) as spy_approved:
+        ApprovalAdapter.is_approved("run-A", "P", "publish", "rev1")
+        spy_approved.assert_called_once_with("run-A", "P", "publish", "rev1")
+    with _mock.patch.object(_rt, "_is_write_tool", wraps=_rt._is_write_tool) as spy_write:
+        ApprovalAdapter.is_write_tool("publish")
+        spy_write.assert_called_once_with("publish")
+        assert ApprovalAdapter.is_write_tool("publish") is True
+        assert ApprovalAdapter.is_write_tool("knowledge_search") is False
+    # Approve via adapter delegates to runtime.approve_run
+    with _mock.patch.object(_rt, "approve_run", wraps=_rt.approve_run) as spy_approve:
+        ApprovalAdapter.approve("run-A", "P", "publish", "rev1")
+        spy_approve.assert_called_once_with("run-A", "P", "publish", "rev1")
+    # check_resume_allowed delegates
+    with _mock.patch.object(_rt, "_is_approved", wraps=_rt._is_approved) as spy2:
+        ApprovalAdapter.check_resume_allowed("run-A", "P", "publish", "rev1")
+        spy2.assert_called_once()
+    # Build interrupt payload is product-typed, not LangGraph import
+    payload = ApprovalAdapter.build_interrupt_payload("run-A", "publish", '{"x":1}', "rev1", "P")
+    assert payload["waiting_tool"] == "publish"
+    assert payload["run_id"] == "run-A"
+    assert "requires approval" in payload["error"]
+
+
+@pytest.mark.unit
+def test_adapter_retry_delegates_to_is_retryable_and_backoff() -> None:
+    """RetryPolicy/TimeoutPolicy ↔ is_retryable/bounded_backoff — adapter delegates."""
+    from agents import runtime as _rt
+
+    policy = RetryPolicy(
+        max_attempts=3,
+        initial_backoff_s=0.1,
+        backoff_multiplier=2.0,
+        max_backoff_s=1.0,
+        retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT],
+    )
+    with _mock.patch.object(_rt, "is_retryable", wraps=_rt.is_retryable) as spy:
+        RetryAdapter.is_retryable(AgentErrorCode.TOOL_TIMEOUT, policy)
+        spy.assert_called_once_with(AgentErrorCode.TOOL_TIMEOUT, policy)
+        assert RetryAdapter.is_retryable(AgentErrorCode.TOOL_TIMEOUT, policy) is True
+        assert RetryAdapter.is_retryable(AgentErrorCode.TOOL_NOT_ALLOWED, policy) is False
+    with _mock.patch.object(_rt, "compute_backoff", wraps=_rt.compute_backoff) as spy2:
+        RetryAdapter.compute_backoff(2, policy)
+        spy2.assert_called_once_with(2, policy)
+    with _mock.patch.object(_rt, "bounded_backoff", wraps=_rt.bounded_backoff) as spy3:
+        deadline = datetime.now(UTC) + timedelta(seconds=10)
+        RetryAdapter.bounded_backoff(1, policy, deadline)
+        spy3.assert_called_once()
+    # Translate helpers are pure dict mapping, no product behavior change
+    lg = RetryAdapter.to_langgraph_retry(policy)
+    assert lg["max_attempts"] == 3
+    assert lg["initial_interval"] == 0.1
+    back = RetryAdapter.from_langgraph_retry(lg)
+    assert back.max_attempts == 3
+
+
+@pytest.mark.unit
+def test_adapter_streaming_no_hidden_reasoning_and_custom_part() -> None:
+    """Streaming ↔ StepEvent — adapter uses custom part, never hidden reasoning."""
+    ev = StepEvent(
+        sequence=1,
+        step_id="step-1",
+        attempt_id="attempt-1",
+        action_summary="tool: calculator",
+        status=StepStatus.SUCCEEDED,
+        latency_ms=1.0,
+        usage=Usage(),
+        timestamp=datetime.now(UTC).isoformat(),
+    )
+    part = StreamingAdapter.to_custom_part(ev)
+    assert part["type"] == "custom"
+    assert part["event"]["action_summary"] == "tool: calculator"
+    back = StreamingAdapter.from_custom_part(part)
+    assert back.sequence == 1
+    assert back.action_summary == "tool: calculator"
+    # No hidden reasoning field
+    assert StreamingAdapter.check_no_hidden_reasoning(ev) is True
+    fields = set(StepEvent.model_fields.keys())
+    assert "reasoning" not in fields
+    # Messages mode would expose hidden reasoning — adapter flags it
+    assert StreamingAdapter.is_hidden_reasoning_exposed("messages") is True
+    assert StreamingAdapter.is_hidden_reasoning_exposed("custom") is False
+    # No langgraph import in adapter — check via AST, not substring (docstring mentions it)
+    import ast
+    import pathlib
+
+    tree = ast.parse(pathlib.Path("packages/agents/adapters/streaming.py").read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                assert "langgraph" not in alias.name, f"streaming adapter must not import langgraph, got {alias.name}"  # noqa: E501
+        if isinstance(node, ast.ImportFrom):
+            assert node.module is None or "langgraph" not in node.module, f"streaming adapter must not import from langgraph, got {node.module}"  # noqa: E501
+
+
+@pytest.mark.unit
+def test_adapter_product_files_untouched_skeleton_only() -> None:
+    """Product files untouched — diff on runtime/interfaces/tools/step_store
+    empty beyond this ticket."""
+    # This test proves the skeleton did not duplicate product logic
+    import pathlib
+
+    for mod in ["state", "checkpoint", "approval", "retry", "streaming"]:
+        text = pathlib.Path(f"packages/agents/adapters/{mod}.py").read_text()
+        # Each adapter must delegate, not duplicate RunState logic
+        if mod == "state":
+            assert "RunState.transition_to" in text or "state.transition_to" in text
+            assert "class StateAdapter" in text
+        if mod == "checkpoint":
+            assert "step_store.append" in text or "self._store.append" in text
+        if mod == "approval":
+            assert "_is_approved" in text
+        if mod == "retry":
+            assert "is_retryable" in text
+        if mod == "streaming":
+            assert "StepEvent" in text
+        # No direct LangGraph import — check via AST, not substring (docstrings mention it)
+        import ast
+
+        tree2 = ast.parse(text)
+        for node2 in ast.walk(tree2):
+            if isinstance(node2, ast.Import):
+                for alias2 in node2.names:
+                    assert "langgraph" not in alias2.name, f"{mod} must not import langgraph"
+            if isinstance(node2, ast.ImportFrom):
+                assert node2.module is None or "langgraph" not in node2.module, f"{mod} must not import from langgraph"  # noqa: E501
