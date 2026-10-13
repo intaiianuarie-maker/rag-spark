@@ -1400,3 +1400,72 @@ GIT SELF-REPORT (`git status --short` in `Super Rag/knowledge-os`; snapshots `/t
 PROGRESS ROW — TASK: T-V1-054 crash fixture reaps its workers, zero orphans (implemented, evidence captured).
 PROGRESS ROW — DONE: two independent nets make an orphan impossible — the worker now watches its parent and `os._exit`s within 1s of it dying (proved: 0.75s on a dead parent, correctly stays alive on a live one), and the parent spawns every worker into its own session and group-kills it at teardown with a real `pgrep` assertion that nothing survived (proved: reap 0.00s, `poll() == -9`). **`Orphan workers after suite: 0`**, verified three ways after a full attached run. 0 new failures (7 ⊂ the 8-test baseline; the one that passed is the known attempt-count flake, not claimed as a fix). No test bodies, assertions or timings touched; T-V1-057's fixture intact. Risks (a) 1s watchdog poll, (b) children lose terminal signals via `start_new_session`, (c) the assertion can now fail the suite by design, (d) `pgrep`-absence would make it vacuous, (e) dev1's reindex had RAM pinned and foreign churn disclosed above.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+
+---
+
+## 2026-10-13 T-V1-064 (crash-recovery baseline: do the 7 survive the T-059 fix?) — code2 (solo, MEASUREMENT)
+
+TASK: T-V1-064. Repo `Super Rag/knowledge-os`. Start HEAD `833dae1` → end HEAD `833dae1` (**UNMOVED**). Allowed: `tests/integration/test_crash_recovery.py` (harness/bounded-wait **only if classification says harness**) + the row. **Measurement first — so I changed nothing.** `git status --short` start → end: **zero delta** (verified by `diff` of the two snapshots).
+
+**Answer to the card's question: no — the 7 survive.** The count did not move (7 failed / 1 passed, identical to the T-054 run), but the *reason* is now known and is not what the count suggests: none of the 7 is failing on a product assertion any more. They all die earlier, at the harness's own stall-wait.
+
+CHANGE: **none.** T-057's `_queue_namespace` fixture (2 refs) and T-054's reap nets (`start_new_session=True` / `os.killpg` / `_no_orphan_workers`, 5 refs) verified present and untouched.
+
+MEASUREMENT — one attached foreground run, that file only (347.75s, exit 1):
+
+| test | outcome | failure signature | verdict |
+|---|---|---|---|
+| `test_after_claim_crash_is_redelivered` | **PASS** | — | **CLEARED** — plausibly **T-V1-059** |
+| `test_crash_during_parse_is_redelivered` | FAIL | `crash-2 never reached stage 'parse'` | **HARNESS — dead seam**, deterministic (0/4 runs) |
+| `test_crash_during_fts_index_is_redelivered` | FAIL | `crash-3 never reached stage 'index'` | harness race/flaky |
+| `test_crash_during_embed_is_redelivered` | FAIL | `crash-4 never reached stage 'embed'` | harness race/flaky |
+| `test_crash_at_publication_gate_is_idempotent` | FAIL | `crash-5 never reached stage 'publication'` | harness race/flaky |
+| `test_redelivery_after_delete_is_fenced_not_resurrected` | FAIL | `crash-6 never reached stage 'embed'` | harness race/flaky |
+| `test_redelivery_after_replace_publishes_only_the_new_generation` | FAIL | `crash-7 never reached stage 'embed'` | harness race/flaky |
+| `test_zz_recovery_matrix_is_green` | FAIL | `missing crash stages: {publication, index, parse, embed}` + `assert {'after_claim'} == {'after_claim','publication'}` | aggregate of the above |
+
+**What T-V1-059 plausibly cleared.** `test_after_claim_crash_is_redelivered` passed in **both** the T-054 run and this one, where at T-057 it failed with `final_attempts == 3` (want `1`) — the exact retry-loop signature T-V1-059's `MissingGreenlet` fix targeted. Independent corroboration that the loop is gone: the job rows for this run are `status: ready`, **`error_code: None`** — several at `attempts: 2-3`, i.e. jobs that retried and *published* instead of looping as `INTERNAL_ERROR`. **The `final_attempts` signature no longer appears anywhere in the run.** I attribute this to **059**, not 054: 054 only reaped processes, it changed no retry semantics.
+
+**Why the other 7 still fail — they never reach their stall.** Every failure is `never reached stage 'X'` from `wait_stalled()` timing out after `STAGE_TIMEOUT=45s`. That is a harness stall, not a product assertion: no `STALE_GENERATION` / `DOCUMENT_DELETED` / zero-writes / attempt-count assertion fires anywhere. The worker logs (`/root/.tmp/t021-markers-*/`, which persist) show the workers **alive and looping**, e.g. crash-2's whole log:
+```
+parent_watchdog_installed parent_pid=3819237
+worker_loop_starting crash_stage=parse
+ingest_claims_recovered / ingest_claims_recovered / ingest_claims_recovered
+```
+— recovering claims repeatedly and never claiming a job to process.
+
+**cycle-2/`parse` is a deterministic dead seam — and it is the same bug I fixed in T-V1-059, in the worker fixture.** `t021_crash_worker.py` patches `ingest_pipeline.parser_for_mime` (lines 163/177), but the pipeline uses that name only for an `is None` check (`ingest_pipeline.py:687`) and actually parses via **`parse_with_precedence`** (`:723`). So `_StallingParser.parse()` is never invoked, `_stall()` never runs, no marker is ever written. Marker evidence across **four** runs: cycle-2 fired **0/4**, while cycle-1 `after_claim` fired 4/4 and cycles 3/4/5/6/7 varied (2–3 of 4). Parse is the only stage that never fires — a structural defect, not a flake.
+
+WHY: the card asked for measurement before fixes, and the measurement contradicts the count's apparent story. Reporting "7 failed" alone would let the next reviewer assume the fence/publish path is still broken and go looking for a product bug that the evidence does not support.
+
+REUSED: none — no dependency, no file edited, no fix applied.
+
+BUILT: nothing. This ticket filed evidence and one follow-up, as instructed.
+
+VERIFY (venv `/root/ko-venv`, **attached in the foreground shell only**, crash file only, no whole integration dir, no backgrounded pytest):
+- Ticket gate → `pytest tests/integration/test_crash_recovery.py -q -rA` → **7 failed, 1 passed in 347.75s**; full per-test output kept at `/tmp/opencode/tv1064_run.txt`.
+- **Not the T-059 symptom** → `grep "final_attempts"` over the run → **0 hits** (it was the signature of the 8-failure baseline).
+- **Jobs publish** → `ingestion_jobs` rows for this run: `status: ready`, `error_code: None`, `attempts` 1–3. Recovery is working; publication is working.
+- **Stall never fires, worker alive** → `wait_stalled`'s *early-exit* assert (which prints the log) never fired; the *timeout* `raise` did ⇒ the process was alive at 45s, just not processing.
+- **Parse seam dead** → `t021_crash_worker.py:163,177` patch `parser_for_mime`; `ingest_pipeline.py:687` uses it only as `is None`; `:723` parses via `parse_with_precedence`. Marker tally 0/4 for cycle-2.
+- **Tree discipline** → start/end `git status --short` identical (zero delta), index empty, 0 orphans after the run, T-057 + T-054 verify-only.
+
+METRICS: failures remaining: **7** (unchanged — the T-059 fix did **not** clear them); failures cleared by T-059: **1** (`test_after_claim_crash_is_redelivered`); failures still showing the MissingGreenlet/attempt-count signature: **0**; failures attributable to a **deterministic dead seam**: **1 class** (parse, 0/4 runs); failures classified harness race/flaky: **6**; product bugs found: **0**; files changed: **0**.
+
+REVIEWER CHECKLIST: measurement-first honoured (zero diff); per-test signatures given; passes attributed to 059 with corroborating job-row evidence; every remaining failure classified; nothing fixed on a hunch; no product code touched.
+
+RISKS / DISCLOSED:
+- **(a) FOLLOW-UP TICKET FILED (not fixed here): `t021_crash_worker.py`'s `parse` stall seam patches a dead name.** Re-point it at `jobs.ingest_pipeline.parse_with_precedence` exactly as T-V1-059 did for `test_dedup_versions.py`. That file is **outside this ticket's allowlist**, so per the card I file rather than fix. Until then `test_crash_during_parse_is_redelivered` cannot pass, and it is the only *deterministic* failure.
+- **(b) The other 6 are a harness race I could not pin to a single cause within the box.** Evidence: the workers are alive and emit only `ingest_claims_recovered`; marker timing varies run-to-run for the same stage. My best read is cross-cycle interference — a previous cycle's worker is still holding the shared `t021-<rand>:` prefix and claiming the next cycle's job, so the cycle's own worker never processes one. **I am flagging this as a hypothesis, not a finding.** It needs a bounded-wait/per-cycle teardown fix (reap each cycle's workers before starting the next) — also outside this ticket's allowlist, so it rides with (a) or gets its own card.
+- **(c) The marker dirs under `/root/.tmp/t021-markers-*` are never cleaned up** by this fixture (4+ runs' worth present). Cheap on disk but it will accumulate; a follow-up should sweep them. Not fixed — outside allowlist.
+- **(d) Timing-sensitive conclusions from a single run.** The marker tallies use four runs, but the pass/fail counts are one run each for T-054 and T-064. The counts happen to match exactly and the signatures are stable, so I am confident in "no change"; I would not defend the exact flaky/non-flaky split per test to more precision than this.
+- **(e) Stack held as instructed** — dev1's reindex had ~2 GB available; crash file only, attached foreground, no compose/restart, no debugging of infra (nothing wedged: Qdrant answered 200 throughout the run).
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1064_{start,end}_status.txt`):
+- **start** (HEAD `833dae1`, the ticket pin): 6 modified + 19 untracked, **all FOREIGN** — `M handoffs/{CODE1,COORDINATOR,DEV21-V4,MUSER-LOOP-STATE,REW1-REVIEW,REW2-REVIEW}-HANDOFF.md`, `M packages/workflow_engine/adapters/langflow_adapter.py`, `M tests/unit/test_workflow_langflow_adapter.py`, 16 `?? handoffs/*` + `?? tests/fixtures/workflows/` + `?? tests/unit/test_workflow_langflow_fixture.py`.
+- **end** (HEAD `833dae1`, **UNMOVED**): **identical to start — zero delta.** My contribution is this row alone.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-064 crash-recovery baseline after T-059 (measured; no code changed).
+PROGRESS ROW — DONE: measured per-test — **the 7 survive** (7 failed / 1 passed, same as T-054). T-V1-059 cleared exactly one (`test_after_claim_crash_is_redelivered`, the old `final_attempts == 3` signature, now gone from the run entirely — corroborated by job rows reading `ready` / `error_code: None` at attempts 1-3). The other 7 all die at the harness's own `wait_stalled()` 45s timeout, never on a product assertion. One deterministic dead seam identified: `t021_crash_worker.py`'s parse seam patches `parser_for_mime`, which the pipeline only uses as an `is None` check (real parse is `parse_with_precedence`) — the same defect T-V1-059 fixed in the dedup test, filed as a follow-up rather than fixed (out of allowlist). Six are a harness race, flagged as hypothesis. **Zero files changed**, index empty, 0 orphans, T-057 + T-054 verified intact.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
