@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
+from typing import Any
 
 from .interfaces import (
     RESERVED_CONTEXT_FIELDS,
@@ -210,3 +211,42 @@ def check_tool_arguments_do_not_override_context(tool_input: Mapping[str, object
         except ContextOverrideError:
             continue
         _fail(f"tool argument {field!r} must be rejected as a reserved context field")
+
+def check_knowledge_search_tool_contract(tool: Any) -> None:
+    """T-V3-002: knowledge_search is strict, read-only and workspace-scoped."""
+    from .interfaces import ToolClass, ToolSpec
+    from .tools import KnowledgeSearchTool
+
+    _require_instance(tool, KnowledgeSearchTool, "knowledge search tool")
+    _require(tool.name == "knowledge_search", "name must be knowledge_search")
+    # ToolSpec derived by runtime.spec_for must be strict and read-only.
+    # Build it here the same way runtime does (additionalProperties default).
+    import json
+
+    schema = json.loads(json.dumps(tool.input_schema or {}))
+    if schema.get("type") == "object" and "additionalProperties" not in schema:
+        schema["additionalProperties"] = False
+    spec = ToolSpec(
+        name=tool.name,
+        version="1",
+        description=tool.description,
+        input_schema=schema,
+        tool_class=ToolClass.READ,
+    )
+    check_tool_spec_contract(spec)
+    _require(
+        spec.input_schema.get("additionalProperties") is False,
+        "knowledge_search input_schema must set additionalProperties=false",
+    )
+    props = spec.input_schema.get("properties", {})
+    _require("query" in props, "query property required")
+    _require("workspace_id" not in props, "workspace_id must not be in input_schema")
+    _require("workspace_ids" not in props, "workspace_ids must not be in input_schema")
+    _require(spec.tool_class is ToolClass.READ, "knowledge_search must be READ")
+    _require(
+        spec.input_schema["properties"]["query"].get("maxLength") == 500,
+        "query maxLength must be 500",
+    )
+    top_k = props.get("top_k", {})
+    _require(top_k.get("minimum") == 1, "top_k minimum 1")
+    _require(top_k.get("maximum") == 10, "top_k maximum 10")

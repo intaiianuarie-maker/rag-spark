@@ -15,14 +15,18 @@ reviewed capability.
 from __future__ import annotations
 
 import ast
+import json
 import math
 import operator
 from abc import ABC, abstractmethod
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .interfaces import AgentErrorCode
+
+if TYPE_CHECKING:
+    pass
 
 #: T-V3-001 (V3 plan trace A1-2): an agent's calculator is a CPU sink whose
 #: input the **model** chooses, so every dimension of the work is bounded
@@ -45,6 +49,24 @@ MAX_AST_NODES = 64
 MAX_AST_DEPTH = 16
 MAX_EXPONENT = 128
 MAX_RESULT_BITS = 4096
+
+#: T-V3-002 (V3 plan trace A1-1a): the search tool is a read-only retrieval
+#: seam whose cost is also model-controlled. Every dimension is bounded
+#: server-side before any retrieval happens:
+#:
+#: * :data:`MAX_QUERY_CHARS` bounds the query string itself — embedding is
+#:   linear in tokens, lexical FTS is linear in query terms, and an
+#:   unbounded query is unbounded work for three legs (dense/sparse/lexical).
+#: * :data:`MAX_SEARCH_TOP_K` bounds the fan-out: each of dense/sparse/lexical
+#:   asks a store for ``top_k`` rows, then fusion and an optional reranker
+#:   touch every row again.
+#: * :data:`MAX_SEARCH_OUTPUT_BYTES` and :data:`MAX_SNIPPET_CHARS` bound what
+#:   the agent sees: without them a single large chunk (or many chunks) would
+#:   exceed the run's token budget and the tool's output-bytes wall.
+MAX_QUERY_CHARS = 500
+MAX_SEARCH_TOP_K = 10
+MAX_SEARCH_OUTPUT_BYTES = 16_384
+MAX_SNIPPET_CHARS = 800
 
 
 class CalculatorInputRejected(ValueError):
@@ -298,6 +320,242 @@ class CalculatorTool(Tool):
             }
         except Exception as exc:
             return {"error": f"Evaluation error: {exc}"}
+
+
+
+class KnowledgeSearchTool(Tool):
+    """ACL-scoped, read-only knowledge search (T-V3-002, trace A1-1a).
+
+    The workspace is enforced **server-side**: the ``workspace_id`` comes from
+    :class:`RunContext` (the first argument ``workspace_id`` to
+    :meth:`execute`), never from ``kwargs``. A model-supplied
+    ``workspace_id``/``workspace_ids``/``filter`` cannot steer the search out
+    of the caller's workspace because:
+
+    * the dispatch layer already rejects any ``workspace_id`` key in the tool
+      payload as a reserved context field (``RESERVED_CONTEXT_FIELDS``), and
+    * this tool **ignores** any such key even if it slipped through.
+
+    The tool is **read-only** by construction: it only calls
+    :meth:`RetrievalOrchestrator.retrieve` (no ``upsert``/``delete``/``index``
+    surface exists on this path), and every store is reached through the
+    ``retrieval.interfaces`` adapter boundary — no ``qdrant_client`` / vendor
+    SDK is imported here.
+
+    Output is **byte-bounded**: each snippet is truncated to
+    :data:`MAX_SNIPPET_CHARS` and the final JSON is truncated until it fits in
+    :data:`MAX_SEARCH_OUTPUT_BYTES`, so the runtime's ``max_output_bytes`` wall
+    is never hit by a large corpus hit.
+    """
+
+    name: ClassVar[str] = "knowledge_search"
+    description: ClassVar[str] = (
+        "Search the knowledge base for evidence. Returns ACL-scoped snippets "
+        "with provenance (document, chunk, score)."
+    )
+    input_schema: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "properties": {
+            "query": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": MAX_QUERY_CHARS,
+                "description": (
+                    "Search query in natural language (1-500 characters). "
+                    "The retrieval is hybrid (dense + lexical) and ACL-scoped."
+                ),
+            },
+            "top_k": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": MAX_SEARCH_TOP_K,
+                "description": (
+                    f"Maximum number of evidence snippets to return "
+                    f"(1-{MAX_SEARCH_TOP_K}, default 5)."
+                ),
+            },
+        },
+        "required": ["query"],
+        "additionalProperties": False,
+    }
+
+    MAX_QUERY_CHARS: ClassVar[int] = MAX_QUERY_CHARS
+    MAX_SEARCH_TOP_K: ClassVar[int] = MAX_SEARCH_TOP_K
+    MAX_SEARCH_OUTPUT_BYTES: ClassVar[int] = MAX_SEARCH_OUTPUT_BYTES
+    MAX_SNIPPET_CHARS: ClassVar[int] = MAX_SNIPPET_CHARS
+
+    def __init__(self, orchestrator: Any | None = None) -> None:
+        # ``Any`` to avoid importing the retrieval interface at runtime; the
+        # only required surface is ``retrieve(query, acl_scope, context_top_k)``.
+        self._orchestrator: Any | None = orchestrator
+
+    def _resolve_orchestrator(self) -> Any | None:
+        if self._orchestrator is not None:
+            return self._orchestrator
+        # Lazy, best-effort construction for production use — never imports
+        # qdrant_client here; the orchestrator factory owns the adapter wiring.
+        try:
+            from answer.factory import create_orchestrator
+
+            return create_orchestrator()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _snippet(text: str) -> str:
+        if len(text) <= MAX_SNIPPET_CHARS:
+            return text
+        return text[: MAX_SNIPPET_CHARS - 3] + "..."
+
+    @staticmethod
+    def _fit_output(payload: dict[str, Any]) -> dict[str, Any]:
+        raw = json.dumps(payload, ensure_ascii=False)
+        if len(raw.encode("utf-8")) <= MAX_SEARCH_OUTPUT_BYTES:
+            return payload
+        # Shrink by dropping the lowest-ranked hits until we fit.
+        results = payload.get("results", [])
+        while results and len(
+            json.dumps({**payload, "results": results}, ensure_ascii=False).encode(
+                "utf-8"
+            )
+        ) > MAX_SEARCH_OUTPUT_BYTES:
+            results = results[:-1]
+        payload = {**payload, "results": results, "truncated": True}
+        # If still too large (single huge hit), truncate its snippet.
+        raw = json.dumps(payload, ensure_ascii=False)
+        if len(raw.encode("utf-8")) > MAX_SEARCH_OUTPUT_BYTES and payload["results"]:
+            first = dict(payload["results"][0])
+            first["content"] = first["content"][:200] + "..."
+            payload["results"][0] = first
+        return payload
+
+    async def execute(self, workspace_id: str, **kwargs: Any) -> Any:
+        # Hard server-side workspace enforcement: ignore any model-supplied
+        # workspace fields even if the dispatch guard were bypassed.
+        kwargs.pop("workspace_id", None)
+        kwargs.pop("workspace_ids", None)
+        kwargs.pop("filter", None)
+        kwargs.pop("acl_scope", None)
+
+        query = kwargs.get("query", "")
+        if not isinstance(query, str):
+            return {
+                "error": "query must be a string",
+                "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+            }
+        stripped = query.strip()
+        if not stripped:
+            return {
+                "error": "query is required",
+                "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+            }
+        if len(query) > self.MAX_QUERY_CHARS:
+            return {
+                "error": f"query is {len(query)} characters; the limit is {self.MAX_QUERY_CHARS}",
+                "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+            }
+        top_k = kwargs.get("top_k", 5)
+        if not isinstance(top_k, int) or isinstance(top_k, bool):
+            return {
+                "error": "top_k must be an integer",
+                "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+            }
+        if not 1 <= top_k <= self.MAX_SEARCH_TOP_K:
+            return {
+                "error": f"top_k must be between 1 and {self.MAX_SEARCH_TOP_K}",
+                "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+            }
+
+        orchestrator = self._resolve_orchestrator()
+        if orchestrator is None:
+            return {
+                "error": "search not configured",
+                "error_code": AgentErrorCode.TOOL_NOT_ALLOWED,
+            }
+
+        # ACL before ranking (R-004): scope is built server-side from the
+        # RunContext workspace_id and never from model arguments.
+        try:
+            from core.auth import ACLScope
+
+            scope = ACLScope(workspace_ids=[workspace_id])
+        except Exception:
+            # Fallback if core.auth is unavailable in a minimal test env.
+            # Minimal ACL scope for test envs where core.auth is unavailable.
+            scope = type(
+                "ACLScope",
+                (),
+                {
+                    "workspace_ids": [workspace_id],
+                    "is_empty": False,
+                    "include_public": False,
+                },
+            )()
+
+        try:
+            items = await orchestrator.retrieve(
+                query=stripped,
+                acl_scope=scope,
+                context_top_k=top_k,
+            )
+        except Exception as exc:
+            return {
+                "error": f"search failed: {exc}",
+                "error_code": AgentErrorCode.PROVIDER_ERROR,
+            }
+
+        # Defensive ACL re-filter: a store that ignored its filter still cannot leak.
+        filtered: list[Any] = []
+        for item in items:
+            try:
+                ws = item.workspace_id
+            except AttributeError:
+                ws = None
+            if ws is not None and ws != workspace_id:
+                continue
+            filtered.append(item)
+        # Respect top_k after re-filter.
+        filtered = filtered[:top_k]
+
+        results: list[dict[str, Any]] = []
+        for item in filtered:
+            try:
+                content = item.content
+            except AttributeError:
+                content = ""
+            try:
+                score_val = item.score
+            except AttributeError:
+                score_val = 0.0
+            try:
+                ws_id = item.workspace_id
+            except AttributeError:
+                ws_id = workspace_id
+            try:
+                doc_id = item.document_id
+            except AttributeError:
+                doc_id = None
+            try:
+                chunk_id = item.chunk_id
+            except AttributeError:
+                chunk_id = None
+            try:
+                method_val = item.method
+            except AttributeError:
+                method_val = ""
+            results.append(
+                {
+                    "content": self._snippet(str(content or "")),
+                    "score": float(score_val or 0.0),
+                    "workspace_id": ws_id,
+                    "document_id": doc_id,
+                    "chunk_id": chunk_id,
+                    "method": str(method_val),
+                }
+            )
+
+        payload: dict[str, Any] = {"results": results, "count": len(results)}
+        return self._fit_output(payload)
 
 
 class ToolRegistry(BaseModel):

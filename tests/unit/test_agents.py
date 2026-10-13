@@ -95,8 +95,7 @@ async def test_agent_runtime_react_multi_step() -> None:
             "Action: calculator\n"
             'Action Input: {"expression": "25 * 4"}',
             # Step 2: LLM receives observation and produces final answer
-            "Thought: The calculation is complete.\n"
-            "Final Answer: The result is 100.",
+            "Thought: The calculation is complete.\nFinal Answer: The result is 100.",
         ]
     )
 
@@ -331,9 +330,7 @@ class _ScriptedLLM(LLMProvider):
 
     async def generate(self, request: GenerationRequest) -> GenerationResult:
         text = (
-            self.responses[self.calls]
-            if self.calls < len(self.responses)
-            else "Final Answer: done"
+            self.responses[self.calls] if self.calls < len(self.responses) else "Final Answer: done"
         )
         self.calls += 1
         return GenerationResult(
@@ -405,7 +402,7 @@ def test_enforced_dispatch_rejects_reserved_context_override() -> None:
     registry.register(CalculatorTool())
     llm = _ScriptedLLM(
         [
-            'Thought: escalate\nAction: calculator\n'
+            "Thought: escalate\nAction: calculator\n"
             'Action Input: {"expression": "1+1", "workspace_id": "ws-victim"}',
             "Final Answer: ok",
         ]
@@ -416,9 +413,9 @@ def test_enforced_dispatch_rejects_reserved_context_override() -> None:
     # rew1 follow-up 2: the scalar error is cleared on completion; the blocked
     # attempt stays recorded in the step trace.
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
-    assert not any(
-        s.tool_output == {"result": 2} for s in run.steps
-    ), "override attempt must not execute the tool"
+    assert not any(s.tool_output == {"result": 2} for s in run.steps), (
+        "override attempt must not execute the tool"
+    )
 
 
 def test_enforced_dispatch_validates_strict_schema() -> None:
@@ -448,16 +445,13 @@ def test_enforced_dispatch_validates_strict_schema() -> None:
     runtime = AgentRuntime(llm, registry)
 
     run = asyncio.run(
-        runtime.run_enforced(
-            context=_enforced_context(allowed_tools=["strict"]), goal="try"
-        )
+        runtime.run_enforced(context=_enforced_context(allowed_tools=["strict"]), goal="try")
     )
     # rew1 follow-up 2: assert on the recorded blocked step, not the cleared
     # scalar error.
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
     assert any(
-        s.tool_output is not None
-        and "undeclared" in str(s.tool_output.get("error", "")).lower()
+        s.tool_output is not None and "undeclared" in str(s.tool_output.get("error", "")).lower()
         for s in run.steps
     )
 
@@ -524,7 +518,9 @@ def test_enforced_dispatch_enforces_token_budget() -> None:
 
         async def generate(self, request: GenerationRequest) -> GenerationResult:
             return GenerationResult(
-                text="Final Answer: done", model=request.model, prompt_tokens=900,
+                text="Final Answer: done",
+                model=request.model,
+                prompt_tokens=900,
                 completion_tokens=900,
             )
 
@@ -565,9 +561,7 @@ def test_enforced_dispatch_enforces_output_size_bound() -> None:
     runtime = AgentRuntime(llm, registry)
 
     run = asyncio.run(
-        runtime.run_enforced(
-            context=_enforced_context(allowed_tools=["verbose"]), goal="try"
-        )
+        runtime.run_enforced(context=_enforced_context(allowed_tools=["verbose"]), goal="try")
     )
     # rew1 follow-up 2: the run completed, so the scalar error is cleared; the
     # oversized-output rejection stays recorded in the step trace.
@@ -575,10 +569,11 @@ def test_enforced_dispatch_enforces_output_size_bound() -> None:
     assert run.error is None
     assert any(s.type == AgentStepType.ERROR for s in run.steps)
     assert any(
-        s.tool_output is not None
-        and "exceeded" in str(s.tool_output.get("error", "")).lower()
+        s.tool_output is not None and "exceeded" in str(s.tool_output.get("error", "")).lower()
         for s in run.steps
     )
+
+
 # ======================================================================================
 # T-V3-001 — bounded calculator (V3 plan trace A1-2)
 #
@@ -737,9 +732,7 @@ def test_calculator_has_no_dynamic_execution_surface() -> None:
             elif isinstance(node, (ast_mod.Import, ast_mod.ImportFrom)):
                 root = getattr(node, "module", None) or ""
                 imported = (
-                    [a.name for a in node.names]
-                    if isinstance(node, ast_mod.Import)
-                    else [root]
+                    [a.name for a in node.names] if isinstance(node, ast_mod.Import) else [root]
                 )
                 for name in imported:
                     if str(name).split(".")[0] in banned_modules:
@@ -880,3 +873,220 @@ def test_calculator_rejection_carries_a_stable_code_not_just_text() -> None:
     output = _calc_output("9**9**9")
     assert output["error_code"] == "tool_schema_invalid", output
     assert "expression rejected" in output["error"], output
+
+
+# ======================================================================================
+# T-V3-002 — ACL-scoped knowledge_search (V3 plan trace A1-1a)
+# ======================================================================================
+
+from agents.contract_tests import check_knowledge_search_tool_contract  # noqa: E402
+from agents.tools import (  # noqa: E402
+    MAX_QUERY_CHARS,
+    MAX_SEARCH_OUTPUT_BYTES,
+    MAX_SEARCH_TOP_K,
+    KnowledgeSearchTool,
+)
+
+
+class _FakeRetrievedItem:
+    def __init__(
+        self, content, workspace_id, document_id="doc-1", chunk_id=None, score=0.9, method="fused"
+    ):
+        self.content = content
+        self.workspace_id = workspace_id
+        self.document_id = document_id
+        self.chunk_id = chunk_id or f"chunk-{uuid.uuid4().hex[:6]}"
+        self.score = score
+        self.method = method
+
+
+class _FakeOrchestrator:
+    def __init__(self, items=None, capture=None):
+        self._items = items or []
+        self.captured_scopes = capture if capture is not None else []
+        self.calls = 0
+
+    async def retrieve(self, *, query, acl_scope, context_top_k=5, **kwargs):
+        self.calls += 1
+        self.captured_scopes.append(acl_scope)
+        return list(self._items)[: context_top_k * 2]
+
+
+def _search_output(query="hello", workspace_id="ws-allowed", orchestrator=None, **extra):
+    tool = KnowledgeSearchTool(orchestrator=orchestrator)
+    return asyncio.run(tool.execute(workspace_id, query=query, **extra))
+
+
+@pytest.mark.unit
+def test_knowledge_search_contract_is_strict_readonly_and_scoped() -> None:
+    tool = KnowledgeSearchTool(orchestrator=_FakeOrchestrator())
+    check_knowledge_search_tool_contract(tool)
+    rt = AgentRuntime(MockLLM([]), ToolRegistry())
+    spec = rt.spec_for(tool)
+    assert spec.input_schema.get("additionalProperties") is False
+    assert spec.tool_class.value == "read"
+
+
+@pytest.mark.unit
+def test_knowledge_search_workspace_enforced_server_side() -> None:
+    items = [
+        _FakeRetrievedItem("a", "ws-allowed"),
+        _FakeRetrievedItem("b", "ws-other"),
+        _FakeRetrievedItem("c", "ws-allowed"),
+    ]
+    orch = _FakeOrchestrator(items=items)
+    tool = KnowledgeSearchTool(orchestrator=orch)
+    out = asyncio.run(
+        tool.execute(
+            "ws-allowed",
+            query="q",
+            **{"workspace_ids": ["ws-other"], "filter": {"workspace_ids": ["ws-other"]}},
+        )
+    )
+    assert "results" in out
+    assert all(r["workspace_id"] == "ws-allowed" for r in out["results"]), out
+    assert len(orch.captured_scopes) == 1
+    assert orch.captured_scopes[0].workspace_ids == ["ws-allowed"]
+
+
+@pytest.mark.unit
+def test_knowledge_search_cross_workspace_reads_rejected() -> None:
+    items = [
+        _FakeRetrievedItem("secret other", "ws-victim", document_id="doc-v"),
+        _FakeRetrievedItem("allowed one", "ws-allowed", document_id="doc-a"),
+        _FakeRetrievedItem("secret other 2", "ws-victim", document_id="doc-v2"),
+    ]
+    orch = _FakeOrchestrator(items=items)
+    out = _search_output(query="test", workspace_id="ws-allowed", orchestrator=orch, top_k=10)
+    assert out["count"] == 1
+    assert out["results"][0]["workspace_id"] == "ws-allowed"
+    assert not any(r["workspace_id"] == "ws-victim" for r in out["results"])
+    assert not any(r["document_id"] == "doc-v" for r in out["results"])
+
+
+@pytest.mark.unit
+def test_knowledge_search_runtime_blocks_model_supplied_workspace_id() -> None:
+    registry = ToolRegistry()
+    registry.register(
+        KnowledgeSearchTool(
+            orchestrator=_FakeOrchestrator(items=[_FakeRetrievedItem("hi", "ws-allowed")])
+        )
+    )
+    llm = _ScriptedLLM(
+        [
+            'Thought: try to steal\nAction: knowledge_search\n'
+            'Action Input: {"query": "hello", "workspace_id": "ws-victim"}'
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t302-1",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["knowledge_search"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="try to read other workspace"))
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert not any(s.tool_output and "ws-victim" in json.dumps(s.tool_output) for s in run.steps)
+
+
+@pytest.mark.unit
+def test_knowledge_search_strict_schema_rejects_extra_fields() -> None:
+    registry = ToolRegistry()
+    registry.register(KnowledgeSearchTool(orchestrator=_FakeOrchestrator()))
+    llm = _ScriptedLLM(
+        [
+            'Thought: smuggle\nAction: knowledge_search\n'
+            'Action Input: {"query": "hello", "extra": "evil"}'
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t302-2",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["knowledge_search"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="try extra field"))
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert any(
+        "undeclared" in json.dumps(s.tool_output).lower() for s in run.steps if s.tool_output
+    )
+
+
+@pytest.mark.unit
+def test_knowledge_search_output_bounded() -> None:
+    big_content = "x" * 5000
+    items = [_FakeRetrievedItem(big_content, "ws-allowed", score=1.0 - i * 0.01) for i in range(20)]
+    orch = _FakeOrchestrator(items=items)
+    out = _search_output(query="big query", workspace_id="ws-allowed", orchestrator=orch, top_k=10)
+    assert "results" in out
+    raw = json.dumps(out, ensure_ascii=False).encode("utf-8")
+    assert len(raw) <= MAX_SEARCH_OUTPUT_BYTES, (
+        f"output {len(raw)} bytes exceeds {MAX_SEARCH_OUTPUT_BYTES}"
+    )
+    assert all(len(r["content"]) <= 800 + 3 for r in out["results"])
+    if len(items) > out["count"]:
+        assert out.get("truncated") is True or len(raw) <= MAX_SEARCH_OUTPUT_BYTES
+
+
+@pytest.mark.unit
+def test_knowledge_search_rejects_overlong_query_and_invalid_top_k_typed() -> None:
+    orch = _FakeOrchestrator(items=[_FakeRetrievedItem("hi", "ws-allowed")])
+    out = _search_output(query="x" * (MAX_QUERY_CHARS + 1), workspace_id="ws-1", orchestrator=orch)
+    assert out["error_code"] == AgentErrorCode.TOOL_SCHEMA_INVALID
+    assert "characters" in out["error"]
+    assert "results" not in out
+    out = _search_output(query="   ", workspace_id="ws-1", orchestrator=orch)
+    assert out["error_code"] == AgentErrorCode.TOOL_SCHEMA_INVALID
+    for bad in (0, 11, 100, "5", 3.5, True):
+        out = _search_output(query="hello", workspace_id="ws-1", orchestrator=orch, top_k=bad)
+        assert out["error_code"] == AgentErrorCode.TOOL_SCHEMA_INVALID, f"top_k={bad!r} -> {out}"
+    out = _search_output(
+        query="hello", workspace_id="ws-1", orchestrator=orch, top_k=MAX_SEARCH_TOP_K
+    )
+    assert "results" in out
+
+
+@pytest.mark.unit
+def test_knowledge_search_has_no_write_surface() -> None:
+    import ast
+
+    source = (
+        Path(__file__).read_text()
+        if False
+        else __import__("pathlib").Path("packages/agents/tools.py").read_text()
+    )
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "KnowledgeSearchTool":
+            called = {
+                getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+                for n in ast.walk(node)
+                if isinstance(n, ast.Call)
+            }
+            assert called.isdisjoint(
+                {"upsert", "delete", "index", "put_object", "eval", "exec", "compile"}
+            ), called
+            assert "import qdrant_client" not in source
+            assert "from qdrant_client" not in source
+            assert "import qdrant_client" not in ast.unparse(node)
+            assert "from qdrant_client" not in ast.unparse(node)
+
+
+@pytest.mark.unit
+def test_knowledge_search_uses_retrieval_adapter_boundary() -> None:
+    text = Path("packages/agents/tools.py").read_text()
+    assert "import qdrant_client" not in text
+    assert "from qdrant_client" not in text
+    assert "orchestrator.retrieve" in text
