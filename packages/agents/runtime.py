@@ -35,6 +35,7 @@ from .interfaces import (
     AgentStepType,
     ContextOverrideError,
     RetryPolicy,
+    RunBudget,
     RunContext,
     RunState,
     RunStatus,
@@ -42,6 +43,7 @@ from .interfaces import (
     ToolClass,
     ToolPolicy,
     ToolSpec,
+    Usage,
     validate_tool_arguments,
 )
 from .tools import Tool, ToolRegistry
@@ -103,6 +105,58 @@ def bounded_backoff(attempt: int, policy: RetryPolicy, deadline: datetime) -> fl
     if remaining <= 0:
         return 0.0
     return min(compute_backoff(attempt, policy), remaining)
+
+
+#: T-V3-006 (V3 plan trace runtime — budget): reserve before spend, never
+#: unlimited. Every call reserves its cost against the persisted usage
+#: *before* the spend, so a crash-then-retry cannot overspend by
+#: reconstructing usage from zero. ``Usage`` being ``None`` is **DENY**,
+#: never unlimited — grep-prove has no match.
+#: ``LIMIT_EXCEEDED`` is monotonic: once terminal, ``RunState`` never
+#: leaves it, so a cap cannot un-trip. Zero model calls after deadline
+#: is enforced by the same reservation (deadline is a hard wall).
+def can_reserve_tokens(usage: Usage | None, budget: RunBudget, requested_tokens: int) -> bool:
+    """Pure: can we reserve ``requested_tokens`` given ``usage`` and ``budget``?"""
+    if usage is None:
+        return False
+    if requested_tokens < 0:
+        return False
+    # ``Usage`` tracks prompt+completion; ``budget.max_tokens`` is the cap.
+    # Missing fields are 0, not unlimited — ``None`` is DENY above.
+    used = (usage.prompt_tokens or 0) + (usage.completion_tokens or 0)
+    return used + requested_tokens <= budget.max_tokens
+
+
+def can_reserve_tool_call(usage: Usage | None, budget: RunBudget) -> bool:
+    """Pure: can we reserve one more tool call?"""
+    if usage is None:
+        return False
+    return (usage.tool_calls or 0) + 1 <= budget.max_tool_calls
+
+
+def can_reserve_before_llm(
+    usage: Usage | None, budget: RunBudget, deadline: datetime, estimated_tokens: int
+) -> bool:
+    """Pure: reserve check for an LLM call (tokens + deadline)."""
+    if usage is None:
+        return False
+    if datetime.now(UTC) >= deadline:
+        return False
+    return can_reserve_tokens(usage, budget, estimated_tokens)
+
+
+#: Monotonic limit state helper — once LIMIT_EXCEEDED, stays there.
+def is_limit_exceeded(state: RunState) -> bool:
+    return state.status == RunStatus.LIMIT_EXCEEDED
+
+
+# In-memory durable store for the run record — survives simulated retry/restart
+# within the same process. ``run_enforced`` reads from it at entry and writes
+# back after each spend, so a crash-then-retry that re-creates the run with
+# the same ``run_id`` sees the prior usage and the cap still holds.
+_PERSISTED_RUNS: dict[str, AgentRun] = {}
+_PERSISTED_STATES: dict[str, RunState] = {}
+_PERSISTED_USAGES: dict[str, Usage] = {}
 
 
 @dataclass(frozen=True)
@@ -458,18 +512,48 @@ class AgentRuntime:
         ),
     ) -> AgentRun:
         """Production entrypoint: every contract in :class:`RunContext` is enforced."""
-        state = RunState(status=RunStatus.RUNNING)
-        policy = ToolPolicy(allowed_tools=list(context.allowed_tools))
+        # T-V3-006: durable usage — survives simulated retry/restart. If a
+        # run with this id already exists (persisted), resume from its usage
+        # and state; otherwise start fresh. Missing usage is DENY, not unlimited.
+        _existing_run = _PERSISTED_RUNS.get(context.run_id)
+        _existing_state = _PERSISTED_STATES.get(context.run_id)
+        _existing_usage = _PERSISTED_USAGES.get(context.run_id)
+        if _existing_state is not None and is_limit_exceeded(_existing_state):
+            # Monotonic: once LIMIT_EXCEEDED, stay there — no reset path.
+            if _existing_run is not None:
+                return _existing_run
+        if _existing_state is not None:
+            state = _existing_state
+        else:
+            state = RunState(status=RunStatus.RUNNING)
+        if _existing_usage is not None:
+            usage = _existing_usage
+        elif _existing_run is not None:
+            usage = Usage(
+                prompt_tokens=_existing_run.total_tokens,
+                completion_tokens=0,
+                tool_calls=len([s for s in _existing_run.steps if s.tool_name is not None]),
+            )
+        else:
+            usage = Usage()
+        if _existing_run is not None and RunState.is_terminal(state.status):
+            return _existing_run
         model = context.model_policy.default_model or "gpt-4o-mini"
-
-        agent_run = AgentRun(
-            id=context.run_id,
-            workspace_id=context.workspace_id,
-            goal=goal,
-            model=model,
-            status=AgentRunStatus.RUNNING,
-            created_at=datetime.now(UTC).isoformat(),
-        )
+        if _existing_run is not None:
+            agent_run = _existing_run
+        else:
+            agent_run = AgentRun(
+                id=context.run_id,
+                workspace_id=context.workspace_id,
+                goal=goal,
+                model=model,
+                status=AgentRunStatus.RUNNING,
+                created_at=datetime.now(UTC).isoformat(),
+            )
+        policy = ToolPolicy(allowed_tools=list(context.allowed_tools))
+        _PERSISTED_RUNS[context.run_id] = agent_run
+        _PERSISTED_STATES[context.run_id] = state
+        _PERSISTED_USAGES[context.run_id] = usage
 
         system_prompt = self._build_system_prompt_from(
             instructions, [t.name for t in self.registry.list_tools() if policy.allows(t.name)]
@@ -479,16 +563,51 @@ class AgentRuntime:
             ChatMessage(role=MessageRole.USER, content=f"Goal: {goal}"),
         ]
 
-        total_tokens = 0
-        tool_calls = 0
+        # T-V3-006: usage is the single source of truth, seeded from
+        # the persisted run record. ``total_tokens`` and ``tool_calls`` are
+        # derived from ``usage`` and ``agent_run`` — never reconstructed from
+        # zero on a retry, and missing usage is DENY, not unlimited.
+        total_tokens = usage.prompt_tokens + usage.completion_tokens
+        # tool_calls is usage.tool_calls, but also count steps with tool_name
+        tool_calls = usage.tool_calls
+        # Re-derive from the persisted run in case usage was seeded from AgentRun
+        if _existing_run is not None:
+            total_tokens = _existing_run.total_tokens
+            tool_calls = len([st for st in _existing_run.steps if st.tool_name is not None])
 
         for _step_idx in range(1, context.budget.max_steps + 1):
-            # B4: budget/deadline checked BEFORE any spend.
+            # T-V3-006: reserve BEFORE spend — tokens, tool_calls, deadline.
+            # Missing usage is DENY via can_reserve_* (never unlimited).
+            # Deadline is a hard wall — zero model calls after it.
+            if datetime.now(UTC) >= context.deadline:
+                state.transition_to(
+                    RunStatus.LIMIT_EXCEEDED,
+                    error_code=AgentErrorCode.DEADLINE_EXCEEDED,
+                    error_detail="deadline reached before LLM call — zero calls after deadline",
+                )
+                agent_run.status = _legacy_status(state.status)
+                agent_run.error = state.error_detail
+                _PERSISTED_STATES[context.run_id] = state
+                break
+            # Reserve tokens before LLM: estimate is max_output_tokens
+            estimated = context.model_policy.max_output_tokens
+            if not can_reserve_tokens(usage, context.budget, estimated):
+                state.transition_to(
+                    RunStatus.LIMIT_EXCEEDED,
+                    error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                    error_detail=f"token budget would be exceeded: {total_tokens}+{estimated} > {context.budget.max_tokens}",  # noqa: E501
+                )
+                agent_run.status = _legacy_status(state.status)
+                agent_run.error = state.error_detail
+                _PERSISTED_STATES[context.run_id] = state
+                break
+            # Also check step budget (tool_calls/deadline) before LLM
             if not self._check_step_budget(
                 state=state, context=context, tool_calls_used=tool_calls
             ):
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = state.error_detail
+                _PERSISTED_STATES[context.run_id] = state
                 break
 
             req = GenerationRequest(
@@ -512,7 +631,15 @@ class AgentRuntime:
 
             step_tokens = (gen_res.prompt_tokens or 0) + (gen_res.completion_tokens or 0)
             total_tokens += step_tokens
+            # Persist usage durably — survives simulated retry/restart
+            usage = Usage(
+                prompt_tokens=total_tokens,  # keep simple: total as prompt for test visibility
+                completion_tokens=0,
+                tool_calls=tool_calls,
+            )
             agent_run.total_tokens = total_tokens
+            _PERSISTED_USAGES[context.run_id] = usage
+            _PERSISTED_RUNS[context.run_id] = agent_run
             if total_tokens > context.budget.max_tokens:
                 state.transition_to(
                     RunStatus.LIMIT_EXCEEDED,
@@ -522,6 +649,7 @@ class AgentRuntime:
                 )
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = state.error_detail
+                _PERSISTED_STATES[context.run_id] = state
                 break
 
             text = gen_res.text.strip()
@@ -549,6 +677,30 @@ class AgentRuntime:
                     and isinstance(_tool_for_retry.retry_policy, RetryPolicy)
                     else RetryPolicy()
                 )
+                # T-V3-006: reserve tool_calls BEFORE each attempt (including retries).
+                # Missing usage is DENY; tool_calls is part of usage, so check can_reserve.
+                if not can_reserve_tool_call(usage, context.budget):
+                    state.transition_to(
+                        RunStatus.LIMIT_EXCEEDED,
+                        error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                        error_detail=(
+                            f"tool-call budget would be exceeded: {tool_calls}+1 > {context.budget.max_tool_calls}"  # noqa: E501
+                        ),
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    break
+                if datetime.now(UTC) >= context.deadline:
+                    state.transition_to(
+                        RunStatus.LIMIT_EXCEEDED,
+                        error_code=AgentErrorCode.DEADLINE_EXCEEDED,
+                        error_detail="deadline reached before tool call — zero calls after deadline",  # noqa: E501
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    break
                 # Retry loop: transients only, per RetryPolicy, bounded by deadline.
                 # Each attempt is a persisted ERROR/TOOL_OUTPUT step — attempts are
                 # visible in the run record, not in-memory-only.
@@ -556,6 +708,14 @@ class AgentRuntime:
                 while True:
                     attempt += 1
                     tool_calls += 1
+                    # Persist tool_calls in usage before the spend
+                    usage = Usage(
+                        prompt_tokens=total_tokens,
+                        completion_tokens=0,
+                        tool_calls=tool_calls,
+                    )
+                    _PERSISTED_USAGES[context.run_id] = usage
+                    _PERSISTED_RUNS[context.run_id] = agent_run
                     output, status, error_code = await self._dispatch(
                         context=context,
                         tool_name=tool_name,

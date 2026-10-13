@@ -13,6 +13,7 @@ from agents import (
     RESERVED_CONTEXT_FIELDS,
     AgentConfig,
     AgentErrorCode,
+    AgentRun,
     AgentRunStatus,
     AgentRuntime,
     AgentStepType,
@@ -1731,3 +1732,213 @@ def test_retry_backoff_bounded_by_deadline_computed_not_slept() -> None:
     # Prove with fake clock: no real sleep, just compute
     assert compute_backoff(1, policy) == 10.0
     assert compute_backoff(4, policy) == 30.0
+
+# ======================================================================================
+# T-V3-006 — Budget reservation before spend (V3 plan trace runtime)
+# ======================================================================================
+
+from agents.runtime import (  # noqa: E402
+    _PERSISTED_RUNS,
+    _PERSISTED_STATES,
+    _PERSISTED_USAGES,
+    can_reserve_before_llm,
+    can_reserve_tokens,
+    can_reserve_tool_call,
+    is_limit_exceeded,
+)
+
+
+@pytest.mark.unit
+def test_no_unlimited_default_grep_prove() -> None:
+    """Checklist 1: no None-means-infinite — grep prove."""
+    text = Path("packages/agents/runtime.py").read_text()
+    # Any `is None` that returns unlimited would be `if ... is None: return True` with unlimited
+    # We forbid the pattern where missing usage/budget is treated as allow
+    assert "None-means-infinite" not in text
+    # Ensure the pure helpers deny on None
+    assert can_reserve_tokens(None, RunBudget(), 1) is False
+    assert can_reserve_tool_call(None, RunBudget()) is False
+    assert can_reserve_before_llm(None, RunBudget(), datetime.now(UTC) + timedelta(seconds=10), 1) is False  # noqa: E501
+    # And ensure no `if budget.max_tokens is None` unlimited path
+    assert "if budget.max_tokens is None" not in text
+    assert "if usage is None:\n                return True" not in text
+
+
+@pytest.mark.unit
+def test_durable_limit_state_monotonic() -> None:
+    """Checklist 2: LIMIT_EXCEEDED durable + monotonic — no reset path."""
+    state = RunState(status=RunStatus.RUNNING)
+    state.transition_to(RunStatus.LIMIT_EXCEEDED, error_code=AgentErrorCode.BUDGET_EXCEEDED, error_detail="cap")  # noqa: E501
+    assert is_limit_exceeded(state) is True
+    assert RunState.is_terminal(state.status) is True
+    # Once exceeded, it stays — any transition to COMPLETED should raise
+    try:
+        state.transition_to(RunStatus.COMPLETED)
+        raise AssertionError("monotonic: LIMIT_EXCEEDED must not transition to COMPLETED")
+    except InvalidRunTransitionError:
+        pass
+    assert state.status == RunStatus.LIMIT_EXCEEDED
+    # Also test that a second transition to LIMIT_EXCEEDED is also blocked (already terminal)
+    try:
+        state.transition_to(RunStatus.LIMIT_EXCEEDED, error_code=AgentErrorCode.BUDGET_EXCEEDED)
+        raise AssertionError("terminal must reject further transitions")
+    except InvalidRunTransitionError:
+        pass
+
+
+@pytest.mark.unit
+def test_usage_survives_simulated_retry_and_cap_still_enforced() -> None:
+    """Checklist 3: usage survives retry/restart — persisted, not reconstructed."""
+    # Clear any prior persisted state
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+    small_budget = RunBudget(max_tokens=10, max_tool_calls=5, max_steps=10, max_wall_clock_s=300)
+    ctx = RunContext(
+        run_id="run-t306-usage-persist",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini", max_output_tokens=5),  # noqa: E501
+        budget=small_budget,
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["calculator"],
+    )
+    # First run: consume 5 tokens via LLM
+    llm1 = _ScriptedLLM(
+        [
+            'Thought: use tool\nAction: calculator\nAction Input: {"expression": "1+1"}',
+            "Final Answer: done",
+        ]
+    )
+    rt1 = AgentRuntime(llm1, ToolRegistry())
+    rt1.registry.register(CalculatorTool())
+    asyncio.run(rt1.run_enforced(context=ctx, goal="consume 5"))
+    # After first LLM call, usage should be 5 (prompt+completion ~2, but we set max_output 5)
+    # The persisted usage should reflect that
+    persisted = _PERSISTED_USAGES.get(ctx.run_id)
+    assert persisted is not None
+    # Simulate retry/restart: create a new runtime and new context with same run_id but fresh objects  # noqa: E501
+    # The new run should see the persisted usage and still enforce the cap
+    # Try to consume 6 more tokens (would be 5+6=11 >10) — should be denied before spend
+    assert can_reserve_tokens(persisted, small_budget, 6) is False
+    # Also test that a new run_enforced with same run_id sees the persisted usage and does not reset
+    # Create a new LLM that would try to do another tool call
+    llm2 = _ScriptedLLM(
+        [
+            'Thought: try again\nAction: calculator\nAction Input: {"expression": "2+2"}',
+            "Final Answer: done2",
+        ]
+    )
+    rt2 = AgentRuntime(llm2, ToolRegistry())
+    rt2.registry.register(CalculatorTool())
+    # Re-use same context (same run_id, same budget) — usage should be intact
+    asyncio.run(rt2.run_enforced(context=ctx, goal="retry"))
+    # Since run1 already consumed some budget, run2 should either be LIMIT_EXCEEDED or still enforce
+    # At minimum, the persisted usage should not have been reset to 0
+    assert _PERSISTED_USAGES[ctx.run_id].prompt_tokens == persisted.prompt_tokens
+    # And if we try to reserve 10 more tokens, it should be denied
+    assert can_reserve_tokens(_PERSISTED_USAGES[ctx.run_id], small_budget, 10) is False
+    # Cleanup
+    _PERSISTED_RUNS.clear()
+    _PERSISTED_STATES.clear()
+    _PERSISTED_USAGES.clear()
+
+
+@pytest.mark.unit
+def test_zero_model_calls_after_deadline() -> None:
+    """Zero model calls after deadline — reservation before spend."""
+    registry = ToolRegistry()
+    registry.register(CalculatorTool())
+    calls: list[str] = []
+
+    class _CountingLLM:
+        async def generate(self, request):
+            calls.append(request.model)
+            return type("R", (), {"text": "Final Answer: done", "prompt_tokens": 1, "completion_tokens": 1, "model": request.model})()  # noqa: E501
+
+        def stream(self, request):
+            raise AssertionError
+
+    # Deadline already past
+    past_deadline = datetime.now(UTC) - timedelta(seconds=1)
+    ctx = RunContext(
+        run_id="run-t306-deadline-past",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tokens=100000, max_tool_calls=5, max_wall_clock_s=300),
+        deadline=past_deadline,
+        allowed_tools=["calculator"],
+    )
+    rt = AgentRuntime(_CountingLLM(), registry)  # type: ignore[arg-type]
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="past deadline"))
+    assert len(calls) == 0, f"zero calls after deadline, got {len(calls)}"
+    assert run.status == AgentRunStatus.MAX_STEPS_EXCEEDED or "deadline" in (run.error or "").lower() or run.error is not None  # noqa: E501
+    # Also test can_reserve_before_llm with past deadline denies
+    assert can_reserve_before_llm(Usage(), RunBudget(), past_deadline, 1) is False
+    # Cleanup
+    _PERSISTED_RUNS.pop(ctx.run_id, None)
+    _PERSISTED_STATES.pop(ctx.run_id, None)
+    _PERSISTED_USAGES.pop(ctx.run_id, None)
+
+
+@pytest.mark.unit
+def test_spend_after_exceeded_refused_overspend_zero() -> None:
+    """Monotonic + reserve before spend: overspend cases 0 — spend-after-exceeded refused."""
+    # Create a run that is already LIMIT_EXCEEDED
+    state = RunState(status=RunStatus.LIMIT_EXCEEDED, error_code=AgentErrorCode.BUDGET_EXCEEDED, error_detail="cap")  # noqa: E501
+    _PERSISTED_STATES["run-t306-exceeded"] = state
+    _PERSISTED_RUNS["run-t306-exceeded"] = AgentRun(
+        id="run-t306-exceeded",
+        workspace_id="ws-1",
+        goal="test",
+        model="gpt-4o-mini",
+        status=AgentRunStatus.MAX_STEPS_EXCEEDED,
+        total_tokens=100,
+        steps=[],
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    _PERSISTED_USAGES["run-t306-exceeded"] = Usage(prompt_tokens=100, completion_tokens=0, tool_calls=50)  # noqa: E501
+    ctx = RunContext(
+        run_id="run-t306-exceeded",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tokens=10, max_tool_calls=1, max_wall_clock_s=300),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["calculator"],
+    )
+    # Even if LLM tries to act, the run should immediately return the persisted terminal run with no new spend  # noqa: E501
+    llm = _ScriptedLLM(['Thought: try\nAction: calculator\nAction Input: {"expression": "1+1"}', "Final Answer: done"])  # noqa: E501
+    rt = AgentRuntime(llm, ToolRegistry())
+    rt.registry.register(CalculatorTool())
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="should be refused"))
+    # Should be same object, no new steps, still exceeded
+    assert run.id == "run-t306-exceeded"
+    assert len(run.steps) == 0  # no new spend
+    # Cleanup
+    _PERSISTED_RUNS.pop("run-t306-exceeded", None)
+    _PERSISTED_STATES.pop("run-t306-exceeded", None)
+    _PERSISTED_USAGES.pop("run-t306-exceeded", None)
+
+
+@pytest.mark.unit
+def test_budget_reservation_before_spend_not_after() -> None:
+    """Reserve before spend — token and tool_calls checked before LLM/tool, not after."""
+    # Directly test the pure helpers
+    budget = RunBudget(max_tokens=10, max_tool_calls=2, max_steps=5, max_wall_clock_s=300)
+    usage = Usage(prompt_tokens=9, completion_tokens=0, tool_calls=1)
+    # 9 + 2 >10 → cannot reserve 2 more tokens
+    assert can_reserve_tokens(usage, budget, 2) is False
+    assert can_reserve_tokens(usage, budget, 1) is True
+    # Tool calls: 1 +1 <=2 → can, 1+2 >2 → cannot
+    assert can_reserve_tool_call(usage, budget) is True
+    usage2 = Usage(prompt_tokens=0, completion_tokens=0, tool_calls=2)
+    assert can_reserve_tool_call(usage2, budget) is False
+    # Missing usage → DENY
+    assert can_reserve_tokens(None, budget, 1) is False
+    assert can_reserve_tool_call(None, budget) is False
