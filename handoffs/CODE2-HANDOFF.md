@@ -1746,3 +1746,80 @@ PROGRESS ROW — TASK: T-V1-061 readiness probe, opening slice — READ-ONLY, di
 PROGRESS ROW — FINDING: **the Q9 harness is hermetic and never touches bge-m3, Qdrant, Infinity, the worker, a DB, or any collection — so dev1's T-060 switch neither blocks nor unblocks it, and the run phase can execute immediately.** Verified by grep (zero `qdrant|collection|alias|dimension|bge|embed|infinity|1024|768` hits in the Q9 path — the single hit is the docstring *denying* the dependency), zero model/env imports in the import closure, and an import-only probe that loaded the module and read 50 records **without calling `main()`** (no bench run, no embed, no search, no model). Entry command is `/root/ko-venv/bin/python3 evals/q9_run_benchmark.py` from repo root; **`evals/run_q9_benchmark.py` must NOT be used** — its citation check compares `source_id` against itself so it is tautologically 1.0 and cannot fail. Prior baseline for apples-to-apples: OVERALL groundedness **0.9888** / cite_validity **1.0000** on n=50 (en 1.0000, ro 1.0000, pt 0.9853, tables 1.0000, multi 0.9586), from `handoffs/CLINE1-V1-Q8-Q9-R1.md`.
 PROGRESS ROW — FLAGS: **(1) LOUD/coordinator: this harness cannot satisfy "re-verification on real bge-m3" — it supplies its own gold-context retrieval, so a green gate here would not evidence bge-m3; decide whether the V1 gate is the oracle or needs a live-index bench.** (2) LOUD: running `run_q9_benchmark.py` yields a meaningless PASS, and `reviews/V1-Q8-Q9-REVIEW-1.md` scoped that weaker file while the gate test + metrics use `q9_run_benchmark.py` — trail disagrees with measured artifact. (3) Do NOT rebuild slices — tracked frozen snapshot, rebuild would break the 0.9888 comparison. (4) Nothing to re-pin: no model pin, dims, collection name or credential on this path. (5) Card's `V1-Q8-Q9-BENCHMARK.md` does not exist in tree. (6) Run attached in foreground with transcript captured — closes the provenance gap, since the prior command exists only as a docstring, never as a logged invocation.
 PROGRESS ROW — NEXT: push DONE-readiness to w5:p4 (plain prompt, no --wait) and go idle; the RUN phase dispatches post-switch.
+---
+
+## 2026-10-13 T-V1-061a (hermetic Q9 bench re-run) — code2 (solo, allowlisted)
+
+TASK: T-V1-061a — re-run the hermetic Q9 bench now, as the coherent half of T-061 (answer layer: verification + disclosure, given gold context). MuseR ruled on my T-061 FLAG-1 and split the ticket. Start HEAD `196c3ad` → end HEAD `196c3ad` (**UNMOVED**). Allowed: `handoffs/T-V1-061A-TRANSCRIPT.md` + `handoffs/CODE2-HANDOFF.md` only.
+
+### VERDICT: **GATE PASS** — groundedness **0.9888** (>= 0.90), citation validity **1.0000** (== 1.0), exit 0 — **bit-identical to the 2026-10-12 baseline on all 6 rows, zero drift.**
+
+| slice | n | groundedness base → re-run | Δ | cite_validity base → re-run | Δ |
+|---|---|---|---|---|---|
+| en | 10 | 1.0000 → 1.0000 | **0** | 1.0000 → 1.0000 | **0** |
+| ro | 10 | 1.0000 → 1.0000 | **0** | 1.0000 → 1.0000 | **0** |
+| pt | 10 | 0.9853 → 0.9853 | **0** | 1.0000 → 1.0000 | **0** |
+| tables | 10 | 1.0000 → 1.0000 | **0** | 1.0000 → 1.0000 | **0** |
+| multi | 10 | 0.9586 → 0.9586 | **0** | 1.0000 → 1.0000 | **0** |
+| **OVERALL** | **50** | **0.9888 → 0.9888** | **0** | **1.0000 → 1.0000** | **0** |
+
+Per-slice failure ids: **none on any slice**.
+
+CHANGE:
+- `handoffs/T-V1-061A-TRANSCRIPT.md` — **NEW.** Verbatim transcript: UTC timestamp, HEAD, **sha256 of both the harness and the slices file**, interpreter, the literal command, the unedited terminal output, exit status, the per-slice table above, and reproduction steps. This is the artefact that closes my T-061 FLAG-6 — the prior pass left no logged invocation anywhere in the repo.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+**No product code, no slices, no harness edits.** `git status --short evals/` was empty before and after; the frozen snapshot was read, never rebuilt; `evals/run_q9_benchmark.py` was not run.
+
+### THE DISCLOSURE THAT MATTERS MOST — this run does not re-evidence T-052
+
+The ticket's premise was that the baseline "predates T-052's all-paths rewrite of every return path, so a re-run genuinely re-evidences something." **That premise does not hold for this harness, and the zero drift proves it rather than my merely asserting it.**
+
+The bench imports `answer.models.Claim` and `answer.verification.{ExtractiveGrounder, verify_claims}` — **never `answer.engine`, never `answer()`** — and calls `verify_claims` directly with in-memory `items` and `chunk_lookup=None`. `answer/verification.py` imports `.hydration`, never `.engine`.
+
+Empirical proof: **`packages/answer/engine.py` has been modified 5 times since the baseline** — `f2e29cd` (T-026), `7ce9711` (T-031), `0d3e0ec` (T-031b), `01e1add` (T-051), `2a6a806` (T-052) — and these six metrics moved by **exactly zero**. A harness that actually exercised the rewritten return paths could not be that insensitive.
+
+**So: do not cite this PASS as evidence for T-V1-052.** T-052's correct gate remains `tests/unit/test_answer_lost_region_disclosure.py`. Recorded because the honest reading and the flattering one diverge here, and the flattering one is the one that would get written into a report.
+
+### WHAT THIS RUN DOES legitimately re-evidence
+
+- `verify_claims` + `ExtractiveGrounder` — the answer-layer verification/disclosure primitives — green on all 50 pinned records, with the fabricated `dead-fabricated-chunk` asserted on every record and surviving **zero** times.
+- **A real post-baseline no-regression check:** `packages/answer/verification.py` was last changed by `8273fdb` (T-V1-024) on **2026-10-13**, i.e. *after* the 2026-10-12 baseline, and these metrics did not move. That is the genuine value this re-run buys — T-024 did not regress the verification path.
+- **Determinism:** two independent executions (the 2026-10-12 baseline and today's) of the same frozen snapshot produce identical 4-decimal output.
+
+Consistent with museR's ruling and T-061: this is the answer-layer half only. It says **nothing** about embeddings or the live retrieval leg (T-061b), exactly as ruled.
+
+### WHY / REUSED / BUILT
+
+**WHY:** the answer-layer verification/disclosure gate is the only V1 acceptance evidence that is executable without the switch, and it had no verbatim record — every prior citation of `0.9888 / 1.0000` traced to a handoff table, never to a log. This produces the missing record and closes the provenance gap, while establishing exactly what the number does and does not cover.
+
+**REUSED:** the existing harness `evals/q9_run_benchmark.py` and the frozen pinned slices `evals/q8_eval_slices.jsonl` (sha256 pinned above). No new harness, no new dataset, no reimplementation — the point of this ticket is an honest re-measurement, not a new measurement apparatus.
+
+**BUILT: nothing.** Two documentation files. No code, no data, no config.
+
+### VERIFY — commands and outputs
+
+1. `git status --short` at START — pasted in full; 25 dirty paths, **all foreign**; `evals/` clean; index empty.
+2. `date -u` / `git rev-parse HEAD` / `sha256sum` (harness + slices) / `stat` (slices mtime) — captured pre-run, recorded in §1 of the transcript.
+3. **`/root/ko-venv/bin/python3 evals/q9_run_benchmark.py`** — **attached in the foreground**, output piped to `tee`, exit **0**. Output reproduced verbatim in §2 of the transcript: `GATE: PASS — groundedness 0.9888 (>= 0.9), citation_validity 1.0000 (== 1.0)`.
+4. Reachability check for the T-052 claim: `grep -nE "answer\.engine|answer\(|_finalize|hydrate" evals/q9_run_benchmark.py` → only the two `from answer...` imports; `git log --oneline --since=2026-10-12 -- packages/answer/engine.py` → 5 commits; `grep` of `verification.py` imports → `.hydration`, no `.engine`.
+5. `git status --short` at END — pasted in full; delta vs start is exactly my 2 allowed paths.
+
+### RISKS
+
+- **(a) The headline risk is mis-citation, and it is live.** A green `0.9888 / 1.0000` sitting in a transcript is exactly the kind of number that gets quoted as "T-052 verified" or "bge-m3 verified". Neither is true. §4 of the transcript states both exclusions in the same file a reader will actually open, precisely so the caveat travels with the number.
+- **(b) A bit-identical result looks like a stub.** It is not — but the reader should know *why* it is identical (frozen snapshot + deterministic lexical harness + a code path that excludes `engine.py`), or "identical" reads as "did nothing". Explained in §4 rather than left to be inferred.
+- **(c) Single execution.** Determinism is argued from two runs separated by a day on an unchanged snapshot, not from N repetitions in one session. Adequate for a deterministic pure function; stated rather than implied.
+- **(d) I did not run `tests/integration/test_benchmark_gate.py`.** It calls `run_benchmark`, i.e. it is a second bench execution, and this ticket scoped one run. Its 3 green tests remain sourced from the prior handoff, not from today.
+- **(e) Box contention is irrelevant here by construction** — hermetic, CPU-light, no model load, no workers, no services. Recorded so the low memory pressure is understood as a property of the harness, not luck.
+- **(f) FOREIGN CHURN — not mine.** 25 dirty paths (V4/workflow-engine stream + `handoffs/*`); none opened, staged, edited or reverted. HEAD unmoved. No commit, deploy, restart or compose.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1061a_{start,end}_status.txt`):
+- **start** (HEAD `196c3ad`): 25 dirty paths, **all FOREIGN**. `git status --short evals/` empty. Index empty.
+- **end** (HEAD `196c3ad`, **UNMOVED**): the same foreign set **plus exactly my 2 allowed paths** — `?? handoffs/T-V1-061A-TRANSCRIPT.md` (new) and `M handoffs/CODE2-HANDOFF.md` (this row).
+- 0 foreign paths added, modified or removed; `evals/` untouched start-to-finish; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-061a hermetic Q9 bench re-run (answer-layer half of the split T-061).
+PROGRESS ROW — VERDICT: **GATE PASS — groundedness 0.9888 (>= 0.90), citation validity 1.0000 (== 1.0), exit 0, bit-identical to the 2026-10-12 baseline on all 6 rows (en 1.0000, ro 1.0000, pt 0.9853, tables 1.0000, multi 0.9586, OVERALL 0.9888 / 1.0000), zero drift, no per-slice failures.** Run attached in the foreground with a verbatim transcript at `handoffs/T-V1-061A-TRANSCRIPT.md` carrying UTC timestamp, HEAD `196c3ad`, and sha256 of both harness and the frozen slices file — closing T-061 FLAG-6's provenance gap.
+PROGRESS ROW — DISCLOSURE (most important): **this PASS must NOT be cited as T-052 evidence.** The premise that the re-run re-evidences T-052's all-paths `_finalize` rewrite does not hold: the bench imports `answer.models` + `answer.verification` and never imports `answer.engine` nor calls `answer()` (it calls `verify_claims` directly with in-memory items, `chunk_lookup=None`; `verification.py` imports `.hydration`, not `.engine`). Empirically, **`engine.py` changed 5× since the baseline (T-026/031/031b/051/052) and these six metrics moved by exactly zero.** T-052's gate stays `tests/unit/test_answer_lost_region_disclosure.py`. What this run *does* validly evidence: `verify_claims` + `ExtractiveGrounder` green on all 50 records with the fabricated `dead-fabricated-chunk` surviving zero times, plus a real post-baseline no-regression check — `verification.py` was changed by `8273fdb` (T-024) on 2026-10-13, after the baseline, with no metric movement. Per museR's ruling, says nothing about embeddings/retrieval (that is T-061b).
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle; T-061b dispatches post-switch.
