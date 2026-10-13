@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 from connectors import ConnectorConfig, ConnectorKind
 from connectors.adapters import GitConnector, LocalFolderConnector, S3Connector, WebConnector
-from connectors.adapters.git_connector import RepoScope, classify_repo
+from connectors.adapters.git_connector import GitSourceRefused, RepoScope, classify_repo
 from connectors.adapters.web_connector import OutOfScopeRedirect, origin_of, resolve_redirect
 from connectors.interfaces import (
     SourceItem,
@@ -95,12 +95,31 @@ def test_classify_repo_pins_local_versus_remote(repo: str, expected: RepoScope) 
         "git@example.com:team/repo.git",
     ],
 )
-async def test_git_rejects_remote_repositories_before_touching_git(repo: str) -> None:
+async def test_git_never_hands_a_remote_url_to_the_read_transport(
+    repo: str, tmp_path
+) -> None:
+    """T-V1-040 (renamed): remotes are ACQUIRED, never blind-passed to ``git -C``.
+
+    The old name pinned an outright refusal, which this ticket replaces with
+    explicit bounded acquisition. What must still hold is the invariant that
+    name was really guarding — **not one read command ever sees the URL**. With
+    no acquisition available (no cloner, no reachable remote) the source is
+    refused loudly as a ``GitSourceRefused`` and nothing runs at all.
+    """
     runner = RecordingRunner()
-    conn = GitConnector(runner=runner)
-    with pytest.raises(ValueError, match="LOCAL checkout"):
+
+    def no_acquisition(url: str, dest: str) -> None:
+        # Stands in for "the acquisition could not happen" (unreachable
+        # remote). Deliberately not a real network attempt: this file must be
+        # green with compose down and no egress.
+        raise RuntimeError("unreachable")
+
+    conn = GitConnector(
+        runner=runner, scratch_root=str(tmp_path), cloner=no_acquisition
+    )
+    with pytest.raises(GitSourceRefused):
         await conn.discover(_git_config(repo=repo))
-    with pytest.raises(ValueError, match="LOCAL checkout"):
+    with pytest.raises(GitSourceRefused):
         await conn.fetch(
             _git_config(repo=repo), SourceItem(external_id="x", name="x")
         )
