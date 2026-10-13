@@ -3780,3 +3780,114 @@ GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv4016_start.txt
 - 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys,
   0 restarts, 0 compose changes, index left empty. Attribution worktree used
   (and removed) read-only at /tmp/opencode/tv4016-base, never in my way.
+---
+
+## T-V4-017 — W4 versioned draft/revision store (in-memory, ABC seam)
+
+```text
+TASK: T-V4-017 (W4) — versioned draft/revision store for workflow definitions,
+       so approval gates (018+) can be about *one specific revision*.
+CHANGE: packages/workflow_engine/store_discipline.py (NEW) — shared store
+        discipline: canonical_bytes(), enforce_bounds() (refuse, never truncate),
+        find_secret()/find_secret_in_config()/assert_no_secret_config() (fail
+        closed on deny-listed config keys + secret-shaped values), redact()/
+        redact_text()/build_summary() (bounded redacted projections).
+        packages/workflow_engine/draft_store.py (NEW) — DraftRevision (wraps the
+        system's own WorkflowRevision), DraftStore ABC (save_draft/revise/get/
+        latest/history/count/workflow_ids — create/read/list only), InMemoryDraftStore,
+        DraftRevisionError family, assert_append_only(), verify_revision().
+        tests/unit/test_workflow_draft_store.py (NEW) — 28 tests.
+        NO existing file modified: no hunk in compiler/interfaces/__init__/
+        validator/executor/checkpoint/v3_adapter or any existing test file.
+WHY:    Cards: append-only history (no update/delete path exists), content-hash
+        identity with 0 collisions, store discipline same as T-V4-016.
+        Deliberate design call, disclosed: redaction is applied to the store's
+        *projection* (summary/journal) and secrets in node config are *refused*
+        at the boundary, rather than redacting the stored spec. Redacting the
+        spec would change its canonical bytes and therefore its content_hash —
+        a store that rewrote content on the way in could never hand back the
+        revision the compiler hashed, so identity integrity wins and the card's
+        "redacted payload" is honoured on the projection surface. Told, not
+        silently deviated.
+REUSED: WorkflowRevision.create() + _canonical_payload (T-V4-008, dev1) for
+        revision identity — the same canonical, process-independent SHA-256 the
+        compiler and executor verify, so there is exactly ONE hash function in
+        play and a stored revision is accepted downstream without re-derivation.
+        V3 StepStore / my T-V4-016 checkpoint store DISCIPLINE mirrored
+        (append-only, monotonic, bounded, secret-free at the boundary) as a
+        separate implementation — no V3 product code across the seam. No new
+        hash, no new canonicalization written by me.
+BUILT:  DraftStore ABC + in-memory implementation behind it (durable backend is
+        the follow-up — same as Sqlite following InMemory in T-V4-016, per card).
+        Content-addressed idempotency (same content as head -> no new revision,
+        no history growth), monotonic per-workflow numbering never reused
+        (a revert is a NEW revision, not a rewrite), workspace/id guards
+        (fail closed, leaving history untouched), deep-copy in and out so no
+        caller can mutate a stored revision, assert_append_only() surface check,
+        verify_revision() integrity re-check, bounded redacted summaries.
+VERIFY: tests/unit/test_workflow_draft_store.py → 28 passed (2.3s).
+        both stores (draft + checkpoint) → 42 passed.
+        tests/unit -k workflow → 492 passed, 0 failed.
+        tests/unit (full) → 1664 passed, 1 warning, 0 failed.
+        ruff check packages/workflow_engine/ + my test → All checks passed.
+        mypy packages/workflow_engine/ → Success, no issues in 12 source files.
+        METRICS: history rewrite/deletion possible = NO. Structural: the ABC
+        surface is exactly [count, get, history, latest, revise, save_draft,
+        workflow_ids] — no update/delete/remove/overwrite/replace/clear/truncate/
+        rewrite/purge exists (asserted by name + assert_append_only()); revision 1
+        reads back byte-identical after 3 further revisions; mutating a returned
+        copy (or the caller's object after save) cannot change the store; refused
+        writes leave history untouched.
+        revision identity collisions = 0. Identical content -> identical hash and
+        an idempotent no-op (count stays 1); ANY byte change -> different hash
+        (description byte 1 vs 2, trailing space, node name, node added, workflow
+        name, workspace); 6 distinct definitions -> 6 distinct identities, each
+        mapping back to exactly its canonical bytes; hash is process/seed
+        independent (PYTHONHASHSEED 0/1/12345/99999 in subprocesses -> ONE hash,
+        which is what proves workspace_capabilities set-ordering cannot alias).
+RISKS:  1. SELF-DISCLOSURE — 6 failures on my first run; 4 were MY TEST bugs
+        (wrong store keys, wrong comparison target, marginal payload sizing,
+        subprocess sys.path) but 2 were REAL DEFECTS in my new discipline code,
+        both found by my own tests and fixed, not re-run away:
+        (a) _DENY_ASSIGNMENT did not match JSON-quoted keys, so
+        {"password": "hunter2"} slipped through the secret gate — replaced with
+        a key-token config scan (authorization/http_authorization/auth_token
+        caught; author/tokenizer not);
+        (b) the pattern rewrite used \1[REDACTED] on patterns whose capture group
+        IS the secret, so redaction appended "[REDACTED]" while leaving the
+        secret in place — replaced with explicit (pattern, replacement) pairs.
+        2. Design deviation from the card's literal "redacted payload" wording:
+        secrets in node config are REFUSED, not redacted (see WHY). Config keys
+        named auth/password/token/authorization make a draft unsavable; node
+        ids/names/descriptions are deliberately NOT scanned so a node named
+        auth_check still saves. Expect false positives only on config keys, not
+        on names.
+        3. InMemoryDraftStore is NOT concurrency-safe for interleaved writes to
+        one workflow id (documented in the class docstring); the durable backend
+        is the concurrent one and is deliberately not built here.
+        4. checkpoint.py (T-V4-016) keeps its own private redaction helpers
+        because it is committed and out of this ticket's allowlist. I probed it
+        for the same \1 pattern and empirically it does NOT leak (its deny-key
+        branch runs before the pattern stage) — reported as a latent robustness
+        nit for a future unification, NOT a defect, and I did not touch it.
+        5. Route/discovery: __init__.py was NOT touched (dev1 owns that file and
+        was live-editing it), so the store is importable as
+        workflow_engine.draft_store / workflow_engine.store_discipline and is not
+        re-exported at package level yet. That re-export is a 1-line follow-up
+        once dev1's __init__ edits settle.
+        6. Tree moved under me mid-ticket (HEAD 1c1b785 → 5de416c as the
+        coordinator committed dev1's compiler/interfaces work); my numbers are
+        from the final tree, where the 5 foreign reds from T-V4-016 are gone.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4017_{start,end}.txt):
+- START (HEAD `1c1b785`): 28 dirty paths — 5 modified handoffs + dev1's live
+  `__init__.py`/`compiler.py`/`interfaces.py` + 3 modified workflow test files +
+  dev1's untracked `test_workflow_compiler_determinism.py`. Index empty.
+- END (HEAD `5de416c`): the coordinator committed dev1's work mid-ticket, so
+  those 6 tracked + 1 untracked dev1 paths are GONE from the status, and my
+  three new files plus this handoff row are the only delta:
+  `?? packages/workflow_engine/store_discipline.py`, `?? packages/workflow_engine/
+  draft_store.py`, `?? tests/unit/test_workflow_draft_store.py`,
+  ` M handoffs/CODE2-HANDOFF.md`.
+- 0 foreign paths modified by me (verified by diffing START vs END snapshots);
+  0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
