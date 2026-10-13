@@ -1520,3 +1520,60 @@ PROGRESS ROW — TASK: T-V1-065 re-point the crash worker's parse stall (impleme
 PROGRESS ROW — DONE: the parse stall seam now wraps `parse_with_precedence` — the resolve-and-invoke site — instead of `parser_for_mime`, which T-031 reduced to an `is None` check, so the wrapper used to be built and discarded and the stage could never fire. Stall-then-delegate contract preserved; the four other seams and the recovery path untouched. **Parse marker 0/4 → 1/1, `test_crash_during_parse` FAIL → PASS (1 passed in 70.27s)**, proved by the `parse.stalled` marker and the worker's own `STALL_REACHED stage=parse` line, not just by a green test. One file, 2 hunks, no product code, no call-site change needed, ruff + py_compile clean, 0 orphans. The other 6 crash failures are the separate T-1-064 harness race, still filed.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-066 (crash harness: per-cycle teardown + marker-dir sweep) — code2 (solo, allowlisted)
+
+TASK: T-V1-066. Repo `Super Rag/knowledge-os`. Start HEAD `405da23` → end HEAD `405da23` (**UNMOVED**). Allowed: `tests/integration/test_crash_recovery.py` — **teardown/fixture/sweep code only**.
+
+**T-V1-064's hypothesis is now pinned, with a mechanism.** Reading `_scenario`: when a stall stage never fires, `crash.wait_stalled()` raises **before** `crash.kill()` — there is no `finally` around the crash worker (only around `recovery`). So that worker survives into the next cycle, still holding the shared module-scoped `QUEUE_PREFIX`, and can claim the *next* cycle's job. That is the cross-cycle interference, and it explains why the leftover workers logged only `ingest_claims_recovered`: they were busy with someone else's job.
+
+CHANGE (**1 path, +47/−1, 4 hunks — all fixture/harness**):
+- `tests/integration/test_crash_recovery.py` —
+  **Per-cycle teardown.** `_await_workers_gone(timeout)` **polls** `proc.poll()` every `_CYCLE_POLL_INTERVAL = 0.1s` up to `_CYCLE_GONE_TIMEOUT = 10.0s` and returns the instant the last worker is actually gone — a bounded poll, not a blanket sleep (nothing sleeps for a fixed period hoping it was enough). `_CrashWorker.start()` calls `_reap_all_workers()` + `_await_workers_gone()` **before** spawning, so every cycle begins from a provably-empty worker set regardless of how the previous cycle exited (pass, assert-fail, or timeout). If a worker somehow survives the bound it prints a `WARNING t021: workers still alive…` with names rather than hanging. Placed in the harness class — **not** the scenario helper — deliberately: it needs no test-body or assertion edit and holds on *any* exit path.
+  **Marker-dir sweep.** The module-scoped `marker_dir` fixture now removes the directory it created in a `finally`, so the FS no longer grows by one dir per run.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: two leaks (a process and a filesystem directory) that made the suite's failures look random. Both were in the harness, not the product, so both are fixed in the harness; per-cycle isolation is a *precondition* for the suite's results meaning anything.
+
+REUSED: none — no dependency, no new file, no product code, no new fixture library. Reuses T-054's existing group-kill reaper; this ticket only decides *when* it runs.
+
+BUILT: one bounded-poll helper, one pre-spawn handover in `start()`, one `finally` sweep. Nothing else custom.
+
+VERIFY (venv `/root/ko-venv`, **only the two chosen tests, twice, attached in the foreground shell, never detached, never the whole 350s file**; dev1's reindex running, ~2 GB available):
+
+- **THE METRIC — marker timing stable across 2 consecutive runs** (`test_crash_during_embed_is_redelivered` + `test_crash_at_publication_gate_is_idempotent`):
+
+| run | embed | publication | wall clock | `t021-markers-*` dirs after |
+|---|---|---|---|---|
+| **BEFORE** (T-064) | FAIL — `crash-4 never reached stage 'embed'` | FAIL — `crash-5 never reached stage 'publication'` | — | grew every run (28 accumulated) |
+| **run 1** | **PASS** | **PASS** | 44.85s | **28 (unchanged)** |
+| **run 2** | **PASS** | **PASS** | 86.75s | **28 (unchanged)** |
+
+- **Markers really fired in both runs**, and this is not a proxy: `wait_stalled()` returns *only* when `marker_path.exists()`, so a passing test is proof the marker was written. Both tests pass in both runs ⇒ both stall markers fired 2/2 each.
+- **Sweep proven, not assumed** → `ls -d /root/.tmp/t021-markers-*` counted **28 before run 1, 28 after run 1, 28 after run 2** — two full runs added zero directories.
+- **Scope discipline** → `git diff -U0` = 4 hunks, all in `marker_dir`, the constants block, the reaper helpers and `_CrashWorker.start()`. `git diff | grep -E "^[+-].*def test_|^[+-].*assert "` → **no hits**: no test body and no assertion changed. `STAGE_TIMEOUT`/`TERMINAL_TIMEOUT` are **not in the diff at all** — the 45s constant is untouched, so I did not conclude the timeout was the bug.
+- **Protected prior work verified present**: T-057 `_queue_namespace` (2 refs), T-054 nets (`start_new_session=True` / `os.killpg` / `_no_orphan_workers` / `T021_PARENT_PID`, 6 refs), T-065's `parse_with_precedence` seam (6 refs in the worker).
+- **Lint/compile** → `ruff check` on the touched file → **All checks passed!**; `py_compile` → OK.
+- **Hygiene** → **0 orphan** `t021_crash_worker` processes after both runs.
+
+METRICS: marker firing stable across 2 consecutive runs: **yes (2/2 both stages, both runs)**; embed + publication **FAIL → PASS**; marker-dir accumulation per run: **1 → 0**; cross-cycle worker carry-over: **eliminated by construction**; `STAGE_TIMEOUT` changes: **0**; test bodies / assertions changed: **0**; product-code changes: **0**; files changed: **1**; hunks: **4**; orphans after runs: **0**.
+
+REVIEWER CHECKLIST: per-cycle teardown is a bounded **poll** verified by `proc.poll()`, not a sleep, and it runs before every spawn so a leftover worker cannot claim the next cycle's job; the marker-dir sweep is scoped to the dir this module created and demonstrably adds zero directories across two runs; stability shown with a 2-run × 2-test table against the recorded BEFORE state.
+
+RISKS / DISCLOSED:
+- **(a) The sweep removes only *our own* marker dir, deliberately.** Older `t021-markers-*` dirs are left alone: they are diagnostic evidence — T-V1-064's entire root cause came from reading a failing worker's log out of one — so deleting another run's markers is not this harness's call. The **28 pre-existing accumulated dirs are still there**; the fix stops the bleeding, it does not clean the wound. A one-off `rm -rf /root/.tmp/t021-markers-*` is a coordinator call (needs dev1's reindex quiet).
+- **(b) Worker logs are now swept, which removes post-hoc evidence.** That is the intended behaviour but it cuts both ways: after a future failure I can no longer read the worker's log unless the run is inspected mid-flight. If a future failure needs that log, the sweep should be made opt-in (e.g. `T021_KEEP_MARKERS=1`) rather than removed — flagged, not done.
+- **(c) Per-cycle handover costs a reap + poll per spawn** (normally sub-millisecond, since the previous worker is already dead). Worst case it adds `_CYCLE_GONE_TIMEOUT` (10s) per cycle if a worker refuses to die; it does not sleep that long in the normal path.
+- **(d) Two runs of two tests is a small sample.** The card asked for exactly this and that is what is shown — but I am not claiming the remaining flakiness is *eliminated*, only that both chosen stages passed twice consecutively with marker dirs stable. Wall clock varied 44.85s → 86.75s between identical runs, which on this RAM-pinned box is contention, not harness cost.
+- **(e) This does not touch `wait_stalled`'s 45s `STAGE_TIMEOUT`.** If a stage genuinely needs longer than 45s on this box that would still fail — but the two stages I ran cleared it comfortably, so the constant is not currently the binding constraint and I left it alone per instruction.
+- **(f) FOREIGN CHURN — not mine.** 25 paths dirty at start (V4 stream + `handoffs/*`); none opened, staged, edited or reverted. HEAD unmoved across my ticket.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1066_{start,end}_status.txt`):
+- **start** (HEAD `405da23`): 25 dirty paths, **all FOREIGN** — `M handoffs/{CODE1,COORDINATOR,DEV21-V4,MUSER-LOOP-STATE,REW1-REVIEW,REW2-REVIEW}-HANDOFF.md`, `M packages/workflow_engine/adapters/langflow_adapter.py`, `M tests/unit/test_workflow_langflow_adapter.py`, plus untracked `handoffs/*`, `tests/fixtures/workflows/`, `tests/unit/test_workflow_langflow_fixture.py`. **None mine.** Index empty.
+- **end** (HEAD `405da23`, **UNMOVED**): the same foreign set **plus exactly my 1 allowed path** — `M tests/integration/test_crash_recovery.py` (+47/−1).
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty, 0 orphans.
+
+PROGRESS ROW — TASK: T-V1-066 crash harness per-cycle teardown + marker sweep (implemented, evidence captured).
+PROGRESS ROW — DONE: T-064's hypothesis pinned with a mechanism — when a stall stage never fires, `crash.wait_stalled()` raises **before** `crash.kill()` (no `finally` around the crash worker), so it survives into the next cycle under the shared prefix and claims that cycle's job. Fixed in harness code only: `_CrashWorker.start()` now reaps and **polls** (0.1s ticks, 10s bound, not a sleep) until every prior worker is verifiably gone before spawning, and the module-scoped `marker_dir` fixture sweeps the dir it created. **METRIC: embed + publication both PASS in 2 consecutive runs (2/2 each), marker dirs 28 → 28 → 28 (zero accumulation across two runs), 0 orphans.** `STAGE_TIMEOUT` untouched (not in the diff), no test body/assertion changed, no product code. Risks: (a) pre-existing 28 dirs deliberately left (diagnostic evidence — the T-064 root cause came from one; the sweep is the coordinator's call), (b) sweep removes post-hoc worker logs — flagged, not undone, (c) sub-ms cost per spawn, (d) 2×2 sample does not prove all flakiness is gone and wall clock varied 44.85s→86.75s under contention, (e) 45s timeout deliberately not raised, (f) foreign churn disclosed.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.

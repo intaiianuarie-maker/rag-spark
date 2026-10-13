@@ -129,7 +129,17 @@ def client() -> Generator:
 @pytest.fixture(scope="module")
 def marker_dir() -> Generator[Path, None, None]:
     path = Path(tempfile.mkdtemp(prefix="t021-markers-", dir=str(Path.home() / ".tmp")))
-    yield path
+    try:
+        yield path
+    finally:
+        # T-V1-066: sweep the dir this module created. These used to be left
+        # behind forever, one per run, so the FS accumulated without bound.
+        # Scoped deliberately to *our own* dir: older ``t021-markers-*`` dirs
+        # are diagnostic evidence (T-V1-064 read a failing worker's log out of
+        # one), so deleting another run's markers is not this harness's call.
+        import shutil
+
+        shutil.rmtree(path, ignore_errors=True)
 
 
 def _auth(token: str) -> dict[str, str]:
@@ -326,6 +336,13 @@ _SPAWNED: list[_CrashWorker] = []
 
 #: How long to wait for a killed group to actually disappear before escalating.
 _REAP_GRACE_SECONDS = 5.0
+#: T-V1-066 — per-cycle handover. A stage that never fires makes
+#: ``wait_stalled()`` raise *before* ``crash.kill()``, so that worker used to
+#: stay alive into the next cycle, still holding the shared module prefix, and
+#: could claim the next cycle's job. Each new cycle now reaps the previous ones
+#: and polls until they are verifiably gone before spawning.
+_CYCLE_GONE_TIMEOUT = 10.0
+_CYCLE_POLL_INTERVAL = 0.1
 #: The bracket keeps the pattern from matching this file's own pgrep argv.
 _ORPHAN_PATTERN = "t021_crash[_]worker"
 
@@ -368,6 +385,23 @@ def _reap_all_workers() -> None:
             pass
 
 
+def _await_workers_gone(timeout: float = _CYCLE_GONE_TIMEOUT) -> bool:
+    """Poll until every tracked worker is verifiably gone. Returns True if clean.
+
+    A **poll**, not a blanket sleep: each tick re-reads ``proc.poll()`` so we
+    return the instant the last worker is actually gone, and the bound is short
+    because a surviving process here is a bug to report, not a condition to
+    wait out.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        alive = [w for w in _SPAWNED if w.proc is not None and w.proc.poll() is None]
+        if not alive:
+            return True
+        time.sleep(_CYCLE_POLL_INTERVAL)
+    return not [w for w in _SPAWNED if w.proc is not None and w.proc.poll() is None]
+
+
 @pytest.fixture(scope="session", autouse=True)
 def _no_orphan_workers() -> Generator[None, None, None]:
     """T-V1-054: after this module runs, not one crash worker may remain.
@@ -406,6 +440,18 @@ class _CrashWorker:
         self.started_at = 0.0
 
     def start(self) -> None:
+        # T-V1-066 — per-cycle handover. Every cycle in this module shares one
+        # QUEUE_PREFIX, so a worker left over from a previous cycle can claim
+        # the *next* cycle's job and starve its stall seam (T-V1-064's
+        # unpinned hypothesis, now pinned: a stage that never fires aborts the
+        # scenario *before* ``crash.kill()``, so the worker really does survive
+        # into the following cycle). Reap and poll-verify before spawning, so
+        # each cycle starts from a provably empty worker set.
+        if _SPAWNED:
+            _reap_all_workers()
+            if not _await_workers_gone():
+                stragglers = [w.name for w in _SPAWNED if w.proc and w.proc.poll() is None]
+                print(f"WARNING t021: workers still alive after wait: {stragglers}")
         env = dict(os.environ)
         env["PYTHONPATH"] = os.pathsep.join(
             [str(REPO_ROOT / "packages"), str(REPO_ROOT / "apps" / "worker")]
