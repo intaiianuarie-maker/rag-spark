@@ -1084,67 +1084,52 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         if document.title is None:
             document.title = result.metadata.title
 
-    # Optional Graph Extraction & Indexing (V2 / RP-04 / QF-04). Runs after
-    # the T-V1-019 gate for the same reason: a fenced generation must leave
-    # no index rows behind, and the partial disclosure below only belongs on
-    # a job that actually publishes.
+    # Optional Graph Extraction (V2 / T-V2-001). Queued, not inline.
+    # The ingest pipeline no longer blocks on extraction and never risks a
+    # silent READY with missing graph rows due to an inline failure. When
+    # GRAPH_MODE=off the check below is the ONLY work (no enqueue, no DB,
+    # ~zero overhead, byte-identical to v1). When on, one durable enqueue
+    # hands the version's chunks to the graph worker; that worker's own
+    # T-V1-020 claim/ack, visible park codes and retry-not-resurrect handle
+    # extraction failures loudly, never as a silent READY.
     graph_mode_val = os.environ.get("GRAPH_MODE", "off").strip().lower()
     if graph_mode_val in ("rule", "llm"):
         try:
-            from graph.extractor import GraphChunk, RuleBasedGraphExtractor
-            from graph.factory import graph_db_path
-            from graph.sqlite_store import SQLiteGraphStore
+            # Lazy import keeps flag-off path from touching graph code at all
+            from jobs.graph_extraction import enqueue_graph_extraction
 
-            graph_store = SQLiteGraphStore(graph_db_path())
-            extractor = RuleBasedGraphExtractor()
-            graph_chunks = [
-                GraphChunk(
-                    chunk_id=str(id_map[c.id]),
-                    text=c.text,
-                    workspace_id=str(job.workspace_id),
-                    document_id=str(document.id) if document else None,
-                    page=c.page,
-                    section=c.section,
-                )
-                for c in result.chunks
-            ]
-            extraction_result = await extractor.extract(graph_chunks)
-            if extraction_result.entities:
-                await graph_store.upsert_entities(str(job.workspace_id), extraction_result.entities)
-            if extraction_result.relationships:
-                await graph_store.upsert_relationships(
-                    str(job.workspace_id), extraction_result.relationships
-                )
-            if extraction_result.communities:
-                await graph_store.upsert_communities(
-                    str(job.workspace_id), extraction_result.communities
-                )
+            await enqueue_graph_extraction(
+                workspace_id=str(job.workspace_id),
+                document_id=str(document.id) if document else "",
+                version_id=str(version.id),
+            )
             logger.info(
-                "graph_extraction_indexed",
+                "graph_job_enqueued",
                 extra={
-                    "event": "graph_extraction_indexed",
+                    "event": "graph_job_enqueued",
                     "job_id": str(job.id),
-                    "entities": len(extraction_result.entities),
-                    "relationships": len(extraction_result.relationships),
-                    "communities": len(extraction_result.communities),
+                    "workspace_id": str(job.workspace_id),
+                    "document_id": str(document.id) if document else "",
+                    "version_id": str(version.id),
                 },
             )
         except Exception as exc:
+            # Enqueue must be durable; a failed enqueue would leave no graph
+            # job to retry and thus a silent missing graph. Retry the ingest
+            # job so the enqueue is re-attempted visibly.
             logger.warning(
-                "graph_extraction_failed",
-                extra={"job_id": str(job.id), "error": str(exc)},
+                "graph_enqueue_failed",
+                extra={
+                    "event": "graph_enqueue_failed",
+                    "job_id": str(job.id),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
             )
-            # TASK-Q1: partial must be explicit, never a silent ready (V1 §5
-            # "no silent mandatory failures"). Disclosed through the existing
-            # error_code/error_message columns only (no migration) — the API
-            # surfaces them on an otherwise READY job via `_job_error`.
-            # TASK-Q1 partial reason — Q0 taxonomy code requested in handoff
-            # (packages/core/errors.py)
-            job.error_code = "GRAPH_INDEX_PARTIAL"
-            job.error_message = (
-                f"graph_extraction_failed: {type(exc).__name__}: {exc}"
-            )[:2000]
-            partial_reasons.append(f"graph_extraction_failed: {type(exc).__name__}: {exc}")
+            raise IngestPipelineError(
+                "GRAPH_ENQUEUE_FAILED",
+                f"graph enqueue failed: {type(exc).__name__}: {exc}",
+                retryable=True,
+            ) from exc
 
     #: T-V1-031: content that was only partially read is NOT a clean ``ready``.
     #: The chunks (and the readable text) are published so retrieval works over

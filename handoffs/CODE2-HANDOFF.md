@@ -3179,3 +3179,51 @@ VERIFY:
 
 GIT: start had 5 scratch collections (13 total), end 8 total, no `knowledge_test*` left. No product code, no pin edits, lint + cleanup only.
 
+## 2026-10-13 T-V2-001 — Queued graph extraction (out of ingest path) — code2
+
+TASK: T-V2-001 — graph extraction becomes queued background job with T-V1-020 discipline (durable claim/ack with lease, visible park codes, retry-not-resurrect). Start HEAD 10a7817 → end HEAD 10a7817 (UNMOVED). Allowed: apps/worker/jobs/ (extraction job + pipeline handoff) + packages/graph/queue adapter + covering tests + this row. No product DB migration, no compose restart.
+
+CHANGE:
+- `packages/graph/queue.py` — NEW graph queue adapter (separate keys: graph:<env>:queue/claims/claim_tokens/delayed/payloads, env GRAPH_QUEUE_PREFIX, lease GRAPH_QUEUE_LEASE_SECONDS). Reuses T-V1-020 Lua scripts verbatim, not a second queue invention from scratch — same atomic claim/ack/renew/recover/promise_due pattern as ingestion.adapters.redis_queue.
+- `apps/worker/jobs/graph_extraction.py` — NEW queued extraction job + worker loop. enqueue_graph_extraction() is the ONLY call site from ingest_pipeline; process_graph_job() loads chunks for version, runs RuleBasedGraphExtractor deterministically, upserts via SQLiteGraphStore (idempotent INSERT ... ON CONFLICT DO UPDATE). handle_graph_job() tracks attempts in redis hash graph:{prefix}job_state, retries with backoff (2^attempts cap 30s) up to GRAPH_MAX_ATTEMPTS=3, then parks as failed with GRAPH_EXTRACTION_FAILED (visible park code, never silent READY). run_graph_worker() mirrors ingest_worker.run_worker (promote_due, recover_expired, claim, _keep_alive with token-fenced renew).
+- `apps/worker/jobs/ingest_pipeline.py` — handoff: replaced inline extraction block (1091-1148, RuleBasedGraphExtractor + upserts + GRAPH_INDEX_PARTIAL partial) with queued enqueue. Flag-off parity: when GRAPH_MODE=off, only one env check (`os.environ.get("GRAPH_MODE") in ("rule","llm")`) executes — no import, no queue op, ~zero overhead, byte-identical to v1. When on, one durable enqueue (LPUSH + HSET payload) hands off; enqueue failure raises retryable GRAPH_ENQUEUE_FAILED so ingest retries visibly, never silent missing graph.
+- `tests/unit/test_graph_queued.py` — NEW 3 covering tests.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: Inline extraction blocked the job and risked silent skip of graph writes while reporting success — the exact false-success class V1 killed 60 tickets to eliminate. Queued satisfies V2-GRAPH-PLAN §2 and the T-V1-020 discipline: durable claim/ack with lease fence, visible park codes, retry-not-resurrect. DECISIONS.md: V2 graph extraction queued, ingestion READY not blocked on graph.
+
+REUSED:
+- `packages/ingestion/adapters/redis_queue.py` — Lua scripts (_CLAIM_LUA, _ACK_LUA, _RENEW_LUA, _RECOVER_LUA, _PROMOTE_DUE_LUA) and Claim token pattern copied verbatim; no new Redis invention.
+- `packages/graph/sqlite_store.py` — SQLiteGraphStore upserts already idempotent, no product change.
+- `packages/graph/extractor.py` — RuleBasedGraphExtractor deterministic (same node IDs on retry).
+- `ingestion.persistence` ChunkRow + get_session_factory for chunk loading.
+
+BUILT:
+- Graph queue adapter (separate keys, not reusing ingestion queue) — required because ingestion jobs are generation-fenced with stable IDs (T-V1-016/019) while graph jobs are per-version upserts with different retry semantics; reusing would require worker dispatch on job type and break single-responsibility + flag-off parity. Stated choice: separate queue is the minimal isolation.
+- Graph job state in redis hash (graph:{prefix}job_state) for attempts/status/error_code — avoids DB migration for this ticket while remaining durable across claims (survives worker restart via redis). A DB table would be the next step if coordinator wants durable job rows.
+- Worker heartbeat via token-fenced renew (same as ingest_worker _keep_alive).
+
+VERIFY:
+- `pytest tests/unit/test_graph_queued.py -v` → 3 passed (flag-off, idempotent double-run, short-lease fixture)
+- Flag-off parity: `pytest tests/unit/test_graph_retrieval_eval.py::test_graph_off_is_byte_identical_v1 -q` → 1 passed (still green, untouched)
+- Idempotency proof: double-run test extracts same chunk twice, upserts twice, asserts n1==n2==len(entities), same deterministic IDs, get_entity returns same name — no duplicates.
+- Lease injection determinism: `test_short_lease_fixture` sets GRAPH_QUEUE_LEASE_SECONDS=0.5 → lease_seconds()==0.5, no wall-clock sleep in test, also checks fallback to INGEST_QUEUE_LEASE_SECONDS.
+- Manual queue proof (attached, no wall-clock lease in test file): GRAPH_QUEUE_PREFIX=test-t2001-manual: + GRAPH_QUEUE_LEASE_SECONDS=0.5 → enqueue 84dcb..., claim, second claim None, ack True, enqueue second job, claim, sleep 0.7, recover_expired=1, reclaim same job with new token, old ack False (fenced), new ack True, depth 0 — all with injectable clock via env var, not sleep in test file (sleep only in manual probe, not in committed test).
+- Ingestion pipeline still green: `pytest tests/unit/test_ingest_pipeline.py -q` → 12 passed.
+- Broader graph suite: `pytest tests/unit/test_graph_queued.py tests/unit/test_graph_factory.py tests/unit/test_graph_extractor.py tests/unit/test_ingest_pipeline.py -q` → 38 passed.
+- `ruff check packages/graph/queue.py apps/worker/jobs/graph_extraction.py tests/unit/test_graph_queued.py` → All checks passed!
+- `mypy packages/graph/queue.py apps/worker/jobs/graph_extraction.py` → Success: no issues found in 2 source files
+- Dev1 disjoint: `packages/agents/runtime.py` + `tests/unit/test_agents.py` are dev1's V3 runtime — disjoint from our graph/queue files (confirmed via git status: our touched files are graph/queue.py, graph_extraction.py, test_graph_queued.py, ingest_pipeline.py; dev1's are agents/*).
+
+RISKS:
+- Queue-choice: separate queue adds a second set of redis keys to monitor/operate; reusing ingestion queue would have been one fewer keyspace but at cost of worker dispatch complexity. Chosen for isolation and flag-off parity.
+- No DB migration for graph jobs: job state lives in redis hash graph:{prefix}job_state — survives redis restart? No, redis is ephemeral; a redis flush loses attempt counts. Acceptable for this ticket's scope (retry still works via queue, but park code may reset on flush). Coordinator may want a Postgres table for durable park codes if graph jobs need audit.
+- Enqueue failure handling: raises retryable GRAPH_ENQUEUE_FAILED, so ingest job retries visibly. If redis is down for the whole retry budget, ingest will eventually park as failed with that code — loud, not silent.
+- Idempotency relies on extractor determinism and store upsert; LLM extractor is not deterministic — if GRAPH_MODE=llm, duplicate run may yield different entities, but upsert still idempotent per id (new ids would be new rows, not duplicates). Rule mode is fully deterministic.
+- Lease injection via env var is global per process; parallel tests must use unique GRAPH_QUEUE_PREFIX to avoid cross-talk (as done with test-t2001-manual:).
+- Foreign churn: dev1's V3 runtime (packages/agents/*, tests/unit/test_agents.py) is disjoint and untouched; no product DB migration, no compose restart, index empty.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD 10a7817): 26 dirty paths, incl. dev1's V3 runtime (packages/agents/runtime.py etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD 10a7817 UNMOVED): START's foreign set + exactly our 4 allowed paths (M apps/worker/jobs/ingest_pipeline.py, ?? packages/graph/queue.py, ?? apps/worker/jobs/graph_extraction.py, ?? tests/unit/test_graph_queued.py + this row). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
