@@ -19,6 +19,7 @@ replaced version stays retrievable. A failed store cleanup is queued for retry
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
@@ -165,6 +166,96 @@ async def latest_job_for_version(
     return (await session.execute(statement)).scalars().first()
 
 
+#: T-V1-072: a superseded generation's vectors must die *durably*. One failed
+#: Qdrant call used to leave the points behind and rely on a queued job retry
+#: that could never arrive (66 orphaned points on superseded versions, measured
+#: in T-V1-069). The delete is therefore retried in-process a bounded number of
+#: times — a transient blip no longer outlives the job that caused it — and
+#: anything that still fails keeps the loud marker + queued retry of T-V1-017.
+_VECTOR_CLEANUP_ATTEMPTS = 3
+_VECTOR_CLEANUP_BACKOFF_SECONDS = (1.0, 2.0)
+
+
+async def _delete_superseded_points(
+    *, document_id: uuid.UUID | None, version_ids: Sequence[uuid.UUID]
+) -> int:
+    """Delete superseded versions' points, retrying a failure a bounded number of times.
+
+    Raises the last failure once the budget is spent, so the caller's visible
+    failure surface (marker + queued retry) still triggers — the retry here is
+    only about not *losing* the work to a one-off failure.
+    """
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    collection = vector_collection()
+    ids = [str(v) for v in version_ids]
+    last: Exception | None = None
+    for attempt in range(1, _VECTOR_CLEANUP_ATTEMPTS + 1):
+        qdrant = QdrantVectorStore(collection=collection)
+        try:
+            return await qdrant.delete_versions(
+                collection=collection,
+                version_ids=ids,
+                document_id=str(document_id) if document_id is not None else None,
+            )
+        except Exception as exc:
+            last = exc
+            if attempt == _VECTOR_CLEANUP_ATTEMPTS:
+                break
+            delay = _VECTOR_CLEANUP_BACKOFF_SECONDS[
+                min(attempt, len(_VECTOR_CLEANUP_BACKOFF_SECONDS)) - 1
+            ]
+            logger.warning(
+                "supersession_vectors_cleanup_retry",
+                extra={
+                    "event": "supersession_vectors_cleanup_retry",
+                    "attempt": attempt,
+                    "of": _VECTOR_CLEANUP_ATTEMPTS,
+                    "delay": delay,
+                    "document_id": str(document_id) if document_id else None,
+                    "superseded_version_ids": ids,
+                    "error": str(exc),
+                },
+            )
+            await asyncio.sleep(delay)
+    raise last if last is not None else RuntimeError("superseded-vector cleanup failed")
+
+
+async def reconcile_superseded_vectors(
+    session: AsyncSession, *, document_id: uuid.UUID | None = None
+) -> int:
+    """Delete every point whose version row is already superseded (T-V1-072).
+
+    The reconcile that cannot lose the work. Postgres is the authority for
+    "superseded": a version row with ``superseded_at`` set is stale by
+    definition, so whatever the vector store still holds for it is an orphan,
+    whatever became of the original cleanup (a lost queued retry, a process that
+    died mid-supersede). Called on every supersede (cheap and idempotent) and
+    safe to call on its own — a scheduled reconcile or an operator run repairs
+    historical orphans without a rebuild.
+
+    Returns the number of points removed; a store failure raises so the caller
+    sees it rather than reading "0 removed" as "nothing was there".
+    """
+    statement = select(DocumentVersion.id).where(DocumentVersion.superseded_at.is_not(None))
+    if document_id is not None:
+        statement = statement.where(DocumentVersion.document_id == document_id)
+    stale = (await session.execute(statement)).scalars().all()
+    if not stale:
+        return 0
+    removed = await _delete_superseded_points(document_id=document_id, version_ids=list(stale))
+    logger.info(
+        "supersession_vectors_reconciled",
+        extra={
+            "event": "supersession_vectors_reconciled",
+            "document_id": str(document_id) if document_id else None,
+            "superseded_version_ids": [str(v) for v in stale],
+            "points_removed": removed,
+        },
+    )
+    return removed
+
+
 async def supersede_other_versions(
     session: AsyncSession, document_id: uuid.UUID, keep_version_id: uuid.UUID
 ) -> int:
@@ -216,6 +307,22 @@ async def supersede_other_versions(
     await _cleanup_superseded_vectors(
         session, document_id=document_id, version_ids=older, keep_version_id=keep_version_id
     )
+    # T-V1-072: reconcile the whole document on every supersede. The targeted
+    # cleanup above can still fail (and then only a queued retry stands between
+    # us and an orphan); this sweep removes points for ANY already-superseded
+    # version of this document, so a cleanup lost in an earlier run is repaired
+    # the next time the document is replaced — no rebuild required.
+    try:
+        await reconcile_superseded_vectors(session, document_id=document_id)
+    except Exception as exc:
+        logger.warning(
+            "supersession_vectors_reconcile_failed",
+            extra={
+                "event": "supersession_vectors_reconcile_failed",
+                "document_id": str(document_id),
+                "error": str(exc),
+            },
+        )
     return len(older)
 
 
@@ -236,18 +343,9 @@ async def _cleanup_superseded_vectors(
     """
     ids = [str(v) for v in version_ids]
     try:
-        from retrieval.adapters.qdrant_store import QdrantVectorStore
-
-        collection = vector_collection()
-        qdrant = QdrantVectorStore(collection=collection)
-        try:
-            removed = await qdrant.delete_versions(
-                collection=collection,
-                version_ids=ids,
-                document_id=str(document_id),
-            )
-        finally:
-            await qdrant.close()
+        removed = await _delete_superseded_points(
+            document_id=document_id, version_ids=list(version_ids)
+        )
         logger.info(
             "supersession_vectors_cleaned",
             extra={

@@ -592,10 +592,14 @@ def test_supersession_cleanup_failure_is_retried_visibly(
 ) -> None:
     """T-V1-017 checklist 3: a failed store cleanup is queued for retry, visibly.
 
-    The Qdrant half of the supersession cleanup fails once: the job must show a
-    ``SUPERSESSION_CLEANUP_RETRY`` marker, the retry must be queued (captured,
-    not silently dropped), and the stale points must STILL be there (no false
-    "clean"). The next run cleans them and clears the marker.
+    T-V1-072: the cleanup now retries the store call **in process** (bounded), so
+    this test has to fail the store *persistently* to reach the marker path — a
+    single blip is now cleaned up before it can be reported (see
+    ``test_supersession_cleanup_single_blip_is_retried_in_process``). With the
+    store failing every attempt: the job must show a ``SUPERSESSION_CLEANUP_RETRY``
+    marker, the retry must be queued (captured, not silently dropped), and the
+    stale points must STILL be there (no false "clean"). The next run cleans them
+    and clears the marker.
     """
     import ingestion.queue as queue_mod
     from retrieval.adapters import qdrant_store
@@ -607,9 +611,13 @@ def test_supersession_cleanup_failure_is_retried_visibly(
 
     async def flaky_delete_versions(self, **kwargs):
         calls["n"] += 1
-        if calls["n"] == 1:
+        # T-V1-072: every attempt fails, so the in-process retry budget is spent
+        # and the visible marker + queued retry below are what remain.
+        if failing["now"]:
             raise RuntimeError("simulated Qdrant outage during supersession cleanup")
         return await real_delete_versions(self, **kwargs)
+
+    failing = {"now": True}
 
     monkeypatch.setattr(
         qdrant_store.QdrantVectorStore, "delete_versions", flaky_delete_versions
@@ -639,17 +647,70 @@ def test_supersession_cleanup_failure_is_retried_visibly(
 
     # Cleanup failed: marker visible on the job, retry queued, points STILL
     # there (never reported clean), FTS half already committed.
-    assert calls["n"] == 1
+    # T-V1-072: the store failed every attempt, so the in-process budget was
+    # spent (>= 2 calls) before the visible marker below took over.
+    assert calls["n"] >= 2
     assert _job_error_code(second["job_id"]) == "SUPERSESSION_CLEANUP_RETRY"
     assert scheduled and scheduled[0][0] == second["job_id"]
     assert _fts_version_count(v1_version) == 0
     assert _qdrant_version_points(v1_version), "stale points must remain VISIBLE pre-retry"
 
     # The queued retry re-runs the job: cleanup now succeeds and clears it.
+    failing["now"] = False
     _run_job(second["job_id"])
-    assert calls["n"] == 2
+    assert calls["n"] > 1, "the re-run attempted the cleanup again"
     assert _job_error_code(second["job_id"]) is None  # marker cleared by the new run
     assert _qdrant_version_points(v1_version) == []  # stale points gone after retry
+
+
+def test_supersession_cleanup_single_blip_is_retried_in_process(
+    client, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """T-V1-072 metric: a ONE-OFF store failure leaves zero orphan points.
+
+    The superseded generation's points must not depend on a queued job retry
+    arriving: the delete is retried in-process, so a single blip is cleaned up
+    before anything is reported. No marker, no orphan points, the live
+    generation's points untouched.
+    """
+    from retrieval.adapters import qdrant_store
+
+    _install_stub_embedder(monkeypatch)
+
+    real_delete_versions = qdrant_store.QdrantVectorStore.delete_versions
+    calls = {"n": 0}
+
+    async def blip_once(self, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:  # exactly one failure: the transient case
+            raise RuntimeError("simulated one-off Qdrant blip")
+        return await real_delete_versions(self, **kwargs)
+
+    monkeypatch.setattr(
+        qdrant_store.QdrantVectorStore, "delete_versions", blip_once
+    )
+
+    token = _new_user(client)
+    workspace = _create_workspace(client, token)
+    first = _upload(
+        client, token, workspace, "blip-cleanup.txt", b"version one of blip cleanup"
+    ).json()
+    _run_job(first["job_id"])
+    v1_version = first["version_id"]
+    assert _qdrant_version_points(v1_version), "v1 points must exist before the replace"
+
+    second = _upload(
+        client, token, workspace, "blip-cleanup.txt", b"version two of blip cleanup"
+    ).json()
+    assert second["version_id"] != v1_version
+    _run_job(second["job_id"])
+
+    # The blip was retried in-process and the cleanup completed: 0 orphans.
+    assert calls["n"] >= 2, "the failed call must have been retried, not abandoned"
+    assert _qdrant_version_points(v1_version) == [], "0 orphan points after one blip"
+    assert _job_row(second["job_id"])["status"] == "ready"
+    assert _job_error_code(second["job_id"]) is None, "a recovered cleanup leaves no marker"
+    assert _qdrant_version_points(second["version_id"]), "the live generation survives"
 
 
 def test_changed_file_creates_immutable_version_and_supersedes(client) -> None:
