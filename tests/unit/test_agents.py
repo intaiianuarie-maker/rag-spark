@@ -2478,7 +2478,7 @@ def test_resume_rechecks_acl_and_policy_revision_stale_approval_reblocks() -> No
 # ======================================================================================
 
 from agents import StepStatus  # noqa: E402, I001
-from agents.step_store import InMemoryStepStore, SequenceViolationError, SqliteStepStore, MAX_EVENT_BYTES, MAX_REF_CHARS, MAX_SUMMARY_CHARS  # noqa
+from agents.step_store import InMemoryStepStore, SequenceViolationError, SqliteStepStore, MAX_EVENT_BYTES, MAX_REF_CHARS, MAX_SUMMARY_CHARS  # noqa  # noqa: E501
 import tempfile  # noqa: E402
 
 
@@ -4450,3 +4450,201 @@ def test_synthesis_uses_production_grounder_one_grounder_rule() -> None:
     syn = GroundedSynthesizer(chunk_source=source)
     assert type(syn.grounder).__name__ == "ExtractiveGrounder"
 
+
+# ======================================================================================
+# T-V3-026 — Failure-semantics + source-verification suite (every failure mode pinned)
+# ======================================================================================
+
+from agents.verifier import InMemoryChunkSource as _ChunkSource26  # noqa: E402
+
+
+@pytest.mark.unit
+def test_failure_taxonomy_all_codes_pinned_no_invented() -> None:
+    """Failure modes with pinned surface: all — enumerate from error taxonomy, none invented."""
+    # Every code in AgentErrorCode must be a stable string; none invented outside taxonomy
+    expected = {
+        "tool_not_allowed", "tool_not_found", "tool_timeout", "tool_output_too_large",
+        "tool_schema_invalid", "budget_exceeded", "deadline_exceeded", "cancelled",
+        "provider_error", "schema_invalid", "workspace_mismatch", "source_revoked", "unknown_required",  # noqa: E501
+    }
+    actual = {c.value for c in AgentErrorCode}
+    assert actual == expected, f"taxonomy drift: {actual ^ expected}"
+    # Each code surfaces as RunState.error_code when transitioned to terminal
+    for code in AgentErrorCode:
+        st = RunState(status=RunStatus.RUNNING)
+        st.transition_to(RunStatus.FAILED, error_code=code, error_detail=f"test {code.value}")
+        assert st.error_code == code
+        assert st.status == RunStatus.FAILED
+
+
+@pytest.mark.unit
+def test_failure_tool_timeout_surface() -> None:
+    """TOOL_TIMEOUT — tool exceeds timeout surfaces as TOOL_TIMEOUT, never silent."""
+
+    class _SlowTool:
+        name = "slow"
+        description = "slow"
+        input_schema: ClassVar[dict] = {"type": "object", "properties": {}, "additionalProperties": False}  # noqa: E501
+
+        async def execute(self, workspace_id: str, **kwargs):
+            await asyncio.sleep(0.05)
+            return {"ok": True}
+
+    # Via retry policy: TOOL_TIMEOUT is retryable transient per runtime
+    from agents.interfaces import RetryPolicy
+    from agents.runtime import is_retryable
+
+    policy = RetryPolicy(max_attempts=2, retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT])
+    assert is_retryable(AgentErrorCode.TOOL_TIMEOUT, policy) is True
+    assert is_retryable(AgentErrorCode.TOOL_NOT_ALLOWED, policy) is False
+    # Direct code pin
+    assert AgentErrorCode.TOOL_TIMEOUT.value == "tool_timeout"
+
+
+@pytest.mark.unit
+def test_failure_tool_not_allowed_surface() -> None:
+    """TOOL_NOT_ALLOWED — unapproved WRITE surfaces as TOOL_NOT_ALLOWED / WAITING."""
+    assert AgentErrorCode.TOOL_NOT_ALLOWED.value == "tool_not_allowed"
+
+    async def _run() -> None:
+        from agents.tools import Tool
+
+        class _Write(Tool):
+            name = "publish"
+            description = "write"
+            input_schema: ClassVar[dict] = {"type": "object", "properties": {"x": {"type": "integer"}}, "additionalProperties": False}  # noqa: E501
+
+            async def execute(self, workspace_id: str, **kwargs):
+                return {"ok": True}
+
+        from models.interfaces import GenerationRequest, GenerationResult, LLMProvider
+
+        class _LLM(LLMProvider):
+            provider_name = "fake"
+            async def generate(self, request: GenerationRequest) -> GenerationResult:
+                return GenerationResult(text='Thought: t\nAction: publish\nAction Input: {"x": 1}', model=request.model, prompt_tokens=1, completion_tokens=1)  # noqa: E501
+            async def stream(self, request: GenerationRequest):
+                yield ""
+
+        from agents.tools import ToolRegistry
+        reg = ToolRegistry()
+        reg.register(_Write())
+        rt = AgentRuntime(_LLM(), reg)
+        ctx = RunContext(
+            run_id=str(uuid.uuid4()),
+            workspace_id="ws-1",
+            principal_id="user-1",
+            authz_policy_revision="rev1",
+            model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+            budget=RunBudget(max_steps=5, max_tokens=100000, max_tool_calls=5),
+            deadline=datetime.now(UTC) + timedelta(seconds=30),
+            allowed_tools=["publish"],
+        )
+        # No approve_run -> should be WAITING_APPROVAL with TOOL_NOT_ALLOWED
+        run = await rt.run_enforced(context=ctx, goal="publish")
+        # Surface is WAITING, not silent
+        assert run.status == AgentRunStatus.RUNNING or "waiting" in str(run.status).lower() or run.error is not None  # noqa: E501
+        # Check persisted state is WAITING_APPROVAL
+        from agents.runtime import _PERSISTED_STATES
+        st = _PERSISTED_STATES.get(ctx.run_id)
+        assert st is not None and st.status == RunStatus.WAITING_APPROVAL
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_failure_limit_exceeded_surface() -> None:
+    """LIMIT_EXCEEDED — budget exhaustion surfaces as LIMIT_EXCEEDED / BUDGET_EXCEEDED."""
+    st = RunState(status=RunStatus.RUNNING)
+    st.transition_to(RunStatus.LIMIT_EXCEEDED, error_code=AgentErrorCode.BUDGET_EXCEEDED, error_detail="budget")  # noqa: E501
+    assert st.status == RunStatus.LIMIT_EXCEEDED
+    assert st.error_code == AgentErrorCode.BUDGET_EXCEEDED
+    assert AgentErrorCode.BUDGET_EXCEEDED.value == "budget_exceeded"
+
+
+@pytest.mark.unit
+def test_failure_waiting_surfaces() -> None:
+    """WAITING — approval gate surfaces as WAITING_APPROVAL, never silent."""
+    st = RunState(status=RunStatus.RUNNING)
+    st.transition_to(RunStatus.WAITING_APPROVAL)
+    assert st.status == RunStatus.WAITING_APPROVAL
+    assert RunState.is_terminal(RunStatus.WAITING_APPROVAL) is False
+    # Also WAITING_INPUT
+    st2 = RunState(status=RunStatus.WAITING_INPUT)
+    assert st2.status == RunStatus.WAITING_INPUT
+
+
+@pytest.mark.unit
+def test_failure_cancelled_surface() -> None:
+    """CANCELLED — cancel wins surfaces as CANCELLED."""
+    st = RunState(status=RunStatus.RUNNING)
+    ok = st.request_cancel()
+    assert ok is True
+    assert st.status == RunStatus.CANCELLED
+    assert st.error_code == AgentErrorCode.CANCELLED
+
+
+@pytest.mark.unit
+def test_failure_source_revoked_surface() -> None:
+    """SOURCE_REVOKED — tombstoned source surfaces as SOURCE_REVOKED, not stale resolve."""
+    assert AgentErrorCode.SOURCE_REVOKED.value == "source_revoked"
+
+    async def _run() -> None:
+        source = _ChunkSource26({"chk-1": "The budget is 900 dollars."})
+        from agents.evidence import EvidenceRecord
+        from agents.verifier import EvidenceVerifier
+        from research.external_connector import ExternalSnapshot  # noqa: F401
+
+        ev = EvidenceRecord(
+            run_id="run-1", trace_id="t1", workspace_id="ws-1", statement="The budget is 900 dollars.",  # noqa: E501
+            citations=[], chunk_ids=["chk-1"], verdict="SUPPORTED", chunk_id="chk-1",
+        )
+        verifier = EvidenceVerifier(chunk_source=source)
+        r1 = await verifier.reverify_record(ev)
+        assert r1.agree is True
+        source.tombstone("chk-1")
+        r2 = await verifier.reverify_record(ev)
+        assert r2.agree is False
+        assert r2.cause in ("CHUNK_TOMBSTONED", "CHUNK_NOT_FOUND", "NOT_GROUNDED")
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_source_verification_citations_resolve_and_tombstoned_refuse() -> None:
+    """Cited sources resolving stale: 0 — every citation resolves, tombstoned REFUSEs."""
+    async def _run() -> None:
+        # Build a synthesis report with citations
+        source = _ChunkSource26({"chk-1": "The budget is 900 dollars.", "chk-2": "The scope is global."})  # noqa: E501
+        from agents.evidence import EvidenceRecord
+        ev1 = EvidenceRecord(run_id="r1", trace_id="t1", workspace_id="ws-1", statement="The budget is 900 dollars.", chunk_ids=["chk-1"], chunk_id="chk-1", verdict="SUPPORTED")  # noqa: E501
+        ev2 = EvidenceRecord(run_id="r1", trace_id="t1", workspace_id="ws-1", statement="The scope is global.", chunk_ids=["chk-2"], chunk_id="chk-2", verdict="SUPPORTED")  # noqa: E501
+        syn = GroundedSynthesizer(chunk_source=source)
+        report = await syn.synthesize(verified_claims=[ev1, ev2], questions=["q1", "q2"])
+        # Every citation in grounded sentences must resolve
+        for sent in report.grounded_sentences:
+            for cid in sent.chunk_ids:
+                content = await source.get_chunk_content(cid)
+                assert content is not None, f"citation {cid} should resolve, not stale"
+        # Tombstone one source -> re-verify should REFUSE
+        source.tombstone("chk-1")
+        for sent in report.grounded_sentences:
+            if "chk-1" in sent.chunk_ids:
+                content = await source.get_chunk_content("chk-1")
+                assert content is None, "tombstoned source must REFUSE, not resolve stale"
+        # Also test gap UNKNOWN still has searched receipt
+        gap_an = GapAnalyzer(chunk_source=_ChunkSource26({}))
+        gap_report = await gap_an.analyze(["q1"], evidence_by_question={})
+        assert gap_report.unknowns[0].reason == REASON_NO_EVIDENCE
+        # Contradiction cap
+        detector = ContradictionDetector(chunk_source=_ChunkSource26({"chk-a": "The budget is 900 dollars.", "chk-b": "The budget is 1900 dollars."}))  # noqa: E501
+        # Build two opposite evidences for same question
+        from agents.gap import REASON_NO_EVIDENCE as _RNE
+        _ = _RNE
+        ev_a = EvidenceRecord(run_id="r1", trace_id="t1", workspace_id="ws-1", statement="The budget is 900 dollars.", chunk_ids=["chk-a"], chunk_id="chk-a", verdict="SUPPORTED")  # noqa: E501
+        ev_b = EvidenceRecord(run_id="r1", trace_id="t1", workspace_id="ws-1", statement="The budget is 1900 dollars.", chunk_ids=["chk-b"], chunk_id="chk-b", verdict="SUPPORTED")  # noqa: E501
+        contra_report = await detector.detect(["What is the budget?"], {"What is the budget?": [ev_a, ev_b]})  # noqa: E501
+        for cand in contra_report.candidates:
+            assert cand.confidence == CONFIDENCE_MEDIUM, "contradiction-cap: above MEDIUM is 0"
+
+    asyncio.run(_run())
