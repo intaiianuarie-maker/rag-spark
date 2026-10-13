@@ -39,10 +39,25 @@ class NodeRunStatus(StrEnum):
 
 
 class WorkflowRunStatus(StrEnum):
+    """Terminal run states (T-V4-009: exactly one of the three).
+
+    A run ends in exactly one of ``COMPLETED`` / ``FAILED`` / ``CANCELLED``:
+
+    * ``COMPLETED`` — every node reached a genuine terminal state, no node
+      failed, no declared join barrier was left incomplete, and every
+      non-skipped node recorded its output.
+    * ``FAILED`` — a node failed (raised, or returned an error payload) or a
+      declared barrier could not be satisfied; the run names the node.
+    * ``CANCELLED`` — cancellation was requested (or the task was
+      cancelled) mid-run; in-flight nodes are settled and no node starts
+      afterwards.  A cancelled run never becomes ``COMPLETED``.
+    """
+
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 class WorkflowNode(BaseModel):
@@ -472,7 +487,12 @@ class NodeExecutor(Protocol):
 
 
 class NodeRun(BaseModel):
-    """Execution trace of an individual node in a workflow run."""
+    """Execution trace of an individual node in a workflow run.
+
+    ``error`` carries the failure reason for FAILED nodes and the honest
+    skip reason for SKIPPED ones (T-V4-009: a skip is disclosed, never
+    silent).
+    """
 
     node_id: str
     status: NodeRunStatus = NodeRunStatus.PENDING
@@ -483,7 +503,12 @@ class NodeRun(BaseModel):
 
 
 class WorkflowRun(BaseModel):
-    """Execution instance of a workflow."""
+    """Execution instance of a workflow.
+
+    T-V4-009: ``error`` / ``failed_node_id`` name the node that made the
+    run terminal (failing node, incomplete-barrier node, or cancellation)
+    so a non-COMPLETED run is never an unlabelled status.
+    """
 
     id: str
     workspace_id: str
@@ -494,3 +519,7 @@ class WorkflowRun(BaseModel):
     final_output: Any = None
     created_at: str = ""
     finished_at: str | None = None
+    #: Run-level failure/cancellation reason (``None`` on COMPLETED).
+    error: str | None = None
+    #: The node that determined the terminal status (``None`` on COMPLETED).
+    failed_node_id: str | None = None

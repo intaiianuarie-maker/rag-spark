@@ -6,12 +6,29 @@ provides:
 - ``WorkflowExecutor``: event-driven execution of an ``ExecutionPlan`` using
   a ``NodeExecutor``, producing a ``WorkflowRun`` with full node traces.
 
+Terminal-state honesty (T-V4-009): a run ends in exactly one of
+``COMPLETED`` / ``FAILED`` / ``CANCELLED`` (see ``WorkflowRunStatus``):
+
+* a node that raises, or returns an ``{"error": ...}`` payload, FAILS the
+  run and the run names the node;
+* a declared join barrier left incomplete (an ``all`` join with a skipped
+  branch, an ``any`` join with no active input) is NOT a silent success —
+  the node is skipped with that reason recorded and the run FAILS naming
+  it;
+* cancellation (``request_cancel`` mid-run, or an external
+  ``asyncio.CancelledError``) settles the in-flight node, skips the rest
+  and ends ``CANCELLED`` — never ``COMPLETED``;
+* ``COMPLETED`` requires every node terminal with its output recorded;
+  routing skips (a conditional branch not taken on a single-inbound node)
+  stay disclosed SKIPPED and may still complete.
+
 Production integration with a real LangGraph runtime (v3) will supply a
 concrete ``NodeExecutor`` implementation in a later, reviewed change.
 """
 
 from __future__ import annotations
 
+import asyncio
 import time
 import uuid
 from collections import deque
@@ -31,6 +48,16 @@ from .interfaces import (
     WorkflowRun,
     WorkflowRunStatus,
 )
+
+#: Payload key an executor uses to return a structured node failure.  A
+#: returned error is a failure — never absorbed into the run's outputs.
+_ERROR_PAYLOAD_KEY = "error"
+
+#: Skip reasons (recorded on ``NodeRun.error`` — a skip is disclosed).
+_SKIP_BARRIER = "barrier-incomplete"
+_SKIP_NO_INPUT = "no-active-inbound-edge"
+_SKIP_UPSTREAM = "upstream-skipped"
+_SKIP_CANCELLED = "cancelled"
 
 
 class FakeNodeExecutor:
@@ -167,13 +194,28 @@ class WorkflowExecutor:
       ``condition_value``.
 
     Nodes that are not activated (because their conditional branch was
-    skipped) are marked ``SKIPPED``.  Failure honesty: the executor never
-    marks a skipped node as COMPLETED.
+    skipped) are marked ``SKIPPED`` with the reason recorded.  Failure
+    honesty: the executor never marks a skipped node as COMPLETED, and a
+    run never reports COMPLETED while a failed node, an incomplete declared
+    barrier, or a cancellation is inside it (T-V4-009).
     """
 
-    
     def __init__(self, node_executor: NodeExecutor) -> None:
         self._executor = node_executor
+        self._cancel = asyncio.Event()
+
+    def request_cancel(self) -> None:
+        """Request cancellation; observed before the next node dispatch.
+
+        Deterministic by design: a node already executing finishes and its
+        output is recorded (settled), no further node starts, and the run
+        ends ``CANCELLED`` — never ``COMPLETED``.
+        """
+        self._cancel.set()
+
+    @property
+    def cancel_requested(self) -> bool:
+        return self._cancel.is_set()
 
     async def execute(
         self,
@@ -231,7 +273,59 @@ class WorkflowExecutor:
             sorted([nid for nid, cnt in pending.items() if cnt == 0])
         )
 
+        try:
+            return await self._run_loop(
+                plan=plan,
+                revision=revision,
+                initial_input=initial_input,
+                run=run,
+                nodes_by_id=nodes_by_id,
+                steps_by_node=steps_by_node,
+                outgoing=outgoing,
+                incoming_count=incoming_count,
+                pending=pending,
+                active_count=active_count,
+                node_outputs=node_outputs,
+                ready=ready,
+            )
+        except asyncio.CancelledError:
+            # External task cancellation: settle the in-flight node, end
+            # CANCELLED, then re-raise (asyncio semantics preserved).
+            for record in run.node_runs.values():
+                if record.status == NodeRunStatus.RUNNING:
+                    record.status = NodeRunStatus.FAILED
+                    record.error = "cancelled mid-execution"
+            for node_id in nodes_by_id:
+                if node_id not in run.node_runs:
+                    _mark_skipped(node_id, run, reason=f"{_SKIP_CANCELLED}: run cancelled")
+            run.status = WorkflowRunStatus.CANCELLED
+            run.error = "run cancelled (task cancelled)"
+            run.finished_at = datetime.now(UTC).isoformat()
+            raise
+
+    async def _run_loop(
+        self,
+        *,
+        plan: ExecutionPlan,
+        revision: WorkflowRevision,
+        initial_input: dict[str, Any],
+        run: WorkflowRun,
+        nodes_by_id: dict[str, NodeSpec],
+        steps_by_node: dict[str, ExecutionStep],
+        outgoing: dict[str, list[ExecutionEdgeInfo]],
+        incoming_count: dict[str, int],
+        pending: dict[str, int],
+        active_count: dict[str, int],
+        node_outputs: dict[str, dict[str, Any]],
+        ready: deque[str],
+    ) -> WorkflowRun:
+        """The readiness loop (extracted so the caller can settle on cancel)."""
         while ready:
+            # T-V4-009: cancellation is observed before every dispatch — a
+            # cancelled run never proceeds to COMPLETED.
+            if self._cancel.is_set():
+                return self._finish_cancelled(run, nodes_by_id)
+
             node_id = ready.popleft()
             node = nodes_by_id.get(node_id)
             if node is None:
@@ -241,12 +335,40 @@ class WorkflowExecutor:
             # Check join readiness.
             if node_id != plan.trigger_node_id and node_step is not None:
                 join_mode = node_step.join_mode
-                if join_mode == "all" and active_count[node_id] < incoming_count[node_id]:
-                    _mark_skipped(node_id, run)
-                    continue
-                if join_mode == "any" and active_count[node_id] == 0:
-                    _mark_skipped(node_id, run)
-                    continue
+                if join_mode in {"all", "any", "first"}:
+                    active = active_count[node_id]
+                    inbound = incoming_count[node_id]
+                    if active == 0:
+                        # Nothing arrived.  On a single wire this is routing
+                        # (the branch was not taken); on a join node it is an
+                        # incomplete declared barrier.
+                        if inbound < 2:
+                            reason = (
+                                f"{_SKIP_NO_INPUT}: no active inbound edge "
+                                f"delivered a value"
+                            )
+                        else:
+                            reason = (
+                                f"{_SKIP_BARRIER}: declared {join_mode}-barrier "
+                                f"received no active input"
+                            )
+                        _mark_skipped(node_id, run, reason=reason)
+                        WorkflowExecutor._propagate_skipped(
+                            node_id, outgoing, pending, ready
+                        )
+                        continue
+                    if join_mode == "all" and active < inbound:
+                        _mark_skipped(
+                            node_id, run,
+                            reason=(
+                                f"{_SKIP_BARRIER}: declared all-barrier received "
+                                f"{active}/{inbound} active inputs"
+                            ),
+                        )
+                        WorkflowExecutor._propagate_skipped(
+                            node_id, outgoing, pending, ready
+                        )
+                        continue
 
                         # Build input data.
             if node_step and node_id == plan.trigger_node_id:
@@ -259,9 +381,18 @@ class WorkflowExecutor:
             else:
                 node_input = None
 
-            # Handle missing input.
+            # Handle missing input (a single-inbound node whose branch was
+            # not taken lands here or above — either way it is routing).
             if node_input is None and node_id != plan.trigger_node_id:
-                _mark_skipped(node_id, run)
+                _mark_skipped(
+                    node_id, run,
+                    reason=(
+                        f"{_SKIP_NO_INPUT}: no active inbound edge delivered a value"
+                    ),
+                )
+                WorkflowExecutor._propagate_skipped(
+                    node_id, outgoing, pending, ready
+                )
                 continue
 
             node_run = NodeRun(
@@ -275,6 +406,21 @@ class WorkflowExecutor:
                 result = await self._executor.execute_node(
                     node, node_input, revision.spec.workspace_id
                 )
+                # T-V4-009: a returned error payload is a failure — never
+                # absorbed into the run's outputs.
+                if isinstance(result, dict) and _ERROR_PAYLOAD_KEY in result:
+                    node_run.status = NodeRunStatus.FAILED
+                    node_run.error = str(result[_ERROR_PAYLOAD_KEY])
+                    run.node_runs[node_id] = node_run
+                    run.status = WorkflowRunStatus.FAILED
+                    run.error = (
+                        f"node '{node_id}' returned an error payload: "
+                        f"{node_run.error}"
+                    )
+                    run.failed_node_id = node_id
+                    run.finished_at = datetime.now(UTC).isoformat()
+                    self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                    return run
                 node_run.status = NodeRunStatus.COMPLETED
                 node_run.output_data = result
                 node_outputs[node_id] = result
@@ -300,14 +446,20 @@ class WorkflowExecutor:
                 node_run.error = str(exc)
                 run.node_runs[node_id] = node_run
                 run.status = WorkflowRunStatus.FAILED
+                run.error = f"node '{node_id}' failed: {exc}"
+                run.failed_node_id = node_id
                 run.finished_at = datetime.now(UTC).isoformat()
+                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
                 return run
             except Exception as exc:
                 node_run.status = NodeRunStatus.FAILED
                 node_run.error = str(exc)
                 run.node_runs[node_id] = node_run
                 run.status = WorkflowRunStatus.FAILED
+                run.error = f"node '{node_id}' failed: {exc}"
+                run.failed_node_id = node_id
                 run.finished_at = datetime.now(UTC).isoformat()
+                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
                 return run
             finally:
                 node_run.latency_ms = (time.perf_counter() - t_start) * 1000.0
@@ -319,21 +471,161 @@ class WorkflowExecutor:
                 else:
                     run.final_output = result
 
-                # Mark all unprocessed nodes as skipped.
+        # Mark all unprocessed nodes as skipped (disclosed, with reason).
+        # A join node that never got to evaluate its barrier is named as
+        # such — the barrier was never satisfied, not merely unobserved.
         for node_id in nodes_by_id:
-            if node_id not in run.node_runs:
-                _mark_skipped(node_id, run)
+            if node_id in run.node_runs:
+                continue
+            if incoming_count.get(node_id, 0) >= 2:
+                _mark_skipped(
+                    node_id, run,
+                    reason=(
+                        f"{_SKIP_BARRIER}: declared barrier never satisfied "
+                        f"({active_count[node_id]}/{incoming_count[node_id]} active inputs)"
+                    ),
+                )
+            else:
+                _mark_skipped(node_id, run, reason=f"{_SKIP_UPSTREAM}: never reached")
 
-        # Check overall run status: failed if any node failed.
-        failed = any(
-            nr.status == NodeRunStatus.FAILED for nr in run.node_runs.values()
-        )
+        # Any failed node fails the run and names the node.
+        failed = [
+            nr for nr in run.node_runs.values()
+            if nr.status == NodeRunStatus.FAILED
+        ]
         if failed:
+            node_id = failed[0].node_id
             run.status = WorkflowRunStatus.FAILED
+            run.error = f"node '{node_id}' failed: {failed[0].error}"
+            run.failed_node_id = node_id
             run.finished_at = datetime.now(UTC).isoformat()
             return run
 
+        return self._finalize(run, plan, nodes_by_id, incoming_count)
+
+    # ------------------------------------------------------------------ #
+    # T-V4-009: terminal-state finalization
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _propagate_skipped(
+        node_id: str,
+        outgoing: dict[str, list[ExecutionEdgeInfo]],
+        pending: dict[str, int],
+        ready: deque[str],
+    ) -> None:
+        """Settle a skipped node's outgoing edges as INACTIVE.
+
+        Without this, a skipped branch abandons its edges: downstream
+        pending counters never reach zero, join nodes are never dequeued,
+        and the whole tail of the graph collapses into "never reached" —
+        an ``any``/``first`` barrier could never observe the inputs it DID
+        receive.  The edges are inactive (a skipped node produced nothing),
+        but they still count toward readiness so the barrier is evaluated
+        honestly.
+        """
+        newly_ready: list[str] = []
+        for edge in outgoing.get(node_id, []):
+            pending[edge.target_node_id] -= 1
+            if pending[edge.target_node_id] == 0 and edge.target_node_id not in ready:
+                newly_ready.append(edge.target_node_id)
+        for nid in sorted(newly_ready):
+            ready.append(nid)
+
+    @staticmethod
+    def _settle_remaining(
+        run: WorkflowRun,
+        nodes_by_id: dict[str, NodeSpec],
+        reason: str,
+    ) -> None:
+        """Record every node that never ran as SKIPPED with *reason*.
+
+        A terminal run has a record for EVERY node — a missing record is a
+        silent hole, which is exactly what this closes (a failed run still
+        discloses what did not run).
+        """
+        for node_id in nodes_by_id:
+            if node_id not in run.node_runs:
+                _mark_skipped(node_id, run, reason=reason)
+    def _finalize(
+        self,
+        run: WorkflowRun,
+        plan: ExecutionPlan,
+        nodes_by_id: dict[str, NodeSpec],
+        incoming_count: dict[str, int],
+    ) -> WorkflowRun:
+        """Decide COMPLETED vs FAILED from the honest per-node record.
+
+        COMPLETED requires: every node in the plan has a terminal status,
+        no node FAILED, no node skipped because a declared barrier was left
+        incomplete (or sits downstream of one), and every non-skipped node
+        recorded its output.
+        """
+        # A node in the plan with no record at all is a hole — fail closed.
+        for node_id in nodes_by_id:
+            if node_id not in run.node_runs:
+                run.status = WorkflowRunStatus.FAILED
+                run.error = f"node '{node_id}' has no execution record"
+                run.failed_node_id = node_id
+                run.finished_at = datetime.now(UTC).isoformat()
+                return run
+
+        # An incomplete DECLARED barrier is not a silent success: the run
+        # names the first join node (two or more inbound edges) whose
+        # barrier was left incomplete, or that never got the chance.  A
+        # single-inbound node skipped because its branch was not taken is
+        # routing, not a barrier failure — it stays disclosed SKIPPED.
+        for node_id in nodes_by_id:
+            if incoming_count.get(node_id, 0) < 2:
+                continue
+            record = run.node_runs[node_id]
+            if record.status != NodeRunStatus.SKIPPED:
+                continue
+            reason = record.error or ""
+            if reason.startswith(_SKIP_BARRIER) or reason.startswith(_SKIP_UPSTREAM):
+                run.status = WorkflowRunStatus.FAILED
+                run.error = (
+                    f"declared barrier incomplete at node '{node_id}': {reason}"
+                )
+                run.failed_node_id = node_id
+                run.finished_at = datetime.now(UTC).isoformat()
+                return run
+
+        # Every non-skipped node must have recorded its output.
+        for node_id, record in run.node_runs.items():
+            if record.status == NodeRunStatus.SKIPPED:
+                continue
+            if record.output_data is None:
+                run.status = WorkflowRunStatus.FAILED
+                run.error = (
+                    f"node '{node_id}' is {record.status.value} with no output recorded"
+                )
+                run.failed_node_id = node_id
+                run.finished_at = datetime.now(UTC).isoformat()
+                return run
+
         run.status = WorkflowRunStatus.COMPLETED
+        run.error = None
+        run.failed_node_id = None
+        run.finished_at = datetime.now(UTC).isoformat()
+        return run
+
+    def _finish_cancelled(
+        self,
+        run: WorkflowRun,
+        nodes_by_id: dict[str, NodeSpec],
+    ) -> WorkflowRun:
+        """Settle the run after a cancellation request.
+
+        Completed nodes keep their recorded outputs; nodes that never ran
+        are SKIPPED with the cancellation reason; the run ends CANCELLED and
+        never COMPLETED.
+        """
+        for node_id in nodes_by_id:
+            if node_id not in run.node_runs:
+                _mark_skipped(node_id, run, reason=f"{_SKIP_CANCELLED}: run cancelled before start")
+        run.status = WorkflowRunStatus.CANCELLED
+        run.error = "run cancelled by request"
+        run.failed_node_id = None
         run.finished_at = datetime.now(UTC).isoformat()
         return run
 
@@ -408,9 +700,15 @@ class WorkflowExecutor:
             return result
 
 
-def _mark_skipped(node_id: str, run: WorkflowRun) -> None:
-    """Mark a node as skipped in the run."""
+def _mark_skipped(node_id: str, run: WorkflowRun, reason: str | None = None) -> None:
+    """Mark a node as skipped in the run.
+
+    ``reason`` (T-V4-009) is recorded on the run so a skip is disclosed:
+    ``barrier-incomplete`` / ``no-active-inbound-edge`` / ``upstream-skipped``
+    / ``cancelled``.
+    """
     run.node_runs[node_id] = NodeRun(
         node_id=node_id,
         status=NodeRunStatus.SKIPPED,
+        error=reason,
     )

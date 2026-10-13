@@ -224,16 +224,28 @@ def _skipped_join_defn() -> WorkflowDefinition:
 
 @pytest.mark.unit
 async def test_skipped_branch_skips_join() -> None:
-    """If one branch is skipped, the all-join merge node should also be skipped."""
+    """T-V4-009: an all-barrier join left incomplete is NOT a silent success.
+
+    One branch is skipped by the condition, so the declared all-barrier
+    merge receives partial inputs.  The merge is skipped with the reason
+    recorded, the run FAILS naming the merge node, and nothing reports
+    COMPLETED while the declared work is incomplete.
+    """
     defn = _skipped_join_defn()
     run, _, _ = await _run(defn, {"mode": "fast"})
-    assert run.status == WorkflowRunStatus.COMPLETED
+    assert run.status == WorkflowRunStatus.FAILED
+    assert run.failed_node_id == "merge"
+    assert "barrier-incomplete" in (run.error or "")
     assert run.node_runs["cond"].status == NodeRunStatus.COMPLETED
     assert run.node_runs["fast_branch"].status == NodeRunStatus.COMPLETED
     assert run.node_runs["slow_branch"].status == NodeRunStatus.SKIPPED
-    # Merge should be skipped since it requires both branches (all-join).
+    # Merge should be skipped since it requires both branches (all-join) —
+    # and the skip is disclosed with its reason, not silent.
     assert run.node_runs["merge"].status == NodeRunStatus.SKIPPED
+    assert "barrier-incomplete" in (run.node_runs["merge"].error or "")
+    # end is single-inbound downstream of the skipped merge: routing skip.
     assert run.node_runs["end"].status == NodeRunStatus.SKIPPED
+    assert "no-active-inbound-edge" in (run.node_runs["end"].error or "")
 
 
 @pytest.mark.unit
