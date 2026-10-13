@@ -6,11 +6,21 @@ worker can back off and eventually park a poison message as failed.
 
 Guards applied before any chunk/DB write:
 - size cap (``MAX_DOCUMENT_BYTES``);
+- **pre-expansion parse budgets** (T-V1-031): parse wall clock, peak memory,
+  expanded-text and output-element budgets are enforced *while* the parser
+  expands the document (see :mod:`ingestion.budget`), not by counting elements
+  after the fact — a document that would blow a budget is refused between
+  elements and parked non-retryably;
 - **element-count cap** (boss ruling: a 25 MiB pathological TXT can yield 1.46M
-  elements — refuse past N with a typed error before Postgres writes);
+  elements — refuse past N with a typed error before Postgres writes; kept as
+  the independent post-parse backstop);
 - **generation fence** (T-V1-019): a job is bound to one document generation
   and may only publish it while that generation is still the document's live
   one — see :func:`assert_generation_is_publishable`.
+
+T-V1-031 honesty rule: a PDF page that is an image with no text layer is a
+**lost region**. Nothing is invented for it, the lost pages are disclosed on
+every chunk, and the job ends in ``needs_review`` — never in ``ready``.
 """
 
 from __future__ import annotations
@@ -28,7 +38,13 @@ from ingestion.adapters.llamaindex_chunker import (
 from ingestion.adapters.llamaindex_chunker import (
     chunk_document as llamaindex_chunk_document,
 )
-from ingestion.adapters.registry import parser_for_mime
+from ingestion.adapters.pdf_scan import pdf_text_layer_report
+from ingestion.adapters.registry import (
+    ParseReport,
+    parse_with_precedence,
+    parser_for_mime,
+)
+from ingestion.budget import ParseBudgetExceeded, budgets_from_env
 from ingestion.chunk import ChunkResult, chunk_document
 from ingestion.dedup import supersede_other_versions
 from ingestion.interfaces import DocumentElement, ParsedDocument
@@ -317,26 +333,146 @@ class PipelineResult:
     #: stage (e.g. graph extraction) failed while mandatory writes succeeded.
     partial: bool = False
     warnings: list[str] = field(default_factory=list)
+    #: T-V1-031: True when the content landed but part of the source could not
+    #: be read (e.g. image-only PDF pages). The job is parked ``needs_review``.
+    needs_review: bool = False
+    #: The lost regions themselves (page lists), so a caller never has to
+    #: re-derive them from the message text.
+    lost_regions: list[dict] = field(default_factory=list)
 
 
 def ensure_element_limit(elements: list[DocumentElement], limit: int | None = None) -> None:
-    """Refuse a document that normalizes to more than ``limit`` elements."""
+    """Refuse a document that normalizes to more than ``limit`` elements.
+
+    Kept as an independent **post-parse backstop**: the pre-expansion budgets
+    (T-V1-031, :mod:`ingestion.budget`) are the enforcement point, this is the
+    belt that catches a parser which produced its elements without ever
+    hitting a checkpoint.
+    """
     effective = max_elements() if limit is None else limit
     if len(elements) > effective:
         raise IngestPipelineError(
-            "too_many_elements",
+            "TOO_MANY_ELEMENTS",
             f"document produced {len(elements)} elements (limit {effective})",
             retryable=False,
         )
 
 
+#: Chunk-metadata keys carrying the T-V1-031 parse disclosure. They ride to
+#: the answer layer through the stores' metadata passthrough, so an answer over
+#: a partially-read source can say so (``NEEDS_REVIEW``) instead of looking
+#: confident about the regions that were never read.
+PARSE_PARTIAL_KEY = "parse_partial"
+PARSE_LOST_REGIONS_KEY = "parse_lost_regions"
+PARSE_REPORT_KEY = "parse"
+
+
+def parse_disclosure(report: ParseReport, lost_regions: list[dict]) -> dict:
+    """The disclosure stored on every chunk of one document version."""
+    disclosure: dict = {PARSE_REPORT_KEY: report.as_metadata()}
+    if lost_regions:
+        disclosure[PARSE_PARTIAL_KEY] = True
+        disclosure[PARSE_LOST_REGIONS_KEY] = list(lost_regions)
+    return disclosure
+
+
+async def _park_needs_review(
+    session: AsyncSession,
+    *,
+    job: IngestionJob,
+    reasons: list[str],
+    disclosure: dict,
+    stages: list[str],
+) -> PipelineResult:
+    """Publish nothing, and say why (T-V1-031 image-only document).
+
+    Used when a document cannot be read **at all** (every page is an image with
+    no text layer). The honest outcomes are "refused" or "needs review" — the
+    dishonest one is indexing an empty document as if it had been read. We park
+    the job ``needs_review`` so the source stays visible and reviewable, and no
+    chunk is published that an answer could cite as if it covered the file.
+
+    The generation fence still runs first: a dead generation must not be able
+    to leave a review request behind either.
+    """
+    await assert_generation_is_publishable(
+        session,
+        job=job,
+        document_id=job.document_id,
+        version_id=job.document_version_id,
+        gate="write",
+    )
+    job.status = JobStatus.NEEDS_REVIEW.value
+    job.stage = JobStage.READY.value
+    job.error_code = "NEEDS_REVIEW"
+    job.error_message = "; ".join(reasons)[:2000]
+    job.finished_at = datetime.now(UTC)
+    await session.commit()
+    stages.append(JobStage.READY.value)
+    _log_stage(job, JobStage.READY.value)
+    logger.warning(
+        "ingest_job_needs_review",
+        extra={
+            "event": "ingest_job_needs_review",
+            "job_id": str(job.id),
+            "document_id": str(job.document_id),
+            "chunks": 0,
+            "warnings": reasons,
+            "disclosure": disclosure,
+        },
+    )
+    return PipelineResult(
+        job_id=str(job.id),
+        chunk_count=0,
+        language="unknown",
+        stages=stages,
+        partial=True,
+        warnings=list(reasons),
+        needs_review=True,
+        lost_regions=list(disclosure.get(PARSE_LOST_REGIONS_KEY, [])),
+    )
+
+
+def needs_review_reasons_for(lost_regions: list[dict]) -> list[str]:
+    """Human-readable reasons a partially-read document needs review (T-V1-031)."""
+    return [
+        f"{len(region['lost_pages'])} of {region['page_count']} page(s) carry an "
+        f"image and no text layer (pages {region['lost_pages']}); that content "
+        "was NOT read"
+        for region in lost_regions
+    ]
+
+
+def terminal_job_state(lost_regions: list[dict]) -> tuple[str, str | None, str | None]:
+    """``(status, error_code, error_message)`` for a finished job (T-V1-031).
+
+    Pure, so the honesty rule is pinned directly instead of through a DB run:
+    a document that was read in full finishes ``ready``; a document with lost
+    regions finishes ``needs_review`` — its readable text is still published
+    (retrieval over what *was* read keeps working), but the job never claims
+    ``ready`` and always carries the disclosure.
+
+    ``process_job`` derives the same three values inline (the T-V1-019 gate
+    test pins the READY transition by source order), so this function is the
+    specification the inline branch is checked against by the matrix tests.
+    """
+    reasons = needs_review_reasons_for(lost_regions)
+    if not reasons:
+        return JobStatus.READY.value, None, None
+    return (
+        JobStatus.NEEDS_REVIEW.value,
+        "NEEDS_REVIEW",
+        ("NEEDS_REVIEW: " + "; ".join(reasons))[:2000],
+    )
+
+
 async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResult:
     job = await session.get(IngestionJob, job_id)
     if job is None:
-        raise IngestPipelineError("job_not_found", "ingestion job not found", retryable=False)
+        raise IngestPipelineError("JOB_NOT_FOUND", "ingestion job not found", retryable=False)
     version = await session.get(DocumentVersion, job.document_version_id)
     if version is None:
-        raise IngestPipelineError("version_not_found", "document version missing", retryable=False)
+        raise IngestPipelineError("VERSION_NOT_FOUND", "document version missing", retryable=False)
     document = await session.get(Document, job.document_id)
     content = version.content or b""
 
@@ -351,35 +487,75 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     _log_stage(job, JobStage.PARSING.value)
 
     if not content:
-        raise IngestPipelineError("empty_document", "empty document", retryable=False)
+        raise IngestPipelineError("EMPTY_DOCUMENT", "empty document", retryable=False)
     if len(content) > MAX_DOCUMENT_BYTES:
-        raise IngestPipelineError("document_too_large", "document too large", retryable=False)
+        raise IngestPipelineError("DOCUMENT_TOO_LARGE", "document too large", retryable=False)
 
-    parser = parser_for_mime(version.mime_type)
-    if parser is None:
+    # T-V1-031 explicit-rejection cell (XLSX, images): the refusal happens
+    # BEFORE any parser sees the bytes, and it is a typed, advertised answer —
+    # see `ingestion.format_matrix` and docs/ingestion/FORMAT-MATRIX.md.
+    if parser_for_mime(version.mime_type) is None:
         raise IngestPipelineError(
-            "unsupported_mime_type",
+            "UNSUPPORTED_MIME_TYPE",
             f"unsupported mime type: {version.mime_type}",
             retryable=False,
         )
     mime_type = version.mime_type or ""
     parse_metadata = {"charset": version.charset} if version.charset else None
 
+    #: T-V1-031 lost regions: pages that carry an image and no text layer.
+    #: Empty for a fully readable document.
+    lost_regions: list[dict] = []
+    if mime_type == "application/pdf":
+        text_layer = pdf_text_layer_report(content)
+        if text_layer is not None and text_layer.fully_lost:
+            # Nothing here is readable and nothing may be invented for it.
+            return await _park_needs_review(
+                session,
+                job=job,
+                reasons=[
+                    "NEEDS_REVIEW: no text layer on any page "
+                    f"({len(text_layer.lost_pages)} of {text_layer.page_count} page(s) "
+                    "are image-only); OCR is not enabled in this deployment, so the "
+                    "content was NOT read"
+                ],
+                disclosure=text_layer.disclosure(),
+                stages=stages,
+            )
+        if text_layer is not None and text_layer.lost_pages:
+            lost_regions.append(text_layer.disclosure())
+
     try:
-        parsed: ParsedDocument = await parser.parse(
+        parsed: ParsedDocument
+        #: Pre-expansion budgets (T-V1-031): enforced while the parser expands
+        #: the document, so a pathological input is refused between elements
+        #: instead of after it has already cost the time and the memory.
+        parsed, parse_report = await parse_with_precedence(
             content,
             mime_type=mime_type,
             filename=document.source_filename if document else None,
             metadata=parse_metadata,
+            budgets=budgets_from_env(max_output_elements=max_elements()),
         )
         ensure_element_limit(parsed.elements)  # BEFORE chunk/DB writes
     except IngestPipelineError:
         raise
+    except ParseBudgetExceeded as exc:
+        logger.warning(
+            "ingest_parse_budget_exceeded",
+            extra={
+                "event": "ingest_parse_budget_exceeded",
+                "job_id": str(job.id),
+                "budget": exc.code,
+                "error": exc.message,
+            },
+        )
+        raise IngestPipelineError(exc.code, exc.message, retryable=False) from exc
     except IngestionError as exc:
         raise IngestPipelineError(exc.code, exc.message, retryable=False) from exc
     except Exception as exc:  # unexpected/transient -> retryable
         raise IngestPipelineError(
-            "parse_failed", f"{type(exc).__name__}: {exc}", retryable=True
+            "PARSE_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
         ) from exc
 
     # T-V1-019 — PRE-WRITE gate. Everything below writes publication state
@@ -410,10 +586,14 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         result = _chunk(parsed, filename=document.source_filename if document else None)
     except Exception as exc:
         raise IngestPipelineError(
-            "chunk_failed", f"{type(exc).__name__}: {exc}", retryable=True
+            "CHUNK_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
         ) from exc
 
     await session.execute(delete(ChunkRow).where(ChunkRow.document_version_id == version.id))
+    #: T-V1-031: every chunk carries which parser read it and, when part of the
+    #: source was unreadable, the lost regions — the answer layer reads this
+    #: straight back off the retrieved items.
+    chunk_disclosure = parse_disclosure(parse_report, lost_regions)
     id_map: dict[str, uuid.UUID] = {}
     for chunk in result.chunks:
         # T-V1-016: stable publication ID — same generation + same chunk ⇒ same
@@ -433,7 +613,10 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                 section=chunk.section,
                 page=chunk.page,
                 language=result.language,
-                chunk_metadata=chunk.metadata,
+                chunk_metadata={
+                    **(chunk.metadata or {}),
+                    **chunk_disclosure,
+                },
             )
         )
     if document is not None:
@@ -513,7 +696,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     except Exception as exc:
         logger.error("fts_indexing_failed", extra={"job_id": str(job.id), "error": str(exc)})
         raise IngestPipelineError(
-            "fts_indexing_failed",
+            "FTS_INDEXING_FAILED",
             f"Postgres FTS indexing failed: {exc}",
             retryable=True,
         ) from exc
@@ -580,7 +763,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                     extra={"job_id": str(job.id), "error": str(exc)},
                 )
                 raise IngestPipelineError(
-                    "qdrant_indexing_failed",
+                    "QDRANT_INDEXING_FAILED",
                     f"Vector store upsert failed: {exc}",
                     retryable=True,
                 ) from exc
@@ -624,7 +807,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     except Exception as exc:
         logger.error("qdrant_embedding_failed", extra={"job_id": str(job.id), "error": str(exc)})
         raise IngestPipelineError(
-            "qdrant_indexing_failed",
+            "QDRANT_INDEXING_FAILED",
             f"Embedding and vector store indexing failed: {exc}",
             retryable=True,
         ) from exc
@@ -722,7 +905,23 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             )[:2000]
             partial_reasons.append(f"graph_extraction_failed: {type(exc).__name__}: {exc}")
 
-    job.status = JobStatus.READY.value
+    #: T-V1-031: content that was only partially read is NOT a clean ``ready``.
+    #: The chunks (and the readable text) are published so retrieval works over
+    #: what *was* read, but the job is parked ``needs_review`` with the lost
+    #: regions named, and every chunk carries the same disclosure — so an answer
+    #: over an omitted region can never present itself as complete.
+    needs_review_reasons = needs_review_reasons_for(lost_regions)
+    if needs_review_reasons:
+        # Partial read: park needs_review. An earlier partial reason (e.g.
+        # GRAPH_INDEX_PARTIAL) is overwritten here and only here — a document
+        # read in full keeps the reasons it already had.
+        job.status = JobStatus.NEEDS_REVIEW.value
+        job.error_code = "NEEDS_REVIEW"
+        job.error_message = ("NEEDS_REVIEW: " + "; ".join(needs_review_reasons))[:2000]
+    else:
+        # Full read: the T-V1-019 ready gate above is what authorises this
+        # transition, so it must come before it (pinned by test_ingest_pipeline).
+        job.status = JobStatus.READY.value
     job.stage = JobStage.READY.value
     job.finished_at = datetime.now(UTC)
     await session.commit()
@@ -730,13 +929,17 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     _log_stage(job, JobStage.READY.value)
 
     logger.info(
-        "ingest_job_ready",
+        "ingest_job_ready" if not needs_review_reasons else "ingest_job_needs_review",
         extra={
-            "event": "ingest_job_ready",
+            "event": "ingest_job_ready"
+            if not needs_review_reasons
+            else "ingest_job_needs_review",
             "job_id": str(job.id),
             "chunks": len(result.chunks),
             "language": result.language,
-            "partial": bool(partial_reasons),
+            "partial": bool(partial_reasons) or bool(lost_regions),
+            "needs_review": bool(needs_review_reasons),
+            "parse": parse_report.as_metadata(),
         },
     )
     if partial_reasons:
@@ -753,6 +956,8 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         chunk_count=len(result.chunks),
         language=result.language,
         stages=stages,
-        partial=bool(partial_reasons),
-        warnings=list(partial_reasons),
+        partial=bool(partial_reasons) or bool(lost_regions),
+        warnings=list(partial_reasons) + needs_review_reasons,
+        needs_review=bool(needs_review_reasons),
+        lost_regions=list(lost_regions),
     )

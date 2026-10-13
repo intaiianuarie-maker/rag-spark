@@ -11,7 +11,19 @@ Three things are pinned here, in the order the ticket states them:
    guard trips between elements rather than counting them afterwards.
 3. **Partial is disclosed and never confident** — a partially-read source parks
    the job ``needs_review``, carries its lost regions onto every chunk, and the
-   answer layer refuses to render an answer over it as ``answered``/``HIGH``.
+   terminal state never claims ``ready`` (``terminal_job_state``).
+
+   The **answer-layer** half of that rule (``AnswerEngine._disclose_source``:
+   relabelling ``NEEDS_REVIEW`` + capping confidence at ``MEDIUM``) is NOT
+   pinned here. It was split out of T-V1-031 by reviewer verdict: the engine
+   work belongs to **T-V1-052** (all return paths — 3 ``INSUFFICIENT_EVIDENCE``
+   early returns bypass the helper, and the retrieval metadata passthrough is
+   still unchecked). The 4 engine-dependent tests that used to live in the
+   "answer layer" section below were **moved, not deleted**, to
+   ``handoffs/T-V1-052-SCRATCH-PROPOSAL-ENGINE-DISCLOSURE.md`` for that
+   ticket to re-home. What ingestion pins here is the contract the answer layer
+   will consume: ``PARSE_LOST_REGIONS_KEY == "parse_lost_regions"`` (see
+   ``test_parse_disclosure_rides_on_every_chunk_only_when_regions_were_lost``).
 
 The PD-001 corpus keeps its own contract test (``tests/contracts/
 test_document_parser_contract.py``); this file is the matrix's.
@@ -30,11 +42,9 @@ os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 
 from core.errors import (
     JOB_STATUS_REASON_CODES,
-    AnswerStatus,
     JobStatus,
     ReasonCode,
 )
-from harness_fakes import make_item
 from ingestion.adapters.docx import DocxParser
 from ingestion.adapters.pdf_scan import pdf_text_layer_report
 from ingestion.adapters.pdf_table import PdfTableParser
@@ -555,85 +565,13 @@ def test_fallback_disclosure_is_recorded_when_docling_is_not_the_parser_that_ans
 
 
 # -- the answer layer --------------------------------------------------------------------
-
-
-def _answer(status=AnswerStatus.ANSWERED, level="high"):
-    from answer.models import Answer, Confidence, ConfidenceLevel
-
-    return Answer(
-        answer="Revenue was 1450.",
-        status=status,
-        confidence=Confidence(
-            level=ConfidenceLevel(level),
-            basis="Answer grounded in 1 verified, substantiated citation(s)",
-        ),
-    )
-
-
-def _item_with_lost_regions():
-    return make_item("Revenue was 1450 on page 1").model_copy(
-        update={
-            "metadata": {
-                "parse_partial": True,
-                "parse_lost_regions": [
-                    {
-                        "reason": "no_text_layer",
-                        "lost_pages": [2],
-                        "page_count": 2,
-                        "readable_pages": 1,
-                    }
-                ],
-            }
-        }
-    )
-
-
-def test_an_answer_over_an_omitted_region_is_never_confident() -> None:
-    from answer.engine import AnswerEngine
-    from answer.models import ConfidenceLevel
-
-    answered = AnswerEngine._disclose_source(_answer(), [_item_with_lost_regions()])
-    assert answered.status is AnswerStatus.NEEDS_REVIEW
-    assert answered.reason_code == ReasonCode.NEEDS_REVIEW.value
-    assert answered.confidence.level is ConfidenceLevel.MEDIUM, "HIGH claims completeness"
-    assert any("[2]" in limitation for limitation in answered.limitations)
-    assert "NOT available" in answered.limitations[-1]
-
-
-def test_an_answer_over_a_fully_read_source_is_untouched() -> None:
-    from answer.engine import AnswerEngine
-    from answer.models import ConfidenceLevel
-
-    clean_item = make_item("Revenue was 1450 on page 1")
-    base = _answer()
-    answered = AnswerEngine._disclose_source(base, [clean_item])
-    assert answered is base, "a fully-read source must not be relabelled at all"
-    assert answered.status is AnswerStatus.ANSWERED
-    assert answered.confidence.level is ConfidenceLevel.HIGH
-    assert answered.limitations == []
-    assert answered.reason_code is None
-
-
-def test_an_abstention_keeps_its_reason_but_still_discloses_the_lost_region() -> None:
-    from answer.engine import AnswerEngine
-
-    abstained = _answer(status=AnswerStatus.INSUFFICIENT_EVIDENCE, level="low")
-    result = AnswerEngine._disclose_source(abstained, [_item_with_lost_regions()])
-    assert result.status is AnswerStatus.INSUFFICIENT_EVIDENCE, "an abstention is not a claim"
-    assert result.reason_code is None
-    assert any("[2]" in limitation for limitation in result.limitations)
-
-
-def test_the_lost_region_metadata_key_is_the_one_ingestion_writes() -> None:
-    """The two sides must agree on the key or the disclosure never arrives."""
-    import inspect
-
-    from answer.engine import AnswerEngine
-    from jobs.ingest_pipeline import PARSE_LOST_REGIONS_KEY
-
-    assert PARSE_LOST_REGIONS_KEY == "parse_lost_regions"
-    collect_source = inspect.getsource(AnswerEngine._collect_lost_regions)
-    assert "parse_lost_regions" in collect_source
+# MOVED (T-V1-031b repair, reviewer verdict): the 4 engine-dependent disclosure
+# tests that lived here (an omitted region is never confident / a fully-read
+# source is untouched / an abstention still discloses / the shared metadata key)
+# were moved VERBATIM to `handoffs/T-V1-052-SCRATCH-PROPOSAL-ENGINE-DISCLOSURE.md`.
+# `packages/answer/engine.py` was reverted to its pre-T-V1-031 state (the
+# `_disclose_source` work was out-of-scope for this ticket), so this file pins
+# only the ingestion side of the contract. T-V1-052 owns the answer-layer half.
 
 
 # --------------------------------------------------------------------------------------
