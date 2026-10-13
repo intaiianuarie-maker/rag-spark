@@ -28,6 +28,20 @@ test — env only), and a restarted worker must redeliver and reconcile.
 With ``T021_CRASH_STAGE`` unset this script is the *recovery* worker: the same
 loop with no stall, used to reconcile after the crash.
 
+Never outlive the test (T-V1-054)
+---------------------------------
+A stall here is *unbounded by design* — ``await asyncio.Event().wait()`` never
+returns. Before T-V1-054 the only thing that stopped a stalled worker was the
+parent's teardown, so a parent that was killed, detached from its terminal or
+lost mid-run left this process wedged forever; 29 of these at ~140 MB each is
+how the box was OOM-starved.
+
+So this process now watches its own parent (the PID the test passes in
+``T021_PARENT_PID``) and exits on its own the moment that parent is gone. The
+parent also spawns us into a dedicated process group and kills the group, so
+there are two independent mechanisms: *reaping* in the normal case and
+*self-termination* when the parent's own cleanup never gets to run.
+
 Embeddings note (same rationale as tests/integration/test_dedup_versions.py):
 this box's Infinity serves 384-d where the ``knowledge`` collection expects
 1024-d (T-V1-043, open), which would gate the vector stage with
@@ -42,14 +56,54 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
 _MARKER_SUFFIX = ".stalled"
+#: How often the parent watchdog checks that its parent still exists.
+_WATCHDOG_INTERVAL = 1.0
 
 
 def _log(message: str) -> None:
     print(f"[t021-crash-worker pid={os.getpid()} t={time.time():.3f}] {message}", flush=True)
+
+
+def _parent_is_alive(parent_pid: int) -> bool:
+    """Is the test parent still there? Signal 0 tests existence, sends nothing."""
+    try:
+        os.kill(parent_pid, 0)
+    except ProcessLookupError:
+        return False  # reaped: nobody will ever reap us, so we leave
+    except PermissionError:
+        return True  # alive, merely not ours to signal
+    except OSError:
+        return True  # unknown -> assume alive; the parent still has killpg
+    return True
+
+
+def _install_parent_watchdog(parent_pid: int | None) -> None:
+    """Exit when the test parent disappears (T-V1-054).
+
+    This is the half that survives the exact failure the parent-side reaper
+    cannot: the parent being SIGKILLed, detached, or simply never reaching its
+    teardown. A daemon thread polls at a fixed interval and ``os._exit``s, so
+    the worker cannot sit on a claim and ~140 MB of RSS indefinitely.
+    """
+    if not parent_pid:
+        return
+    _log(f"parent_watchdog_installed parent_pid={parent_pid}")
+
+    def _watch() -> None:
+        while True:
+            if not _parent_is_alive(parent_pid):
+                _log(f"parent_gone pid={parent_pid} -> self-terminating")
+                # Hard exit: a stalled ``asyncio.Event().wait()`` never unwinds,
+                # and nothing should do partial work on the way out.
+                os._exit(0)
+            time.sleep(_WATCHDOG_INTERVAL)
+
+    threading.Thread(target=_watch, daemon=True, name="t021-parent-watchdog").start()
 
 
 async def _stall(marker_dir: Path, stage: str, detail: str) -> None:
@@ -160,6 +214,15 @@ def main() -> int:
     crash_stage = os.environ.get("T021_CRASH_STAGE", "").strip()
     marker_dir = Path(os.environ["T021_MARKER_DIR"])
     marker_dir.mkdir(parents=True, exist_ok=True)
+
+    # T-V1-054: arm the watchdog BEFORE the heavy imports below, so a parent
+    # that dies while we are still starting up cannot leave us behind.
+    raw_parent_pid = os.environ.get("T021_PARENT_PID", "").strip()
+    try:
+        parent_pid = int(raw_parent_pid) if raw_parent_pid else None
+    except ValueError:
+        parent_pid = None
+    _install_parent_watchdog(parent_pid)
 
     _install_embedder(crash_stage, marker_dir)
     if crash_stage:

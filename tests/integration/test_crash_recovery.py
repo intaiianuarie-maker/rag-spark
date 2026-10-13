@@ -26,8 +26,10 @@ Skipped loudly when Postgres/Redis/Qdrant are not reachable (``make up``).
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
+import signal
 import socket
 import subprocess
 import sys
@@ -317,6 +319,80 @@ def _cleanup_queue_keys() -> None:
 # killable worker subprocess
 # --------------------------------------------------------------------------------------
 
+#: T-V1-054 — every worker this module spawns, for deterministic teardown.
+#: A stalled worker waits on an Event forever, so "the test finished" and "the
+#: worker died" are unrelated unless we make them related.
+_SPAWNED: list[_CrashWorker] = []
+
+#: How long to wait for a killed group to actually disappear before escalating.
+_REAP_GRACE_SECONDS = 5.0
+#: The bracket keeps the pattern from matching this file's own pgrep argv.
+_ORPHAN_PATTERN = "t021_crash[_]worker"
+
+
+def _live_orphan_pids() -> list[int]:
+    """PIDs of any ``t021_crash_worker`` still alive on this box (a real pgrep)."""
+    result = subprocess.run(
+        ["pgrep", "-f", _ORPHAN_PATTERN],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [int(line) for line in result.stdout.split() if line.strip().isdigit()]
+
+
+def _reap_all_workers() -> None:
+    """Kill every spawned worker's **process group** and wait for it to go.
+
+    Group kill, not a best-effort ``terminate``: the workers are started with
+    ``start_new_session=True`` so each leads its own group, which means one
+    ``killpg`` reaches the worker *and anything it started*, and — unlike
+    signalling a bare PID — cannot leave a grandchild wedged on a claim.
+    """
+    for worker in list(_SPAWNED):
+        proc = worker.proc
+        if proc is None:
+            continue
+        if proc.poll() is not None:
+            continue
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            try:
+                proc.kill()
+            except ProcessLookupError:
+                pass
+        try:
+            proc.wait(timeout=_REAP_GRACE_SECONDS)
+        except subprocess.TimeoutExpired:  # pragma: no cover - SIGKILL ignored
+            pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _no_orphan_workers() -> Generator[None, None, None]:
+    """T-V1-054: after this module runs, not one crash worker may remain.
+
+    Two independent nets, because each covers the other's blind spot:
+
+    * this teardown (reap + assert) — the normal case;
+    * ``atexit`` + the worker's own parent-watchdog — the case the card was
+      written for, where the test process is SIGKILLed and *no* teardown runs
+      at all.
+    """
+    baseline = set(_live_orphan_pids())
+    try:
+        yield
+    finally:
+        _reap_all_workers()
+        stragglers = [pid for pid in _live_orphan_pids() if pid not in baseline]
+        assert stragglers == [], (
+            "orphaned t021_crash_worker processes survived the suite "
+            f"(pids={stragglers}); they hold a claim and ~140MB RSS each"
+        )
+
+
+atexit.register(_reap_all_workers)
+
 
 class _CrashWorker:
     """A real ``run_worker`` process that stalls at one stage until SIGKILLed."""
@@ -338,6 +414,9 @@ class _CrashWorker:
         env["INGEST_QUEUE_LEASE_SECONDS"] = LEASE_SECONDS
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         env["T021_MARKER_DIR"] = str(self.marker_dir)
+        # T-V1-054: let the worker police itself if this test process dies
+        # before its own teardown ever runs.
+        env["T021_PARENT_PID"] = str(os.getpid())
         env.setdefault("MIGRATIONS_ON_BOOT", "false")
         env.setdefault("LOG_JSON", "false")
         env.setdefault("APP_ENV", "test")
@@ -353,7 +432,15 @@ class _CrashWorker:
                 env=env,
                 stdout=log,
                 stderr=subprocess.STDOUT,
+                # T-V1-054: our own session/process group. This is what makes
+                # the teardown's killpg deterministic — without it the worker
+                # shares the pytest group and killpg would kill the test runner
+                # too (and a dead parent leaves the children behind).
+                start_new_session=True,
             )
+            # Registered in a finally: a worker that spawned but then failed to
+            # come up is still ours to reap.
+            _SPAWNED.append(self)
         finally:
             log.close()
         self.started_at = time.time()
@@ -376,12 +463,31 @@ class _CrashWorker:
             time.sleep(0.05)
         raise AssertionError(f"{self.name} never reached stage {self.crash_stage!r}")
 
+    def _killpg(self, sig: int) -> None:
+        """Signal the worker's whole process group (T-V1-054)."""
+        proc = self.proc
+        assert proc is not None
+        try:
+            os.killpg(os.getpgid(proc.pid), sig)
+        except (ProcessLookupError, PermissionError):
+            # Already gone, or the group moved: fall back to the bare PID so the
+            # caller's intent (this worker must be dead) is still honoured.
+            try:
+                proc.send_signal(sig)
+            except ProcessLookupError:
+                pass
+
     def kill(self) -> float:
-        """SIGKILL (a real crash: no finally, no ack, no lease release)."""
+        """SIGKILL (a real crash: no finally, no ack, no lease release).
+
+        Group-killed rather than bare-PID-killed so that anything the worker
+        started dies with it. SIGKILL still bypasses every Python-level cleanup,
+        which is the whole point of this scenario.
+        """
         assert self.proc is not None
         t_kill = time.time()
-        self.proc.kill()
-        self.proc.wait(timeout=15)
+        self._killpg(signal.SIGKILL)
+        self.proc.wait(timeout=_REAP_GRACE_SECONDS)
         return t_kill
 
     def stop(self) -> None:
@@ -389,12 +495,15 @@ class _CrashWorker:
         if self.proc is None:
             return
         if self.proc.poll() is None:
-            self.proc.terminate()
+            self._killpg(signal.SIGTERM)
             try:
                 self.proc.wait(timeout=10)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
-                self.proc.wait(timeout=10)
+                self._killpg(signal.SIGKILL)
+                try:
+                    self.proc.wait(timeout=_REAP_GRACE_SECONDS)
+                except subprocess.TimeoutExpired:  # pragma: no cover
+                    pass
 
     def log_text(self) -> str:
         if not self.log_path.exists():
