@@ -13,6 +13,7 @@ import json
 import pytest
 from workflow_engine import (
     CapabilityManifest,
+    JoinStrategy,
     NodeSpec,
     NodeType,
     PortSpec,
@@ -151,19 +152,37 @@ def test_compile_outgoing_edges_populated() -> None:
     assert cond_vals == {True, False}
 
 
-def test_compile_join_mode_any_for_condition_downstream() -> None:
-    """Nodes downstream of a CONDITION node should have join_mode='any'."""
+def test_compile_join_mode_declared_any_for_condition_downstream() -> None:
+    """T-V4-008: a join node fed by two conditional edges must DECLARE
+    ``any`` — the barrier is declared, not inferred from the source type."""
     defn = _branch_defn()
+    for node in defn.nodes:
+        if node.id == "legal_out":
+            node.input_ports = [
+                PortSpec(name="t", type="any"),
+                PortSpec(name="f", type="any"),
+            ]
+            node.join_strategy = JoinStrategy.ANY
+    defn.edges.append(
+        WorkflowEdgeSpec(id="e4", source_node_id="cond", source_port="result",
+                         target_node_id="legal_out", target_port="f",
+                         condition_value=False),
+    )
     rev = _make_revision(defn)
     plan = WorkflowCompiler.compile(rev, allow_unvalidated=True)
 
-    legal_step = plan.step_by_node_id("legal_out")
-    assert legal_step is not None
-    assert legal_step.join_mode == "any"
+    step = plan.step_by_node_id("legal_out")
+    assert step is not None
+    assert step.join_mode == "any"
+    assert step.join_waits_for == ["f", "input"]  # sorted, all mapped ports
+    assert step.join_emit_on_partial == "first-arrival"
 
+    # A single-inbound node carries the trivial all barrier (no declaration needed).
     general_step = plan.step_by_node_id("general_out")
     assert general_step is not None
-    assert general_step.join_mode == "any"
+    assert general_step.join_mode == "all"
+    assert general_step.join_waits_for == ["input"]
+    assert general_step.join_emit_on_partial == "nothing"
 
 
 def test_compile_join_mode_all_for_regular_merge() -> None:
@@ -185,7 +204,8 @@ def test_compile_join_mode_all_for_regular_merge() -> None:
             NodeSpec(id="merge", type=NodeType.TRANSFORM, name="Merge",
                      config={"key": "out"},
                      input_ports=[PortSpec(name="a", type="any"), PortSpec(name="b", type="any")],
-                     output_ports=[PortSpec(name="out", type="any")]),
+                     output_ports=[PortSpec(name="out", type="any")],
+                     join_strategy=JoinStrategy.ALL),
             NodeSpec(id="end", type=NodeType.OUTPUT, name="End",
                      input_ports=[PortSpec(name="in", type="any")]),
         ],

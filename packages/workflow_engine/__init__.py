@@ -19,6 +19,7 @@ from .interfaces import (
     ExecutionEdgeInfo,
     ExecutionPlan,
     ExecutionStep,
+    JoinStrategy,
     NodeExecutor,
     # Prototype models (preserved)
     NodeRun,
@@ -45,6 +46,7 @@ __all__ = [
     "ExecutionPlan",
     "ExecutionStep",
     "FakeNodeExecutor",
+    "JoinStrategy",
     "LangflowAdapter",
     "LangflowComponentSpec",
     "LangflowImportError",

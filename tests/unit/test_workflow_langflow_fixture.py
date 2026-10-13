@@ -236,13 +236,19 @@ class TestReferenceFlowCompiles:
         assert order["ConditionalRouter-ref03"] < order["ChatOutput-ref04"]
         assert order["ConditionalRouter-ref03"] < order["TextOutput-ref05"]
 
-    def test_condition_downstream_uses_any_join(self) -> None:
+    def test_condition_downstream_single_inbound_trivial_all_barrier(self) -> None:
+        """T-V4-008: single-inbound downstream nodes carry the trivial ``all``
+        barrier (join modes are declared, not inferred from the source type);
+        the runtime behaviour for one inbound edge is unchanged."""
         revision = self._import()
         plan = WorkflowCompiler.compile(revision, manifest=MANIFEST)
         for node_id in ("ChatOutput-ref04", "TextOutput-ref05"):
             step = plan.step_by_node_id(node_id)
             assert step is not None
-            assert step.join_mode == "any"
+            assert step.join_mode == "all"
+            assert step.join_waits_for == ["input_value"]
+            assert step.join_emit_on_partial == "nothing"
+            assert step.join_timeout_s is not None
 
     def test_rejected_when_capability_disabled(self) -> None:
         """Same fixture with 'llm' disabled must fail honestly, not pass."""

@@ -155,6 +155,25 @@ class PortSpec(BaseModel):
             )
 
 
+class JoinStrategy(StrEnum):
+    """Declared join strategy for a node with multiple inbound edges (T-V4-008).
+
+    The strategy is the node's explicit barrier contract — the compiler
+    refuses to compile a join node that does not declare one:
+
+    * ``all``   — wait for EVERY mapped inbound port; emit nothing until the
+      barrier is complete.
+    * ``any``   — wait for the FIRST inbound port to arrive; emit on partial
+      input.
+    * ``first`` — await only the first mapped port; later arrivals do not
+      extend the barrier.
+    """
+
+    ALL = "all"
+    ANY = "any"
+    FIRST = "first"
+
+
 class NodeSpec(BaseModel):
     """A workflow node with explicit port contracts and capability declarations.
 
@@ -162,6 +181,9 @@ class NodeSpec(BaseModel):
     declare its input/output ports and the external capabilities it depends
     on.  The compiler and executor use these declarations to detect missing
     wiring and unavailable capabilities *before* any execution.
+
+    T-V4-008: a node with two or more inbound edges is a join node and must
+    declare ``join_strategy``; an undeclared join refuses to compile.
     """
 
     id: str
@@ -172,6 +194,9 @@ class NodeSpec(BaseModel):
     output_ports: list[PortSpec] = Field(default_factory=list)
     required_capabilities: list[str] = Field(default_factory=list)
     description: str = ""
+    #: Declared join strategy (``None`` = not declared; legal only for
+    #: non-join nodes — single inbound edge or a trigger).
+    join_strategy: JoinStrategy | None = None
 
 
 class WorkflowEdgeSpec(BaseModel):
@@ -228,9 +253,42 @@ class WorkflowRevision(BaseModel):
     # Hash construction / verification
     # ------------------------------------------------------------------ #
     @staticmethod
+    def _canonical_payload(value: Any) -> Any:
+        """Canonicalize a spec payload for hashing (T-V4-008).
+
+        Dict keys are stringified and sorted, and set members are sorted by
+        their canonical JSON.  Set iteration order depends on the process
+        hash seed (``PYTHONHASHSEED``), so an unsorted set — e.g.
+        ``workspace_capabilities`` — would make identical definition bytes
+        hash differently across processes.  The dump is taken in python mode
+        first so sets reach this normalizer as sets (not as seed-ordered
+        lists).
+        """
+        if isinstance(value, dict):
+            return {
+                str(k): WorkflowRevision._canonical_payload(v)
+                for k, v in sorted(value.items(), key=lambda kv: str(kv[0]))
+            }
+        if isinstance(value, (set, frozenset)):
+            normalized = [WorkflowRevision._canonical_payload(v) for v in value]
+            return sorted(
+                normalized,
+                key=lambda item: json.dumps(item, sort_keys=True, default=str),
+            )
+        if isinstance(value, (list, tuple)):
+            return [WorkflowRevision._canonical_payload(v) for v in value]
+        return value
+
+    @staticmethod
     def _compute_content_hash(spec: WorkflowDefinition) -> str:
-        """Compute the canonical SHA-256 of *spec* (sorted JSON)."""
-        canonical = json.dumps(spec.model_dump(mode="json"), sort_keys=True)
+        """Compute the canonical SHA-256 of *spec* (sorted JSON).
+
+        The canonicalization is process-independent (see
+        :meth:`_canonical_payload`): the same definition bytes hash
+        identically under any ``PYTHONHASHSEED``.
+        """
+        payload = WorkflowRevision._canonical_payload(spec.model_dump())
+        canonical = json.dumps(payload, sort_keys=True, default=str)
         return hashlib.sha256(canonical.encode()).hexdigest()
 
     @classmethod
@@ -321,7 +379,13 @@ class ExecutionStep(BaseModel):
     ``order`` gives the deterministic topological position.  For nodes with
     multiple inbound edges, ``join_mode`` describes how inputs are merged
     (``"all"`` = all predecessors must complete; ``"any"`` = any one
-    suffices, used for condition-fan-out branches).
+    suffices, used for condition-fan-out branches; ``"first"`` = only the
+    first mapped port is awaited).
+
+    T-V4-008: the join barrier is STATED on the step — ``join_waits_for``
+    (which inbound ports the node waits for), ``join_emit_on_partial`` (what
+    it emits when the barrier is incomplete) and ``join_timeout_s`` — so the
+    executor never has to infer the barrier from ``join_mode``.
     """
 
     node_id: str
@@ -332,6 +396,12 @@ class ExecutionStep(BaseModel):
         description="target_port -> list of 'source_node:source_port'",
     )
     outgoing_edges: list[ExecutionEdgeInfo] = Field(default_factory=list)
+    #: Inbound ports this node waits for (sorted; strategy-dependent).
+    join_waits_for: list[str] = Field(default_factory=list)
+    #: What the node emits while the barrier is incomplete.
+    join_emit_on_partial: str = "nothing"
+    #: Barrier timeout in seconds (``None`` = the executor's run deadline).
+    join_timeout_s: float | None = None
 
 
 class ExecutionPlan(BaseModel):
