@@ -12,7 +12,7 @@ from io import StringIO
 from typing import Any
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, decode_text, make_element, validate_input
+from ..normalize import ParseBudgetExceeded, ParseError, decode_text, make_element, validate_input
 
 SUPPORTED_MIME_TYPES = frozenset({"text/csv", "application/csv"})
 
@@ -33,7 +33,7 @@ class CsvParser(DocumentParser):
             text = decode_text(data, (metadata or {}).get("charset"))
             reader = csv.DictReader(StringIO(text))
             elements = _row_elements(reader)
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except csv.Error as exc:
             raise ParseError(f"invalid CSV: {exc}") from exc

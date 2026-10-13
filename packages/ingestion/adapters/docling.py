@@ -12,7 +12,7 @@ from io import BytesIO
 from typing import Any
 
 from ..interfaces import BBox, DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, clean_text, make_element, validate_input
+from ..normalize import ParseBudgetExceeded, ParseError, clean_text, make_element, validate_input
 
 SUPPORTED_MIME_TYPES = frozenset(
     {
@@ -93,7 +93,7 @@ class DoclingParser(DocumentParser):
             converter = DocumentConverter(format_options=format_options if format_options else None)
             result = converter.convert(DocumentStream(name=stream_name, stream=BytesIO(data)))
             doc = result.document
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except Exception as exc:
             raise ParseError(f"docling conversion failed: {exc}") from exc

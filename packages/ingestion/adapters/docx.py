@@ -14,7 +14,7 @@ from docx.table import Table
 from docx.text.paragraph import Paragraph
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, clean_text, make_element, validate_input
+from ..normalize import ParseBudgetExceeded, ParseError, clean_text, make_element, validate_input
 
 SUPPORTED_MIME_TYPES = frozenset(
     {
@@ -39,7 +39,7 @@ class DocxParser(DocumentParser):
         try:
             document = Document(BytesIO(data))
             elements = _body_elements(document)
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except Exception as exc:
             raise ParseError(f"failed to parse DOCX: {exc}") from exc

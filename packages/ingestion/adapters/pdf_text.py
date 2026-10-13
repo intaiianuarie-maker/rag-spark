@@ -14,6 +14,7 @@ from pypdf import PdfReader
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
 from ..normalize import (
+    ParseBudgetExceeded,
     ParseError,
     clean_text,
     is_numbered_heading,
@@ -40,10 +41,20 @@ class PdfTextParser(DocumentParser):
         try:
             reader = PdfReader(BytesIO(data))
             elements: list[DocumentElement] = []
+            #: T-V1-031: pages the text layer could not yield anything from.
+            #: A page that carries an image and no text is a *lost region*, and
+            #: the pipeline discloses it (``needs_review``) instead of pretending
+            #: the document was read in full. A genuinely blank page is not
+            #: reported: nothing was lost from it.
+            pages_without_text: list[int] = []
             for page_number, page in enumerate(reader.pages, start=1):
-                elements.extend(_page_elements(page.extract_text() or "", page_number))
+                page_text = page.extract_text() or ""
+                if not page_text.strip():
+                    pages_without_text.append(page_number)
+                    continue
+                elements.extend(_page_elements(page_text, page_number))
             page_count = len(reader.pages)
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except Exception as exc:  # third-party failure -> typed error
             raise ParseError(f"failed to parse PDF text: {exc}") from exc
@@ -54,7 +65,10 @@ class PdfTextParser(DocumentParser):
             elements=elements,
             mime_type=mime_type,
             page_count=page_count,
-            metadata=dict(metadata or {}),
+            metadata={
+                **dict(metadata or {}),
+                "pages_without_text": pages_without_text,
+            },
         )
 
 

@@ -10,7 +10,14 @@ import re
 from typing import Any
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, clean_text, decode_text, make_element, validate_input
+from ..normalize import (
+    ParseBudgetExceeded,
+    ParseError,
+    clean_text,
+    decode_text,
+    make_element,
+    validate_input,
+)
 
 SUPPORTED_MIME_TYPES = frozenset({"text/plain"})
 _PARAGRAPH_SPLIT = re.compile(r"\n\s*\n")
@@ -31,7 +38,7 @@ class TextParser(DocumentParser):
         try:
             text = decode_text(data, (metadata or {}).get("charset"))
             elements = _paragraph_elements(text)
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except Exception as exc:
             raise ParseError(f"failed to parse text: {exc}") from exc

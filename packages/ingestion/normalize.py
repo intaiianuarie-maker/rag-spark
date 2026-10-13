@@ -13,6 +13,10 @@ from typing import Any
 
 from charset_normalizer import from_bytes
 
+# Re-exported for the adapters' typed re-raise (`except ParseBudgetExceeded`),
+# the one exception they must never swallow into a generic ParseError.
+from .budget import ParseBudgetExceeded as ParseBudgetExceeded
+from .budget import active_guard
 from .interfaces import BBox, DocumentElement, ElementType
 
 #: Refuse documents above this size before parsing (task: oversized → typed error).
@@ -108,6 +112,18 @@ def make_element(
     bbox: BBox | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> DocumentElement:
+    """Build one element — the single pre-expansion budget checkpoint (T-V1-031).
+
+    Every PD-001 adapter funnels its element loop through here, so this is
+    where the parse budgets (time / memory / expanded text / output) are
+    enforced: a document that would expand past its budget is refused
+    **between** elements, before the expansion is paid for, instead of being
+    counted after the fact. Outside a guarded parse there is no guard and the
+    behaviour is unchanged.
+    """
+    guard = active_guard()
+    if guard is not None:
+        guard.observe(text)
     return DocumentElement(
         type=element_type,
         text=text,

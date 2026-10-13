@@ -44,6 +44,7 @@ Guarantees:
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 
 from core.auth import ACLScope
@@ -59,6 +60,7 @@ from retrieval.interfaces import (
     DEFAULT_CONTEXT_TOP_K,
     RetrievalMode,
     RetrievalOrchestrator,
+    RetrievedItem,
 )
 from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retrieval_outcome
 
@@ -271,7 +273,8 @@ class AnswerEngine:
         if claims and len(verified) < len(claims):
             # Partial verification: render only from the verified claims.
             rendered_answer = " ".join(claim.text for claim in verified)
-            return self._disclose(
+            return self._disclose_source(
+                self._disclose(
                 Answer(
                     answer=rendered_answer,
                     status=AnswerStatus.PARTIAL,
@@ -292,12 +295,15 @@ class AnswerEngine:
                     citations=citations,
                 ),
                 outcome,
+                ),
+                items,
             )
 
         has_high_conf = bool(citations) and (len(verified) == len(claims) if claims else False)
         confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         rendered_answer = " ".join(claim.text for claim in verified)
-        return self._disclose(
+        return self._disclose_source(
+            self._disclose(
             Answer(
                 answer=rendered_answer,
                 status=AnswerStatus.ANSWERED,
@@ -315,6 +321,90 @@ class AnswerEngine:
                 citations=citations,
             ),
             outcome,
+            ),
+            items,
+        )
+
+    @staticmethod
+    def _collect_lost_regions(items: Sequence[RetrievedItem]) -> list[dict]:
+        """Lost regions carried by the retrieved chunks (T-V1-031).
+
+        The ingestion pipeline writes them onto every chunk of a partially-read
+        source (``ingest_pipeline.parse_disclosure``); retrieval hands them
+        back on the items' metadata unchanged.
+        """
+        lost: list[dict] = []
+        for item in items:
+            for region in item.metadata.get("parse_lost_regions") or ():
+                if isinstance(region, dict) and region not in lost:
+                    lost.append(region)
+        return lost
+
+    @staticmethod
+    def _limitation_text(lost: Sequence[dict]) -> str:
+        page_summary = "; ".join(
+            f"pages {region.get('lost_pages')} of {region.get('page_count')}"
+            for region in lost
+        )
+        return (
+            f"Only part of the source was read: {page_summary} carried an image "
+            "and no text layer, so that content was NOT available to this answer."
+        )
+
+    @classmethod
+    def _disclose_source(cls, answer: Answer, items: Sequence[RetrievedItem]) -> Answer:
+        """Disclose partially-parsed sources; never let one read as confident (T-V1-031).
+
+        The pipeline parks a job ``needs_review`` when part of a source could not
+        be read (e.g. image-only PDF pages) and writes the lost regions onto
+        every chunk it published. Retrieval hands that metadata straight back on
+        the retrieved items, so the answer layer says the same thing the job
+        said — instead of answering over an omitted region as if the document
+        had been read in full.
+
+        Two rules, both hard:
+
+        * a **standing** answer is labelled ``needs_review`` and lists the
+          regions that were never read (an abstention keeps its own reason —
+          it is already not a claim to have read anything);
+        * confidence is capped at ``MEDIUM``. ``HIGH`` claims completeness, and
+          completeness is exactly what a partially-read source does not have.
+        """
+        lost = cls._collect_lost_regions(items)
+        if not lost:
+            return answer
+
+        limitation = cls._limitation_text(lost)
+        limitations = [*answer.limitations]
+        if limitation not in limitations:
+            limitations.append(limitation)
+
+        level = (
+            ConfidenceLevel.MEDIUM
+            if answer.confidence.level is ConfidenceLevel.HIGH
+            else answer.confidence.level
+        )
+        standing = answer.status in {AnswerStatus.ANSWERED, AnswerStatus.PARTIAL}
+        return answer.model_copy(
+            update={
+                "status": AnswerStatus.NEEDS_REVIEW if standing else answer.status,
+                "reason_code": (
+                    ReasonCode.NEEDS_REVIEW.value if standing else answer.reason_code
+                ),
+                "reason": (
+                    "A cited source was only partially parsed; see limitations."
+                    if standing
+                    else answer.reason
+                ),
+                "limitations": limitations,
+                "confidence": Confidence(
+                    level=level,
+                    basis=(
+                        f"{answer.confidence.basis} — capped at {level.value}: a "
+                        "partially-parsed source cannot ground a complete answer"
+                    ),
+                ),
+            }
         )
 
     @staticmethod

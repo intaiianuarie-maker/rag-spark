@@ -12,7 +12,7 @@ from typing import Any
 from bs4 import BeautifulSoup
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, clean_text, make_element, validate_input
+from ..normalize import ParseBudgetExceeded, ParseError, clean_text, make_element, validate_input
 
 SUPPORTED_MIME_TYPES = frozenset({"text/html", "application/xhtml+xml"})
 _BOILERPLATE_TAGS = ("nav", "footer", "header", "script", "style", "noscript", "aside")
@@ -37,7 +37,7 @@ class HtmlParser(DocumentParser):
             root = soup.find("article") or soup.body or soup
             elements = _body_elements(root)
             language = _document_language(soup)
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except Exception as exc:
             raise ParseError(f"failed to parse HTML: {exc}") from exc

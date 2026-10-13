@@ -13,7 +13,7 @@ from typing import Any
 import pdfplumber
 
 from ..interfaces import DocumentElement, DocumentParser, ElementType, ParsedDocument
-from ..normalize import ParseError, clean_text, make_element, validate_input
+from ..normalize import ParseBudgetExceeded, ParseError, clean_text, make_element, validate_input
 
 SUPPORTED_MIME_TYPES = frozenset({"application/pdf"})
 _HEADING_MIN_SIZE = 13.0
@@ -37,7 +37,7 @@ class PdfTableParser(DocumentParser):
                 for page_number, page in enumerate(pdf.pages, start=1):
                     elements.extend(_page_elements(page, page_number))
                 page_count = len(pdf.pages)
-        except ParseError:
+        except (ParseError, ParseBudgetExceeded):
             raise
         except Exception as exc:
             raise ParseError(f"failed to parse PDF structure: {exc}") from exc
