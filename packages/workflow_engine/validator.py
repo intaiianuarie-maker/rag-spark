@@ -19,7 +19,6 @@ from collections.abc import Mapping
 from typing import Any
 
 from .interfaces import (
-    PORT_TYPE_ANY,
     CapabilityManifest,
     NodeType,
     ValidationError,
@@ -87,19 +86,116 @@ def _config_bytes(container: Mapping[str, Any]) -> int:
         return MAX_CONFIG_BYTES_PER_NODE + 1
 
 
+# ---------------------------------------------------------------------------
+# T-V4-007: port type-compatibility — the matrix is STATED, not emergent
+# ---------------------------------------------------------------------------
+
+#: Base port types (mirrors ``interfaces._SUPPORTED_PORT_TYPES``).  A port
+#: type is one of these, a recursive ``list<…>`` parameterization, and/or a
+#: trailing ``?`` nullable marker.
+_BASE_PORT_TYPES = frozenset({
+    "string", "dict", "list", "boolean", "number", "any",
+})
+
+#: The nullable marker suffix (``string?`` — the port accepts ``None``).
+_NULLABLE_SUFFIX = "?"
+
+#: The compatibility matrix, stated explicitly: a ``(source, target)`` base
+#: pair may be wired ONLY when it appears here.
+#:
+#: * identity pairs — a value flows only between ports of the same base type;
+#: * ``any`` — the DECLARED wildcard.  ``any`` is in the matrix because the
+#:   port that carries it explicitly opts out of type checking (both as a
+#:   source and as a target).  It is not an emergent fallback: no other pair
+#:   is inferred, and a pair absent from this matrix refuses.
+_PORT_TYPE_MATRIX: frozenset[tuple[str, str]] = frozenset(
+    {(base, base) for base in _BASE_PORT_TYPES}
+    | {("any", base) for base in _BASE_PORT_TYPES}
+    | {(base, "any") for base in _BASE_PORT_TYPES}
+)
+
+#: Container prefix/suffix for parameterized ports (``list<string>``).
+_LIST_PREFIX = "list<"
+_LIST_SUFFIX = ">"
+
+
+def _split_nullable(port_type: str) -> tuple[str, bool]:
+    """Split a trailing ``?`` off *port_type* → ``(base_type, nullable)``."""
+    if port_type.endswith(_NULLABLE_SUFFIX):
+        return port_type[: -len(_NULLABLE_SUFFIX)], True
+    return port_type, False
+
+
+def _list_element(port_type: str) -> str | None:
+    """Element type of a ``list<…>`` port, or ``None`` for a bare ``list``.
+
+    A bare ``list`` carries no element type — it is the legacy container
+    form and behaves as ``list<any>`` (an explicitly untyped element, not a
+    blanket bypass of element checking).
+    """
+    if port_type.startswith(_LIST_PREFIX) and port_type.endswith(_LIST_SUFFIX):
+        return port_type[len(_LIST_PREFIX) : -len(_LIST_SUFFIX)]
+    return None
+
+
 def _types_compatible(source_type: str, target_type: str) -> bool:
     """Return True if a value of *source_type* can safely flow to *target_type*.
 
-    Rules:
-    - ``any`` is compatible with any type (source or target).
-    - Identical type names are compatible.
-    - All other combinations are incompatible (e.g. ``dict`` → ``number``).
+    The rules, in order (T-V4-007):
+
+    1. **Matrix** — the base pair must be in :data:`_PORT_TYPE_MATRIX`
+       (identity, or the declared ``any`` wildcard on either side).  A pair
+       not in the matrix refuses — no silent coercion, no inference.
+    2. **Nullability** — a nullable source (``string?``) may carry ``None``,
+       so it may only feed a nullable target.  Nullability is per-port (the
+       ``?`` on the port type), never a global escape hatch.
+    3. **Generics** — ``list<A>`` into ``list<B>`` requires the ELEMENT types
+       compatible under these same rules (recursively — same
+       elements-not-container discipline as the B-R1-3 list fix).  A bare
+       ``list`` is ``list<any>``.
     """
-    if source_type == PORT_TYPE_ANY or target_type == PORT_TYPE_ANY:
-        return True
-    if source_type == target_type:
-        return True
-    return False
+    source_base, source_nullable = _split_nullable(source_type)
+    target_base, target_nullable = _split_nullable(target_type)
+
+    # Rule 2: a possibly-None value never flows into a non-nullable port.
+    if source_nullable and not target_nullable:
+        return False
+
+    # Rule 1: the CONTAINER pair must be in the stated matrix (a
+    # parameterized list is still a ``list`` for the matrix).
+    source_element = _list_element(source_base)
+    target_element = _list_element(target_base)
+    source_container = "list" if source_element is not None else source_base
+    target_container = "list" if target_element is not None else target_base
+    if (source_container, target_container) not in _PORT_TYPE_MATRIX:
+        return False
+
+    # Rule 3: compare element types when both sides are parameterized lists.
+    if source_element is not None and target_element is not None:
+        return _types_compatible(source_element, target_element)
+
+    # A parameterized list into a bare list (or vice versa) is the
+    # ``any``-element case already settled by the matrix.
+    return True
+
+
+def _mismatch_reason(source_type: str, target_type: str) -> str:
+    """Bounded reason class for a refused pair (for the rejection message)."""
+    source_base, source_nullable = _split_nullable(source_type)
+    target_base, target_nullable = _split_nullable(target_type)
+    if source_nullable and not target_nullable:
+        return "nullable source into non-nullable target"
+    source_element = _list_element(source_base)
+    target_element = _list_element(target_base)
+    source_container = "list" if source_element is not None else source_base
+    target_container = "list" if target_element is not None else target_base
+    if (
+        source_element is not None
+        and target_element is not None
+        and (source_container, target_container) in _PORT_TYPE_MATRIX
+    ):
+        return f"list element types differ ({source_element} vs {target_element})"
+    return "type pair not in the compatibility matrix"
 
 
 class WorkflowValidator:
@@ -468,8 +564,11 @@ class WorkflowValidator:
     ) -> list[ValidationError]:
         """Reject edges whose source/target port types are incompatible.
 
-        ``any`` is compatible with all types.  Otherwise the source port
-        type must equal the target port type.
+        The compatibility rules are the stated matrix + nullability +
+        element-type recursion in ``_types_compatible`` (T-V4-007).  A
+        refusal names the edge, both ports and both types, plus the reason
+        class (off-matrix pair, nullable source into non-nullable target, or
+        mismatched list element types) so the operator sees WHY.
         """
         errors: list[ValidationError] = []
 
@@ -492,7 +591,8 @@ class WorkflowValidator:
                     message=(
                         f"Edge '{edge.id}': source port '{edge.source_port}' "
                         f"({src_type}) is incompatible with target port "
-                        f"'{edge.target_port}' ({tgt_type})"
+                        f"'{edge.target_port}' ({tgt_type}) — "
+                        f"{_mismatch_reason(src_type, tgt_type)}"
                     ),
                                         edge_id=edge.id,
                 ))

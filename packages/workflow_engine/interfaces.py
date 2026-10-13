@@ -93,6 +93,38 @@ _SUPPORTED_PORT_TYPES = frozenset({
     PORT_TYPE_ANY,
 })
 
+#: T-V4-007: maximum nesting depth accepted for a parameterized port type
+#: (``list<list<…>>``).  The type value is an untrusted-length string, so the
+#: recursive syntax check itself must be bounded.
+_MAX_PORT_TYPE_DEPTH = 8
+
+
+def _is_supported_port_type(value: str, depth: int = 0) -> bool:
+    """Port-type syntax accepted by :class:`PortSpec` (T-V4-007).
+
+    Grammar (stated, not emergent)::
+
+        type      := base | "list<" type ">" , optional trailing "?"
+        base      := string | number | boolean | dict | list | any
+
+    * ``list<…>`` parameterizes the container with its element type,
+      recursively — ``list<string>``, ``list<list<number>>`` — so validation
+      can compare element types, not just the container.
+    * a trailing ``?`` marks the port nullable (``string?``,
+      ``list<string>?``); the meaning is enforced by the validator, the
+      syntax is accepted here.
+    * the bare bases (including ``list`` and ``any``) are unchanged.
+    """
+    if depth > _MAX_PORT_TYPE_DEPTH:
+        return False
+    if value.endswith("?"):
+        value = value[:-1]
+    if value in _SUPPORTED_PORT_TYPES:
+        return True
+    if value.startswith("list<") and value.endswith(">"):
+        return _is_supported_port_type(value[5:-1], depth + 1)
+    return False
+
 
 class PortSpec(BaseModel):
     """A typed input or output port on a workflow node.
@@ -100,6 +132,12 @@ class PortSpec(BaseModel):
     Ports make data-flow contracts explicit.  An input port without a
     ``default`` value must be satisfied by an incoming edge or the initial
     workflow input, otherwise validation fails (required-ports check).
+
+    T-V4-007: ``type`` also accepts parameterized and nullable forms —
+    ``list<string>`` (element-typed container) and a trailing ``?``
+    (``string?``, ``list<string>?``) for a port that accepts ``None``.
+    See :func:`_is_supported_port_type`; the compatibility rules are stated
+    as an explicit matrix in ``workflow_engine.validator``.
     """
 
     name: str
@@ -109,10 +147,11 @@ class PortSpec(BaseModel):
     description: str = ""
 
     def model_post_init(self, __context: Any) -> None:
-        if self.type not in _SUPPORTED_PORT_TYPES:
+        if not _is_supported_port_type(self.type):
             raise ValueError(
                 f"Unsupported port type '{self.type}'. "
-                f"Allowed: {{_SUPPORTED_PORT_TYPES}}"
+                f"Allowed: bases {sorted(_SUPPORTED_PORT_TYPES)}, "
+                f"recursive list<...> parameterization, and a trailing '?'"
             )
 
 
