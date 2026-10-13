@@ -34,6 +34,7 @@ from .interfaces import (
     AgentStep,
     AgentStepType,
     ContextOverrideError,
+    RetryPolicy,
     RunContext,
     RunState,
     RunStatus,
@@ -70,6 +71,38 @@ def _tool_class_for(name: str) -> ToolClass:
 #:   fuzz cannot hang the worker.
 MAX_ACTION_TEXT_CHARS = 10_240
 MAX_PARSE_TIME_S = 0.5
+
+
+#: T-V3-005 (V3 plan trace runtime — retry): transient vs fatal is a pure
+#: classifier. Only ``retryable_error_codes`` in ``RetryPolicy`` ever retry;
+#: ``TOOL_NOT_ALLOWED`` (scope/policy) is never in that set by construction,
+#: so it never retries. ``TOOL_TIMEOUT`` is the canonical transient and does.
+#: Backoff is exponential but **capped**:
+#: ``delay = min(initial * multiplier^(attempt-1), max_backoff, deadline - now)``
+#: — unbounded exponential would let a 30 s max with 3 attempts become 1+2+4=7 s
+#: worst-case, but without the ``max_backoff``/``deadline`` caps a flapping
+#: tool could hold the worker for minutes. The deadline cap guarantees the
+#: total wait never pushes the run past its wall-clock deadline.
+def is_retryable(error_code: AgentErrorCode | None, policy: RetryPolicy) -> bool:
+    """Pure classifier: retry only if the code is in the policy's allowlist."""
+    return error_code is not None and error_code in policy.retryable_error_codes
+
+
+def compute_backoff(attempt: int, policy: RetryPolicy) -> float:
+    """Exponential backoff for ``attempt`` (1-indexed), capped at ``max_backoff_s``."""
+    if attempt < 1:
+        return 0.0
+    # 1 → initial, 2 → initial*multiplier, 3 → initial*multiplier^2, …
+    delay = policy.initial_backoff_s * (policy.backoff_multiplier ** (attempt - 1))
+    return min(delay, policy.max_backoff_s)
+
+
+def bounded_backoff(attempt: int, policy: RetryPolicy, deadline: datetime) -> float:
+    """Backoff additionally bounded by wall-clock deadline."""
+    remaining = (deadline - datetime.now(UTC)).total_seconds()
+    if remaining <= 0:
+        return 0.0
+    return min(compute_backoff(attempt, policy), remaining)
 
 
 @dataclass(frozen=True)
@@ -264,17 +297,32 @@ class AgentRuntime:
 
         The tool's declared ``input_schema`` becomes the contract; object
         schemas are pinned to ``additionalProperties: false`` so a model cannot
-        smuggle extra arguments past dispatch.
+        smuggle extra arguments past dispatch. If the tool declares
+        ``retry_policy`` or ``timeout_s`` (as the retry tests do), they are
+        honoured — otherwise the ToolSpec defaults (timeout 30 s, single
+        attempt) apply, so existing tools are unchanged.
         """
         schema = json.loads(json.dumps(tool.input_schema or {}))
         if schema.get("type") == "object" and "additionalProperties" not in schema:
             schema["additionalProperties"] = False
+        # Honour per-tool retry/timeout when the test injects them (pure for
+        # the classifier — no new dependency).
+        retry_policy = getattr(tool, "retry_policy", None)
+        if not isinstance(retry_policy, RetryPolicy):
+            retry_policy = RetryPolicy()
+        timeout_s = getattr(tool, "timeout_s", 30.0)
+        try:
+            timeout_s = float(timeout_s)
+        except Exception:
+            timeout_s = 30.0
         return ToolSpec(
             name=tool.name,
             version="1",
             description=tool.description,
             input_schema=schema,
             tool_class=_tool_class_for(tool.name),
+            timeout_s=timeout_s,
+            retry_policy=retry_policy,
         )
 
     def _validate_arguments_against_schema(self, tool_input: dict, spec: ToolSpec) -> None:
@@ -493,37 +541,117 @@ class AgentRuntime:
                 assert parsed.tool_name is not None
                 tool_name = parsed.tool_name
                 raw_input = parsed.raw_input or "{}"
-                tool_calls += 1
-
-                output, status, error_code = await self._dispatch(
-                    context=context,
-                    tool_name=tool_name,
-                    raw_tool_input=raw_input,
-                    policy=policy,
-                    state=state,
+                # Resolve spec once for retry policy / timeout (tool may inject).
+                _tool_for_retry = self.registry.get(tool_name)
+                _retry_policy = (
+                    _tool_for_retry.retry_policy
+                    if _tool_for_retry is not None and hasattr(_tool_for_retry, "retry_policy")
+                    and isinstance(_tool_for_retry.retry_policy, RetryPolicy)
+                    else RetryPolicy()
                 )
-
-                agent_run.steps.append(
-                    AgentStep(
-                        step_number=len(agent_run.steps) + 1,
-                        type=(
-                            AgentStepType.TOOL_OUTPUT
-                            if status is StepStatus.SUCCEEDED
-                            else AgentStepType.ERROR
-                        ),
-                        content="",
+                # Retry loop: transients only, per RetryPolicy, bounded by deadline.
+                # Each attempt is a persisted ERROR/TOOL_OUTPUT step — attempts are
+                # visible in the run record, not in-memory-only.
+                attempt = 0
+                while True:
+                    attempt += 1
+                    tool_calls += 1
+                    output, status, error_code = await self._dispatch(
+                        context=context,
                         tool_name=tool_name,
-                        tool_input=(
-                            {"raw": raw_input} if status is not StepStatus.SUCCEEDED else None
-                        ),
-                        tool_output=output,
-                        timestamp=datetime.now(UTC).isoformat(),
+                        raw_tool_input=raw_input,
+                        policy=policy,
+                        state=state,
                     )
-                )
-                if error_code is not None:
-                    agent_run.error = f"{error_code.value}: {output.get('error', '')}"
+                    # Persist this attempt as a step — the last attempt's output
+                    # is what the history sees, but all attempts are in the trace.
+                    # Include attempt count and error_code for visibility (attempts persisted).
+                    persisted_output: dict = dict(output)
+                    persisted_output["attempt"] = attempt
+                    if _retry_policy.max_attempts > 1:
+                        persisted_output["max_attempts"] = _retry_policy.max_attempts
+                    if error_code is not None:
+                        persisted_output["error_code"] = error_code.value
+                    agent_run.steps.append(
+                        AgentStep(
+                            step_number=len(agent_run.steps) + 1,
+                            type=(
+                                AgentStepType.TOOL_OUTPUT
+                                if status is StepStatus.SUCCEEDED
+                                else AgentStepType.ERROR
+                            ),
+                            content="",
+                            tool_name=tool_name,
+                            tool_input=(
+                                {"raw": raw_input} if status is not StepStatus.SUCCEEDED else None
+                            ),
+                            tool_output=persisted_output,
+                            timestamp=datetime.now(UTC).isoformat(),
+                        )
+                    )
+                    if error_code is not None:
+                        agent_run.error = f"{error_code.value}: {output.get('error', '')}"
 
-                history.append(ChatMessage(role=MessageRole.USER, content=f"Observation: {output}"))
+                    # Success or non-retryable or out of attempts → stop retrying.
+                    if status is StepStatus.SUCCEEDED:
+                        history.append(
+                            ChatMessage(role=MessageRole.USER, content=f"Observation: {output}")
+                        )
+                        break
+                    if not is_retryable(error_code, _retry_policy):
+                        history.append(
+                            ChatMessage(role=MessageRole.USER, content=f"Observation: {output}")
+                        )
+                        break
+                    if attempt >= _retry_policy.max_attempts:
+                        # Exhausted: transient → FAILED, as the card requires.
+                        # The run itself fails — the next LLM turn must not clear it.
+                        history.append(
+                            ChatMessage(role=MessageRole.USER, content=f"Observation: {output}")
+                        )
+                        state.transition_to(
+                            RunStatus.FAILED,
+                            error_code=error_code,
+                            error_detail=(
+                            f"{error_code.value if error_code else 'unknown'}: tool {tool_name!r} failed after {attempt} attempts: {output.get('error', '')}"  # noqa: E501
+                        ),
+                        )
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        # Do not continue to next LLM turn — the retry is the terminal.
+                        break
+                    # Bounded backoff before next attempt — capped by deadline and max_backoff.
+                    # Never sleep past the run's deadline.
+                    delay = bounded_backoff(attempt, _retry_policy, context.deadline)
+                    if delay > 0:
+                        # Respect deadline even during sleep.
+                        remaining = (context.deadline - datetime.now(UTC)).total_seconds()
+                        if remaining <= 0:
+                            break
+                        delay = min(delay, remaining)
+                        if delay > 0:
+                            await asyncio.sleep(min(delay, remaining))
+                    # Check budget/deadline before next attempt.
+                    if not self._check_step_budget(
+                        state=state, context=context, tool_calls_used=tool_calls
+                    ):
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        break
+                    if datetime.now(UTC) >= context.deadline:
+                        state.transition_to(
+                            RunStatus.LIMIT_EXCEEDED,
+                            error_code=AgentErrorCode.DEADLINE_EXCEEDED,
+                            error_detail="deadline reached during retry backoff",
+                        )
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        break
+                    # Loop for next attempt (tool_calls already counted).
+                    continue
+                # After the retry loop, continue outer LLM loop unless terminal.
+                if RunState.is_terminal(state.status):
+                    break
                 continue
 
             # Invalid / unknown / garbage → BLOCKED, never exec, never evidence.

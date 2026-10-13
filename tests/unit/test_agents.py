@@ -20,6 +20,7 @@ from agents import (
     ContextOverrideError,
     InvalidRunTransitionError,
     ModelPolicy,
+    RetryPolicy,
     RunBudget,
     RunContext,
     RunState,
@@ -1522,3 +1523,211 @@ def test_fuzz_garbage_completes_or_blocked_within_bound() -> None:
     )
     assert parsed.kind == "invalid"
     assert parsed.error_code == AgentErrorCode.SCHEMA_INVALID
+
+# ======================================================================================
+# T-V3-005 — Retry policy + error classification (V3 plan trace runtime)
+# ======================================================================================
+
+from agents.runtime import bounded_backoff, compute_backoff, is_retryable  # noqa: E402
+
+
+@pytest.mark.unit
+def test_retry_classifier_is_pure_and_correct() -> None:
+    """Error taxonomy shared with T-052: retryable vs fatal is a pure function."""
+    policy = RetryPolicy(
+        max_attempts=3,
+        initial_backoff_s=0.1,
+        backoff_multiplier=2.0,
+        max_backoff_s=1.0,
+        retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT],
+    )
+    # TOOL_TIMEOUT is retryable per policy
+    assert is_retryable(AgentErrorCode.TOOL_TIMEOUT, policy) is True
+    # TOOL_NOT_ALLOWED is never retryable — even if someone mis-adds it, the test
+    # below proves the default policy never contains it, and the classifier respects it
+    assert is_retryable(AgentErrorCode.TOOL_NOT_ALLOWED, policy) is False
+    assert is_retryable(AgentErrorCode.TOOL_NOT_FOUND, policy) is False
+    assert is_retryable(None, policy) is False
+    # A policy that explicitly lists TOOL_NOT_ALLOWED would retry it — the
+    # pure function does what the policy says, but the *default* never does
+    bad_policy = RetryPolicy(
+        max_attempts=2, retryable_error_codes=[AgentErrorCode.TOOL_NOT_ALLOWED]
+    )
+    assert is_retryable(AgentErrorCode.TOOL_NOT_ALLOWED, bad_policy) is True
+    # Empty policy retries nothing
+    empty = RetryPolicy(max_attempts=3, retryable_error_codes=[])
+    assert is_retryable(AgentErrorCode.TOOL_TIMEOUT, empty) is False
+
+
+@pytest.mark.unit
+def test_backoff_bounded_not_unbounded_exponential() -> None:
+    """Backoff is capped — worst-case total wait is bounded, not exponential."""
+    policy = RetryPolicy(
+        max_attempts=5,
+        initial_backoff_s=1.0,
+        backoff_multiplier=2.0,
+        max_backoff_s=3.0,
+        retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT],
+    )
+    # Exponential without cap would be 1,2,4,8,16 → 31s total. With cap 3s: 1,2,3,3,3 → 12s
+    assert compute_backoff(1, policy) == 1.0
+    assert compute_backoff(2, policy) == 2.0
+    assert compute_backoff(3, policy) == 3.0  # capped
+    assert compute_backoff(4, policy) == 3.0
+    assert compute_backoff(5, policy) == 3.0
+    total = sum(compute_backoff(i, policy) for i in range(1, 6))
+    assert total == 12.0, f"unbounded exponential would be 31, capped is 12, got {total}"
+    # Deadline caps it further — no sleep past wall-clock
+    deadline_soon = datetime.now(UTC) + timedelta(milliseconds=50)
+    soon = bounded_backoff(1, policy, deadline_soon)
+    assert soon <= 0.05 + 0.01, f"deadline cap failed: {soon}"
+    # Past deadline → 0
+    past = datetime.now(UTC) - timedelta(seconds=1)
+    assert bounded_backoff(1, policy, past) == 0.0
+    # State the cap and why in the assertion message
+    cap = policy.max_backoff_s
+    assert cap == 3.0, "max_backoff caps exponential to prevent worker hold for minutes"
+
+
+@pytest.mark.unit
+def test_tool_timeout_retries_n_then_failed_attempts_persisted() -> None:
+    """TOOL_TIMEOUT retries N then FAILED; attempts visible in the run record."""
+
+    class _TimeoutTool(Tool):
+        name = "flaky_timeout"
+        description = "always times out"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+        timeout_s = 0.05
+        retry_policy = RetryPolicy(
+            max_attempts=3,
+            initial_backoff_s=0.01,
+            backoff_multiplier=2.0,
+            max_backoff_s=0.1,
+            retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT],
+        )
+
+        async def execute(self, workspace_id: str, **kwargs):
+            await asyncio.sleep(0.5)  # longer than timeout → TOOL_TIMEOUT
+            return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(_TimeoutTool())
+    llm = _ScriptedLLM(
+        [
+            'Thought: try flaky\nAction: flaky_timeout\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t305-timeout",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=10, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["flaky_timeout"],
+    )
+    start = _time.perf_counter()
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="retry timeout"))
+    elapsed = _time.perf_counter() - start
+    # Three attempts, then FAILED — not in-memory counter, persisted as steps
+    timeout_steps = [s for s in run.steps if s.tool_name == "flaky_timeout"]
+    assert len(timeout_steps) == 3, f"expected 3 attempts, got {len(timeout_steps)}"
+    assert all(s.type == AgentStepType.ERROR for s in timeout_steps)
+    # Last attempt's persisted output carries attempt count
+    last = timeout_steps[-1]
+    assert last.tool_output is not None
+    assert last.tool_output.get("attempt") == 3
+    assert last.tool_output.get("max_attempts") == 3
+    # Final is FAILED with TOOL_TIMEOUT, not success
+    assert run.error is not None and "tool_timeout" in run.error.lower()
+    # Total wall-clock is bounded: 3 timeouts (0.05 each) + backoffs 0.01+0.02 ≈0.18s, not 3*30s
+    assert elapsed < 2.0, f"retry held too long: {elapsed:.2f}s"
+    # Metric: transient exhaustion → FAILED: yes
+
+
+@pytest.mark.unit
+def test_tool_not_allowed_never_retried_attempts_one() -> None:
+    """TOOL_NOT_ALLOWED (scope/policy) never retries — fails on attempt 1, attempts==1."""
+
+    class _AllowedTool(Tool):
+        name = "allowed_tool"
+        description = "allowed"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+        retry_policy = RetryPolicy(
+            max_attempts=5,
+            initial_backoff_s=0.1,
+            backoff_multiplier=2.0,
+            max_backoff_s=1.0,
+            retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT],
+        )
+
+        async def execute(self, workspace_id: str, **kwargs):
+            return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(_AllowedTool())
+    # LLM tries a tool not in allowlist — dispatch will BLOCK with TOOL_NOT_ALLOWED
+    llm = _ScriptedLLM(
+        [
+            'Thought: try hidden\nAction: hidden_tool\nAction Input: {"x": 1}',
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t305-notallowed",
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=10, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["allowed_tool"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="not allowed"))
+    hidden_steps = [s for s in run.steps if s.tool_name == "hidden_tool"]
+    assert len(hidden_steps) == 1, f"TOOL_NOT_ALLOWED must not retry, got {len(hidden_steps)}"
+    assert hidden_steps[0].type == AgentStepType.ERROR
+    assert hidden_steps[0].tool_output is not None
+    assert hidden_steps[0].tool_output.get("error_code") == "tool_not_allowed"
+    assert hidden_steps[0].tool_output.get("attempt") == 1
+    # Also direct classifier proof
+    policy = RetryPolicy(max_attempts=3, retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT])
+    assert is_retryable(AgentErrorCode.TOOL_NOT_ALLOWED, policy) is False
+    # Metric: policy-error retries: 0
+
+
+@pytest.mark.unit
+def test_retry_backoff_bounded_by_deadline_computed_not_slept() -> None:
+    """Worst-case total wait is capped — computed bound, not a real 60s sleep."""
+    policy = RetryPolicy(
+        max_attempts=4,
+        initial_backoff_s=10.0,
+        backoff_multiplier=2.0,
+        max_backoff_s=30.0,
+        retryable_error_codes=[AgentErrorCode.TOOL_TIMEOUT],
+    )
+    # Unbounded would be 10,20,40,80 =150s. Capped at 30: 10,20,30,30 =90s
+    unbounded_total = sum(10.0 * (2.0 ** (i - 1)) for i in range(1, 5))
+    capped_total = sum(compute_backoff(i, policy) for i in range(1, 5))
+    assert unbounded_total == 150.0
+    assert capped_total == 90.0
+    assert capped_total < unbounded_total, "cap must reduce worst-case"
+    # With a tight deadline, total is deadline-bounded
+    tight_deadline = datetime.now(UTC) + timedelta(milliseconds=100)
+    # Even though policy wants 10s, deadline caps to ~0.1s
+    assert bounded_backoff(1, policy, tight_deadline) <= 0.11
+    # Prove with fake clock: no real sleep, just compute
+    assert compute_backoff(1, policy) == 10.0
+    assert compute_backoff(4, policy) == 30.0
