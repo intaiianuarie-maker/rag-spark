@@ -1577,3 +1577,58 @@ GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1066_{start,en
 PROGRESS ROW — TASK: T-V1-066 crash harness per-cycle teardown + marker sweep (implemented, evidence captured).
 PROGRESS ROW — DONE: T-064's hypothesis pinned with a mechanism — when a stall stage never fires, `crash.wait_stalled()` raises **before** `crash.kill()` (no `finally` around the crash worker), so it survives into the next cycle under the shared prefix and claims that cycle's job. Fixed in harness code only: `_CrashWorker.start()` now reaps and **polls** (0.1s ticks, 10s bound, not a sleep) until every prior worker is verifiably gone before spawning, and the module-scoped `marker_dir` fixture sweeps the dir it created. **METRIC: embed + publication both PASS in 2 consecutive runs (2/2 each), marker dirs 28 → 28 → 28 (zero accumulation across two runs), 0 orphans.** `STAGE_TIMEOUT` untouched (not in the diff), no test body/assertion changed, no product code. Risks: (a) pre-existing 28 dirs deliberately left (diagnostic evidence — the T-064 root cause came from one; the sweep is the coordinator's call), (b) sweep removes post-hoc worker logs — flagged, not undone, (c) sub-ms cost per spawn, (d) 2×2 sample does not prove all flakiness is gone and wall clock varied 44.85s→86.75s under contention, (e) 45s timeout deliberately not raised, (f) foreign churn disclosed.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-067 (`T021_KEEP_MARKERS` opt-in) — code2 (solo, allowlisted)
+
+TASK: T-V1-067. Repo `Super Rag/knowledge-os`. Start HEAD `5088180` (T-066 already committed, so my T-066 paths started clean) → end HEAD `5088180` (**UNMOVED**). Allowed: **the `marker_dir` fixture in `tests/integration/test_crash_recovery.py` ONLY**.
+
+CHANGE (**1 path, +36/−8, 2 hunks — both inside the fixture function**):
+- `tests/integration/test_crash_recovery.py` — `marker_dir` fixture only:
+  - Fixture docstring now documents the escape hatch: name `T021_KEEP_MARKERS`, truthy spellings, **default OFF**, and *when* to use it (set → re-run the one failing test attached → read the logs from the printed path → unset), with the explicit warning that leaving it set re-accumulates a dir per run, which is the thing the fixture exists to prevent.
+  - Teardown reads `os.environ.get("T021_KEEP_MARKERS", "").strip().lower() in {"1", "true", "yes"}`; when truthy it prints the surviving dir's path and skips the sweep, otherwise it runs T-066's `shutil.rmtree` exactly as before.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: T-066's sweep is right for accumulation but it also destroys the crash worker's `crash-N.log` / `recovery-N.log` — and those logs are *how T-V1-064's root cause was found*. So the correct fix made the next failure undiagnosable. The default must stay OFF (accumulation was the bug, and T-066 proved one dir per run is what accumulates); diagnosis needs an explicit, documented opt-in, not a policy change.
+
+REUSED: T-066's `marker_dir` fixture body, its `shutil.rmtree` sweep, and its "our own dir only" scoping — unchanged. No new dependency, no new file, no product code, no new module-level symbol (the truthy check is inline in the fixture, deliberately, to stay inside the narrow allowlist).
+
+BUILT: one inline env read, one `if/else`, one print. Nothing else.
+
+VERIFY (venv `/root/ko-venv`; **no crash-file run at all for this ticket**, per the card — dev1's reindex holds the box):
+- **(1) Behavioural proof — direct fixture invocation**, `/tmp/opencode/tv1067_proof.py` (outside the repo → no dirty path). The fixture is unwrapped from pytest's decorator and driven by hand (`next(gen)` → write a stand-in `crash-1.log` → `gen.close()` to run the `finally`), for 13 env values. Deterministic, no services, no 350s test:
+
+| `T021_KEEP_MARKERS` | expected survive | actual |
+|---|---|---|
+| `<unset>` (default) | False (swept) | **False** |
+| `''` / `'0'` / `'false'` / `'no'` | False | **False** |
+| `'maybe'` (unrecognised) | False | **False** |
+| `'1'` / `'true'` / `'yes'` | True | **True** |
+| `'TRUE'` / `'YES'` / `'TrUe'` (case) | True | **True** |
+| `'  yes  '` (whitespace) | True | **True** |
+
+→ **PROOF: PASS — 13/13 cases behaved as documented.** Unrecognised values fall back to OFF, so a typo cannot silently start accumulating dirs.
+- **Default preserved**: the `<unset>` row is the direct proof that T-066's sweep is still the default — this ticket did not weaken it.
+- **Proof leaked nothing**: marker dirs **28 before, 28 after**, leaked-by-proof **0**. (First run of the proof reported FAIL — that was *my proof's* bug: it counted the 28 pre-existing T-064/066 dirs as its own leak instead of differencing against a baseline. Fixed to a baseline-relative check and re-run; the 13 behaviour rows were correct on both runs.)
+- **`if/else`, not an early `return`** — and I verified the reason rather than asserting it: `gen.throw(ValueError(...))` into the fixture propagates correctly under **both** `KEEP` unset and `KEEP=1`. A `return` inside a generator's `finally` would have swallowed a teardown exception.
+- **(2) ruff + py_compile** on the touched file → `All checks passed!` / `COMPILE OK`.
+- **Scope discipline** → `git diff -U0` = **2 hunks, both inside `marker_dir`**. `git diff | grep -E "^[+-].*def test_|^[+-].*assert |STAGE_TIMEOUT|TERMINAL_TIMEOUT"` → **no hits**: 0 test bodies, 0 assertions, 0 timeout constants changed.
+- **Prior work intact** → T-066's `_reap_all_workers` / `_await_workers_gone` still present (6 refs); T-057's `_queue_namespace` and T-054's reap nets untouched.
+
+METRICS: env values proven: **13/13**; truthy spellings documented and tested: **3** (`1`/`true`/`yes`) + case + whitespace tolerance; default still OFF: **yes**; dirs leaked by verification: **0**; files changed: **1**; hunks: **2** (both in the fixture); test bodies / assertions / timeouts / product-code changes: **0**; commits: **0**.
+
+RISKS / DISCLOSED:
+- **(a) The opt-in is per-run, not sticky.** Nothing enforces unsetting it, and an exported `T021_KEEP_MARKERS=1` in a shell profile would silently re-accumulate a dir per run — reintroducing exactly the leak T-066 fixed. The print states the path each time so the dirs are at least visible. Not adding expiry/auto-clean, as that would be a second policy this ticket was not scoped for.
+- **(b) The docstring is the only user-facing documentation.** Not added to `docs/` or a README — both are outside this ticket's allowlist. If the crash harness is documented elsewhere, this is the gap; flagging rather than freelancing.
+- **(c) Truthiness is my spelling choice**, and `maybe`-style values deliberately read as OFF. Anyone expecting `T021_KEEP_MARKERS=on` to work will get a swept dir. Documented explicitly in the docstring; a future widening (e.g. accepting `on`) is a one-line change.
+- **(d) No end-to-end crash-test run.** Per the card, verification is fixture-level and the crash file was deliberately not run (350s, contended box). The sweep/opt-in decision is the *only* thing this ticket changes and it is fully exercised; but I have not observed a real failing crash run's logs surviving a real pytest session. That is the one claim I am not making.
+- **(e) FOREIGN CHURN — not mine.** 25 dirty paths at start (V4 stream + `handoffs/*`); none opened, staged, edited or reverted. T-066's own paths were clean at start because museR committed them (`5088180`).
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1067_{start,end}_status.txt`):
+- **start** (HEAD `5088180`): 25 dirty paths, **all FOREIGN**; my T-066 paths (`tests/integration/test_crash_recovery.py`, `handoffs/CODE2-HANDOFF.md`) already clean — committed by museR. Index empty.
+- **end** (HEAD `5088180`, **UNMOVED**): the same foreign set **plus exactly my 1 allowed path** — `M tests/integration/test_crash_recovery.py` (+36/−8).
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-067 `T021_KEEP_MARKERS` opt-in so crash worker logs survive on failure (implemented, evidence captured).
+PROGRESS ROW — DONE: added the escape hatch T-066 filed — the `marker_dir` fixture now skips its sweep when `T021_KEEP_MARKERS` is truthy (`1`/`true`/`yes`, case-insensitive, whitespace-trimmed) and prints the surviving path; **default stays OFF**, so the accumulation fix is untouched. Fixture docstring documents name/spelling/default/when-to-use. **PROOF: 13/13 env values behaved as documented (unset/''/0/false/no/maybe → swept; 1/true/TRUE/yes/YES/'  yes  '/TrUe → survive), 0 dirs leaked (28 before → 28 after), ruff + py_compile clean, 2 hunks both inside the fixture, 0 test bodies/assertions/timeouts/product code.** Used `if/else` rather than an early `return` because a `return` in a generator's `finally` swallows teardown exceptions — verified by `gen.throw(ValueError)` propagating under both branches. Risks: (a) opt-in is per-run and unenforced, an exported var would silently re-accumulate (print keeps it visible), (b) docstring is the only user-facing doc — `docs/` is outside the allowlist, (c) truthiness spelling is mine and `on` reads as OFF, (d) **no end-to-end crash-test run by instruction** — I have not watched a real failing run's logs survive a real pytest session and am not claiming it, (e) foreign churn disclosed. First proof run reported FAIL on my own baseline bug, re-run clean.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.

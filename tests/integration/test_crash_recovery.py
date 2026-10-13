@@ -128,18 +128,46 @@ def client() -> Generator:
 
 @pytest.fixture(scope="module")
 def marker_dir() -> Generator[Path, None, None]:
+    """Module-scoped dir holding each cycle's crash-worker markers and logs.
+
+    Swept on teardown by default (T-V1-066): these used to be left behind
+    forever, one per run, so ``$HOME/.tmp`` accumulated without bound. The
+    sweep is scoped to *the dir this module created* — older ``t021-markers-*``
+    dirs are diagnostic evidence, so deleting another run's markers is not this
+    harness's call.
+
+    **Escape hatch — ``T021_KEEP_MARKERS``** (T-V1-067). The sweep also deletes
+    the crash worker's own ``crash-N.log`` / ``recovery-N.log``, and those logs
+    are how T-V1-064's root cause was found, so a failure that needs diagnosis
+    after the fact has nothing left to read. Set the variable to skip the sweep:
+
+    * name: ``T021_KEEP_MARKERS``
+    * truthy spellings: ``1``, ``true``, ``yes`` (case-insensitive, surrounding
+      whitespace ignored); **default OFF** — accumulation was the bug, so the
+      sweep stays the default and keeping markers is an explicit choice.
+    * when to use: when a crash test fails and you need its worker logs —
+      set it, re-run *that one failing test* attached, read the logs out of the
+      printed path, then unset it. Leaving it set will re-accumulate a dir per
+      run, which is exactly what this fixture exists to prevent.
+
+    The surviving dir's path is printed so it is findable without guessing::
+
+        T021_KEEP_MARKERS=1 pytest tests/integration/test_crash_recovery.py::test_...
+    """
     path = Path(tempfile.mkdtemp(prefix="t021-markers-", dir=str(Path.home() / ".tmp")))
     try:
         yield path
     finally:
-        # T-V1-066: sweep the dir this module created. These used to be left
-        # behind forever, one per run, so the FS accumulated without bound.
-        # Scoped deliberately to *our own* dir: older ``t021-markers-*`` dirs
-        # are diagnostic evidence (T-V1-064 read a failing worker's log out of
-        # one), so deleting another run's markers is not this harness's call.
-        import shutil
+        # if/else, not an early `return`: a `return` inside a generator's
+        # `finally` swallows any exception pytest throws in at teardown.
+        keep = os.environ.get("T021_KEEP_MARKERS", "").strip().lower() in {"1", "true", "yes"}
+        if keep:
+            print(f"t021: T021_KEEP_MARKERS set — keeping markers at {path}")
+        else:
+            # T-V1-066: sweep the dir this module created.
+            import shutil
 
-        shutil.rmtree(path, ignore_errors=True)
+            shutil.rmtree(path, ignore_errors=True)
 
 
 def _auth(token: str) -> dict[str, str]:
