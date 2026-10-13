@@ -2636,3 +2636,95 @@ PROGRESS ROW — RESULT: **GREEN — `RUN_WEB_E2E=1 pytest tests/integration/tes
 PROGRESS ROW — FINDING FOR THE RECORD (the thing to get right): **the skip is SILENT, not loud** — with `RUN_WEB_E2E` unset the file reports **2 skipped in 0.04s with EXIT CODE 0**, so a forgotten env var yields a skip indistinguishable from a pass to any runner checking only exit status. That is exactly how "required checks executed (not skipped) 100%" could be satisfied on paper while two checks never ran. **Judgement asked for by the card: the skip is legitimate and load-bearing by design** (default suites stay service-free per tests/README.md; CI already runs `npm run build` in its frontend job) **but only when explicit** — the record must carry the env var AND a zero-skips assertion (`-rs` with no SKIPPED for this file), not just a zero exit.
 PROGRESS ROW — DISCLOSURES: (a) **84.42 s is not a cold-build figure** — `.next/` already existed so the build ran incrementally; do not budget 84 s for a first build on CI, though the proxy matrix itself is only ~4 s; (b) **the card's "box is free" premise did not hold** — observed load average 8.04 on 4 cores with ~2 GB available (dev1 mid-T-071); the run still passed comfortably so this is not tight, but I am not claiming the same margin on a loaded box for a cold build; (c) **`M tests/conftest.py` appeared mid-run and is NOT mine** — dev1's T-V1-071 `pytest_sessionfinish` hook (28 added lines), confirmed by reading its diff; I did not touch, stage or revert it, and the fixtures my run consumed were unaffected; (d) the e2e needs the live compose API on :8000, so the acceptance runbook must sequence it with the stack up, unlike the hermetic benches; (e) the `next build` wrote only to the gitignored `apps/web/.next` — zero tree drift. Nothing fixed, so no follow-up filed.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-073 (points⇄chunks reconciliation + flagged prune) — code2 (solo, allowlisted)
+
+TASK: reconcile points ⇄ chunks over the live collection, then provide a **flagged, dry-run-by-default** prune. Reconcile first, prune behind flags, never `--apply` on `knowledge`. Start HEAD `d007d8e` → end HEAD `d007d8e` (**UNMOVED**). Allowed: the prune script + covering tests + this row. **No product file touched** (hard ban honoured — see §collision).
+
+### RECONCILIATION — live `knowledge`, 2041 points, read-only
+
+| metric | value |
+|---|---|
+| points in collection | **2041** |
+| points matched to a PG chunk row | **1927** |
+| **orphan points** | **114** |
+|  ├ `superseded-version` | **67** |
+|  ├ `tombstoned-doc` | **7** |
+|  ├ `no-PG-row` | **0** |
+|  └ `other` (unexplained) | **40** |
+| **pointless PG chunks** (chunk row, no point) | **546** |
+| **prunable set** (what the dry run would delete) | **74** = 67 + 7 + 0 |
+| retained as unclassified | **40** |
+
+**Cross-check against dev1's T-069** (112 orphans / 66 superseded / 7 tombstoned / 485 pointless): the shape reproduces and the small deltas are collection churn — `knowledge` went 2039 → **2041** points and PG chunks 2473, so orphans +2 and pointless chunks +61. **T-069's "17 orphan chunk_ids not reproducible" is independently confirmed: my `no-PG-row` count is 0.**
+
+**METRIC satisfied:** categories sum to the orphan total (67+7+0+40 = 114) and the dry-run delete set is exactly the prunable subset (74) — asserted programmatically, not by eye.
+
+### THE PRUNE — safety model, and why it is shaped this way
+
+`scripts/reconcile_points_chunks.py`. **In tree, not /tmp**: the T-036 record must cite a *reproducible* command, and the classification logic has to be importable by unit tests. A /tmp one-shot would satisfy neither after the next box rebuild.
+
+- **Dry run is the default.** `--apply` is required to delete anything.
+- **`--apply` alone is refused.** Deleting needs `--apply` **and** `--live <collection>`, so a copy-pasted apply against production fails closed.
+- **The live name is guarded.** `knowledge` is in `LIVE_COLLECTIONS`; it cannot be pruned without `--live knowledge` spelled out. Proven live:
+  `REFUSED: refusing to prune the live collection 'knowledge' without --live knowledge.`
+- **`other` is never prunable.** "We cannot explain this point" is a reason to investigate, not to delete. `--categories other` is rejected by name.
+- Precedence: `superseded-version` → `tombstoned-doc` → `no-PG-row` → `other`. A retired version's point is superseded garbage even if its document was later tombstoned, so that case must not be filed under the tombstone bucket.
+
+### VERIFY — exact commands and outputs
+
+```
+pytest tests/unit/test_reconcile_points_chunks.py -q                 → 18 passed
+ruff check scripts/reconcile_points_chunks.py tests/unit/...py       → All checks passed!
+python3 -m py_compile scripts/reconcile_points_chunks.py             → OK
+python3 scripts/reconcile_points_chunks.py --collection knowledge   → the table above; DRY RUN, nothing deleted
+python3 scripts/reconcile_points_chunks.py --collection knowledge --json
+        → {"total_points":2041,"matched_points":1927,"orphan_points":114,
+           "by_category":{"superseded-version":67,"tombstoned-doc":7,"no-PG-row":0,"other":40},
+           "pointless_chunks":546,"prunable":[…74 ids…],"applied":false}
+GET /collections/knowledge  (before, after, and after the apply proof) → 2041 / 2041 / 2041  UNCHANGED
+```
+
+**SCRATCH-APPLY PROOF** — the apply path exercised on a seeded scratch collection, never on `knowledge`:
+
+| seeded point | category | after `--apply --live t073_scratch_probe` |
+|---|---|---|
+| 3 × `ghost-superseded-*` | superseded-version | **deleted** |
+| `ghost-tombstoned` | tombstoned-doc | **deleted** |
+| `mystery-other` | **other** | **SURVIVED** (unprunable, by design) |
+| a real chunk id | matched (not an orphan) | **SURVIVED** (no collateral damage) |
+
+6 seeded → dry run listed 4 and deleted 0 → apply deleted **exactly 4** → survivors were **exactly** `{'mystery-other', <real chunk id>}`. The live guard then refused `--apply` on `knowledge` without `--live`. Scratch collection deleted at the end; **no `t073_*` collection left behind**.
+
+### WHY / REUSED / BUILT
+
+**WHY:** T-069 measured the orphans but could not act on them; T-036's record needs a reproducible reconciliation command. Doing it in that order means the prune is a consequence of a classified census rather than a guess.
+
+**REUSED (nothing rebuilt, as instructed):** dev1's T-069 census method and numbers (from `handoffs/CODE1-HANDOFF.md`) as the cross-check, and my T-061b artifacts; the same scroll-and-join approach as `tv1061b_census.py`. No re-census of vector authenticity, no re-derivation of the 373.
+
+**REUSED (product logic, untouched):** `chunks.document_version_id` → `document_versions.superseded_at` / `documents.current_version_id` / `documents.deleted_at` are the join and classification keys; nothing in `packages/` was modified.
+
+**BUILT:** `scripts/reconcile_points_chunks.py` (classifier + guarded prune, ~1 file) and `tests/unit/test_reconcile_points_chunks.py` (18 tests).
+
+### RISKS / DISCLOSED
+
+- **(a) The 40 `other` orphans are unexplained and I did not explain them.** Version row alive and current, document not deleted, yet the chunk row is gone — a genuinely inconsistent state. **Filed, not fixed** (and deliberately not prunable). dev1's T-071/T-072 work is in this exact area, so this may already be understood; if not, it is a follow-up.
+- **(b) The prune was NEVER run against `knowledge`.** Apply was proven only on a scratch collection that I then deleted. Authorising a live prune is a separate, explicit decision and I am not asking for it as part of this ticket.
+- **(c) 67 superseded-version orphans are a symptom, not a dataset.** dev1's T-069 traced them to `packages/ingestion/dedup.py:196-217` (`supersede_other_versions` → `_cleanup_superseded_vectors`) being best-effort: chunk/TS rows are deleted in-transaction while vector cleanup is not. **Pruning removes the residue; it does not stop the leak.** A prune without that fix would need re-running.
+- **(d) Two real bugs in my own tooling, found and fixed before use:** the Qdrant collection verbs were POST instead of PUT/DELETE, and `--json` emitted the human report *after* the JSON (unparseable). Both are fixed; `--json` is now JSON-only and `by_category` reports every category including zeros, so two runs can be diffed without special-casing a missing key.
+- **(e) The pointless-chunk direction (546) is reported, not acted on.** Those are PG rows with no vector — the inverse leak, and deleting them would be a *product-data* decision about whether the chunk or the point is authoritative. Out of scope, deliberately not pruned.
+- **(f) COLLISION PROTOCOL — honoured.** `packages/ingestion/dedup.py` (+110/−12) and `?? tests/unit/test_supersession_vector_cleanup.py` appeared **mid-ticket**; both are dev1's T-072, not mine. I never opened either for writing, so no BLOCKED push was needed. My 3 files: `scripts/reconcile_points_chunks.py`, `tests/unit/test_reconcile_points_chunks.py`, this row.
+- **(g) Counts are a snapshot of a live, still-churning collection.** Re-running will differ; the tool reports whatever is true at that moment and the record should cite a timestamp.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1073_{start,end}_status.txt`):
+- **start** (HEAD `d007d8e`): 24 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `d007d8e`, **UNMOVED**): the foreign set plus dev1's T-072 additions, **plus exactly my 3 allowed paths**.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty. **No writes to live `knowledge` (2041 before, during and after).**
+
+PROGRESS ROW — TASK: T-V1-073 points⇄chunks reconciliation + flagged prune (reconcile first, prune behind flags).
+PROGRESS ROW — RECONCILIATION (live `knowledge`, read-only): **2041 points, 1927 matched, 114 orphans = 67 superseded-version + 7 tombstoned-doc + 0 no-PG-row + 40 other (unexplained); 546 pointless PG chunks; prunable set 74.** Cross-checks dev1's T-069 (112/66/7/485) — shape reproduces, deltas are churn (collection 2039→2041, chunks→2473), and **T-069's unreproducible "17 orphan chunk_ids" is independently confirmed at 0**. METRIC proven programmatically: categories sum to the orphan total and the dry-run delete set is exactly the prunable subset.
+PROGRESS ROW — PRUNE SAFETY: `scripts/reconcile_points_chunks.py`, **in tree because the T-036 record must cite a reproducible command and the classifier must be unit-testable** (a /tmp one-shot would satisfy neither). Dry-run is the default; `--apply` alone is refused; deleting needs `--apply` AND `--live <collection>`; `knowledge` is in `LIVE_COLLECTIONS` and was proven to REFUSE (`refusing to prune the live collection 'knowledge' without --live knowledge`); **`other` is never prunable** — "cannot explain this point" is a reason to investigate, not delete — and `--categories other` is rejected by name. Precedence superseded→tombstoned→no-PG-row→other, so a retired version's point on a later-tombstoned document is filed as superseded garbage.
+PROGRESS ROW — SCRATCH-APPLY PROOF (never on `knowledge`): seeded 6 points → dry run listed 4, deleted 0 → `--apply --live t073_scratch_probe` deleted **exactly 4** (3 superseded + 1 tombstoned) → survivors **exactly** `{'mystery-other', <real chunk id>}` proving the unclassified orphan was retained and there was no collateral damage; live guard then refused; scratch collection deleted. **`knowledge` 2041 before, during and after.**
+PROGRESS ROW — RISKS: (a) the **40 `other` orphans are unexplained and I did not explain them** — alive current version, live document, missing chunk row; filed not fixed, and dev1's T-071/T-072 is in this area; (b) the prune was **never applied to `knowledge`** — authorising that is a separate explicit decision; (c) **67 superseded orphans are a symptom**: T-069 traced them to `dedup.py:196-217` best-effort vector cleanup, so pruning removes residue but not the leak and would need re-running after that fix; (d) **two real bugs in my own tooling found and fixed before use** — Qdrant collection verbs were POST not PUT/DELETE, and `--json` emitted the human report AFTER the JSON (unparseable); `--json` is now JSON-only and `by_category` includes zero categories so runs can be diffed; (e) the 546 pointless chunks are reported not acted on — deleting PG rows is a product-data decision about which side is authoritative; (f) **collision protocol honoured** — `dedup.py` (+110/-12) and `?? tests/unit/test_supersession_vector_cleanup.py` appeared mid-ticket as dev1's T-072, never opened by me, so no BLOCKED push was needed; my 3 files only; (g) counts are a snapshot of a live churning collection — the record should cite a timestamp. 18 tests pass, ruff clean, py_compile OK, HEAD d007d8e unmoved, index empty, no commit.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
