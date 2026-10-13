@@ -474,3 +474,27 @@ class RunState(BaseModel):
         self.unknown_required_failure = True
         self.error_code = AgentErrorCode.UNKNOWN_REQUIRED
         self.error_detail = detail
+
+    def request_cancel(self) -> bool:
+        """Request cancellation — terminal-aware, byte-identical no-op if already terminal.
+
+        If the run is already terminal (``COMPLETED``/``CANCELLED``/``FAILED``/etc.),
+        this is a clean no-op: returns ``False`` and changes nothing, so a
+        ``cancel-after-COMPLETED`` leaves state and record byte-identical.
+        Otherwise transitions to ``CANCELLED`` with ``AgentErrorCode.CANCELLED``
+        and returns ``True``. Monotonicity is enforced by ``transition_to``.
+        """
+        if self.is_terminal(self.status):
+            return False
+        try:
+            self.transition_to(
+                RunStatus.CANCELLED,
+                error_code=AgentErrorCode.CANCELLED,
+                error_detail="run cancelled",
+            )
+            return True
+        except InvalidRunTransitionError:
+            return False
+
+    def is_cancelled(self) -> bool:
+        return self.status == RunStatus.CANCELLED

@@ -16,6 +16,7 @@ from agents import (
     AgentRun,
     AgentRunStatus,
     AgentRuntime,
+    AgentStep,
     AgentStepType,
     CalculatorTool,
     ContextOverrideError,
@@ -1942,3 +1943,182 @@ def test_budget_reservation_before_spend_not_after() -> None:
     # Missing usage → DENY
     assert can_reserve_tokens(None, budget, 1) is False
     assert can_reserve_tool_call(None, budget) is False
+
+# ======================================================================================
+# T-V3-007 — Cancellation + terminal-state monotonicity (V3 plan trace runtime)
+# ======================================================================================
+
+
+
+@pytest.mark.unit
+def test_mid_tool_cancel_stops_loop_no_further_dispatches() -> None:
+    """Checklist 1: cancel mid-tool STOPS the loop — post-cancel dispatches 0."""
+    # Pre-seed a RunState that the tool can cancel mid-execution
+    run_id = f"run-cancel-{uuid.uuid4().hex[:6]}"
+    state = RunState(status=RunStatus.RUNNING)
+    _PERSISTED_STATES[run_id] = state
+    _PERSISTED_RUNS[run_id] = AgentRun(
+        id=run_id,
+        workspace_id="ws-1",
+        goal="cancel mid tool",
+        model="gpt-4o-mini",
+        status=AgentRunStatus.RUNNING,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    _PERSISTED_USAGES[run_id] = Usage()
+
+    calls: list[dict] = []
+
+    class _CancelTool(Tool):
+        name = "cancel_tool"
+        description = "cancels on first call"
+        input_schema: ClassVar[dict] = {
+            "type": "object",
+            "properties": {"x": {"type": "integer"}},
+            "additionalProperties": False,
+        }
+
+        async def execute(self, workspace_id: str, **kwargs):
+            calls.append(dict(kwargs))
+            if len(calls) == 1:
+                # Cancel from inside the tool — the next loop iteration must see it
+                state.request_cancel()
+            return {"ok": True}
+
+    registry = ToolRegistry()
+    registry.register(_CancelTool())
+    # LLM wants to call the tool three times then final answer, but cancel after first must stop
+    llm = _ScriptedLLM(
+        [
+            'Thought: step1\nAction: cancel_tool\nAction Input: {"x": 1}',
+            'Thought: step2\nAction: cancel_tool\nAction Input: {"x": 2}',
+            'Thought: step3\nAction: cancel_tool\nAction Input: {"x": 3}',
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id=run_id,
+        workspace_id="ws-1",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=10, max_tool_calls=10, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["cancel_tool"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="cancel mid-tool"))
+    # Only the first dispatch should have happened; post-cancel dispatches 0
+    assert len(calls) == 1, f"post-cancel dispatches should be 0, got {len(calls)-1} extra: {calls}"
+    assert state.status == RunStatus.CANCELLED
+    # The run should be CANCELLED, not COMPLETED, and the final answer must not have been reached
+    assert run.status == AgentRunStatus.FAILED  # CANCELLED maps to FAILED via _legacy_status
+    # Cleanup
+    _PERSISTED_RUNS.pop(run_id, None)
+    _PERSISTED_STATES.pop(run_id, None)
+    _PERSISTED_USAGES.pop(run_id, None)
+    assert len(calls) == 1  # metric: post-cancel dispatches 0
+
+
+@pytest.mark.unit
+def test_terminal_transitions_one_way_exhaust_matrix() -> None:
+    """Checklist 2: every terminal state rejects ALL transitions — exhaust matrix, not sample."""
+    from agents.interfaces import _TERMINAL_STATUSES
+
+    all_statuses = list(RunStatus)
+    terminal = list(_TERMINAL_STATUSES)
+    # For each terminal, every attempt to leave must raise
+    for term in terminal:
+        for target in all_statuses:
+            state = RunState(status=term)
+            # Even transitioning to itself should raise because already terminal
+            try:
+                state.transition_to(target)
+                raise AssertionError(f"terminal {term} must reject transition to {target}")
+            except InvalidRunTransitionError:
+                pass
+            assert state.status == term, "state must remain byte-identical after rejected transition"  # noqa: E501
+    # Non-terminal can go to terminal, but then cannot leave
+    for active in [RunStatus.QUEUED, RunStatus.RUNNING, RunStatus.WAITING_INPUT, RunStatus.WAITING_APPROVAL]:  # noqa: E501
+        state = RunState(status=active)
+        state.transition_to(RunStatus.COMPLETED)
+        assert state.status == RunStatus.COMPLETED
+        # Now terminal, any further must raise
+        for target in all_statuses:
+            try:
+                state.transition_to(target)
+                raise AssertionError(f"after COMPLETED, must reject {target}")
+            except InvalidRunTransitionError:
+                pass
+
+
+@pytest.mark.unit
+def test_cancel_after_completed_is_clean_noop_byte_identical() -> None:
+    """Checklist 3: cancel-after-COMPLETED is no-op — state + record byte-identical."""
+    state = RunState(status=RunStatus.COMPLETED, error_code=None, error_detail=None)
+    run = AgentRun(
+        id="run-noop",
+        workspace_id="ws-1",
+        goal="test",
+        model="gpt-4o-mini",
+        status=AgentRunStatus.COMPLETED,
+        steps=[
+            AgentStep(
+                step_number=1,
+                type=AgentStepType.FINAL_ANSWER,
+                content="done",
+                timestamp=datetime.now(UTC).isoformat(),
+            )
+        ],
+        final_output="done",
+        total_tokens=5,
+        created_at=datetime.now(UTC).isoformat(),
+        finished_at=datetime.now(UTC).isoformat(),
+    )
+    # Snapshot byte-identical
+    before_state = state.model_dump_json()
+    before_run = run.model_dump_json()
+    # Cancel should be no-op, not error, not state change
+    result = state.request_cancel()
+    assert result is False
+    assert state.status == RunStatus.COMPLETED
+    assert state.model_dump_json() == before_state
+    # Also via AgentRuntime.cancel_run
+    rt = AgentRuntime(_ScriptedLLM(["Final Answer: done"]), ToolRegistry())
+    # Need to test cancel_run on already terminal
+    state2 = RunState(status=RunStatus.COMPLETED)
+    run2 = AgentRun(
+        id="run-noop2",
+        workspace_id="ws-1",
+        goal="test",
+        model="gpt-4o-mini",
+        status=AgentRunStatus.COMPLETED,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    before_state2 = state2.model_dump_json()
+    before_run2 = run2.model_dump_json()
+    ok = rt.cancel_run(state2, run2)
+    assert ok is False
+    assert state2.model_dump_json() == before_state2
+    assert run2.model_dump_json() == before_run2
+    # Also CANCELLED after COMPLETED must not change
+    assert run.model_dump_json() == before_run
+
+
+@pytest.mark.unit
+def test_cancel_wins_over_budget_and_is_monotonic() -> None:
+    """Cancel is terminal and monotonic like LIMIT_EXCEEDED — cannot un-trip."""
+    state = RunState(status=RunStatus.RUNNING)
+    assert state.request_cancel() is True
+    assert state.status == RunStatus.CANCELLED
+    assert state.error_code == AgentErrorCode.CANCELLED
+    # Once cancelled, cannot go to COMPLETED or FAILED
+    for target in [RunStatus.COMPLETED, RunStatus.FAILED, RunStatus.RUNNING, RunStatus.LIMIT_EXCEEDED]:  # noqa: E501
+        try:
+            state.transition_to(target)
+            raise AssertionError(f"CANCELLED must reject {target}")
+        except InvalidRunTransitionError:
+            pass
+    assert state.status == RunStatus.CANCELLED
+    # Second cancel is also no-op
+    assert state.request_cancel() is False

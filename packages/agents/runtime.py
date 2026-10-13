@@ -34,6 +34,7 @@ from .interfaces import (
     AgentStep,
     AgentStepType,
     ContextOverrideError,
+    InvalidRunTransitionError,
     RetryPolicy,
     RunBudget,
     RunContext,
@@ -344,6 +345,29 @@ class AgentRuntime:
         self.llm = llm_provider
         self.registry = tool_registry
 
+    def cancel_run(self, state: RunState, run: AgentRun) -> bool:
+        """Request cancellation of a run — terminal-aware no-op if already terminal.
+
+        Returns ``True`` if the run transitioned to ``CANCELLED``, ``False`` if
+        it was already terminal (byte-identical, no error, no state change).
+        Persists the result so a concurrent ``run_enforced`` loop sees it.
+        """
+        if RunState.is_terminal(state.status):
+            return False
+        try:
+            state.request_cancel()
+            run.status = _legacy_status(state.status)
+            run.error = state.error_detail
+            run.finished_at = datetime.now(UTC).isoformat()
+            _PERSISTED_STATES[run.id] = state
+            _PERSISTED_RUNS[run.id] = run
+            # Also persist usage if present
+            if run.id in _PERSISTED_USAGES:
+                _PERSISTED_STATES[run.id] = state
+            return True
+        except Exception:
+            return False
+
     # -- V3 enforcement (rew1 B2/B3/B4) ------------
 
     def spec_for(self, tool: Tool) -> ToolSpec:
@@ -576,6 +600,12 @@ class AgentRuntime:
             tool_calls = len([st for st in _existing_run.steps if st.tool_name is not None])
 
         for _step_idx in range(1, context.budget.max_steps + 1):
+            # T-V3-007: cancel wins — no further dispatches after cancel.
+            if state.is_cancelled():
+                # Monotonic: already CANCELLED, stay there — no new spend.
+                agent_run.status = _legacy_status(state.status)
+                agent_run.error = state.error_detail
+                break
             # T-V3-006: reserve BEFORE spend — tokens, tool_calls, deadline.
             # Missing usage is DENY via can_reserve_* (never unlimited).
             # Deadline is a hard wall — zero model calls after it.
@@ -618,6 +648,22 @@ class AgentRuntime:
             )
             try:
                 gen_res = await self.llm.generate(req)
+            except asyncio.CancelledError:
+                # Cancel wins — transition to CANCELLED if not already terminal
+                if not RunState.is_terminal(state.status):
+                    try:
+                        state.transition_to(
+                            RunStatus.CANCELLED,
+                            error_code=AgentErrorCode.CANCELLED,
+                            error_detail="run cancelled mid-LLM",
+                        )
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        _PERSISTED_STATES[context.run_id] = state
+                        _PERSISTED_RUNS[context.run_id] = agent_run
+                    except InvalidRunTransitionError:
+                        pass
+                break
             except Exception as exc:
                 state.mark_unknown_required_failure(f"provider failure: {exc}")
                 state.transition_to(
@@ -677,6 +723,9 @@ class AgentRuntime:
                     and isinstance(_tool_for_retry.retry_policy, RetryPolicy)
                     else RetryPolicy()
                 )
+                # T-V3-007: cancel check before tool — no dispatches after cancel.
+                if state.is_cancelled():
+                    break
                 # T-V3-006: reserve tool_calls BEFORE each attempt (including retries).
                 # Missing usage is DENY; tool_calls is part of usage, so check can_reserve.
                 if not can_reserve_tool_call(usage, context.budget):
@@ -752,6 +801,15 @@ class AgentRuntime:
                     if error_code is not None:
                         agent_run.error = f"{error_code.value}: {output.get('error', '')}"
 
+                    # T-V3-007: if cancel was requested mid-tool, stop — no further dispatches.
+                    if state.is_cancelled():
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        history.append(
+                            ChatMessage(role=MessageRole.USER, content=f"Observation: {output}")
+                        )
+                        break
+
                     # Success or non-retryable or out of attempts → stop retrying.
                     if status is StepStatus.SUCCEEDED:
                         history.append(
@@ -790,7 +848,28 @@ class AgentRuntime:
                             break
                         delay = min(delay, remaining)
                         if delay > 0:
-                            await asyncio.sleep(min(delay, remaining))
+                            try:
+                                await asyncio.sleep(min(delay, remaining))
+                            except asyncio.CancelledError:
+                                if not RunState.is_terminal(state.status):
+                                    try:
+                                        state.transition_to(
+                                            RunStatus.CANCELLED,
+                                            error_code=AgentErrorCode.CANCELLED,
+                                            error_detail="run cancelled during backoff",
+                                        )
+                                        agent_run.status = _legacy_status(state.status)
+                                        agent_run.error = state.error_detail
+                                        _PERSISTED_STATES[context.run_id] = state
+                                        _PERSISTED_RUNS[context.run_id] = agent_run
+                                    except InvalidRunTransitionError:
+                                        pass
+                                break
+                    # T-V3-007: check cancel before next retry attempt
+                    if state.is_cancelled():
+                        agent_run.status = _legacy_status(state.status)
+                        agent_run.error = state.error_detail
+                        break
                     # Check budget/deadline before next attempt.
                     if not self._check_step_budget(
                         state=state, context=context, tool_calls_used=tool_calls
