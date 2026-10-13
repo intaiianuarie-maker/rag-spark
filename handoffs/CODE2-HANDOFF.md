@@ -2728,3 +2728,80 @@ PROGRESS ROW — PRUNE SAFETY: `scripts/reconcile_points_chunks.py`, **in tree b
 PROGRESS ROW — SCRATCH-APPLY PROOF (never on `knowledge`): seeded 6 points → dry run listed 4, deleted 0 → `--apply --live t073_scratch_probe` deleted **exactly 4** (3 superseded + 1 tombstoned) → survivors **exactly** `{'mystery-other', <real chunk id>}` proving the unclassified orphan was retained and there was no collateral damage; live guard then refused; scratch collection deleted. **`knowledge` 2041 before, during and after.**
 PROGRESS ROW — RISKS: (a) the **40 `other` orphans are unexplained and I did not explain them** — alive current version, live document, missing chunk row; filed not fixed, and dev1's T-071/T-072 is in this area; (b) the prune was **never applied to `knowledge`** — authorising that is a separate explicit decision; (c) **67 superseded orphans are a symptom**: T-069 traced them to `dedup.py:196-217` best-effort vector cleanup, so pruning removes residue but not the leak and would need re-running after that fix; (d) **two real bugs in my own tooling found and fixed before use** — Qdrant collection verbs were POST not PUT/DELETE, and `--json` emitted the human report AFTER the JSON (unparseable); `--json` is now JSON-only and `by_category` includes zero categories so runs can be diffed; (e) the 546 pointless chunks are reported not acted on — deleting PG rows is a product-data decision about which side is authoritative; (f) **collision protocol honoured** — `dedup.py` (+110/-12) and `?? tests/unit/test_supersession_vector_cleanup.py` appeared mid-ticket as dev1's T-072, never opened by me, so no BLOCKED push was needed; my 3 files only; (g) counts are a snapshot of a live churning collection — the record should cite a timestamp. 18 tests pass, ruff clean, py_compile OK, HEAD d007d8e unmoved, index empty, no commit.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-079 (T-036 acceptance runbook) — code2 (docs only)
+
+TASK: author the T-036 acceptance runbook — closes readiness **F7** (no run *order* existed in the tree; only `make test` / `test-unit` / `test-integration`). **DOCS ONLY — no run, no product, no test, no suite.** Start HEAD `fdee7ce` → end HEAD `fdee7ce` (**UNMOVED**).
+
+CHANGE (**2 files, both docs**):
+- **`handoffs/T-V1-036-RUNBOOK.md`** — NEW. 7 ordered steps with exact commands, each with recorded result + duration; a sourced thresholds table; a 10-row known-failure annex; 6 environment preconditions; reporting rules.
+- **`handoffs/CODE2-HANDOFF.md`** — this row.
+
+**Nothing else was created, edited, or executed.** No test run, no bench, no collection read, no product file touched.
+
+### THE ORDERING DECISION
+
+**Hermetic gates first, heaviest last.** The Q9 bench, the gate test and the unit/contract gate need no services, so a cheap unambiguous failure is surfaced before the run consumes a **~348 s** crash suite. Live-store suites (ingestion trio → dedup → crash) follow, heaviest last. **Step 7 is a post-run reconciliation**, deliberately *after* the suites rather than before: the suites ingest into the same `knowledge` collection, so a pre-run prune or census would be stale by the time the record is written.
+
+### THRESHOLDS — every value quoted from its source, none invented
+
+| gate | value | source |
+|---|---|---|
+| groundedness | ≥ 0.90 | `evals/q9_run_benchmark.py:57` → `GROUNDEDNESS_GATE = 0.90` |
+| citation validity | == 1.00 | `:58` → `CITATION_GATE = 1.0` |
+| abstention | ≥ 0.95 | `evals/q9_gates.py:43` → `ABSTENTION_TARGET = 0.95`, wired at `:60` |
+| factual | ≥ 98% | card `MICRO-TICKETS-V1.md:549` — **not yet gated** (F7) |
+| Recall@20 | ≥ 95% | card `:550` — **not yet gated** (F7) |
+| per-claim support | 0.90 | `evals/q9_gates.py:36` — **harness choice, flagged as such**, not a card value |
+
+**Verified**: I re-read all six quoted lines and confirmed each matches. Also confirmed
+`BASELINE_ANSWERABLE` / `BASELINE_OVERALL` exist in `tests/unit/test_q9_gates.py:40,47`, and
+that all ten referenced files exist.
+
+### WHY / REUSED / BUILT
+
+**WHY:** the run phase had no order, so it would have improvised one — and improvised order means improvised interpretation of which reds are known. The annex exists so "red-that-is-known" and "red-that-is-new" are decided by a written list, not by whoever is running it at 2am.
+
+**REUSED (nothing re-measured):** every recorded result is second-hand from a committed handoff — T-V1-057 (1252 passed), T-V1-076 (Q9 0.9888/1.0000, abstention 1.0000, 3 gate tests), T-V1-077 (web e2e 84.42s), T-V1-070 (9.82s / 1.67s siblings green), dev1 T-V1-071 (dedup 17 passed; trio 19 passed 2 xfailed), T-V1-064 (crash `7 failed, 1 passed in 347.75s`), T-V1-073 (reconciliation), T-V1-061b (corpus census).
+
+**BUILT:** one document. No code, no fixture, no config.
+
+### VERIFY — the source list
+
+```
+sed -n '57p;58p;60p' evals/q9_run_benchmark.py   → GROUNDEDNESS_GATE=0.90 / CITATION_GATE=1.0 / ABSTENTION_GATE=q9_gates.ABSTENTION_TARGET
+sed -n '36p;39p;43p' evals/q9_gates.py           → FACTUAL_SUPPORT_CUTOFF=0.90 / RECALL_AT_K=20 / ABSTENTION_TARGET=0.95
+sed -n '549,550p' ../rag-fork-solution/tasks/MICRO-TICKETS-V1.md → the five RP-02 targets
+grep -n BASELINE_ tests/unit/test_q9_gates.py    → pinned answerable/overall baselines exist
+ls (10 referenced paths)                          → all exist
+Makefile:71-78                                    → confirms no ordered entry point existed (the F7 premise)
+```
+
+**Durations marked `NOT RECORDED`** where no handoff captured one — the full unit/contract
+run and both Q9 commands. I did **not** estimate them; the runbook asks the first execution
+to record them.
+
+### RISKS — WHAT THE RUNBOOK ASSUMES THAT COULD ROT
+
+- **(a) The deepest assumption: every recorded result is second-hand.** I ran nothing. If a handoff figure is wrong, the runbook inherits the error and presents it as a baseline. The transcript requirement (E5) exists to stop that propagating.
+- **(b) Durations will be missing on first execution** for steps 1–2. The budget is only real for steps 3–6.
+- **(c) The annex rots fastest.** F2 (373 vectors) and F3 (114 orphans / 546 pointless chunks) are counts over a collection the suites keep writing to — they will drift on the run itself. F6 is *unverified*, not known-green.
+- **(d) The pinned baselines are a tripwire, not just documentation.** `BASELINE_ANSWERABLE`/`BASELINE_OVERALL` will **fail the suite** if any change moves an answerable slice's number. That is intended, but it means a legitimate T-072/T-073-driven change needs the pin updated *and* the runbook updated together — a two-place edit that can rot.
+- **(e) The runbook cites line numbers** (`q9_run_benchmark.py:57`). Any edit above those lines silently invalidates the citations; the values are the contract, the line numbers are a convenience.
+- **(f) F7 means the record still cannot claim RP-02's five targets** — factual and Recall@20 have harnesses but **no runner**. The runbook states this rather than letting a 3-of-5 gate read as 5-of-5.
+- **(g) Suite plumbing is in active flux** — dev1's T-071/T-072 are moving suites onto scratch collections, which changes what each suite writes and therefore its recorded counts. The `19 passed, 2 xfailed` and `17 passed` figures may already be stale by the time the run happens.
+- **(h) The web-e2e 84.42 s figure is incremental, not cold** (F4) — budgeting it as a CI cost would be wrong.
+- **(i) `/ready`'s dependency set can grow**, so E1's check should record the block rather than assert a fixed list.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1079_{start,end}_status.txt`):
+- **start** (HEAD `fdee7ce`): 26 dirty paths, all FOREIGN (dev1 T-072 `dedup.py` + V4 stream + `handoffs/*`). Index empty.
+- **end** (HEAD `fdee7ce`, **UNMOVED**): the foreign set **plus exactly my 2 allowed paths** — `?? handoffs/T-V1-036-RUNBOOK.md`, `M handoffs/CODE2-HANDOFF.md`.
+- 0 foreign paths added, modified or removed by me; **0 test runs, 0 bench runs, 0 collection reads**; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-079 author the T-036 acceptance runbook (docs only; closes readiness F7 — no run ORDER existed in the tree, only make test / test-unit / test-integration).
+PROGRESS ROW — DELIVERED: `handoffs/T-V1-036-RUNBOOK.md` with 7 ordered steps (exact command + recorded result + duration for each), a sourced thresholds table, a **10-row known-failure annex (F1–F10)**, 6 environment preconditions, and reporting rules. **ORDERING DECISION: hermetic gates first, heaviest last**, so a cheap unambiguous failure surfaces before the run consumes a ~348 s crash suite; and **the reconciliation is deliberately STEP 7 (post-run), because the suites ingest into the same `knowledge` collection and a pre-run census would be stale by the time the record is written.**
+PROGRESS ROW — THRESHOLDS, ALL SOURCED AND RE-VERIFIED BY READING THE FILES: groundedness ≥0.90 (`q9_run_benchmark.py:57`), citation validity ==1.0 (`:58`), abstention ≥0.95 (`q9_gates.py:43` wired at `:60`), factual ≥98% and Recall@20 ≥95% (card `MICRO-TICKETS-V1.md:549-550`, both flagged **not yet gated**), per-claim support 0.90 (`q9_gates.py:36`, flagged as a HARNESS CHOICE not a card value). I re-read all six quoted lines and confirmed each matches, and confirmed BASELINE_ANSWERABLE/BASELINE_OVERALL exist at `tests/unit/test_q9_gates.py:40,47` and that all ten referenced files exist.
+PROGRESS ROW — ANNEX, so the run phase can tell known-red from new-red: **F1 crash 6 (T-064/T-066, all `wait_stalled` timeouts, never a product assertion), F2 373 non-authentic vectors (T-069/T-071), F3 ~114 orphans incl. 40 unexplained 'other' + 546 pointless chunks (T-072/T-073), F4 web-e2e cold-build timing (84.42s was INCREMENTAL), F5 1 FTS row survives delete (T-058), F6 acceptance_5 multilingual UNVERIFIED since embeddings cleared, F7 factual/Recall@20 have harnesses but NO runner so the record cannot claim 5-of-5, F8 citation_validity partially vacuous (`all([])` is True; T-076), F9 corpus hash-pinned so a pin error is a CORPUS failure not a product one, F10 live corpus is test debris (102 of 2034 authentic) so probes can go green without evidencing real retrieval quality.**
+PROGRESS ROW — RISKS (what could rot): (a) **the deepest assumption — every recorded result is second-hand; I ran nothing**, so a wrong handoff figure would be inherited as a baseline (E5 transcript capture exists to stop that propagating); (b) durations are marked **NOT RECORDED** for steps 1–2 rather than estimated, so the budget is only real for steps 3–6; (c) the annex rots fastest — F2/F3 are counts over a collection the suites keep writing to, and F6 is unverified rather than known-green; (d) the pinned baselines are a **tripwire** — a legitimate T-072/T-073-driven change needs the test pin AND the runbook updated together, a two-place edit that can rot; (e) the runbook cites line numbers, so any edit above them silently invalidates citations; (f) F7 means the run still cannot claim RP-02's five targets — stated explicitly rather than letting a 3-of-5 gate read as 5-of-5; (g) dev1's T-071/T-072 are actively changing suite plumbing, so the recorded `19 passed, 2 xfailed` and `17 passed` may already be stale; (h) 84.42s is incremental, not a CI budget; (i) /ready's dependency set can grow, so record the block rather than assert a fixed list.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle; the T-036 RUN phase dispatches after T-069/T-072 land.
