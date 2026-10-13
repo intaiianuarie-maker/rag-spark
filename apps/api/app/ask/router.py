@@ -254,6 +254,8 @@ async def ask(
     except LLMProviderError as exc:
         # T-V1-026: same tracking ID the engine's log line carries, so the
         # operator can join the API response to the retrieval/generation trace.
+        # T-V1-051: the registered safe message + trace_id only — the raw
+        # exception text is never put on the wire (no `cause` field).
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
@@ -262,7 +264,6 @@ async def ask(
                     "The model gateway is unavailable; try again shortly.",
                 ),
                 "trace_id": request_id_ctx.get(),
-                "cause": str(exc)[:300],
             },
         ) from exc
 

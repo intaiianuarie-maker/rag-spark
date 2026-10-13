@@ -264,6 +264,35 @@ def test_worker_and_api_persist_through_the_registry() -> None:
     )
 
 
+def test_no_exception_text_surfaces_in_ask_route_or_engine_log() -> None:
+    """T-V1-051: ``str(exc)`` surfaces = 0 on the two flagged paths.
+
+    - the ask route's ``LLMProviderError`` 503 must not carry a ``cause`` built
+      from the exception text (it carries the registered safe message +
+      ``trace_id`` instead);
+    - the engine's ``answer_parse_fallback`` log must not interpolate the
+      exception text (it logs the registry's safe ``PARSE_FALLBACK`` message +
+      ``trace_id``).
+
+    The ``LocalOnlyUnavailable`` leg keeps its ``str(exc)``: that exception's
+    message is a fixed safe string by design (no hostname/URL/query/credential),
+    pinned verbatim by tests/unit/test_local_only_no_egress.py.
+    """
+    router = (REPO_ROOT / "apps" / "api" / "app" / "ask" / "router.py").read_text(
+        encoding="utf-8"
+    )
+    assert '"cause"' not in router, "ask router must not put an exception 'cause' on the wire"
+    assert "str(exc)[" not in router, "ask router must not truncate exception text onto the wire"
+
+    engine = (REPO_ROOT / "packages" / "answer" / "engine.py").read_text(encoding="utf-8")
+    # Strip comments before scanning so a doc note mentioning ``str(exc)`` is
+    # not a false positive — the check is on live code only.
+    engine_code = "\n".join(line.split("#", 1)[0] for line in engine.splitlines())
+    assert "str(exc)" not in engine_code, "answer engine must not log raw exception text"
+    # The parse-fallback leg logs the registry's safe message, keyed for joins.
+    assert "ERROR_REGISTRY[ReasonCode.PARSE_FALLBACK].message" in engine
+
+
 def test_error_detail_envelope_shape() -> None:
     detail = error_detail(ReasonCode.LLM_UNAVAILABLE)
     assert detail == {

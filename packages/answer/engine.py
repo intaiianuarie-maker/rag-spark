@@ -47,7 +47,7 @@ import logging
 from dataclasses import dataclass, field
 
 from core.auth import ACLScope
-from core.errors import ReasonCode
+from core.errors import ERROR_REGISTRY, ReasonCode
 from core.logging import request_id_ctx
 from models.interfaces import (
     ChatMessage,
@@ -176,11 +176,18 @@ class AnswerEngine:
 
         try:
             parsed = parse_model_output(result.text)
-        except ValueError as exc:
+        except ValueError:
             # Never fabricate structure or return raw prose as a factual answer.
+            # T-V1-051: log the registry's safe PARSE_FALLBACK message (never
+            # str(exc), which can carry internals) alongside the tracking ID;
+            # the Answer below keeps its fixed safe reason string.
             logger.warning(
                 "answer_parse_fallback",
-                extra={"event": "answer_parse_fallback", "error": str(exc), "trace_id": trace_id},
+                extra={
+                    "event": "answer_parse_fallback",
+                    "reason": ERROR_REGISTRY[ReasonCode.PARSE_FALLBACK].message,
+                    "trace_id": trace_id,
+                },
             )
             return Answer(
                 answer="I cannot answer this question based on the provided documents.",
