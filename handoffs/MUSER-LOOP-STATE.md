@@ -66,6 +66,7 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
 - T-V1-053 reviewer: APPROVE (mechanical-only proven by strip-diff, LEGACY_ALIASES intact,
   17 green) → DONE. Correction: the 202 TypeError is T-039-dirt interaction, not drift —
   test line 125 update added to T-039 acceptance. Stale errors.py docstring: doc follow-up.
+- T-V1-046 reviewer: APPROVE (mapping correct, transients untouched, 16 green) → DONE.
 - T-V1-051 reviewer: APPROVE (both surfaces replaced, kept sites confirmed safe, pin test
   comment-aware, 18 green) → DONE.
 - T-V1-039 reviewer: APPROVE (readability signed, live DB triple-confirmed, T-053
@@ -178,6 +179,84 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   4 noul Qs (stuck/talk × dev1/dev2). Acts only on stuck≥0.75+15min-stale (one nudge/15min)
   or talk≥0.80 (row in `handoffs/JEV-ESCALATIONS.md`). Advisory only — never commits/deploys.
   Assignments: `tasks/agent-assignments.json` (museR updates per dispatch).
+## 2026-10-13 03:43Z RESUME (post-restart) — museR back on cycle
+- START STATE: HEAD `99dcfa1` (T-046, committed by museR 03:18Z pre-crash). Dev1 restarted idle (w5:p2). Dev2 (w5:p6) working. Verified pre-commit: T-039 residual harness pair + T-045 delivery both real (spot-checked myself: `pytest tests/unit/test_reindex.py -q` → 14 passed; `tests/unit/test_originals_store.py` → 19 passed; unit collection 1039, no ImportError; ruff+mypy clean).
+- COMMITTED: `b6a8916` T-039 harness residual (conftest.py + object_store_env.py must land together — split = ImportError session-wide); `68793fe` T-V1-045 (reindex adopts promote_replacement; refuse/exit-2 paths kept; live dry-run incomplete = T-043 384-d blocker, zero writes proven).
+- DEPLOYED 03:52Z: `docker compose restart worker api` — worker was still on pre-0010 code (ingestion DOWN since 62a55c8; old worker log spammed `ingest_queue_unavailable` until 03:36). Post-restart worker: `ingest_worker_started` clean, /health 200, /ready deps all reachable.
+- FINDING (follow-up): /ready `worker` probe is STALE since T-V1-020 — readiness.py checks `CLIENT LIST` for a `brpop` consumer, but T-020's durable claim (Lua) holds no standing BRPOP (`dequeue()` is marked superseded). Worker is healthy; /ready false-DEGRADED. File as T-V1-056, not caused by this deploy.
+- T-V1-047 (dev2, in flight): bulk `get_many` on ChunkLookup + hydration N+1 collapse — dirty answer-side paths are EXPECTED (live writer = w5:p6, verified in pane: 140 green, writing query-count test).
+- ANOMALY (NOT mine, NOT committed): V4 B-slice R1 remediation (B-R1-1..4 per REW2-V4-B-R1.md) being written live to `packages/workflow_engine/adapters/langflow_adapter.py` + `tests/unit/test_workflow_langflow_adapter.py` (mtime 03:40-03:48Z, growing). No loop pane owns it (dev21 lineage, old w4 setup; a session was resumed 00:26Z). V4 is GATED — left untouched in tree, evidence kept at /tmp/opencode/quarantine-7/. Referred to judge/user; DO NOT commit, DO NOT dispatch coders on it.
+- BOARD: T-V1-045 → DONE, T-V1-047 IN-PROGRESS (dev2), T-V1-055 registered (delete originals on purge — T-039 follow-up, the privacy/retention hole) and dispatched to dev1. Assignments: dev1=T-V1-055, dev2=T-V1-047.
+
+## 2026-10-13 ~03:58Z — museR cycle 2 (T-V1-047)
+- T-V1-047 (dev2) delivered → museR verified independently: scope = exactly the 6 claimed paths (5 code + CODE2-HANDOFF.md), index empty at review; `test_bulk_chunk_lookup.py` 13 passed; hydration+answer+graph selection 144 passed (3 fakes extended, 0 assertions touched); ruff clean ×5; mypy Success on answer files; query-count pin is real (stub session counts execute_calls; dev2's call-site revert control: 3 call-site tests fail, 9 adapter green).
+- ALLOWLIST RULING (recorded): `packages/answer/interfaces.py` accepted as a deliberate, pre-flagged deviation — 3-line ADDITIVE Protocol widening (ChunkLookup.get_many) the call site needs for mypy; the alternative leaves HEAD red or dirties the T-022 seam. Committed `4d0f88a` with the ruling in the message.
+- Deployed: api restarted (answer path), /health 200, /ready unchanged false-red on the known-stale worker probe (T-056). Board: T-V1-047 → DONE, T-V1-056 registered QUEUED. Assignments: dev2 → T-V1-052 (engine lost-region disclosure, dispatched 03:58Z with scratch proposal + 7ce9711 recovery point).
+- Full-gate note for later: 837 passed / 3 pre-existing failures (2 queue-namespacing tests fail only in full session via test_crash_recovery.py:61 import-time INGEST_QUEUE_PREFIX leak; 1 multilingual probe needs live embeddings). That import-time leak is a small fix-someone ticket — logged.
+- Out-of-gate V4 stream STILL live: DEV21-V4-HANDOFF.md went dirty too (03:40–now). Untouched, uncommitted, evidence in /tmp/opencode/quarantine-7/. Awaiting judge/user ruling.
+
+## 2026-10-13 ~04:1xZ — museR cycle 3 (T-V1-052) + dispatch
+- T-V1-052 (dev2) delivered → museR verified: scope exact (engine.py +203/−59 + 1 new test file + CODE2-HANDOFF.md), index empty; `test_answer_lost_region_disclosure.py` 15 passed; answer suite 120 passed; ruff clean; mypy Success. Metric pin is STRUCTURAL (`inspect.getsource(AnswerEngine.answer)` — any return without `_finalize` fails) and bites: HEAD engine.py swapped in → 13 failed/2 passed.
+- Accepted flags (recorded): (a) 7 paths wrapped vs card's stale "3" (4 abstention + UNAVAILABLE) — metric is 0 undisclosing; (b) `_finalize` puts lost-region disclosure before leg status, dual-degraded ends DEGRADED + limitation (one-line reorder, documented).
+- Committed `2a6a806`, api restarted (engine = answer path), /health 200. Board: T-V1-052 → DONE. Registered T-V1-057 (test_crash_recovery.py import-time INGEST_QUEUE_PREFIX leak — the only remaining non-baseline full-suite failure). Dev2 dispatched **T-V1-056** (stale /ready worker probe — heartbeat freshness, fail-closed both directions).
+- Dev1 still on T-V1-055 (tree shows its dedup.py + untracked test_purge_originals.py in flight, 3 self-reported red = pre-implementation state).
+- Next museR action: T-V1-043 (coordinator-owned): deploy real BAAI/bge-m3 1024-d embedding service, re-point INFINITY_URL, revert adaptation opt-in → Q9 gate + integration class-1 unblock.
+
+## 2026-10-13 ~05:1xZ — museR cycle 4 (T-043 DEPLOYED, T-055/T-056 DONE) — **/ready ALL-GREEN**
+- T-V1-043 (coordinator-owned) DEPLOYED: `e108c87`. Served model was bge-small 384-d vs 1024-d collections (jobs parked EMBED_UNAVAILABLE; Q9 blocked). Image-config traps found the hard way (3 silent fallbacks): reads `INFINITY_MODEL_ID`/`INFINITY_ENGINE` NOT `INFERENCE_*`; engines are torch|ctranslate2|optimum|neuron (no `onnx`); multi-model list is SEMICOLON-separated. Now serves BAAI/bge-m3 + reranker; /embeddings 1024-d proven; rerank ranks correctly; ALLOW_DIMENSION_ADAPTATION reverted false (T-042 opt-in retired).
+- T-V1-055 (dev1): `33d3c09` — purge deletes originals (per-call purger via existing seam, after tombstone commit, failure → same 207 report). 12 green, ruff/mypy clean, PD-005 PASSED.
+- T-V1-056 (dev2): `f241cb6` — worker heartbeat (15s TTL, first statement of loop) + readiness probe, fail-closed both directions, live-redis both-direction pin. 19 green.
+- LIVE STACK: worker+api recreated → **/ready TRUE, all 7 deps** (worker heartbeat renewed 0.6s ago — first true green since T-020). /health 200.
+- Integration: test_dedup_versions 3→2 failed (1 healed by real embeddings). Remaining 2 filed: **T-V1-058** (1 FTS row survives delete — straggler vs scope gap) and **T-V1-059** (dead parser_for_mime seam breaks late-job test, seam moved by T-031). Also filed **T-V1-060** (reindex legacy padded corpus into fresh collection + promote_replacement switch — post-T-043, the knowledge collection still holds 1456 pre-bge-m3 points).
+- Session commits: b6a8916, 68793fe, 4d0f88a, 2a6a806, 33d3c09, f241cb6, e108c87.
+- Out-of-gate V4 stream: still untouched/uncommitted (langflow + DEV21 handoff), awaiting judge/user ruling.
+
+## 2026-10-13 ~05:3xZ — museR cycle 5 (T-V1-050 committed; dev1 on T-058, dev2 on T-057)
+- T-V1-050 (dev2): `b7a6086` — publish decision moved INTO postgres: one UPDATE with the fence (`_generation_still_live`) in its WHERE ⇒ race-window publishes 0 by construction; losing job fails loudly (log + precise re-read + unpublish + NON-RETRYABLE park). 10 passed (dedicated CAS suite), touched suites 101, ruff+mypy clean, pin bites (old `job.status = READY` form fails exactly the inverted assignment pin). No migration needed (existing PK/FK columns only).
+- T-050 DEPLOY NOTE: worker restart DEFERRED — dev1's T-058 is running live integration tests on the shared stack; restart after its window closes (then run test_dedup_versions live as the T-050 live proof dev2 asked for).
+- Dispatched: dev1 **T-V1-058** (FTS row survives delete — straggler vs scope gap), dev2 **T-V1-057** (import-time INGEST_QUEUE_PREFIX leak — poisons every full-suite run).
+- Filed **T-V1-061**: Q9 re-verification with real bge-m3 = the formal V1 acceptance gate → V2 ungate. PREVIOUS Q9 PASS RODE UNCERTAIN EMBEDDINGS (pre-T-043 384-d era) — must re-run to be trusted.
+- Out-of-gate V4 stream: still untouched/uncommitted, awaiting judge/user ruling.
+
+## 2026-10-13 ~05:4xZ — museR cycle 6 (T-V1-058 committed + deployed; T-043/T-050 now live)
+- T-V1-058 (dev1): `66d78bb` — REAL purge gap, self-inflicted by my own T-055 (`33d3c09`): registering the originals purger BEFORE the lazy `if not _STORE_PURGERS:` block left fts/qdrant unregistered in fresh processes → purges reported `{postgres, originals}` clean-204 while FTS+Qdrant survived. Root cause proven from the DB (survivor scoped correctly + FTS write 0.66s BEFORE tombstone ⇒ not a straggler). Fix = registration order + pinning tests (3/5 fail pre-fix).
+- DEPLOYED in the same window (dev1 idle): worker+api restarted → **live stack now runs T-050's CAS fence + T-058's ordering fix + T-056 heartbeat**. `/health` 200, `/ready` TRUE all-7 (worker heartbeat 0.3s).
+- T-V1-062 (coordinator ops): one-shot re-purge of the 68 lexical rows naming tombstoned docs (all 5 distinct filenames = test fixtures, 0 real docs; +1 non-UUID junk literal `doc-b` left alone, pre-existing unit-test pollution, logged) → **0 after**, every report showing all 4 stores. Script: /tmp/opencode/repurge-66.py.
+- Live dedup suite now 13 passed / 4 failed. Remaining 4 mapped: 2 = parser-seam (T-059, dev2), 2 = T-063 dispatched to dev1 (`identical_reupload_skips_parse_and_reuses_version` + `supersession_cleanup_failure_is_retried_visibly` — the untriaged T-039-era pair; both plausibly EXPECTATION updates now that T-050's fence correctly parks racers STALE_GENERATION instead of racing READY).
+- Board: 058/062 DONE, 057/063 IN-PROGRESS. Out-of-gate V4 stream still untouched.
+
+## 2026-10-13 ~05:5xZ — museR cycle 7 (T-V1-057 DONE — FULL SUITE 1252/0)
+- T-V1-057 (dev2): `a3fa8c6` — import-time `INGEST_QUEUE_PREFIX` writes moved into a module-scoped autouse fixture (save/install/restore-exact in finally); QUEUE_PREFIX stays a constant. museR re-ran the FULL gate: **pytest tests/unit tests/contracts -q → 1252 passed, 0 failed** (132s). The 2 formerly-red queue tests pass mid-session. grep-prove confirmed: zero module-level `os.environ[` writes in anything pytest imports (13 in m004_ready_degraded.py = standalone script, disclosed).
+- T-057's own baseline NOTE: crash_recovery.py's 8 failures are pre-existing (retry-storm attempt-count, reproduces at HEAD with T-057 absent) — filed **T-V1-064**, explicitly NOT swept into T-057.
+- Dispatched dev2 **T-V1-059** (dead parser_for_mime seam — the 2 late_job tests). File-collision protocol with dev1's live T-063 on the same integration file (disjoint hunks or BLOCKED push).
+- Loop state: dev1 T-063 in progress, dev2 T-059 in progress. V4 out-of-gate stream untouched. Q9 re-verification (T-V1-061) = formal V1 acceptance gate, still queued.
+
+## 2026-10-13 ~06:4xZ — museR cycle 8 (T-V1-059 DONE — a T-050 self-inflicted bug found & fixed)
+- T-V1-059 (dev2): committed. (1) Dead seam re-pointed: `parser_for_mime` was a bare is-None check since T-031 (wrapper constructed + discarded, mid-parse delete never fired) → now injects at `parse_with_precedence` (registry:139, the pipeline's real resolve+invoke site). (2) **REAL PRODUCT BUG, self-inflicted by my own T-050 (`b7a6086`)**: the CAS used `synchronize_session=False` + `session.expire(job)` → next attribute access = refresh SELECT outside a greenlet → `MissingGreenlet` → retryable `INTERNAL_ERROR` → jobs retry-looped instead of publishing. Fix = `synchronize_session="fetch"` (sync inside `execute()`, greenlet live, clean state, no second unpredicated UPDATE). A/B-proven; restored byte-identical. **That one bug was causing ALL FOUR dedup failures.**
+- museR VERIFICATION: full `test_dedup_versions.py` 17 passed / 0 failed (live, post-commit); CAS suite 10/10; ruff+mypy clean; worker restarted (ingest_worker_started clean), /health 200. Blast-radius note: anything touching the READY publish path may have been intermittently bitten since b7a6086 — unit+contract gate was clean at T-057, so exposure was integration-only; sweep noted for T-V1-061.
+- ALLOWLIST RULING: ACCEPTED dev2's touch of its own `test_publication_fence_cas.py` — 2 pins pinned the wrong implementation detail and were repointed STRICTER (require 'fetch', forbid session.expire, assert session.expired == []). Alternative = reverting a correct fix and leaving 4 tests red. Ruling recorded here + commit message.
+- T-V1-063 RESCOPED to close-without-change (dev1 confirming 17/0 in its own run + a confirmation row). Lesson logged in its dispatch: expect 2 red tests to go green with ZERO test edits — that is what a product bug looks like; prove expectation-vs-product FIRST.
+- Shared-tree discipline held: dev1 had zero hunks in the file at commit time (verified via `git diff -U0` before staging).
+
+## 2026-10-13 ~07:0xZ — museR cycle 9 (T-063 closed; T-060 reindex + T-048 docs dispatched)
+- T-V1-063 CLOSED WITHOUT CHANGE (dev1 confirmation row committed as `8f11860`): root cause = my T-050 MissingGreenlet regression (fixed by T-V1-059/`2e4170a`); dev1 made zero edits and removed its own transient diagnostic so the fix stands alone. Confirmed 17/0 in its own run.
+- URGENCY ESCALATED on the mixed-model collection: `knowledge` now holds **1997 points** (1456 legacy padded + ~540 real 1024-d written by post-T-043 integration runs). Every run widens the never-mix hazard. Dispatched dev1 **T-V1-060** (fresh `knowledge_v2` rebuild through the real provider → identity verify → promote_replacement alias switch → search smoke). Heads-up push protocol: dev1 will herdr me BEFORE the switch; dev2 is deliberately on docs-only (T-048) so nothing competes with the live switch.
+- Then T-V1-061 (Q9 benchmark on real bge-m3) runs AFTER the switch — the formal V1 acceptance gate.
+- Out-of-gate V4 stream: still untouched/uncommitted.
+
+## 2026-10-13 ~07:2xZ — museR cycle 10 (T-V1-048 committed; dispatch-error corrected; T-040 out)
+- T-V1-048 (dev2): `0721869` — docs-only. museR verified: `self._finalize(` = 7, hydration does `lookups += len(missing)` → ONE `get_many(missing)`, wrong test path removed (real file tests/unit/test_graph_citation_hydration.py 5 passed), doc's §4 gate 156 passed, and the wrongly-named wiring spec untouched (md5 88a83ee…, mtime Oct 12 09:24).
+- DISPATCH ERROR (mine, corrected in-flight): my T-048 allowlist named rag-fork-solution/tasks/V2-G4-INTEGRATION-WIRING.md (a bare historical spec); the real target was docs/graph/G4-INTEGRATION-CONTRACT.md — which the ORIGINAL MICRO card had specified all along. Dev2 stopped and asked instead of guessing; corrected dispatch landed, no writes to the wrong file. Lesson: read the card's own allowed-files line, not my memory of it.
+- T-064 watch: crash_recovery.py's 8 baseline failures >300s to even run — background run started (/tmp/opencode/crash-after-059.log). Hypothesis to check: they were MissingGreenlet retry-loop victims (attempts==1 sees 3 = retryable INTERNAL_ERROR loop, now fixed); if so T-064 closes without change.
+- Dev2 dispatched **T-V1-040** (git connector acquires remotes, bounded scratch, containment — untrusted-URL surface). Dev1 still on T-060 (live reindex; `M scripts/reindex_all_chunks.py` observed in dev2's churn report = expected).
+
+## 2026-10-13 ~08:1xZ — museR cycle 11 (INCIDENT: infinity repair; T-060 resumed)
+- **INCIDENT (coordinator-owned, owned):** infinity crash-looped 25× — `michaelf34/infinity:latest` silently drifted to 0.0.77 whose CLI REQUIRES an explicit subcommand; bare `infinity_emb` exits 0 ("No command given … use the v2 command") while compose declared no `command:`. /ready infinity=false, ingest DOWN stack-wide. Compounded by **29 orphaned `t021_crash_worker.py` fixture processes (~4GB RSS)** — box at 277MB available. Root causes: floating `:latest` + the crash-fixture worker leak T-054 exists for + my own detached crash-suite run (lesson logged: that suite leaks workers; never run it detached).
+- REPAIR (`2e63bd7`): orphans reaped (277MB→2.1GB available); image PINNED 0.0.77; `command: ["v2","--host","0.0.0.0","--port","7997"]`. Verified: both models, 1024-d, /health 200, /ready TRUE all-7. Dev1's 2 fixes committed with it (reindex batch 100→32; embed timeout 30→120 — 14 reindex tests green).
+- Stale `.git/index.lock` (0 bytes, 32min old, no git process) removed before commit — shared worktree discipline: always check for a live git process first.
+- T-060 RESUMED (dev1): dry-run was clean (build plan, 2374 chunks, 0 writes); now running the real build into knowledge_v2 + identity verify + promote_replacement switch + smoke. Heads-up push protocol before the flip.
+- T-054 promoted to board priority (proven-leak today). V4 stream untouched.
+
 | S1 | RP-06/QF-06 | Ask/Search single serialization boundary + contract test | QUEUED |
 | S2 | RP-07/QF-07 | Proxy raw-bytes multipart + SHA/length check + limits | QUEUED |
 | S3 | RP-10/QF-10 | Reindex via real provider + boundary reject + dry-run | QUEUED |
