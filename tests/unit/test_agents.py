@@ -3448,3 +3448,167 @@ def test_worker_visible_park_codes() -> None:
         assert await q.park(fake, "TEST") is False
 
     asyncio.run(_run())
+
+# ======================================================================================
+# T-V3-014 — Persistent evidence adapter + migration (citations/claims durable)
+# ======================================================================================
+
+import tempfile as _tempfile2  # noqa: E402, I001
+from agents.evidence import (  # noqa: E402
+    Citation,
+    EVIDENCE_VERIFIER_VERSION,
+    EvidenceRecord,
+    EvidenceStore,
+    EvidenceStoreError,
+    InMemoryEvidenceStore,
+    SqliteEvidenceStore,
+)
+
+
+def _make_evidence(run_id: str, trace_id: str, chunk_id: str = "chunk-1", doc_id: str = "doc-1") -> EvidenceRecord:  # noqa: E501
+    return EvidenceRecord(
+        run_id=run_id,
+        trace_id=trace_id,
+        workspace_id="ws-1",
+        statement="claim",
+        citations=[Citation(document_id=doc_id, chunk_id=chunk_id, quote="hello", source_hash="abc")],  # noqa: E501
+        chunk_ids=[chunk_id],
+        verdict="SUPPORTED",
+        document_id=doc_id,
+        chunk_id=chunk_id,
+        source_hash="abc",
+    )
+
+
+async def _evidence_round_trip_suite(store: EvidenceStore, run_id: str, trace_id: str) -> None:
+    rec = _make_evidence(run_id, trace_id)
+    written = await store.write(rec)
+    # Byte-identical round-trip
+    listed = await store.list_for_run(run_id)
+    assert len(listed) == 1
+    assert listed[0].model_dump_json() == written.model_dump_json()
+    fetched = await store.get(run_id, written.id)
+    assert fetched is not None
+    assert fetched.model_dump_json() == written.model_dump_json()
+    # Every record carries chunk ids + verifier version + timestamp
+    assert written.chunk_ids
+    assert written.verifier_version
+    assert written.verified_at
+    assert written.citations
+    assert written.citations[0].chunk_id
+
+
+@pytest.mark.unit
+def test_evidence_round_trip_byte_identical_inmemory() -> None:
+    async def _run() -> None:
+        store = InMemoryEvidenceStore()
+        await _evidence_round_trip_suite(store, "run-1", "trace-1")
+        # Second run isolation
+        await _evidence_round_trip_suite(store, "run-2", "trace-2")
+        assert len(await store.list_for_run("run-1")) == 1
+        assert len(await store.list_for_run("run-2")) == 1
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_evidence_round_trip_byte_identical_sqlite() -> None:
+    async def _run() -> None:
+        with _tempfile2.TemporaryDirectory() as td:
+            store = SqliteEvidenceStore(Path(td) / "ev.db")
+            await _evidence_round_trip_suite(store, "run-1", "trace-1")
+            # Re-open from same file — durable
+            store2 = SqliteEvidenceStore(Path(td) / "ev.db")
+            listed = await store2.list_for_run("run-1")
+            assert len(listed) == 1
+            assert listed[0].verifier_version == EVIDENCE_VERIFIER_VERSION
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_evidence_without_provenance_rejected_zero() -> None:
+    """Every record carries chunk ids + verifier version + timestamp — 0 without provenance."""
+    async def _run() -> None:
+        store = InMemoryEvidenceStore()
+        # Valid has provenance
+        rec_ok = _make_evidence("run-1", "trace-1", chunk_id="chunk-1")
+        await store.write(rec_ok)
+        assert len(await store.list_for_run("run-1")) == 1
+        # Invalid without provenance should be rejected — 0 without provenance
+        try:
+            rec_bad = EvidenceRecord(
+                run_id="run-1",
+                trace_id="trace-1",
+                workspace_id="ws-1",
+                statement="bad",
+                citations=[],
+                chunk_ids=[],
+                chunk_id="",
+                document_id="",
+                source_hash="",
+                verifier_version=EVIDENCE_VERIFIER_VERSION,
+                verified_at=datetime.now(UTC).isoformat(),
+            )
+            await store.write(rec_bad)
+            raise AssertionError("evidence without provenance must be rejected")
+        except (EvidenceStoreError, ValueError):
+            pass
+        assert len(await store.list_for_run("run-1")) == 1  # still 1, no bad record added
+        # Also test that every stored record has provenance
+        for rec in await store.list_for_run("run-1"):
+            has_prov = bool(rec.chunk_ids or rec.citations or rec.chunk_id)
+            assert has_prov, "every record must carry chunk provenance"
+            assert rec.verifier_version
+            assert rec.verified_at
+            assert rec.chunk_ids or rec.citations
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_evidence_append_only_no_mutation_api() -> None:
+    """Append-only — no update/delete surface."""
+    store = InMemoryEvidenceStore()
+    assert hasattr(store, "write")
+    assert hasattr(store, "list_for_run")
+    assert hasattr(store, "get")
+    assert not hasattr(store, "update")
+    assert not hasattr(store, "delete")
+    assert not hasattr(store, "put")
+    # Check class dict as well
+    for cls in [InMemoryEvidenceStore, SqliteEvidenceStore]:
+        assert "update" not in cls.__dict__
+        assert "delete" not in cls.__dict__
+    # Sqlite also
+    with _tempfile2.TemporaryDirectory() as td:
+        sql = SqliteEvidenceStore(Path(td) / "ev.db")
+        assert not hasattr(sql, "update")
+        assert not hasattr(sql, "delete")
+
+
+@pytest.mark.unit
+def test_evidence_verifier_version_and_timestamp_present() -> None:
+    """Re-verify later must know WHAT verified it and WHEN."""
+    async def _run() -> None:
+        store = InMemoryEvidenceStore()
+        run_id = f"run-ev-{uuid.uuid4().hex[:6]}"
+        rec = _make_evidence(run_id, "trace-1")
+        # Verifier version is pinned at write time
+        assert rec.verifier_version == EVIDENCE_VERIFIER_VERSION
+        assert rec.verified_at
+        written = await store.write(rec)
+        assert written.verifier_version == EVIDENCE_VERIFIER_VERSION
+        assert written.verified_at
+        # Byte-identical round-trip preserves version and timestamp
+        fetched = await store.get(run_id, written.id)
+        assert fetched is not None
+        assert fetched.verifier_version == EVIDENCE_VERIFIER_VERSION
+        assert fetched.verified_at == written.verified_at
+        # Every record in the run has them
+        for r in await store.list_for_run(run_id):
+            assert r.verifier_version
+            assert r.verified_at
+            assert r.chunk_ids or r.citations
+
+    asyncio.run(_run())
