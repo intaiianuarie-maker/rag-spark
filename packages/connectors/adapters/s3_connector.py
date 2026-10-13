@@ -26,6 +26,8 @@ from ..interfaces import (
     ConnectorKind,
     ConnectorSyncResult,
     SourceItem,
+    page_items,
+    snapshot_digest,
 )
 
 
@@ -51,7 +53,30 @@ class S3Connector(Connector):
         return bucket
 
     def _prefix(self, config: ConnectorConfig) -> str:
-        return config.settings.get("prefix", "") or ""
+        prefix = config.settings.get("prefix", "") or ""
+        if any(ch in prefix for ch in "*?["):
+            raise ValueError(
+                "S3Connector prefix is a literal key prefix — glob/regex "
+                "characters are not supported"
+            )
+        return prefix
+
+    def _require_in_prefix(self, config: ConnectorConfig, key: str) -> None:
+        """T-V1-034 S3 prefix semantics — a configured prefix is a hard scope.
+
+        ``settings.prefix`` is a **literal, unnormalized key prefix**: a key is
+        in scope iff ``key.startswith(prefix)``, with no glob, no regex, no
+        implicit ``/`` and no delimiter (listing is recursive, so ``docs``
+        also matches ``docs-old/x``; write ``docs/`` for a folder). Whatever
+        the listing admits, ``fetch`` must refuse — an item that did not come
+        from this prefix (or one whose key was rewritten by a caller) is out
+        of scope and must not be downloaded.
+        """
+        prefix = self._prefix(config)
+        if not key.startswith(prefix):
+            raise ValueError(
+                f"key {key!r} is outside the configured prefix {prefix!r}"
+            )
 
     def _client_or_build(self):
         if self._client is not None:
@@ -69,7 +94,12 @@ class S3Connector(Connector):
         )
 
     def _list_all(self, config: ConnectorConfig) -> list[SourceItem]:
-        """List all objects under the prefix in a stable (sorted by key) order."""
+        """List all objects under the prefix in a stable (sorted by key) order.
+
+        T-V1-034: the listing is **recursive** — no ``Delimiter`` is sent, so
+        keys are returned at every depth under the literal prefix (see
+        :meth:`_require_in_prefix` for the prefix contract).
+        """
         client = self._client_or_build()
         bucket = self._bucket(config)
         prefix = self._prefix(config)
@@ -107,13 +137,15 @@ class S3Connector(Connector):
         self, config: ConnectorConfig, cursor: str | None = None
     ) -> ConnectorDiscovery:
         all_items = self._list_all(config)
-        start = int(cursor) if cursor else 0
-        window = all_items[start : start + self._page_size]
-        next_start = start + self._page_size
-        next_cursor = str(next_start) if next_start < len(all_items) else None
-        return ConnectorDiscovery(items=window, next_cursor=next_cursor)
+        window, next_cursor = page_items(all_items, cursor, self._page_size)
+        return ConnectorDiscovery(
+            items=window,
+            next_cursor=next_cursor,
+            snapshot=snapshot_digest(all_items),
+        )
 
     async def fetch(self, config: ConnectorConfig, item: SourceItem) -> bytes:
+        self._require_in_prefix(config, item.external_id)
         client = self._client_or_build()
         bucket = self._bucket(config)
         resp = client.get_object(Bucket=bucket, Key=item.external_id)

@@ -16,7 +16,10 @@ code is copied in-tree, so the license guard stays clean.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Callable
+from enum import StrEnum
+from urllib.parse import unquote, urlparse
 
 from ..interfaces import (
     Connector,
@@ -25,10 +28,49 @@ from ..interfaces import (
     ConnectorKind,
     ConnectorSyncResult,
     SourceItem,
+    page_items,
+    snapshot_digest,
 )
 
 #: A git seam: given (args, repo) return raw stdout bytes. Injectable for tests.
 GitRunner = Callable[[list[str], str], bytes]
+
+#: T-V1-034: the only git subcommands this adapter may ever run. ``ls-tree``
+#: and ``cat-file`` are read-only and local; ``clone``/``fetch``/``pull``/
+#: ``ls-remote``/anything else is refused before it can reach a process.
+_ALLOWED_GIT_COMMANDS = frozenset({"ls-tree", "cat-file"})
+
+
+class RepoScope(StrEnum):
+    """T-V1-034 Git local-vs-remote contract (pinned in code, not prose)."""
+
+    LOCAL = "local"  # a checkout on this machine — readable offline
+    REMOTE = "remote"  # an URL — never contacted by this connector
+
+
+#: ``file://`` is a local path wearing a scheme; every other scheme is remote.
+_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
+#: scp-style remote shorthand: ``git@host:path`` (no scheme, has a colon).
+_SCP_RE = re.compile(r"^[^/@\s]+@[^/\s]+:.+")
+
+
+def classify_repo(repo: str) -> RepoScope:
+    """Classify ``settings.repo`` as a local checkout or a remote URL.
+
+    Contract: this connector is a **reader of an existing local checkout**.
+    It runs ``ls-tree``/``cat-file`` only — never ``clone``, ``fetch``,
+    ``pull`` or ``ls-remote`` — so a remote URL can only ever be *read* if the
+    objects are already on disk. Anything with a URL scheme (except
+    ``file://``) or scp syntax is REMOTE and is rejected at the boundary
+    rather than silently handed to ``git -C``, which would fail with an
+    unrelated error (or, worse, a later command could dial the network).
+    """
+    value = repo.strip()
+    if value.startswith("file://"):
+        return RepoScope.LOCAL
+    if _SCHEME_RE.match(value) or _SCP_RE.match(value):
+        return RepoScope.REMOTE
+    return RepoScope.LOCAL
 
 
 class GitConnector(Connector):
@@ -46,12 +88,32 @@ class GitConnector(Connector):
         repo = config.settings.get("repo") or config.settings.get("url")
         if not repo:
             raise ValueError("GitConnector requires settings.repo (path or URL)")
-        return str(repo)
+        value = str(repo)
+        if classify_repo(value) is RepoScope.REMOTE:
+            raise ValueError(
+                "GitConnector reads a LOCAL checkout and never performs network "
+                "operations (no clone/fetch/pull); point settings.repo at a "
+                "local clone of the remote repository"
+            )
+        if value.startswith("file://"):
+            parsed = urlparse(value)
+            if parsed.netloc not in ("", "localhost"):
+                raise ValueError("file:// repository URLs must be local (no host)")
+            value = unquote(parsed.path)
+        return value
 
     def _ref(self, config: ConnectorConfig) -> str:
         return str(config.settings.get("ref", "HEAD"))
 
     def _run(self, args: list[str], repo: str) -> bytes:
+        if not args or args[0] not in _ALLOWED_GIT_COMMANDS:
+            # T-V1-034: this connector is a reader of a local checkout. Every
+            # subcommand it can issue is in this set, so ``clone``/``fetch``/
+            # ``pull``/``ls-remote`` (anything that could dial the network or
+            # mutate the repo) can never be reached, even via a bad ref.
+            raise ValueError(
+                f"git subcommand not allowed in GitConnector: {args[:1] or args!r}"
+            )
         if self._runner is not None:
             return self._runner(args, repo)
         import os
@@ -91,6 +153,10 @@ class GitConnector(Connector):
                     metadata={"sha": sha, "ref": ref, "repo": repo},
                 )
             )
+        # Key order (T-V1-034 keyset paging): ``ls-tree -r`` is tree-ordered,
+        # which we normalize to plain ``external_id`` order so a resume never
+        # depends on directory-entry layout.
+        items.sort(key=lambda item: item.external_id)
         return items
 
     def _show_blob(self, config: ConnectorConfig, sha: str) -> bytes:
@@ -100,11 +166,12 @@ class GitConnector(Connector):
         self, config: ConnectorConfig, cursor: str | None = None
     ) -> ConnectorDiscovery:
         items = self._list_tree(config)
-        start = int(cursor) if cursor else 0
-        window = items[start : start + self._page_size]
-        next_start = start + self._page_size
-        next_cursor = str(next_start) if next_start < len(items) else None
-        return ConnectorDiscovery(items=window, next_cursor=next_cursor)
+        window, next_cursor = page_items(items, cursor, self._page_size)
+        return ConnectorDiscovery(
+            items=window,
+            next_cursor=next_cursor,
+            snapshot=snapshot_digest(items),
+        )
 
     async def fetch(self, config: ConnectorConfig, item: SourceItem) -> bytes:
         return self._show_blob(config, str(item.metadata.get("sha", "")))

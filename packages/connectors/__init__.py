@@ -17,6 +17,10 @@ type crosses the ``connectors.interfaces`` seam. Use :func:`create_connector`
 to resolve a ``Connector`` from a ``ConnectorConfig``.
 """
 
+from __future__ import annotations
+
+from collections.abc import Callable
+
 from .adapters import GitConnector, LocalFolderConnector, S3Connector, WebConnector
 from .interfaces import (
     Connector,
@@ -42,14 +46,27 @@ __all__ = [
 ]
 
 
-def create_connector(config: ConnectorConfig) -> Connector:
-    """Resolve a ``Connector`` for ``config.kind`` (single wiring point)."""
+def create_connector(config: ConnectorConfig, *, page_size: int | None = None) -> Connector:
+    """Resolve a ``Connector`` for ``config.kind`` (single wiring point).
+
+    ``page_size`` (T-V1-034) lets the sync consumer control how many items a
+    page holds without knowing adapter types; ``None`` keeps each adapter's
+    default.
+    """
     if config.kind is ConnectorKind.LOCAL_UPLOAD:
-        return LocalFolderConnector()
+        return _build(LocalFolderConnector, page_size)
     if config.kind is ConnectorKind.S3:
-        return S3Connector()
+        return _build(S3Connector, page_size)
     if config.kind is ConnectorKind.WEB:
-        return WebConnector()
+        return _build(WebConnector, page_size)
     if config.kind is ConnectorKind.GIT:
-        return GitConnector()
+        return _build(GitConnector, page_size)
     raise ValueError(f"unsupported connector kind: {config.kind}")
+
+
+def _build(adapter_type: Callable[..., Connector], page_size: int | None) -> Connector:
+    if page_size is None:
+        return adapter_type()
+    if page_size < 1:
+        raise ValueError(f"page_size must be >= 1, got {page_size}")
+    return adapter_type(page_size=page_size)

@@ -123,6 +123,15 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   does the work, T-021 files correctly excluded) → DONE.
 - T-V1-024 reviewer: APPROVE (6/6 false frames, 6/6 positives, limits honest, 120 green) → DONE.
   Nits carried (non-blocking): 'eronic' typo + broad nu/se markers — fix opportunistically.
+- T-V1-030 reviewer: APPROVE (decision sound, scoping + PD-001 reconciliation correct, all 3
+  risks accepted with T-031 as proof) → DONE.
+- T-V1-031 dispatched (dev1, format matrix — the proof T-030 needs). T-V1-034 dispatched
+  (dev2, sync consumer). Both solo, allowlisted, push-on-done.
+- 2026-10-13T00:10Z log: HEAD 6b0cfa1 (T-030). Board 37 DONE / 0 REVIEW / 2 IN-PROGRESS
+  (031 dev1 working, 034 dev2 working) / 12 QUEUED / 62 GATED. Stack healthy (/health ok
+  last check; infinity loopback; adaptation opt-in ON pending T-043 bge-m3). Next events:
+  T-031/T-034 deliveries → verify → commit → REVIEW → reviewer → DONE → dispatch (dev1:
+  T-035 convergence next if 031 lands; dev2: T-032-family done, next per queue).
 - T-V1-021 reviewer: APPROVE (real SIGKILL, deterministic seams, drain asserted, provenance
   clean, lint/type self-run) → DONE. C-section ingestion reliability complete (016–021).
 - T-V1-020 reviewer: APPROVE (atomic claim, fenced ack, ack-after-durability, 80/80 stable —

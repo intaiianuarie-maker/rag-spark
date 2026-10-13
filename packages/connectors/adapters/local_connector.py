@@ -24,6 +24,8 @@ from ..interfaces import (
     ConnectorKind,
     ConnectorSyncResult,
     SourceItem,
+    page_items,
+    snapshot_digest,
 )
 
 
@@ -44,7 +46,11 @@ class LocalFolderConnector(Connector):
         return Path(raw)
 
     def _scan(self, config: ConnectorConfig) -> list[SourceItem]:
-        """List files under the root in a stable (sorted) order."""
+        """List files under the root in key order (sorted by relative path).
+
+        Key order (not readdir order) is required by the T-V1-034 keyset cursor:
+        resuming past a key must be independent of insert/delete churn.
+        """
         root = self._root(config)
         if not root.exists():
             raise FileNotFoundError(f"path does not exist: {root}")
@@ -67,17 +73,19 @@ class LocalFolderConnector(Connector):
                     },
                 )
             )
+        items.sort(key=lambda item: item.external_id)
         return items
 
     async def discover(
         self, config: ConnectorConfig, cursor: str | None = None
     ) -> ConnectorDiscovery:
         all_items = self._scan(config)
-        start = int(cursor) if cursor else 0
-        window = all_items[start : start + self._page_size]
-        next_start = start + self._page_size
-        next_cursor = str(next_start) if next_start < len(all_items) else None
-        return ConnectorDiscovery(items=window, next_cursor=next_cursor)
+        window, next_cursor = page_items(all_items, cursor, self._page_size)
+        return ConnectorDiscovery(
+            items=window,
+            next_cursor=next_cursor,
+            snapshot=snapshot_digest(all_items),
+        )
 
     async def fetch(self, config: ConnectorConfig, item: SourceItem) -> bytes:
         root = self._root(config)
