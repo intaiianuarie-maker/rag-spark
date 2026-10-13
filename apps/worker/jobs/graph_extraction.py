@@ -165,19 +165,16 @@ async def process_graph_job(job_id: str) -> dict:
                 },
             )
 
-    # Idempotent upserts
+    # Idempotent, atomically visible upsert (T-V2-002): single transaction
+    # so a concurrent reader never sees a half-written extraction.
     store = SQLiteGraphStore(graph_db_path())
     try:
-        if extraction_result.entities:
-            await store.upsert_entities(workspace_id, extraction_result.entities)
-        if extraction_result.relationships:
-            await store.upsert_relationships(
-                workspace_id, extraction_result.relationships
-            )
-        if extraction_result.communities:
-            await store.upsert_communities(
-                workspace_id, extraction_result.communities
-            )
+        await store.upsert_extraction(
+            workspace_id,
+            extraction_result.entities,
+            extraction_result.relationships,
+            extraction_result.communities,
+        )
     finally:
         store.close()
 

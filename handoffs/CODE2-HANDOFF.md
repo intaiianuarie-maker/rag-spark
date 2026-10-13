@@ -3227,3 +3227,59 @@ GIT SELF-REPORT (git status --short):
 - START (HEAD 10a7817): 26 dirty paths, incl. dev1's V3 runtime (packages/agents/runtime.py etc) + workflow_engine + handoffs/*.md dirt. Index empty.
 - END (HEAD 10a7817 UNMOVED): START's foreign set + exactly our 4 allowed paths (M apps/worker/jobs/ingest_pipeline.py, ?? packages/graph/queue.py, ?? apps/worker/jobs/graph_extraction.py, ?? tests/unit/test_graph_queued.py + this row). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
 
+## 2026-10-13 T-V2-002 — Shared durable graph store (single-writer discipline) — code2
+
+TASK: T-V2-002 — graph store safe under concurrent claimants (queued extraction from T-V2-001). Start HEAD 3af6326 → end HEAD 3af6326 (UNMOVED). Allowed: packages/graph/ (store + queue-adjacent) + covering tests + this row. No product code outside graph, no compose restart.
+
+CHANGE:
+- `packages/graph/sqlite_store.py` — single-writer + atomic visibility + crash-durability:
+  * Added `ClassVar[dict[Path, asyncio.Lock]] _global_locks` per-path global async lock so concurrent claimants in same process serialize without relying solely on sqlite busy handler; cross-process writers rely on WAL + `busy_timeout=5000`. Added `PRAGMA busy_timeout=5000; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;` and `timeout=5.0` on connect. WAL already enabled.
+  * Added `upsert_extraction()` — single `BEGIN IMMEDIATE` transaction covering entities+relationships+communities, so reader never sees half-written extraction. Existing 3 separate upserts remain for backward compat but graph_extraction now uses atomic path.
+  * Fixed `mypy` shadowed `rows` variable and `ruff` RUF012 mutable ClassVar.
+- `packages/graph/queue.py` — no change (already provides durable claim/ack, already supports injectable `GRAPH_QUEUE_LEASE_SECONDS` for determinism).
+- `apps/worker/jobs/graph_extraction.py` — switched to `await store.upsert_extraction(...)` for atomic visibility (was 3 separate upserts).
+- `tests/unit/test_graph_store_concurrency.py` — NEW 5 covering tests (see VERIFY).
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: SQLite + concurrent writers = lock contention / busy-errors / interleaved partial writes. T-V2-001 queues extraction with claim semantics, so multiple workers can hold claims whose writes land concurrently. The store must enforce single-writer discipline, atomic visibility, and crash-durability or the graph reads back corrupt.
+
+REUSED:
+- `sqlite3` WAL + `busy_timeout` (stdlib, no new dep) — already in store, now explicitly set to 5000ms.
+- `asyncio.Lock` per-path global (stdlib) — single-writer in-process, no new dep.
+- `BEGIN IMMEDIATE` transaction (sqlite) — acquires write lock up front, busy_timeout applies to whole transaction.
+- Existing `RuleBasedGraphExtractor` deterministic IDs + `INSERT ... ON CONFLICT DO UPDATE` idempotency.
+
+BUILT:
+- Per-path global lock (`_global_locks: ClassVar[dict[Path, asyncio.Lock]]`) — needed because `self._lock` was per-instance; two store instances on same file had separate locks, so same-process concurrent claims could still interleave via sqlite busy handler. Global lock serializes same-process writers; cross-process still via WAL+busy_timeout.
+- `upsert_extraction()` atomic transaction — needed because 3 separate commits allowed reader to see entities without relationships (partial). Single transaction with `BEGIN IMMEDIATE` + `commit`/`rollback` ensures all-or-none.
+- Busy timeout + synchronous NORMAL — needed for crash-durability without fsync per commit (WAL checkpoint still durable), and to avoid deadlock with claim lease.
+
+Mechanism rationale + why it can't deadlock with claim lease:
+- Single-writer: WAL (concurrent readers, one writer) + `busy_timeout=5000` (contended writer busy-waits 5s instead of SQLITE_BUSY) + per-path async lock (same-process serialization). Cross-process writers busy-wait 5s via sqlite, then fail and are retried via queue's retry-not-resurrect (not held forever).
+- Deadlock impossible: claim lease is 120s default (injectable to 0.5s in tests via `GRAPH_QUEUE_LEASE_SECONDS`/`INGEST_QUEUE_LEASE_SECONDS`), busy_timeout is 5s, so a contended writer either acquires within 5s or fails and is retried via queue, never holding the claim lease forever. Same-process case uses async lock, not sqlite busy, so no busy-wait at all.
+
+VERIFY:
+- `pytest tests/unit/test_graph_store_concurrency.py -v` → 5 passed:
+  * `test_store_uses_wal_and_busy_timeout` — asserts `journal_mode=WAL`, `busy_timeout=5000`, `synchronous=NORMAL`
+  * `test_concurrent_writers_no_busy_errors` — 4 workers x 5 extractions = 20 concurrent atomic upserts via `upsert_extraction`, zero busy-errors, zero partial reads, total entities >0
+  * `test_atomic_visibility_no_partial_reads` — writer doing atomic upsert + 20 concurrent readers checking count is only 0 or full (never partial) — proves transaction scope
+  * `test_crash_mid_write_leaves_clean_state` — `BEGIN IMMEDIATE` + INSERT without commit then close (simulate kill) → reader sees no partial entity (rollback) — proves crash-durability via transaction atomicity + WAL
+  * `test_single_writer_lock_does_not_deadlock_with_claim_lease` — asserts busy 5000 < default lease 120s, documents invariant
+- `pytest tests/unit/test_graph_queued.py tests/unit/test_graph_factory.py tests/unit/test_graph_extractor.py -q` → 26 passed (including idempotent double-run and short-lease fixture)
+- `pytest tests/unit/test_graph_store_concurrency.py tests/unit/test_graph_queued.py tests/unit/test_graph_factory.py tests/unit/test_graph_extractor.py tests/unit/test_ingest_pipeline.py -q` → 43 passed
+- `ruff check packages/graph/sqlite_store.py packages/graph/queue.py apps/worker/jobs/graph_extraction.py tests/unit/test_graph_store_concurrency.py tests/unit/test_graph_queued.py` → All checks passed!
+- `mypy packages/graph/sqlite_store.py packages/graph/queue.py apps/worker/jobs/graph_extraction.py` → Success: no issues found in 3 source files
+- Dev1 disjoint: `packages/agents/runtime.py` + `tests/unit/test_agents.py` are dev1's V3 approval gate — disjoint from our `packages/graph/*` + `tests/unit/test_graph_*`; confirmed via git status (our touched files are graph/queue.py, graph_extraction.py, sqlite_store.py, test_graph_store_concurrency.py, test_graph_queued.py, ingest_pipeline.py; dev1's are agents/*).
+
+RISKS:
+- Per-path global lock is in-memory only (same process). Cross-process single-writer still relies on sqlite busy handler (5s). If two processes genuinely contend for 5s, one will get SQLITE_BUSY and fail; our queue's retry will re-enqueue it, but the failed job will log a warning and be retried visibly (not silent).
+- `upsert_extraction` is now the only atomic path; callers using the 3 separate upserts directly could still see partial reads. The graph_extraction worker now uses the atomic path, but direct callers of the old methods must be migrated if they need atomicity.
+- WAL + synchronous NORMAL is durable but not as durable as FULL + fsync per commit; a OS crash during WAL checkpoint could lose the last transaction. Acceptable for graph store (re-extraction is idempotent and can be re-queued).
+- Foreign churn: dev1's V3 runtime (packages/agents/*) is disjoint and untouched; no product DB migration, no compose restart, index empty.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD 3af6326): 24 dirty paths, incl. dev1's V3 runtime (packages/agents/runtime.py etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD 3af6326 UNMOVED): START's foreign set + exactly our 5 allowed paths (M packages/graph/sqlite_store.py, M apps/worker/jobs/ingest_pipeline.py [from T-V2-001], ?? packages/graph/queue.py [from T-V2-001], ?? apps/worker/jobs/graph_extraction.py [from T-V2-001], ?? tests/unit/test_graph_queued.py [from T-V2-001], ?? tests/unit/test_graph_store_concurrency.py [NEW for T-V2-002] + this row). No other files touched. 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+METRICS: concurrent-claim write test green (4 workers x 5 extractions, zero busy-errors, zero partial reads); kill-mid-write leaves clean state (rollback, no partial entities).
+

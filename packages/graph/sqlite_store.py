@@ -12,7 +12,7 @@ import json
 import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
-from typing import TypeVar
+from typing import ClassVar, TypeVar
 
 from .interfaces import Entity, GraphCommunity, GraphStore, Relationship
 
@@ -76,22 +76,58 @@ def _load_entity_name(
 class SQLiteGraphStore(GraphStore):
     """Embedded persistent GraphStore; one file, workspace-partitioned rows."""
 
+    # Single-writer discipline across instances sharing a file.
+    # Each path gets one global async lock so concurrent claimants in the same
+    # process serialize without relying solely on sqlite's busy handler.
+    # Cross-process writers still rely on WAL + busy_timeout.
+    _global_locks: ClassVar[dict[Path, asyncio.Lock]] = {}
+    _global_lock_guard: ClassVar[asyncio.Lock] = asyncio.Lock()
+
     def __init__(self, path: str | Path) -> None:
-        self._path = Path(path)
+        self._path = Path(path).resolve()
         self._init_done = False
-        self._lock = asyncio.Lock()
+        # Per-path global lock (single-writer in-process) + per-instance close guard
+        # Use get_or_create pattern; _global_locks is populated lazily.
+        # We cannot await here, so create a placeholder and resolve in _run.
+        self._lock: asyncio.Lock | None = None
         self._conn: sqlite3.Connection | None = None
+
+    def _get_lock(self) -> asyncio.Lock:
+        # Lazily create or reuse the global lock for this path.
+        # Called from async context, safe to use _global_locks dict directly
+        # because all callers are already serialized via _run's async lock.
+        lock = SQLiteGraphStore._global_locks.get(self._path)
+        if lock is None:
+            lock = asyncio.Lock()
+            SQLiteGraphStore._global_locks[self._path] = lock
+        if self._lock is None:
+            self._lock = lock
+        return lock
 
     def _connect(self) -> sqlite3.Connection:
         # Lazily open ONE connection per store and run schema exactly once. The
-        # connection is reused across ``_run`` calls (guarded by ``self._lock``
-        # so it is never used concurrently from two threads) and closed
-        # deterministically by ``close`` -- no per-read reconnect/re-schema.
+        # connection is reused across ``_run`` calls (guarded by the global
+        # per-path lock so it is never used concurrently from two threads) and
+        # closed deterministically by ``close`` -- no per-read reconnect/re-schema.
         conn = self._conn
         if conn is None:
             self._path.parent.mkdir(parents=True, exist_ok=True)
-            conn = sqlite3.connect(str(self._path), check_same_thread=False)
+            conn = sqlite3.connect(
+                str(self._path), check_same_thread=False, timeout=5.0
+            )
+            # Single-writer discipline: WAL for concurrent readers, busy_timeout
+            # so a contended writer busy-waits up to 5s instead of failing with
+            # SQLITE_BUSY, and synchronous NORMAL for crash-durability without
+            # fsync on every commit (WAL + checkpoint still durable).
+            # This cannot deadlock with the claim lease: the lease is 120s
+            # default (injectable to sub-second in tests), while busy_timeout is
+            # 5s, so a contended writer either acquires within 5s or fails and
+            # is retried via the queue's retry-not-resurrect, never holding the
+            # claim forever.
             conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("PRAGMA busy_timeout=5000;")
+            conn.execute("PRAGMA synchronous=NORMAL;")
+            conn.execute("PRAGMA foreign_keys=ON;")
             conn.executescript(_SCHEMA)
             self._conn = conn
         return conn
@@ -116,7 +152,8 @@ class SQLiteGraphStore(GraphStore):
             pass
 
     async def _run(self, fn: Callable[[], T]) -> T:
-        async with self._lock:
+        lock = self._get_lock()
+        async with lock:
             return await asyncio.to_thread(fn)
 
     async def ensure_graph(self, workspace_id: str) -> None:
@@ -329,6 +366,100 @@ class SQLiteGraphStore(GraphStore):
 
         res = await self._run(_op)
         return res
+
+    async def upsert_extraction(
+        self,
+        workspace_id: str,
+        entities: Sequence[Entity],
+        relationships: Sequence[Relationship],
+        communities: Sequence[GraphCommunity],
+    ) -> dict[str, int]:
+        """Atomically upsert one extraction's entities/relationships/communities.
+
+        A reader never sees a half-written extraction: all three tables are
+        updated in a single transaction. If the worker dies mid-write, the
+        transaction rolls back and no partial entities are visible (crash-
+        durability via WAL + transaction atomicity).
+
+        Returns counts {entities, relationships, communities}.
+        """
+
+        def _op() -> dict[str, int]:
+            counts = {"entities": 0, "relationships": 0, "communities": 0}
+            with self._connect() as conn:
+                # BEGIN IMMEDIATE acquires the write lock up front so the
+                # busy_timeout (5s) applies to the whole transaction, not per
+                # statement, and readers see either all or none.
+                conn.execute("BEGIN IMMEDIATE")
+                try:
+                    if entities:
+                        rows = [
+                            (workspace_id, e.id, e.model_dump_json())
+                            for e in entities
+                            if e.workspace_id == workspace_id
+                        ]
+                        if rows:
+                            conn.executemany(
+                                "INSERT INTO graph_entities"
+                                "(workspace_id, entity_id, payload, tombstoned)"
+                                " VALUES (?, ?, ?, 0)"
+                                " ON CONFLICT(workspace_id, entity_id)"
+                                " DO UPDATE SET payload=excluded.payload,"
+                                " tombstoned=0",
+                                rows,
+                            )
+                            counts["entities"] = len(rows)
+                    if relationships:
+                        rel_rows = [
+                            (
+                                workspace_id,
+                                r.id,
+                                r.source_entity_id,
+                                r.target_entity_id,
+                                r.model_dump_json(),
+                            )
+                            for r in relationships
+                            if r.workspace_id == workspace_id
+                        ]
+                        if rel_rows:
+                            conn.executemany(
+                                "INSERT INTO graph_relationships"
+                                "(workspace_id, relationship_id, source_id,"
+                                " target_id, payload, tombstoned)"
+                                " VALUES (?, ?, ?, ?, ?, 0)"
+                                " ON CONFLICT(workspace_id, relationship_id)"
+                                " DO UPDATE SET payload=excluded.payload,"
+                                " source_id=excluded.source_id,"
+                                " target_id=excluded.target_id, tombstoned=0",
+                                rel_rows,
+                            )
+                            counts["relationships"] = len(rel_rows)
+                    if communities:
+                        comm_rows = [
+                            (workspace_id, c.id, c.model_dump_json())
+                            for c in communities
+                            if c.workspace_id == workspace_id
+                        ]
+                        if comm_rows:
+                            conn.executemany(
+                                "INSERT INTO graph_communities"
+                                "(workspace_id, community_id, payload)"
+                                " VALUES (?, ?, ?)"
+                                " ON CONFLICT(workspace_id, community_id)"
+                                " DO UPDATE SET payload=excluded.payload,"
+                                " tombstoned=0",
+                                comm_rows,
+                            )
+                            counts["communities"] = len(comm_rows)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            return counts
+
+        res = await self._run(_op)
+        return res
+
     def _prune_communities(
         self,
         conn: sqlite3.Connection,
