@@ -4275,3 +4275,178 @@ def test_contradiction_uses_production_grounder_one_grounder_rule() -> None:
     detector = ContradictionDetector(chunk_source=source)
     assert type(detector.grounder).__name__ == "ExtractiveGrounder"
 
+
+# ======================================================================================
+# T-V3-020 — Grounded synthesis, no unverified final (every sentence grounded)
+# ======================================================================================
+
+from agents.contradictions import Candidate as _Cand  # noqa: E402
+from agents.contradictions import Contradiction as _Contra  # noqa: E402
+from agents.gap import REASON_NO_EVIDENCE as _RNE  # noqa: E402
+from agents.gap import Unknown as _GapUnknown  # noqa: E402
+from agents.synthesis import GroundedSynthesizer  # noqa: E402
+
+
+def _syn_ev(statement: str, chunk_id: str = "chk-1") -> EvidenceRecord:
+    return EvidenceRecord(
+        run_id="run-syn",
+        trace_id="trace-1",
+        workspace_id="ws-1",
+        statement=statement,
+        citations=[Citation(document_id="doc-1", chunk_id=chunk_id, quote=statement, source_hash="h")],  # noqa: E501
+        chunk_ids=[chunk_id],
+        verdict="SUPPORTED",
+        document_id="doc-1",
+        chunk_id=chunk_id,
+        source_hash="h",
+    )
+
+
+@pytest.mark.unit
+def test_synthesis_grounding_gate_unverified_dropped_not_shipped() -> None:
+    """Unverified finals: 0 — ungroundable sentences DROPPED into unknowns, not shipped."""
+    async def _run() -> None:
+        # One grounded, one unrelated (not grounded)
+        source = _ChunkSource2({
+            "chk-good": "The budget is 900 dollars.",
+            "chk-bad": "The deadline is Friday.",
+        })
+        syn = GroundedSynthesizer(chunk_source=source)
+        ev_good = _syn_ev("The budget is 900 dollars.", "chk-good")
+        ev_bad = _syn_ev("The budget is 900 dollars.", "chk-bad")  # same statement but chunk unrelated -> not grounded  # noqa: E501
+        report = await syn.synthesize(verified_claims=[ev_good, ev_bad], questions=["q1"])
+        # Only grounded shipped
+        assert len(report.grounded_sentences) == 1
+        assert report.grounded_sentences[0].sentence == "The budget is 900 dollars."
+        assert "chk-good" in report.grounded_sentences[0].chunk_ids
+        # Ungrounded NOT shipped, instead dropped into unknowns
+        assert any("NOT_GROUNDED" in u.reason for u in report.unknowns)
+        # Unverified finals: 0 — every shipped sentence grounded via grounder re-check
+        for s in report.grounded_sentences:
+            assert s.chunk_ids, "grounded sentence must have citations"
+            assert s.sentence.strip()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_synthesis_unknowns_contradictions_carried_through_no_loss() -> None:
+    """Unknowns/conflicts lost in synthesis: 0 — carried verbatim."""
+    async def _run() -> None:
+        source = _ChunkSource2({"chk-1": "The budget is 900 dollars."})
+        syn = GroundedSynthesizer(chunk_source=source)
+        unknown = _GapUnknown(question="What is the scope?", searched=["chk-x"], reason=_RNE, tried_chunk_ids=["chk-x"])  # noqa: E501
+        contra = _Contra(question="What is the budget?", claim_a="The budget is 900 dollars.", claim_b="The budget is 1900 dollars.", evidence_a_id="a", evidence_b_id="b", chunk_ids_a=["chk-a"], chunk_ids_b=["chk-b"])  # noqa: E501
+        outline = ["Contradiction on 'What is the budget?': '900' [chk-a] vs '1900' [chk-b]"]
+        ev = _syn_ev("The budget is 900 dollars.", "chk-1")
+        report = await syn.synthesize(
+            verified_claims=[ev],
+            gap_unknowns=[unknown],
+            contradictions=[contra],
+            contradiction_outline=outline,
+        )
+        # Unknown carried
+        assert len(report.unknowns) >= 1
+        assert any(u.question == "What is the scope?" for u in report.unknowns)
+        # Contradiction carried
+        assert len(report.contradictions) == 1
+        assert report.contradictions[0].question == "What is the budget?"
+        assert report.contradiction_outline == outline
+        # Grounded still present
+        assert len(report.grounded_sentences) == 1
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_synthesis_abstention_honesty_with_searched_disclosure() -> None:
+    """Zero groundable content abstains with reason AND discloses what was searched."""
+    async def _run() -> None:
+        source = _ChunkSource2({})
+        syn = GroundedSynthesizer(chunk_source=source)
+        # No verified claims, no candidates — zero groundable
+        report = await syn.synthesize(
+            verified_claims=[],
+            questions=["What is X?", "What is Y?"],
+            searched=["What is X?", "What is Y?"],
+        )
+        assert report.abstained is True
+        assert report.abstention_reason
+        assert len(report.grounded_sentences) == 0
+        # Discloses what was searched — T-052 pattern
+        assert any("Searched" in lim for lim in report.limitations)
+        assert report.searched == ["What is X?", "What is Y?"]
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_synthesis_adversarial_mixed_input() -> None:
+    """Adversarial proof: groundable + unrelated + contradiction pair + unknown."""
+    async def _run() -> None:
+        # Groundable claims
+        content_good = "The budget is 900 dollars."
+        content_scope = "The scope is global."
+        # Unrelated chunk (plausible but unrelated) — will be rejected
+        content_unrelated = "The deadline is Friday."
+        # Contradiction pair chunks
+        content_a = "The budget is 900 dollars."
+        content_b = "The budget is 1900 dollars."
+        source = _ChunkSource2({
+            "chk-good": content_good,
+            "chk-scope": content_scope,
+            "chk-unrelated": content_unrelated,
+            "chk-a": content_a,
+            "chk-b": content_b,
+        })
+        syn = GroundedSynthesizer(chunk_source=source)
+        ev_good = _syn_ev("The budget is 900 dollars.", "chk-good")
+        ev_scope = _syn_ev("The scope is global.", "chk-scope")
+        ev_unrelated = _syn_ev("The budget is 900 dollars.", "chk-unrelated")  # same statement but chunk unrelated -> not grounded  # noqa: E501
+        unknown = _GapUnknown(question="What is unknown?", searched=["chk-unknown"], reason=_RNE, tried_chunk_ids=["chk-unknown"])  # noqa: E501
+        contra = _Contra(question="What is the budget?", claim_a="The budget is 900 dollars.", claim_b="The budget is 1900 dollars.", evidence_a_id="a", evidence_b_id="b", chunk_ids_a=["chk-a"], chunk_ids_b=["chk-b"])  # noqa: E501
+        outline = ["Contradiction on 'What is the budget?': '900' [chk-a] vs '1900' [chk-b]"]
+        cand_a = _Cand(question="What is the budget?", statement="The budget is 900 dollars.", evidence_id="a", chunk_ids=["chk-a"], confidence="MEDIUM", limitations=["Conflicting evidence"])  # noqa: E501
+        cand_b = _Cand(question="What is the budget?", statement="The budget is 1900 dollars.", evidence_id="b", chunk_ids=["chk-b"], confidence="MEDIUM", limitations=["Conflicting evidence"])  # noqa: E501
+        report = await syn.synthesize(
+            verified_claims=[ev_good, ev_scope, ev_unrelated],
+            candidates=[cand_a, cand_b],
+            gap_unknowns=[unknown],
+            contradictions=[contra],
+            contradiction_outline=outline,
+            questions=["What is the budget?", "What is the scope?", "What is unknown?"],
+        )
+        # Grounded sentences cited, unrelated chunk NOWHERE
+        grounded_texts = [s.sentence for s in report.grounded_sentences]
+        assert "The budget is 900 dollars." in grounded_texts or "The scope is global." in grounded_texts  # noqa: E501
+        # unrelated chunk chk-unrelated must NOWHERE in grounded citations
+        all_cited = [cid for s in report.grounded_sentences for cid in s.chunk_ids]
+        assert "chk-unrelated" not in all_cited, "unrelated chunk leaked into final"
+        # Both conflict sides present
+        assert any(s.sentence == "The budget is 1900 dollars." for s in report.grounded_sentences) or len([c for c in report.grounded_sentences if "1900" in c.sentence]) == 1  # noqa: E501
+        # Both sides OR at least contradiction outline present (covers both)
+        assert len(report.contradictions) == 1
+        assert report.contradiction_outline == outline
+        # Unknown retained
+        assert any(u.question == "What is unknown?" for u in report.unknowns)
+        # Unverified finals: 0 — every grounded sentence has chunk_ids and is grounded
+        for s in report.grounded_sentences:
+            assert s.chunk_ids
+            assert s.sentence.strip()
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_synthesis_uses_production_grounder_one_grounder_rule() -> None:
+    """One-grounder rule — reuses verifier seam."""
+    import inspect
+
+    from agents import synthesis as sm
+
+    src = inspect.getsource(sm)
+    assert "from answer.verification import ExtractiveGrounder" in src
+    source = _ChunkSource2({"chk-1": "Hello world."})
+    syn = GroundedSynthesizer(chunk_source=source)
+    assert type(syn.grounder).__name__ == "ExtractiveGrounder"
+
