@@ -252,6 +252,15 @@ services:
       # multi-model lists are SEMICOLON-separated (a comma is kept as one id).
       INFINITY_MODEL_ID: BAAI/bge-m3;cross-encoder/ms-marco-MiniLM-L6-v2
       INFINITY_ENGINE: torch
+      # T-V1-060 incident #2: the listener WEDGED under sustained embedding load
+      # (process spinning at ~99% CPU, instant connection refusals, no crash).
+      # Cause: torch's thread pool grabs all 4 vCPUs and starves uvicorn's
+      # event loop, so the server stops accepting. Capped to 2 threads, leaving
+      # CPU for the serving loop; embed throughput cost is acceptable on this
+      # box (build batches measured 9-30s, retry budget covers the tail).
+      TORCH_NUM_THREADS: "2"
+      OMP_NUM_THREADS: "2"
+      MKL_NUM_THREADS: "2"
       PORT: "7997"
     ports:
       # T-V1-037 — CLOSING the public infinity question (review 2026-10-09
