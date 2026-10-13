@@ -345,3 +345,138 @@ async def test_revoked_evidence_excluded_from_report() -> None:
     assert report.evidence_ids == []
     assert report.supported_findings == []
     assert any("revoked" in u for u in report.unknowns)
+
+# ======================================================================================
+# T-V3-025 — External research connector opt-in (SSRF-safe fetch adapter, default off)
+# ======================================================================================
+
+import hashlib  # noqa: E402
+
+import pytest as _pytest2  # noqa: E402
+from research.external_connector import (  # noqa: E402
+    ConnectorDisabledError,
+    ExternalConnector,
+    ExternalSnapshot,
+    FakeResponse,
+    SSRFBlockedError,
+    validate_url_for_fetch,
+)
+
+
+class _FakeTransport:
+    """Fake transport — never a real socket; records what the validator allowed."""
+
+    def __init__(self, mapping: dict[str, FakeResponse] | None = None) -> None:
+        self.mapping = mapping or {}
+        self.calls: list[str] = []
+
+    async def fetch(self, url: str) -> FakeResponse:
+        self.calls.append(url)
+        if url in self.mapping:
+            return self.mapping[url]
+        # Default public success
+        return FakeResponse(url=url, status_code=200, headers={}, content=f"content for {url}")
+
+
+@pytest.mark.unit
+async def test_external_snapshot_fields_all_five() -> None:
+    """Snapshot fields stored (all five, asserted)."""
+    transport = _FakeTransport({"https://example.com/a": FakeResponse(url="https://example.com/a", content="hello")})  # noqa: E501
+    conn = ExternalConnector(workspace_id="ws-1", licence="MIT", enabled=True, transport=transport)
+    snap = await conn.fetch("https://example.com/a")
+    assert snap.url == "https://example.com/a"
+    assert snap.fetched_at
+    assert snap.content_hash == hashlib.sha256(b"hello").hexdigest()
+    assert snap.licence == "MIT"
+    assert snap.workspace_id == "ws-1"
+    assert isinstance(snap, ExternalSnapshot)
+    # Also stored for audit
+    assert len(conn.snapshots) == 1
+    assert conn.snapshots[0].content_hash == snap.content_hash
+
+
+@pytest.mark.unit
+async def test_external_default_off_fetches_nothing_until_enabled() -> None:
+    """Default off (prove: fresh connector fetches nothing until explicitly enabled)."""
+    transport = _FakeTransport()
+    conn = ExternalConnector(workspace_id="ws-1", licence="MIT", transport=transport)
+    assert conn.enabled is False
+    with _pytest2.raises(ConnectorDisabledError):
+        await conn.fetch("https://example.com/a")
+    assert transport.calls == []
+    assert conn.snapshots == []
+    conn.enable()
+    snap = await conn.fetch("https://example.com/a")
+    assert snap.workspace_id == "ws-1"
+    assert len(transport.calls) == 1
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "hostile_url",
+    [
+        "http://10.0.0.1/secret",
+        "http://10.1.2.3/",
+        "http://172.16.5.4/",
+        "http://172.31.255.255/",
+        "http://192.168.1.1/",
+        "http://127.0.0.1/",
+        "http://127.0.0.1:8000/",
+        "http://[::1]/",
+        "http://[fe80::1]/",
+        "http://169.254.169.254/latest/meta-data/",
+        "file:///etc/passwd",
+        "http://%31%32%37%2e%30%2e%30%2e%31/",  # 127.0.0.1 encoded
+        "http://%31%30%2E%30%2E%30%2E%31/",  # 10.0.0.1 encoded
+        "ftp://example.com/a",
+    ],
+)
+async def test_external_ssrf_hostile_battery_all_refused_with_typed_errors(hostile_url: str) -> None:  # noqa: E501
+    """SSRF paths: 0 — hostile-URL battery ALL refused with typed errors."""
+    transport = _FakeTransport()
+    conn = ExternalConnector(workspace_id="ws-1", licence="MIT", enabled=True, transport=transport)
+    with _pytest2.raises(SSRFBlockedError) as exc:
+        await conn.fetch(hostile_url)
+    assert hostile_url in str(exc.value) or exc.value.url == hostile_url
+    assert transport.calls == [], "refusal must come from validator, not network"
+
+
+@pytest.mark.unit
+async def test_external_redirect_guard_revalidates_every_hop() -> None:
+    """Redirect guard — public URL redirecting to 169.254.169.254 is blocked."""
+    transport = _FakeTransport(
+        {
+            "https://example.com/start": FakeResponse(url="https://example.com/start", status_code=302, headers={"Location": "http://169.254.169.254/meta"}, content=""),  # noqa: E501
+            "http://169.254.169.254/meta": FakeResponse(url="http://169.254.169.254/meta", content="secret"),  # noqa: E501
+        }
+    )
+    conn = ExternalConnector(workspace_id="ws-1", licence="MIT", enabled=True, transport=transport, max_redirects=3)  # noqa: E501
+    with _pytest2.raises(SSRFBlockedError):
+        await conn.fetch("https://example.com/start")
+    # First hop was allowed (public), second hop validator blocked before second transport call for the private target  # noqa: E501
+    assert "https://example.com/start" in transport.calls
+    assert "http://169.254.169.254/meta" not in transport.calls
+
+
+@pytest.mark.unit
+async def test_external_redirect_max_hops_enforced() -> None:
+    transport = _FakeTransport(
+        {
+            "https://example.com/a": FakeResponse(url="https://example.com/a", status_code=302, headers={"Location": "https://example.com/b"}, content=""),  # noqa: E501
+            "https://example.com/b": FakeResponse(url="https://example.com/b", status_code=302, headers={"Location": "https://example.com/c"}, content=""),  # noqa: E501
+            "https://example.com/c": FakeResponse(url="https://example.com/c", status_code=302, headers={"Location": "https://example.com/d"}, content=""),  # noqa: E501
+        }
+    )
+    conn = ExternalConnector(workspace_id="ws-1", licence="MIT", enabled=True, transport=transport, max_redirects=1)  # noqa: E501
+    with _pytest2.raises(Exception) as exc:
+        await conn.fetch("https://example.com/a")
+    assert "too many redirects" in str(exc.value).lower()
+
+
+@pytest.mark.unit
+async def test_external_validate_decoded_then_rechecked() -> None:
+    """Encoded loopback still blocked after decode."""
+    with _pytest2.raises(SSRFBlockedError):
+        validate_url_for_fetch("http://%31%32%37%2e%30%2e%30%2e%31/")
+    with _pytest2.raises(SSRFBlockedError):
+        validate_url_for_fetch("http://%30%2e%30%2e%30%2e%30/")  # 0.0.0.0
