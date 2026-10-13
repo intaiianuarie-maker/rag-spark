@@ -3693,3 +3693,90 @@ GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv4015_{start,en
 - END (HEAD `f97929e`): foreign set (now incl. dev1's ``validator.py``/``resource_limits.py``; `config_enforcement` was absorbed by dev1's commit) **plus exactly**: ``?? packages/workflow_engine/adapters/v3_adapter.py`` (new), ``M tests/unit/test_workflow_fake_runtime.py`` (appended), and this handoff row.
 - 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
 
+---
+
+## T-V4-016 — W3 checkpoint / restart / resume + evidence propagation
+
+```text
+TASK: T-V4-016 (W3) — workflows survive restarts; pre-kill evidence is not orphaned
+CHANGE: packages/workflow_engine/checkpoint.py (NEW, 428 lines) — WorkflowCheckpoint /
+        EvidenceRow models, CheckpointStore ABC + InMemoryCheckpointStore +
+        SqliteCheckpointStore, checkpoint_boundary() policy, ResumableExecutor,
+        attach_evidence() -> ResumedRun, _redact_text/_redact/_enforce_bounds.
+        tests/unit/test_workflow_checkpoint.py (NEW) — 14 tests, all card metrics.
+        NO existing file modified. No executor-core change. No interfaces.py change.
+WHY:    Card rule 1 (checkpoint only at boundaries worth resuming from), rule 2
+        (resume == identical continuation, same bar as V3 T-012), rule 3 (pre-kill
+        evidence re-attaches, 0 orphans). Deliberately did NOT add an `evidence`
+        field to WorkflowRun (interfaces.py): evidence rides an explicit
+        ResumedRun pairing instead, so the shared run model and the executor
+        core stay untouched and no evidence is silently absorbed into the trace.
+REUSED: V3 StepStore + checkpoint pattern (packages/agents/step_store.py) —
+        append-only, monotonic per-run sequence, secrets redacted at the store
+        boundary, bounded payloads. MIRRORED AS A SEPARATE IMPLEMENTATION, not
+        imported: the W3 adapter (adapters/v3_adapter.py) stays the only bridge
+        to V3 and it stays flagged off, so no V3 product code crosses the seam.
+        Deny-list is a re-declared tuple, not an import.
+BUILT:  Checkpoint boundary policy (terminal / approval / completed-community;
+        everything else ephemeral), the ResumableExecutor wrapper that seeds
+        checkpointed node_outputs into the *wrapper* rather than into
+        WorkflowExecutor — which is what makes resume exact without touching the
+        executor core — and the evidence-propagation pairing. Reuse did not fit:
+        V3's store is keyed to agent runs, not workflow runs, and importing it
+        would cross the flagged-off seam.
+VERIFY: tests/unit/test_workflow_checkpoint.py → 14 passed (0.6–1.0s).
+        tests/unit/test_workflow_fake_runtime.py (W0/W1 franchise) → 22 passed.
+        tests/unit -k workflow → 443 passed, 5 failed (see RISKS — not mine).
+        tests/unit (full) → 1615 passed, 5 failed (same 5).
+        ruff check packages/workflow_engine/ tests/unit/test_workflow_checkpoint.py → All checks passed.
+        mypy packages/workflow_engine/ → Success: no issues found in 10 source files.
+        Card metrics: resume-trace equality = exact (full normalized run dump
+        equal, incl. every NodeRun's input_data/output_data/status + final_output);
+        orphaned evidence after resume = 0; checkpoints on approval/terminal
+        boundaries = all worth persisting (2 of 4 node completions in the linear
+        probe — TRIGGER and TRANSFORM stay ephemeral, both OUTPUT nodes persist).
+RISKS:  1. FOREIGN RED VERIFIED NOT MINE — 5 workflow failures appeared mid-ticket
+        from dev1's UNCOMMITTED edits to packages/workflow_engine/interfaces.py
+        (mod 23:57) and compiler.py (mod 23:58), on top of HEAD 7927a76:
+        test_compile_join_mode_any_for_condition_downstream,
+        test_compile_join_mode_all_for_regular_merge,
+        test_skipped_branch_skips_join,
+        test_skipped_branch_both_branches_run_when_no_condition,
+        test_condition_downstream_uses_any_join.
+        Attribution proof: the same suite at committed HEAD 7927a76 via a
+        throwaway worktree = 434 passed, 0 failed. On the dirty tree = 443
+        passed, 5 failed. My 14 checkpoint tests pass on BOTH the dirty tree
+        and are unaffected: I add only new files, touch no existing file.
+        These are compiler/join-semantics paths, outside my allowlist ("do not
+        touch the executor core") — disclosed to museR, NOT touched, NOT fixed.
+        2. DISCLOSURE — my own first "bounds" test was wrong, not the invariant:
+        a single 256 KB string does NOT trip MAX_CHECKPOINT_BYTES because
+        _redact_text truncates every text field to MAX_TEXT_CHARS (8192) first.
+        Fixed the test to build an aggregate-oversized payload (128 x 8 KB);
+        the bound itself was always correct. Disclosed rather than silently
+        re-run.
+        3. Resume equality normalises away run id, created_at, finished_at and
+        per-node latency_ms (run identity + wall clock); every content field
+        (status, input_data, output_data, final_output, node set) compares equal.
+        4. InMemoryCheckpointStore now enforces the same MAX_CHECKPOINT_BYTES via
+        a shared _enforce_bounds() so the bound is a discipline invariant, not a
+        backend detail (this changed behaviour for in-memory appends).
+        5. Timestamps are wall-clock ISO strings, so "identical trace" compares
+        only after stripping them; a resumed run's created_at is its own.
+        6. Package __init__.py deliberately left untouched (dev1 is in the same
+        directory): tests import from workflow_engine.checkpoint directly, so
+        there was no need to widen the public surface and collide with his hunks.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv4016_start.txt`):
+- START (HEAD `666b55d`): 23 dirty paths (5 modified handoffs, dev1's
+  `validator.py`, 16 untracked handoff docs, dev1's `resource_limits.py`). Index empty.
+- HEAD moved mid-ticket to `7927a76` (coordinator committed T-V4-015 666b55d,
+  dev1's T-V4-006 bff690e and T-V4-007 7927a76) and dev1 then landed further
+  UNCOMMITTED edits to interfaces.py/compiler.py.
+- END (HEAD `7927a76`): the same foreign set, now incl. dev1's dirty
+  interfaces.py/compiler.py (validator.py was absorbed by his commits),
+  **plus exactly my two**: ``?? packages/workflow_engine/checkpoint.py`` (new)
+  and ``?? tests/unit/test_workflow_checkpoint.py`` (new), plus this handoff row.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys,
+  0 restarts, 0 compose changes, index left empty. Attribution worktree used
+  (and removed) read-only at /tmp/opencode/tv4016-base, never in my way.
