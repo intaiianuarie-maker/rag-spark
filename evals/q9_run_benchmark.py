@@ -32,12 +32,18 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import sys
+from collections.abc import Sequence
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parents[1]
-for _p in (REPO / "packages", REPO / "apps" / "api", REPO):
+for _p in (REPO / "packages", REPO / "apps" / "api", REPO, REPO / "evals"):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
+
+# Imported after sys.path is seeded: q9_gates pulls app.eval.metrics. Imported as
+# a module (not as names) so the block stays a single sorted import.
+import q9_gates  # noqa: E402
 
 _q8_spec = importlib.util.spec_from_file_location(
     "build_q8_slices", Path(__file__).resolve().parent / "build_q8_slices.py"
@@ -50,6 +56,8 @@ load_slices = _q8.load_slices
 
 GROUNDEDNESS_GATE = 0.90
 CITATION_GATE = 1.0
+#: T-V1-076 — additive gate for unanswerable material (RP-02 target).
+ABSTENTION_GATE = q9_gates.ABSTENTION_TARGET
 WS = "ws-q9"
 DOC = "doc-q9"
 
@@ -178,15 +186,61 @@ def _score_record(record: dict) -> dict:
 
 
 
+def is_abstention_slice(rows: Sequence[dict[str, Any]]) -> bool:
+    """True when a slice's records have no supportable gold answer.
+
+    T-V1-076: detected from the DATA, not hardcoded to a slice name, so a future
+    unanswerable slice is routed correctly without touching this function.
+
+    Groundedness is definitionally 0.0 on such a slice — there is nothing to be
+    grounded in — so gating it on groundedness is a category error. That is the
+    defect T-V1-075 surfaced honestly (GATE FAIL on `unanswerable`) and this is
+    the fix: those slices are gated on abstention rate instead. The five
+    answerable slices' thresholds and computation are untouched.
+    """
+    return bool(rows) and all(not (r.get("gold_answer") or "").strip() for r in rows)
+
+
+def _abstention_pair(record: dict[str, Any]) -> tuple[str, list, str]:
+    """Build the ``(id, retrieved_items, asserted_claim)`` triple for one record.
+
+    The claim is the naive restatement of the question: what a system that has
+    no answer tends to assert anyway. Content words are kept (see
+    ``q9_gates.naive_restatement``) so the probe is the harder construction.
+    """
+    items, _claims, _claim = _retrieval_result(record)
+    return record["source_id"], items, q9_gates.naive_restatement(record["question"])
+
+
 def run_benchmark(slices_path: Path | None = None) -> dict:
     """Score every pinned record and aggregate groundedness + citation validity."""
     records = load_slices(slices_path) if slices_path else load_slices()
     per_slice: dict[str, list[dict]] = {tag: [] for tag in SLICES}
+    raw_by_slice: dict[str, list[dict]] = {tag: [] for tag in SLICES}
     for record in records:
-        per_slice[record["slice"]].append(_score_record(record))
+        row = dict(_score_record(record))
+        row["gold_answer"] = record.get("gold_answer", "")
+        per_slice[record["slice"]].append(row)
+        raw_by_slice[record["slice"]].append(record)
 
     summary: dict[str, dict] = {}
     for tag, rows in per_slice.items():
+        if is_abstention_slice(rows):
+            # T-V1-076: unanswerable material is gated on abstention rate, NOT
+            # on groundedness (which is 0.0 by construction). Reported additively:
+            # the answerable-slice fields below are not applied to it.
+            report = q9_gates.evaluate_abstention(
+                [_abstention_pair(r) for r in raw_by_slice.get(tag, [])]
+            )
+            summary[tag] = {
+                "n": report.n_items,
+                "abstention_rate": report.rate,
+                "abstained": report.abstained,
+                "leaked": report.leaked,
+                "oracle": True,
+                "metric": "abstention_rate",
+            }
+            continue
         scored = [r for r in rows if r["ok"]]
         n = len(scored)
         valid = sum(1 for r in scored if r["valid"])
@@ -201,18 +255,21 @@ def run_benchmark(slices_path: Path | None = None) -> dict:
             ],
         }
 
-    total_n = sum(s["n"] for s in summary.values())
-    total_valid = sum(s["valid"] for s in summary.values())
+    total_n = sum(s["n"] for s in summary.values() if "groundedness" in s)
+    total_valid = sum(s["valid"] for s in summary.values() if "valid" in s)
+    answerable = [s for s in summary.values() if "groundedness" in s]
     summary["_overall"] = {
         "n": total_n,
         "groundedness": (
-            sum(s["groundedness"] * s["n"] for s in summary.values()) / total_n
+            sum(s["groundedness"] * s["n"] for s in answerable) / total_n
             if total_n
             else 0.0
         ),
         "citation_validity": (total_valid / total_n) if total_n else 1.0,
         "valid": total_valid,
-        "fabricated_survived": sum(s["fabricated_survived"] for s in summary.values()),
+        "fabricated_survived": sum(
+            s["fabricated_survived"] for s in summary.values() if "fabricated_survived" in s
+        ),
         "failures": [],
     }
     return summary
@@ -227,13 +284,22 @@ def main(argv: list[str] | None = None) -> int:
     summary = run_benchmark(args.slices)
 
     print("Q9 benchmark — real multilingual slices (gold-context oracle)")
-    print(f"{'slice':10s} {'n':>3s} {'groundedness':>12s} {'cite_validity':>14s}  failures")
+    print(f"{'slice':14s} {'n':>3s} {'groundedness':>12s} {'cite_validity':>14s}  detail")
     for tag in (*SLICES, "_overall"):
         s = summary[tag]
         label = "OVERALL" if tag == "_overall" else tag
+        if "abstention_rate" in s:
+            # Unanswerable slice: reported by abstention rate. Groundedness is
+            # 0.0 by construction here and is deliberately NOT shown as if it
+            # were a quality number.
+            print(
+                f"{label:14s} {s['n']:>3d} {'n/a':>12s} {'n/a':>14s}  "
+                f"abstention={s['abstention_rate']:.4f} leaked={len(s['leaked'])}"
+            )
+            continue
         fails = ",".join(s["failures"]) or "-"
         print(
-            f"{label:10s} {s['n']:>3d} {s['groundedness']:>12.4f} "
+            f"{label:14s} {s['n']:>3d} {s['groundedness']:>12.4f} "
             f"{s['citation_validity']:>14.4f}  {fails}"
         )
 
@@ -241,6 +307,16 @@ def main(argv: list[str] | None = None) -> int:
     failures: list[str] = []
     for tag in (*SLICES, "_overall"):
         s = summary[tag]
+        if "abstention_rate" in s:
+            # T-V1-076: the abstention gate is ADDITIVE. It replaces only the
+            # (category-error) groundedness check for unanswerable material; it
+            # never relaxes the answerable slices' thresholds.
+            if s["abstention_rate"] < ABSTENTION_GATE:
+                failures.append(
+                    f"{tag}: abstention {s['abstention_rate']:.4f} < {ABSTENTION_GATE}"
+                    f" (leaked: {','.join(s['leaked']) or '-'})"
+                )
+            continue
         if s["groundedness"] < args.min_groundedness:
             failures.append(
                 f"{tag}: groundedness {s['groundedness']:.4f} < {args.min_groundedness}"
@@ -255,10 +331,15 @@ def main(argv: list[str] | None = None) -> int:
         for line in failures:
             print(f"  - {line}")
         return 1
+    unans = [s for s in summary.values() if "abstention_rate" in s]
+    unans_note = ""
+    if unans:
+        rates = " ".join(f"{v['abstention_rate']:.4f}" for v in unans)
+        unans_note = f", abstention {rates} (>= {ABSTENTION_GATE})"
     print(
         f"\nGATE: PASS — groundedness {overall['groundedness']:.4f} "
         f"(>= {args.min_groundedness}), citation_validity "
-        f"{overall['citation_validity']:.4f} (== {CITATION_GATE})"
+        f"{overall['citation_validity']:.4f} (== {CITATION_GATE}){unans_note}"
     )
     return 0
 

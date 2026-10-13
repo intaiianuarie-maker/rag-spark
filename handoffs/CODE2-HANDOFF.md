@@ -2444,3 +2444,96 @@ PROGRESS ROW — DONE: (1) appended **10** `unanswerable` records (**≥8 requir
 PROGRESS ROW — ⚠️ DISCLOSURE (the headline, not a clean win): **adding the slice flips Q9 from PASS to FAIL** — `unanswerable: groundedness 0.0000 < 0.9` (n=0, because the harness has no abstention concept) — and `test_benchmark_gate.py::test_q9_benchmark_gate_holds_per_slice` now fails with "slice unanswerable has no scored records". **Filed, NOT fixed**: resolution is T-036 F1 (abstention-aware scorer), which is harness/metric work this data-only card forbids; needs your call between building the scorer or scoping the Q9 gate to the five answerable slices. **I did not weaken that assertion or adjust a threshold to hide it — it is the thing that made the gap visible.** The five answerable slices and OVERALL are untouched at `0.9888 / 1.0000`, so no previously-recorded evidence is invalidated.
 PROGRESS ROW — THREE OF MY OWN ERRORS, DISCLOSED: (1) re-typing `UNANSWERABLE_ROWS` into the module silently ASCII-folded one Romanian context and reworded one PT question, so a rebuild would have produced different bytes — caught by a test, fixed by regenerating the constant FROM the JSONL; (2) that fixup was itself wrong first time (joining space placed outside the string literal → "currentportion", **0/10 matches**), fixed by putting the space inside; (3) one of my own tests asserted against all 60 records so nothing raised, fixed to drop a record before repinning. Also disclosed: the unanswerable records are **authored** (no public dataset ships questions unanswerable from a given context) and I authored and asserted them in the same ticket — a reviewer should spot-check that each is genuinely unanswerable; and a digest check detects drift by accident/review, **not tamper-proof against a motivated editor who re-pins both constants**.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-076 (factual/Recall@20/abstention harnesses + abstention-aware scorer) — code2 (solo, allowlisted)
+
+TASK: build the three missing F1 harnesses and the abstention-aware Q9 scorer that resolves the T-V1-075 kept-red flip. **Eval code only** — no threshold weakening, no gate rescoping. Start HEAD `ad5216f` → end HEAD `ad5216f` (**UNMOVED**). Allowed: `evals/` + covering tests + this row.
+
+### VERDICT: **4 harnesses green, Q9 flip RESOLVED BY SCORER, thresholds provably unchanged.**
+
+```
+slice            n groundedness  cite_validity  detail
+en              10       1.0000         1.0000  -
+ro              10       1.0000         1.0000  -
+pt              10       0.9853         1.0000  -
+tables          10       1.0000         1.0000  -
+multi           10       0.9586         1.0000  -
+unanswerable    10          n/a            n/a  abstention=1.0000 leaked=0
+OVERALL         50       0.9888         1.0000  -
+
+GATE: PASS — groundedness 0.9888 (>= 0.9), citation_validity 1.0000 (== 1.0), abstention 1.0000 (>= 0.95)
+```
+
+### THE HARNESSES
+
+| # | harness | function | reuses (not reimplemented) | target |
+|---|---|---|---|---|
+| 1 | **Factual** | `claim_support_rate` | `app.eval.metrics.score_faithfulness` | ≥98% (RP-02) |
+| 2 | **Recall@20** | `recall_at_k` | `app.eval.metrics.compute_recall` on the top-k truncation | ≥95% (RP-02) |
+| 3 | **Abstention** | `evaluate_abstention` | real `answer.verification.verify_claims` + `ExtractiveGrounder` | ≥95%/slice |
+| 4 | **Abstention-aware scorer** | `is_abstention_slice` + gate routing in `q9_run_benchmark` | the existing `_score_record` path, untouched for answerable slices | resolves the flip |
+
+`recall_at_k` is a **truncation wrapper**, not a new metric: recall@k *is* recall over the top-k of the ranking, so it delegates. `compute_recall`/`compute_mrr`/`compute_ndcg` already existed unused — this wires them rather than re-deriving them.
+
+### THRESHOLD INVARIANCE — proven, not asserted
+
+The five answerable slices are **byte-identical to the T-061a baseline**, pinned as constants in the test file:
+
+`en 10/1.0000/1.0000 · ro 10/1.0000/1.0000 · pt 10/0.9853/1.0000 · tables 10/1.0000/1.0000 · multi 10/0.9586/1.0000 · OVERALL 50/0.9888/1.0000`
+
+Plus `GROUNDEDNESS_GATE == 0.90`, `CITATION_GATE == 1.0` asserted unchanged, and `ABSTENTION_GATE == 0.95` **added**. The gate is **additive**: it replaces only the category-error groundedness check for unanswerable data and relaxes nothing. Slices are routed **from the data** (`is_abstention_slice` inspects whether records have a gold answer), not by a hardcoded name, so a future unanswerable slice routes correctly without touching the scorer.
+
+`_overall` aggregates **only** answerable slices, exactly reproducing the pre-T-075 result (previously the unanswerable slice contributed `n=0`).
+
+### THE MOST IMPORTANT THING I BUILT: the self-check that stops `1.0000` being vacuous
+
+My first run reported `abstention=1.0000` and I did not accept it — a harness that returns 100% for every input is indistinguishable from a broken one. So `evaluate_abstention` runs a **positive control** before reporting anything: it asserts that a sentence copied verbatim from the retrieved context *does* survive the real verification path. If nothing survives, it **raises** rather than printing a number:
+
+> `abstention harness self-check FAILED: … an abstention rate of 1.0 would be vacuous. Do not report an abstention number from this run.`
+
+The control **caught two of my own bugs** and one product observation:
+- My first negative control used a claim *fragment*; `ExtractiveGrounder` requires verbatim + whole-sentence assertion, so it was correctly rejected and my harness reported a false abstention.
+- A **single-sentence chunk does not self-verify** (score 0.0 against a claim copied from it), while a multi-sentence chunk's sentence does (1.0).
+- A sentence containing a **bare year** ("…2013 British…") scores 0.0 while its sibling scores 1.0. **Flagged, not fixed** — product behaviour, outside this ticket's scope.
+
+So the `1.0000` now means something specific: *no unsupported claim was certified, and the harness proved on the same run that it would have certified a supported one.*
+
+### VERIFY
+
+- **Full bench path, both slice kinds** → `GATE: PASS`, exit 0, abstention `1.0000`, `leaked=0`.
+- **Tests** → `tests/unit/test_q9_gates.py` **21 passed**; with `test_benchmark_gate.py` + `test_q8_slice_integrity.py` → **37 passed**. Includes the negative control (`a supported claim must not be counted as abstention`), the self-check-fails test (injects a dead grounder and asserts it raises), empty-input-returns-0 (a vacuous 1.0 would pass a ≥98% gate), and the threshold-invariance tests.
+- **`test_benchmark_gate.py::test_q9_benchmark_gate_holds_per_slice`** was failing after T-075 (`slice unanswerable has no scored records`). Made **abstention-aware and strictly stronger**: every answerable-slice assertion is unchanged, plus the branch adds `abstention_rate >= 0.95` and asserts `"groundedness" not in s`. Nothing was weakened to make it pass.
+- **`ruff check`** on all four touched files → **All checks passed!**; **`mypy`** on both eval sources → **Success: no issues found in 2 source files**.
+- **Corpus frozen** → `evals/q8_eval_slices.jsonl` has **no diff**; `load_slices()` returns 60 records with the T-075 pin **verifying**. No threshold on an existing gate changed.
+- **Product code untouched** → no diff in `apps/api/app/eval/metrics.py` or `packages/answer/verification.py`.
+
+### WHY / REUSED / BUILT
+
+**WHY:** T-075 left Q9 honestly red because the corpus was right and the scorer was incomplete. Per museR's recorded call the red had to stay visible until a real scorer existed — so this ticket builds the scorer rather than relaxing anything.
+
+**REUSED:** `score_faithfulness`, `compute_recall`, `compute_mrr`/`compute_ndcg` (present but unwired), the real `verify_claims`/`ExtractiveGrounder`, the existing `_score_record` answerable path, and the T-075 pin. No new dependency.
+
+**BUILT:** `evals/q9_gates.py` (three harnesses + self-check + deterministic restatement), the abstention branch in the scorer, 21 covering tests, one abstention-aware branch in the existing gate test.
+
+### RISKS / DISCLOSED
+
+- **(a) What the abstention harness actually measures.** It exercises the **claim gate's refusal**: given the naive restatement of an unanswerable question, does `verify_claims` refuse to certify it? It does **not** measure generator-side abstention (whether an LLM chooses to emit a claim at all) — that needs an LLM in the loop and would break the bench's reproducibility, so it is deliberately out of scope. Do not cite `1.0000` as "the model abstains".
+- **(b) `abstention 1.0000` is a perfect score, and I want that read carefully.** It reflects a conservative grounder refusing unsupported fragments, not a hard problem being solved. The self-check makes it non-vacuous but does not make it hard.
+- **(c) Pre-existing partial vacuity in `citation_validity`, found while checking my own numbers.** Measured on the `en` slice: 9 supporting chunks and 9 surviving citations across 10 records — so the `1.0000` is **not** wholly vacuous. But the metric is `not fabricated_survived AND all(c in items for c in citations)`, and `all([])` is `True`, so the one record with no surviving citation contributes a **vacuous 1.0**. This is the T-061a definition, unchanged by me; **filed, not fixed**, since altering it would change reported numbers on an existing gate.
+- **(d) Two product observations filed, not fixed:** a single-sentence chunk never self-verifies, and a sentence containing a bare year scores 0.0 against its own chunk. Both may be intentional conservatism in `ExtractiveGrounder`; neither is verified as a bug, and product code was out of scope.
+- **(e) `RECALL_AT_K`/`FACTUAL_SUPPORT_CUTOFF` are harness constants, not card values.** `RECALL_TARGET`/`ABSTENTION_TARGET` are the card's ≥95%; `FACTUAL_SUPPORT_CUTOFF = 0.90` is the *per-claim* criterion I chose (the card's ≥98% is the *rate* target, a different quantity). That choice is mine and is named in the module.
+- **(f) The factual and recall harnesses are wired and unit-tested but have no end-to-end runner in this ticket** — recall in particular needs retrieved sets that only a live retrieval run can supply, and the live corpus is test debris (my T-061b census). They are reusable and proven, not yet reported as a product number.
+- **(g) FOREIGN CHURN — not mine.** 34 dirty paths at start, including dev1's T-071 footprint (`ingest_pipeline`, `answer/factory`, `core/config`, `ingestion/dedup`, `test_crash_recovery`, `test_dedup_versions`, `test_ingestion_jobs`, `test_knowledge_reads`, `test_security_placeholders`, `tests/fixtures/vector_collection_env.py`). **None opened, staged, edited or reverted by me.** My 4 files: `evals/q9_gates.py` (new), `evals/q9_run_benchmark.py`, `tests/unit/test_q9_gates.py` (new), `tests/integration/test_benchmark_gate.py`. HEAD unmoved.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1076_{start,end}_status.txt`):
+- **start** (HEAD `ad5216f`): 34 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `ad5216f`, **UNMOVED**): the foreign set plus exactly my 4 allowed paths.
+- 0 foreign paths added, modified or removed; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-076 factual/Recall@20/abstention harnesses + abstention-aware Q9 scorer (eval code, the F1 close).
+PROGRESS ROW — VERDICT: **4 harnesses green; Q9 flip RESOLVED BY SCORER — GATE PASS** with `unanswerable abstention=1.0000 leaked=0` alongside `OVERALL 0.9888/1.0000`. **THRESHOLDS NOT RELAXED**: the five answerable slices are byte-identical to the T-061a baseline (pinned as test constants — en/ro/tables 1.0000, pt 0.9853, multi 0.9586, OVERALL 0.9888), `GROUNDEDNESS_GATE==0.90` and `CITATION_GATE==1.0` asserted unchanged, `ABSTENTION_GATE==0.95` **added**; the gate is additive and replaces only the category-error groundedness check on unanswerable data. Slices are routed **from the data** (`is_abstention_slice` inspects for a gold answer), not by a hardcoded name. `recall_at_k` delegates to the existing `compute_recall` on the top-k truncation (reuse, not reimplementation); factual delegates to `score_faithfulness`; abstention runs the real `verify_claims`+`ExtractiveGrounder`.
+PROGRESS ROW — NON-VACUOUS BY CONSTRUCTION: I did not accept my first `abstention=1.0000` — a harness returning 100% for everything is indistinguishable from a broken one — so `evaluate_abstention` runs a **positive control** first and **raises** ("an abstention rate of 1.0 would be vacuous. Do not report an abstention number from this run") when no verbatim sentence from the retrieved context survives. The control caught two of my own bugs (a fragment claim that `ExtractiveGrounder` correctly rejects, and a single-sentence chunk that never self-verifies) and one product observation (a sentence with a bare year scores 0.0 against its own chunk — **filed, not fixed**, product code out of scope).
+PROGRESS ROW — DISCLOSURE on a number I previously reported: I checked whether T-061a's `citation_validity 1.0000` was vacuous. **It is not wholly vacuous** — the `en` slice yields 9 supporting chunks and 9 surviving citations across 10 records, and the fabricated id never survives. But the metric is `not fabricated_survived AND all(c in items for c in citations)` and `all([])` is True, so the **one record with no surviving citation contributes a vacuous 1.0**. That is the T-061a definition, unchanged by me — **filed, not fixed**, since altering it would change numbers on an existing gate. Also disclosed: abstention measures the **claim gate's refusal**, not generator-side abstention (an LLM in the loop would break reproducibility), and factual/recall are wired+unit-tested but have no end-to-end runner yet (live recall needs a real retrieval run, and that corpus is test debris).
+PROGRESS ROW — VERIFY: bench exit 0 with abstention reported; **37 tests pass** (21 new + gate + T-075 integrity, incl. the negative control and a self-check-fails test); `test_benchmark_gate.py`'s per-slice gate made abstention-aware and **strictly stronger** (every answerable assertion unchanged, branch adds `abstention_rate>=0.95` and asserts `groundedness` absent) — nothing weakened to make it pass; ruff clean, **mypy Success (2 files)**; `q8_eval_slices.jsonl` **no diff** with the T-075 pin verifying (60 records); no product-code diff in `app/eval/metrics.py` or `answer/verification.py`. foreign churn disclosed (34 paths, dev1's T-071); my 4 files only; HEAD `ad5216f` unmoved, index empty, no commit.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.

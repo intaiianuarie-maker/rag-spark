@@ -40,6 +40,7 @@ _q9 = _load("q9_run_benchmark", REPO / "evals" / "q9_run_benchmark.py")
 SLICES = _bq.SLICES
 GROUNDEDNESS_GATE = _q9.GROUNDEDNESS_GATE
 CITATION_GATE = _q9.CITATION_GATE
+ABSTENTION_GATE = _q9.ABSTENTION_GATE
 SLICES_FILE = REPO / "evals" / "q8_eval_slices.jsonl"
 
 pytestmark = pytest.mark.integration
@@ -78,6 +79,20 @@ def test_q9_benchmark_gate_holds_per_slice() -> None:
     summary = _q9.run_benchmark()
     for tag in SLICES:
         s = summary[tag]
+        # T-V1-076: an unanswerable slice is gated on abstention rate. Groundedness
+        # is 0.0 there by construction, so asserting it would be a category error;
+        # every assertion below for the answerable slices is UNCHANGED, and the
+        # abstention branch ADDS a gate that did not exist before.
+        if "abstention_rate" in s:
+            assert s["n"] > 0, f"slice {tag} has no records"
+            assert s["abstention_rate"] >= ABSTENTION_GATE, (
+                f"{tag} abstention {s['abstention_rate']:.4f} < {ABSTENTION_GATE} "
+                f"(leaked: {s['leaked']})"
+            )
+            assert "groundedness" not in s, (
+                f"{tag} reports groundedness on unanswerable data (category error)"
+            )
+            continue
         assert s["n"] > 0, f"slice {tag} has no scored records"
         assert s["groundedness"] >= GROUNDEDNESS_GATE, (
             f"{tag} groundedness {s['groundedness']:.4f} < {GROUNDEDNESS_GATE}"
