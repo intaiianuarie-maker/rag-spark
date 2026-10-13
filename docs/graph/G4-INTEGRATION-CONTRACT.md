@@ -9,7 +9,17 @@
 > owns it). True remaining gap: UI mode selector in `apps/web` (no
 > graph/hybrid_graph toggle; trace-panel label covered by D2).
 >
-> Author: dev2 (Stream B) · 2026-10-10 · updated 2026-10-12 (code2 docs-only).
+> **Answer-path behaviour has since moved on and §2/§2a below now describe
+> what the code does, not a plan.** T-V1-022 landed canonical hydration before
+> context build *and* verify, T-V1-047 collapsed its N+1 into one bulk store
+> pass (`ChunkLookup.get_many`), and T-V1-052 put lost-region disclosure on
+> **every** `answer()` return path. The three "must" statements that used to
+> sit in §2/§2a as unmet requirements are now enforced, and the test they
+> promised exists and is green. The UI-selector gap is unchanged and still the
+> only blocker named here.
+>
+> Author: dev2 (Stream B) · 2026-10-10 · updated 2026-10-12 (code2 docs-only) ·
+> updated 2026-10-13 (code2, T-V1-048: hydration + disclosure synced to HEAD).
 
 The graph leg itself (G1 extract, G2 store, G3 retrieve/fuse) is implemented,
 tested, and reviewed-approved. The backend exposure is also merged (factory
@@ -17,7 +27,7 @@ graph wiring, ask/search mode passthrough, hydration + ingest hook — see §0).
 What remains for "product completion" is the UI selector. This contract pins
 that wiring (applied parts marked ✅, remaining parts marked ⚠).
 
-## 0. Current state (verified 2026-10-10)
+## 0. Current state (wiring verified 2026-10-10; answer-path rows 2026-10-13)
 
 | Seam | Today | Gap |
 |---|---|---|
@@ -27,6 +37,8 @@ that wiring (applied parts marked ✅, remaining parts marked ⚠).
 | `answer.factory.create_orchestrator()` | ✅ APPLIED (5dcb6c1): passes `graph=create_graph_retriever()` (None when `GRAPH_MODE=off`) | none — flag-off parity holds |
 | `/ask` endpoint | ✅ APPLIED (5dcb6c1): `AskRequest.mode` + `AnswerEngine.answer(mode)`, HYBRID default | none backend-side |
 | UI (search/chat) | ⚠ no graph mode toggle | add `mode` selector (frontend stream) — TRUE REMAINING GAP |
+| `answer.hydration::CanonicalHydrator` | ✅ T-V1-022/T-V1-047: bulk-hydrates every candidate ref to canonical text **before** context build and **before** verify; one store pass per `hydrate()` via `ChunkLookup.get_many` | none — §2a is enforced, not aspirational |
+| `answer.engine` disclosure | ✅ T-V1-052: all **7** `answer()` returns funnel through `_finalize` (lost-region disclosure + optional-leg degradation) | none — undisclosing return paths: 0 |
 
 `GRAPH_MODE=off` (the default) is the byte-identical v1 **retrieval** path: the
 factory returns `None`, the orchestrator's graph leg no-ops, and no graph
@@ -104,14 +116,15 @@ change.
 - **ACL before ranking (R-004):** graph nodes/edges are workspace-scoped and the
   orchestrator re-filters every leg defensively before fusion. Locked by
   `test_graph_acl_scoped_no_cross_workspace_leak`.
-- **Citations stay real — authoritative original-chunk hydration required
-  (see §2a):** graph-derived `RetrievedItem`s currently carry a `chunk_id` **and
-  a synthesized `[Knowledge Graph Context]` passage**, not the original chunk
-  text. A chunk ID alone is **not** sufficient evidence of authentic displayed
-  source content. Before a graph-derived answer is grounded, the original chunk
-  must be re-hydrated from the authoritative store and ACL/version/provenance
-  verified, with an exact source span located. See §2a for the full contract and
-  the integration test that will prove it.
+- **Citations stay real — authoritative original-chunk hydration (see §2a):
+  ENFORCED, not aspirational.** Graph-derived `RetrievedItem`s still carry a
+  `chunk_id` **and a synthesized `[Knowledge Graph Context]` passage**, and a
+  chunk ID alone is still not evidence of authentic source content. What
+  changed is that this no longer depends on reviewer vigilance:
+  `answer.hydration.CanonicalHydrator` replaces each ref's text with the
+  authoritative original **before** the prompt is built and **before**
+  verification runs, so the synthesized passage can never become a citation.
+  §2a states what the code does today and which test pins it.
 - **Flag-off parity:** `GRAPH_MODE=off` is byte-identical to v1
   (`test_graph_off_is_byte_identical_v1`).
 - **No vendor leak:** graph backend stays behind `GraphStore` (SQLite default;
@@ -125,39 +138,97 @@ change.
 The graph leg (`GraphRetriever.to_retrieved_items`) emits, per evidence chunk, a
 `RetrievedItem` whose `content` is a **synthesized** `[Knowledge Graph Context]`
 passage (entities/relationships summary) and whose `chunk_id` points at the
-source. The v1 citation verifier (`answer.verification`) currently trusts items
-already present in the retrieved map and grounds against whatever `content` it
-was handed. Therefore, for graph-derived answers, a `chunk_id` alone is **not**
-sufficient evidence of authentic displayed source content. Before any
-graph-derived claim is accepted as grounded/cited, the integration MUST:
+source. That part is unchanged — and a `chunk_id` alone is still **not**
+sufficient evidence of authentic displayed source content.
 
-1. **Authoritative original-chunk hydration.** Resolve each graph citation's
-   `chunk_id` to the **original chunk text** from the authoritative document
-   store (not the synthesized graph passage), for the exact
-   `document_id` / `document_version_id`.
-2. **ACL / version / provenance checks.** Confirm the hydrated chunk is inside
-   the caller's workspace scope (R-004), matches the cited document version, and
-   carries real provenance (document, page, section). Drop the citation on any
-   mismatch.
-3. **Exact source span.** Locate the claim text within the hydrated original
-   chunk (the `ExtractiveGrounder.locate` span) and surface `(start, end)` in the
-   `Citation.span`. A citation with no locatable span in the original chunk is
-   dropped.
-4. **No synthesized content as evidence.** The `[Knowledge Graph Context]`
-   passage may be shown as *context* but must never itself be the grounded
-   source for a citation.
+What is no longer true is the old framing of this section: the v1 citation
+verifier no longer "trusts items already present in the retrieved map and
+grounds against whatever `content` it was handed". T-V1-022 inserted
+`answer.hydration.CanonicalHydrator` **upstream** of both consumers, so the
+four rules below are properties of the pipeline rather than obligations on
+each caller:
 
-**Future integration test (to be added under the protected `answer`/API seam
-after Q9; not in this graph-only cycle):**
-`tests/integration/test_graph_citation_hydration.py` — assert that (a) a graph
-citation to a real chunk hydrates the original text and grounds; (b) a graph
-citation whose `chunk_id` does not resolve in the caller's scope is dropped; (c)
-a claim is never grounded against the synthesized `[Knowledge Graph Context]`
-passage; (d) an out-of-version `document_version_id` is rejected. Until that
-test exists and is green, graph-derived answers must abstain
-(`INSUFFICIENT_EVIDENCE`) rather than cite synthesized content.
+1. **Authoritative original-chunk hydration.** ✅ `CanonicalHydrator.hydrate()`
+   resolves every candidate ref to the original chunk text for its exact
+   `document_id` / `document_version_id`, from the authoritative store — never
+   the synthesized graph passage. `HydratingOrchestrator` applies it at the
+   retrieval seam, so hydration **precedes** context build; `verify_claims`
+   bulk-hydrates the cited refs again (fresh, bypassing the cache) so
+   verification sees current store state.
+2. **ACL / version / provenance checks.** ✅ Two layers, both fail-closed. The
+   **store** refuses a row whose `documents.deleted_at` or
+   `document_versions.superseded_at` is set, and drops a ref that is not
+   UUID-shaped (it can never name a row). The **hydrator** then re-applies the
+   caller scope on every read — including cache hits — so a chunk outside
+   `allowed_workspace_ids` is never returned, and a shared hydrator cannot leak
+   one caller's chunk to another. Unresolvable or foreign refs are simply
+   absent, and the caller treats absence as rejection.
+3. **Exact source span.** ✅ `ExtractiveGrounder` locates the claim text within
+   the hydrated original and surfaces `(start, end)` as `Citation.span`; a
+   claim that is not a verbatim substring of the canonical text is not
+   grounded.
+4. **No synthesized content as evidence.** ✅ Enforced by ordering, not by a
+   filter: canonical text replaces the retrieved payload *before* the prompt is
+   built, and graph descriptions are tagged `routing_hint` / `is_graph` so they
+   decide *which* chunks are candidates but can never be cited themselves.
+
+**One store pass.** T-V1-047 added `ChunkLookup.get_many` (declared on the
+`ChunkLookup` protocol, implemented by both `PostgresChunkLookup` and
+`MemoryChunkLookup`). `hydrate()` collects the refs it still has to read and
+resolves them in a **single** query — the ~16 single-row reads per `/ask` it
+used to issue are one `IN (…)` statement — with per-id semantics identical to
+`get`. `CanonicalHydrator.lookups` still counts *refs read* (the T-V1-022
+metric), so its value is unchanged; only the query count collapsed.
+
+**The test that proves it exists and is green:**
+`tests/unit/test_graph_citation_hydration.py` (5 tests, verified passing at
+HEAD). Note the path: it lives under `tests/unit/`, **not**
+`tests/integration/` as an earlier revision of this document claimed.
+
+## 2b. Lost-region disclosure on the answer path (T-V1-052)
+
+Related to §2a but a separate guarantee, and worth its own section because it
+is the reason a partially-read source can never masquerade as a complete one —
+including in a graph-assisted answer whose evidence came from such a source.
+
+The ingestion pipeline parks a job `needs_review` when part of a source could
+not be read (image-only PDF pages, an unexpandable table) and writes the lost
+regions onto every chunk it publishes. Retrieval hands that metadata back on
+the items, and the answer layer now says the same thing the job said.
+
+**Every return path discloses.** `AnswerEngine.answer()` has **7** return
+paths — 2 standing (`ANSWERED`, `PARTIAL`), 4 abstentions (`PARSE_FALLBACK`,
+`EVIDENCE_MISSING`, `NO_CLAIMS`, `CITATION_INVALID`) and the fail-closed
+`UNAVAILABLE` leg-down return. All 7 funnel through a single `_finalize()`
+helper, so **undisclosing return paths: 0**. Before T-V1-052 the abstentions
+bypassed the disclosure entirely: an answer that declined to claim anything
+over a partially-read source said nothing about the pages nobody read.
+
+Two rules, both hard:
+
+- **A standing answer is labelled `needs_review`** and lists the regions that
+  were never read, with confidence **capped at `MEDIUM`** — `HIGH` claims
+  completeness, and completeness is exactly what a partially-read source does
+  not have.
+- **An abstention keeps its own `reason_code`** (it is already not a claim to
+  have read anything) **and still discloses**: the limitation is appended, the
+  status stays `INSUFFICIENT_EVIDENCE`.
+
+`_finalize()` applies `_disclose_source` first and the optional-leg
+`_disclose` (T-V1-026 `DEGRADED`) second. When both apply, the degradation
+owns the single status field, but the lost-region **limitation is already
+appended and the confidence already capped**, so the user reads both facts.
+
+The precise boundary is `parse_lost_regions` (pinned on both sides by
+`jobs.ingest_pipeline.PARSE_LOST_REGIONS_KEY` and an engine source-inspection
+test), so a chunk indexed before that metadata existed simply does not
+disclose — correct, since nothing was known to be lost.
 
 ## 3. Known limitation to disclose (not a blocker)
+
+*Not the disclosure of §2b* — this is a scoring limitation, unrelated to
+lost-region or provenance disclosure, and none of T-V1-022/047/052 touched
+fusion, so it stands as written.
 
 The fused orchestrator path currently **dilutes** the graph advantage: the graph
 leg emits one `RetrievedItem` per evidence chunk with a uniform score, so RRF
