@@ -12,6 +12,7 @@ from core.logging import configure_logging, new_request_id, reset_request_id, se
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.agents.router import router as agent_router
 from app.api.health import router as system_router
 from app.ask.router import router as ask_router
 from app.auth.adapters.redis_store import close_redis
@@ -102,6 +103,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router)
     app.include_router(legacy_search_router)
     app.include_router(eval_router)
+    app.include_router(agent_router)
     register_auth_exception_handlers(app)
     return app
 
