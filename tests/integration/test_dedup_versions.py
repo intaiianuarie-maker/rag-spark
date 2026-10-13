@@ -1424,12 +1424,13 @@ def test_late_job_for_a_deleted_document_cannot_publish(
     resurrect it, and must not be marked READY.
 
     The delete runs through the REAL ``ingestion.dedup.purge_document`` (the
-    API's tombstone path), injected by wrapping the pipeline's parser factory so
+    API's tombstone path), injected by wrapping the pipeline's
+    ``parse_with_precedence`` — where the parser is resolved and invoked — so
     it lands between the job's parse and its first write. The PRE-WRITE gate
     then refuses the job before a single chunk/FTS/vector row exists, the
     tombstone stands, and nothing about the document is retrievable.
     """
-    from ingestion.adapters.registry import parser_for_mime as real_parser_for_mime
+    from ingestion.adapters.registry import parse_with_precedence as real_parse_with_precedence
     from ingestion.dedup import purge_document
     from ingestion.persistence import get_session_factory
 
@@ -1443,27 +1444,31 @@ def test_late_job_for_a_deleted_document_cannot_publish(
 
     deleted = {"done": False}
 
-    class _DeletingParser:
-        def __init__(self, inner) -> None:
-            self._inner = inner
+    async def _deleting_parse(*args, **kwargs):
+        """Parse first, then delete — so the tombstone lands exactly where this
+        test's contract says it must: after the job's parse and before its
+        first write (the PRE-WRITE gate then refuses with nothing written).
 
-        async def parse(self, *args, **kwargs):
-            if not deleted["done"]:
-                deleted["done"] = True
-                async with get_session_factory()() as session:
-                    report = await purge_document(
-                        session,
-                        workspace_id=uuid.UUID(workspace),
-                        document_id=uuid.UUID(document_id),
-                    )
-                assert report.get("postgres") is True  # the delete really landed
-            return await self._inner.parse(*args, **kwargs)
+        T-V1-059: this used to wrap ``parser_for_mime``, which T-031 turned into
+        a bare ``is None`` check — the returned wrapper was constructed and
+        thrown away, ``.parse()`` never ran, and the injected delete never
+        fired, so the test failed on its own harness. ``parse_with_precedence``
+        is where the parser is now resolved *and* invoked, so the injection
+        lands on the live seam.
+        """
+        parsed = await real_parse_with_precedence(*args, **kwargs)
+        if not deleted["done"]:
+            deleted["done"] = True
+            async with get_session_factory()() as session:
+                report = await purge_document(
+                    session,
+                    workspace_id=uuid.UUID(workspace),
+                    document_id=uuid.UUID(document_id),
+                )
+            assert report.get("postgres") is True  # the delete really landed
+        return parsed
 
-    def _parser_for_mime(mime: str | None):
-        inner = real_parser_for_mime(mime)
-        return _DeletingParser(inner) if inner is not None else None
-
-    monkeypatch.setattr("jobs.ingest_pipeline.parser_for_mime", _parser_for_mime)
+    monkeypatch.setattr("jobs.ingest_pipeline.parse_with_precedence", _deleting_parse)
 
     _run_job(uploaded["job_id"])
 

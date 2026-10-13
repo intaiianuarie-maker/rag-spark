@@ -148,12 +148,27 @@ def test_the_fence_is_deterministic_no_clock_and_no_sleep() -> None:
 
 
 def test_the_identity_map_cannot_flush_a_competing_update() -> None:
-    """The CAS must not leave the ORM free to emit a second, unpredicated write."""
+    """The CAS must keep the identity map in step **without** a second write.
+
+    T-V1-059 regression: the original implementation used
+    ``synchronize_session=False`` + ``session.expire(job)``, so the next
+    attribute access issued a refresh SELECT outside a greenlet and every
+    publish died with ``MissingGreenlet`` (a retryable INTERNAL_ERROR, so the
+    job looped instead of going READY). ``synchronize_session="fetch"`` does
+    the sync *inside* ``execute()``, where the greenlet is live, and applies
+    the fetched values as clean state — so neither an unpredicated UPDATE nor
+    a post-hoc refresh can happen.
+    """
     import inspect
 
-    source = inspect.getsource(publish_job_if_generation_live)
-    assert "synchronize_session=False" in source, "no ORM-side row rewrite"
-    assert "session.expire" in source, "the job row must be re-read, not overwritten"
+    raw = inspect.getsource(publish_job_if_generation_live)
+    # Strip comments: the docstring/comment above *names* the old
+    # ``session.expire`` deliberately, and prose is not executable code.
+    source = "\n".join(line.split("#", 1)[0] for line in raw.splitlines())
+    assert 'synchronize_session="fetch"' in source, "sync inside execute(), not after it"
+    assert "session.expire" not in source, (
+        "expiring here re-opens the MissingGreenlet publish failure (T-V1-059)"
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -172,7 +187,10 @@ async def test_a_live_generation_publishes() -> None:
 
     assert published is True
     assert len(session.executed) == 1, "one statement, one round-trip"
-    assert session.expired == [job], "the ORM must not re-write the row afterwards"
+    assert session.expired == [], (
+        "no post-hoc expire/refresh: it would issue IO outside the greenlet "
+        "and fail the publish (T-V1-059 / MissingGreenlet)"
+    )
 
 
 async def test_a_concurrent_replace_publishes_nothing() -> None:

@@ -327,11 +327,16 @@ async def publish_job_if_generation_live(
             stage=JobStage.READY.value,
             finished_at=datetime.now(UTC),
         )
-        # The raw UPDATE owns the job row; leaving the identity map alone keeps
-        # SQLAlchemy from flushing a second, unpredicated UPDATE over it.
-        .execution_options(synchronize_session=False)
+        # ``"fetch"`` keeps the identity map in step with the raw UPDATE so the
+        # in-memory job reads READY without a later refresh. That refresh is
+        # what T-V1-059 caught: ``session.expire(job)`` here made the next
+        # attribute access issue IO outside a greenlet and every publish died
+        # with ``MissingGreenlet`` (retryable, so the job looped instead of
+        # going READY). The fetch runs *inside* ``execute()``, where the async
+        # greenlet is live, and applies the values as clean state — so no
+        # second, unpredicated UPDATE is ever flushed over the CAS result.
+        .execution_options(synchronize_session="fetch")
     )
-    session.expire(job)
     return bool(int(result.rowcount or 0))  # type: ignore[attr-defined]
 
 
