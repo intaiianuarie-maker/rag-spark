@@ -974,7 +974,7 @@ def test_knowledge_search_runtime_blocks_model_supplied_workspace_id() -> None:
     )
     llm = _ScriptedLLM(
         [
-            'Thought: try to steal\nAction: knowledge_search\n'
+            "Thought: try to steal\nAction: knowledge_search\n"
             'Action Input: {"query": "hello", "workspace_id": "ws-victim"}'
             "Final Answer: done",
         ]
@@ -1001,7 +1001,7 @@ def test_knowledge_search_strict_schema_rejects_extra_fields() -> None:
     registry.register(KnowledgeSearchTool(orchestrator=_FakeOrchestrator()))
     llm = _ScriptedLLM(
         [
-            'Thought: smuggle\nAction: knowledge_search\n'
+            "Thought: smuggle\nAction: knowledge_search\n"
             'Action Input: {"query": "hello", "extra": "evil"}'
             "Final Answer: done",
         ]
@@ -1090,3 +1090,250 @@ def test_knowledge_search_uses_retrieval_adapter_boundary() -> None:
     assert "import qdrant_client" not in text
     assert "from qdrant_client" not in text
     assert "orchestrator.retrieve" in text
+
+
+# ======================================================================================
+# T-V3-003 — Scoped source-reader (V3 plan trace A1-1b)
+# ======================================================================================
+
+from agents.tools import KnowledgeReadTool  # noqa: E402
+
+
+class _FakeChunkRow:
+    def __init__(
+        self,
+        chunk_id,
+        document_id,
+        version_id,
+        workspace_id,
+        text="hello world",
+        deleted_at=None,
+        superseded_at=None,
+    ):
+        self.id = chunk_id
+        self.chunk_id = chunk_id
+        self.document_id = document_id
+        self.document_version_id = version_id
+        self.workspace_id = workspace_id
+        self.text = text
+        self.deleted_at = deleted_at
+        self.superseded_at = superseded_at
+
+
+class _FakeChunkStore:
+    def __init__(self, rows=None):
+        self.rows = {r.id: r for r in (rows or [])}
+        self.calls = []
+
+    async def get_chunk(self, document_id, version_id, chunk_id):
+        self.calls.append((document_id, version_id, chunk_id))
+        # Exact triple lookup — no scan
+        row = self.rows.get(chunk_id)
+        return row
+
+    async def __call__(self, document_id, version_id, chunk_id):
+        return await self.get_chunk(document_id, version_id, chunk_id)
+
+
+def _read_output(workspace_id, document_id, version_id, chunk_id, store=None, **extra):
+    tool = KnowledgeReadTool(chunk_reader=store)
+    return asyncio.run(
+        tool.execute(
+            workspace_id,
+            document_id=document_id,
+            document_version_id=version_id,
+            chunk_id=chunk_id,
+            **extra,
+        )
+    )
+
+
+@pytest.mark.unit
+def test_knowledge_read_exact_triple_and_pinned_version() -> None:
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    ws = "ws-allowed"
+    row = _FakeChunkRow(cid, doc, ver, ws, text="pinned content")
+    store = _FakeChunkStore([row])
+    out = _read_output(ws, doc, ver, cid, store=store)
+    assert out["document_id"] == doc
+    assert out["document_version_id"] == ver
+    assert out["chunk_id"] == cid
+    assert out["workspace_id"] == ws
+    assert out["content"] == "pinned content"
+    assert len(store.calls) == 1 and store.calls[0] == (doc, ver, cid)
+
+
+@pytest.mark.unit
+def test_knowledge_read_out_of_scope_rejected() -> None:
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    victim = _FakeChunkRow(cid, doc, ver, "ws-victim", text="secret")
+    store = _FakeChunkStore([victim])
+    out = _read_output("ws-allowed", doc, ver, cid, store=store)
+    assert out["error_code"] == AgentErrorCode.WORKSPACE_MISMATCH
+    assert "workspace" in out["error"].lower()
+    assert "content" not in out
+
+
+@pytest.mark.unit
+def test_knowledge_read_revoked_deleted_refused() -> None:
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    ws = "ws-allowed"
+    # Superseded version
+    row1 = _FakeChunkRow(cid, doc, ver, ws, text="old", superseded_at=datetime.now(UTC))
+    out = _read_output(ws, doc, ver, cid, store=_FakeChunkStore([row1]))
+    assert out["error_code"] == AgentErrorCode.SOURCE_REVOKED
+    # Deleted document (via deleted_at on row)
+    cid2 = str(uuid.uuid4())
+    row2 = _FakeChunkRow(cid2, doc, ver, ws, text="old", deleted_at=datetime.now(UTC))
+    out = _read_output(ws, doc, ver, cid2, store=_FakeChunkStore([row2]))
+    assert out["error_code"] == AgentErrorCode.SOURCE_REVOKED
+
+
+@pytest.mark.unit
+def test_knowledge_read_wrong_triple_no_fuzzy_fallback() -> None:
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    ws = "ws-allowed"
+    row = _FakeChunkRow(cid, doc, ver, ws, text="hello")
+    store = _FakeChunkStore([row])
+    # Wrong document_id
+    out = _read_output(ws, str(uuid.uuid4()), ver, cid, store=store)
+    assert out["error_code"] == AgentErrorCode.TOOL_SCHEMA_INVALID
+    assert "mismatch" in out["error"].lower()
+    # Wrong version_id
+    out = _read_output(ws, doc, str(uuid.uuid4()), cid, store=store)
+    assert out["error_code"] == AgentErrorCode.TOOL_SCHEMA_INVALID
+    # Wrong chunk_id
+    out = _read_output(ws, doc, ver, str(uuid.uuid4()), store=store)
+    assert out["error_code"] == AgentErrorCode.TOOL_SCHEMA_INVALID
+
+
+@pytest.mark.unit
+def test_knowledge_read_output_bounded() -> None:
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    ws = "ws-allowed"
+    big = "y" * 5000
+    row = _FakeChunkRow(cid, doc, ver, ws, text=big)
+    out = _read_output(ws, doc, ver, cid, store=_FakeChunkStore([row]))
+    assert "content" in out
+    assert len(out["content"]) <= 800 + 3
+    raw = json.dumps(out, ensure_ascii=False).encode("utf-8")
+    assert len(raw) <= 16384
+
+
+@pytest.mark.unit
+def test_knowledge_read_no_workspace_scan() -> None:
+    doc = str(uuid.uuid4())
+    ver = str(uuid.uuid4())
+    cid = str(uuid.uuid4())
+    ws = "ws-allowed"
+    row = _FakeChunkRow(cid, doc, ver, ws, text="hi")
+    store = _FakeChunkStore([row])
+    # The store has no scan/list method that the tool should call; only get_chunk
+    # Ensure tool calls exact triple, not a scan
+    out = _read_output(ws, doc, ver, cid, store=store)
+    assert out["content"] == "hi"
+    # If tool had scanned workspace, it would have called with wrong signature
+    assert store.calls == [(doc, ver, cid)]
+
+
+@pytest.mark.unit
+def test_knowledge_read_strict_schema_and_runtime_block() -> None:
+    registry = ToolRegistry()
+    registry.register(KnowledgeReadTool(chunk_reader=_FakeChunkStore()))
+    llm = _ScriptedLLM(
+        [
+            "Thought: smuggle\nAction: knowledge_read\n"
+            'Action Input: {"document_id": "00000000-0000-0000-0000-000000000001", "document_version_id": "00000000-0000-0000-0000-000000000002", "chunk_id": "00000000-0000-0000-0000-000000000003", "extra": "evil"}',  # noqa: E501
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t303-1",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["knowledge_read"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="try extra field"))
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert any(
+        "undeclared" in json.dumps(s.tool_output).lower() for s in run.steps if s.tool_output
+    )
+
+
+@pytest.mark.unit
+def test_knowledge_read_runtime_blocks_workspace_id_override() -> None:
+    registry = ToolRegistry()
+    fake = _FakeChunkStore(
+        [
+            _FakeChunkRow(
+                str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4()), "ws-victim", text="secret"
+            )
+        ]
+    )
+    # This orchestrator shouldn't be called because dispatch blocks workspace_id
+    registry.register(KnowledgeReadTool(chunk_reader=fake))
+    llm = _ScriptedLLM(
+        [
+            "Thought: steal\nAction: knowledge_read\n"
+            'Action Input: {"document_id": "00000000-0000-0000-0000-000000000001", "document_version_id": "00000000-0000-0000-0000-000000000002", "chunk_id": "00000000-0000-0000-0000-000000000003", "workspace_id": "ws-victim"}',  # noqa: E501
+            "Final Answer: done",
+        ]
+    )
+    rt = AgentRuntime(llm, registry)
+    ctx = RunContext(
+        run_id="run-t303-2",
+        workspace_id="ws-allowed",
+        principal_id="user-1",
+        authz_policy_revision="pol-1",
+        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
+        deadline=datetime.now(UTC) + timedelta(seconds=30),
+        allowed_tools=["knowledge_read"],
+    )
+    run = asyncio.run(rt.run_enforced(context=ctx, goal="try workspace override"))
+    assert any(s.type == AgentStepType.ERROR for s in run.steps)
+    assert not any("ws-victim" in json.dumps(s.tool_output) for s in run.steps if s.tool_output)
+
+
+@pytest.mark.unit
+def test_knowledge_read_has_no_write_surface() -> None:
+    import ast
+
+    source = Path("packages/agents/tools.py").read_text()
+    tree = ast.parse(source)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ClassDef) and node.name == "KnowledgeReadTool":
+            called = {
+                getattr(n.func, "attr", None) or getattr(n.func, "id", None)
+                for n in ast.walk(node)
+                if isinstance(n, ast.Call)
+            }
+            assert called.isdisjoint(
+                {"upsert", "delete", "index", "put_object", "eval", "exec", "compile"}
+            ), called
+            assert "import qdrant_client" not in ast.unparse(node)
+            assert "from qdrant_client" not in ast.unparse(node)
+
+
+@pytest.mark.unit
+def test_knowledge_read_uses_adapter_boundary() -> None:
+    text = Path("packages/agents/tools.py").read_text()
+    assert "import qdrant_client" not in text
+    assert "from qdrant_client" not in text
+    # Must use persistence seam, not direct SQL string with workspace scan
+    assert "ChunkRow" in text or "chunk_reader" in text

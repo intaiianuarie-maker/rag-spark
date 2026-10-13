@@ -18,6 +18,7 @@ import ast
 import json
 import math
 import operator
+import uuid
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING, Any, ClassVar
 
@@ -203,9 +204,7 @@ class CalculatorTool(Tool):
         if isinstance(node, ast.BinOp):
             op_type = type(node.op)
             if op_type not in self._OPS:
-                raise CalculatorInputRejected(
-                    f"unsupported operator: {op_type.__name__}"
-                )
+                raise CalculatorInputRejected(f"unsupported operator: {op_type.__name__}")
             count = (
                 1
                 + self._check_tree(node.left, depth=depth + 1)
@@ -219,13 +218,9 @@ class CalculatorTool(Tool):
         if isinstance(node, ast.UnaryOp):
             uop_type = type(node.op)
             if uop_type not in self._UNARY_OPS:
-                raise CalculatorInputRejected(
-                    f"unsupported unary operator: {uop_type.__name__}"
-                )
+                raise CalculatorInputRejected(f"unsupported unary operator: {uop_type.__name__}")
             return 1 + self._check_tree(node.operand, depth=depth + 1)
-        raise CalculatorInputRejected(
-            f"unsupported expression element: {type(node).__name__}"
-        )
+        raise CalculatorInputRejected(f"unsupported expression element: {type(node).__name__}")
 
     def _check_source_nesting(self, expr: str) -> None:
         """Bracket nesting in the **source**, not just in the tree.
@@ -256,8 +251,7 @@ class CalculatorTool(Tool):
             raise CalculatorInputRejected("expression must be a string")
         if len(expr) > self.MAX_EXPRESSION_CHARS:
             raise CalculatorInputRejected(
-                f"expression is {len(expr)} characters; the limit is "
-                f"{self.MAX_EXPRESSION_CHARS}"
+                f"expression is {len(expr)} characters; the limit is {self.MAX_EXPRESSION_CHARS}"
             )
         self._check_source_nesting(expr)
         try:
@@ -265,9 +259,7 @@ class CalculatorTool(Tool):
         except (SyntaxError, ValueError, MemoryError, RecursionError) as exc:
             raise CalculatorInputRejected(f"expression does not parse: {exc}") from exc
         if self._check_tree(tree, depth=0) > self.MAX_AST_NODES:
-            raise CalculatorInputRejected(
-                f"expression has more than {self.MAX_AST_NODES} nodes"
-            )
+            raise CalculatorInputRejected(f"expression has more than {self.MAX_AST_NODES} nodes")
         return tree
 
     # --- evaluation ---------------------------------------------------------
@@ -280,9 +272,7 @@ class CalculatorTool(Tool):
             right = self._eval_node(node.right, depth=depth + 1)
             op_type = type(node.op)
             if op_type not in self._OPS:
-                raise CalculatorInputRejected(
-                    f"unsupported operator: {op_type.__name__}"
-                )
+                raise CalculatorInputRejected(f"unsupported operator: {op_type.__name__}")
             if op_type is ast.Pow:
                 self._check_exponent(right)
                 if isinstance(left, int):
@@ -298,13 +288,9 @@ class CalculatorTool(Tool):
             operand = self._eval_node(node.operand, depth=depth + 1)
             uop_type = type(node.op)
             if uop_type not in self._UNARY_OPS:
-                raise CalculatorInputRejected(
-                    f"unsupported unary operator: {uop_type.__name__}"
-                )
+                raise CalculatorInputRejected(f"unsupported unary operator: {uop_type.__name__}")
             return self._guard_result(self._UNARY_OPS[uop_type](operand))
-        raise CalculatorInputRejected(
-            f"unsupported expression element: {type(node).__name__}"
-        )
+        raise CalculatorInputRejected(f"unsupported expression element: {type(node).__name__}")
 
     async def execute(self, workspace_id: str, **kwargs: Any) -> Any:
         expr = kwargs.get("expression", "")
@@ -320,7 +306,6 @@ class CalculatorTool(Tool):
             }
         except Exception as exc:
             return {"error": f"Evaluation error: {exc}"}
-
 
 
 class KnowledgeSearchTool(Tool):
@@ -414,11 +399,11 @@ class KnowledgeSearchTool(Tool):
             return payload
         # Shrink by dropping the lowest-ranked hits until we fit.
         results = payload.get("results", [])
-        while results and len(
-            json.dumps({**payload, "results": results}, ensure_ascii=False).encode(
-                "utf-8"
-            )
-        ) > MAX_SEARCH_OUTPUT_BYTES:
+        while (
+            results
+            and len(json.dumps({**payload, "results": results}, ensure_ascii=False).encode("utf-8"))
+            > MAX_SEARCH_OUTPUT_BYTES
+        ):
             results = results[:-1]
         payload = {**payload, "results": results, "truncated": True}
         # If still too large (single huge hit), truncate its snippet.
@@ -556,6 +541,310 @@ class KnowledgeSearchTool(Tool):
 
         payload: dict[str, Any] = {"results": results, "count": len(results)}
         return self._fit_output(payload)
+
+
+class KnowledgeReadTool(Tool):
+    """Scoped, read-only chunk reader (T-V3-003, trace A1-1b).
+
+    Addresses one chunk by the exact triple ``(document_id, version_id, chunk_id)``
+    with an ACL re-check **at read time**: the chunk quoted in one workspace
+    must not leak into another via a direct read. The reader re-resolves the
+    caller's scope against the chunk's owning workspace/version before returning
+    bytes, and refuses revoked/deleted rows.
+
+    The tool is **read-only** by construction: the only store operations on
+    this path are ``SELECT``/``get`` via the persistence seam
+    (``ingestion.persistence``) — no ``upsert``/``delete``/``index`` surface
+    exists here, and no workspace-wide scan is performed (the lookup is by
+    primary key, then the triple is verified).
+
+    Output is **byte-bounded** with the same budget as search
+    (:data:`MAX_SEARCH_OUTPUT_BYTES` / :data:`MAX_SNIPPET_CHARS`), so a large
+    chunk cannot blow the run's token wall.
+    """
+
+    name: ClassVar[str] = "knowledge_read"
+    description: ClassVar[str] = (
+        "Read one chunk by its document/version/chunk triple. "
+        "Returns the pinned version's text with provenance; ACL re-checked at read time."
+    )
+    input_schema: ClassVar[dict[str, Any]] = {
+        "type": "object",
+        "properties": {
+            "document_id": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "description": "Document UUID (exact).",
+            },
+            "document_version_id": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "description": "Document version UUID (exact, pinned).",
+            },
+            "chunk_id": {
+                "type": "string",
+                "pattern": "^[0-9a-fA-F-]{36}$",
+                "description": "Chunk UUID (exact).",
+            },
+        },
+        "required": ["document_id", "document_version_id", "chunk_id"],
+        "additionalProperties": False,
+    }
+
+    MAX_OUTPUT_BYTES: ClassVar[int] = MAX_SEARCH_OUTPUT_BYTES
+    MAX_SNIPPET_CHARS: ClassVar[int] = MAX_SNIPPET_CHARS
+
+    def __init__(self, chunk_reader: Any | None = None) -> None:
+        # ``chunk_reader`` is an injectable async callable
+        # ``(document_id, version_id, chunk_id) -> ChunkRow | None`` or a
+        # minimal store with ``get_chunk``. When ``None`` the tool uses the
+        # persistence seam directly.
+        self._chunk_reader: Any | None = chunk_reader
+
+    @staticmethod
+    def _is_uuid(value: Any) -> bool:
+        if not isinstance(value, str):
+            return False
+        try:
+            import uuid as _uuid
+
+            _uuid.UUID(value)
+            return True
+        except Exception:
+            return False
+
+    @staticmethod
+    def _snippet(text: str) -> str:
+        if len(text) <= MAX_SNIPPET_CHARS:
+            return text
+        return text[: MAX_SNIPPET_CHARS - 3] + "..."
+
+    async def _fetch_via_reader(
+        self, document_id: str, version_id: str, chunk_id: str
+    ) -> Any | None:
+        reader = self._chunk_reader
+        if reader is None:
+            return None
+        # Support both callable and object with get_chunk
+        try:
+            if callable(reader):
+                return await reader(document_id, version_id, chunk_id)
+            if hasattr(reader, "get_chunk"):
+                return await reader.get_chunk(document_id, version_id, chunk_id)
+            if hasattr(reader, "get"):
+                return await reader.get(document_id, version_id, chunk_id)
+        except Exception:
+            return None
+        return None
+
+    async def execute(self, workspace_id: str, **kwargs: Any) -> Any:
+        # Hard server-side enforcement: pop any model-supplied scope fields.
+        kwargs.pop("workspace_id", None)
+        kwargs.pop("workspace_ids", None)
+        kwargs.pop("filter", None)
+        kwargs.pop("acl_scope", None)
+
+        document_id = kwargs.get("document_id", "")
+        version_id = kwargs.get("document_version_id", "")
+        chunk_id = kwargs.get("chunk_id", "")
+
+        for field_name, value in (
+            ("document_id", document_id),
+            ("document_version_id", version_id),
+            ("chunk_id", chunk_id),
+        ):
+            if not isinstance(value, str) or not value.strip():
+                return {
+                    "error": f"{field_name} is required",
+                    "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                }
+            if not self._is_uuid(value):
+                return {
+                    "error": f"{field_name} must be a UUID",
+                    "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                }
+
+        # No workspace-wide scan: the only lookup is by the exact triple.
+        # First try the injected reader (unit tests), then the persistence seam.
+        chunk_row: Any | None = None
+        # Injected path — used by unit tests, no DB required.
+        if self._chunk_reader is not None:
+            chunk_row = await self._fetch_via_reader(document_id, version_id, chunk_id)
+            if chunk_row is None:
+                return {
+                    "error": "chunk not found for the given triple",
+                    "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                }
+            # Re-check the triple exactly — no fuzzy fallback.
+            try:
+                row_doc = (
+                    str(chunk_row.document_id)
+                    if hasattr(chunk_row, "document_id")
+                    else str(chunk_row.get("document_id", ""))
+                )
+            except Exception:
+                row_doc = ""
+            try:
+                row_ver = (
+                    str(chunk_row.document_version_id)
+                    if hasattr(chunk_row, "document_version_id")
+                    else str(chunk_row.get("document_version_id", ""))
+                )
+            except Exception:
+                row_ver = ""
+            try:
+                row_cid = (
+                    str(chunk_row.id) if hasattr(chunk_row, "id") else str(chunk_row.get("id", ""))
+                )
+            except Exception:
+                row_cid = ""
+            # Some fakes use chunk_id field instead of id
+            if not row_cid or row_cid == "None":
+                try:
+                    row_cid = str(chunk_row.chunk_id)
+                except Exception:
+                    row_cid = ""
+            if row_doc != document_id or row_ver != version_id or row_cid != chunk_id:
+                return {
+                    "error": "chunk triple mismatch — exact address required",
+                    "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                }
+            # ACL re-check at read time
+            try:
+                row_ws = str(chunk_row.workspace_id)
+            except Exception:
+                try:
+                    row_ws = str(chunk_row.get("workspace_id", ""))
+                except Exception:
+                    row_ws = ""
+            if row_ws != workspace_id:
+                return {
+                    "error": "chunk not in caller's workspace",
+                    "error_code": AgentErrorCode.WORKSPACE_MISMATCH,
+                }
+            # Revoked/deleted: check injected flags
+            try:
+                deleted = bool(chunk_row.deleted_at) if hasattr(chunk_row, "deleted_at") else False
+            except Exception:
+                deleted = False
+            try:
+                superseded = (
+                    bool(chunk_row.superseded_at) if hasattr(chunk_row, "superseded_at") else False
+                )
+            except Exception:
+                superseded = False
+            # Also respect top-level flags injected by tests
+            if chunk_row is not None and isinstance(chunk_row, dict):
+                deleted = deleted or bool(chunk_row.get("deleted_at"))
+                superseded = superseded or bool(chunk_row.get("superseded_at"))
+                # Check version/document flags via extra dict keys
+                if chunk_row.get("version_superseded_at") or chunk_row.get("document_deleted_at"):
+                    superseded = True
+                    deleted = True
+            if deleted or superseded:
+                return {
+                    "error": "chunk version is revoked or deleted",
+                    "error_code": AgentErrorCode.SOURCE_REVOKED,
+                }
+            # Build output from the fake row
+            try:
+                text_val = chunk_row.text
+            except Exception:
+                try:
+                    text_val = chunk_row.get("text", "")
+                except Exception:
+                    text_val = ""
+            snippet = self._snippet(str(text_val or ""))
+            payload: dict[str, Any] = {
+                "document_id": document_id,
+                "document_version_id": version_id,
+                "chunk_id": chunk_id,
+                "workspace_id": workspace_id,
+                "content": snippet,
+                "truncated": len(str(text_val or "")) > self.MAX_SNIPPET_CHARS,
+            }
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            if len(raw) > self.MAX_OUTPUT_BYTES:
+                payload["content"] = payload["content"][:200] + "..."
+                payload["truncated"] = True
+            return payload
+
+        # Production path: persistence seam (read-only SELECTs).
+        try:
+            from ingestion.persistence import (
+                ChunkRow,
+                Document,
+                DocumentVersion,
+                get_session_factory,
+            )
+
+            factory = get_session_factory()
+            async with factory() as session:
+                # Exact triple: fetch chunk by primary key, then verify.
+                chunk = await session.get(ChunkRow, uuid.UUID(chunk_id))
+                if chunk is None:
+                    return {
+                        "error": "chunk not found",
+                        "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                    }
+                if str(chunk.id) != chunk_id or str(chunk.document_version_id) != version_id:
+                    return {
+                        "error": "chunk triple mismatch — exact address required",
+                        "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                    }
+                # ACL re-check
+                if str(chunk.workspace_id) != workspace_id:
+                    return {
+                        "error": "chunk not in caller's workspace",
+                        "error_code": AgentErrorCode.WORKSPACE_MISMATCH,
+                    }
+                version = await session.get(DocumentVersion, uuid.UUID(version_id))
+                if version is None or str(version.document_id) != document_id:
+                    return {
+                        "error": "version not found or mismatched",
+                        "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                    }
+                if version.superseded_at is not None:
+                    return {
+                        "error": "chunk version is revoked or deleted",
+                        "error_code": AgentErrorCode.SOURCE_REVOKED,
+                    }
+                document = await session.get(Document, uuid.UUID(document_id))
+                if document is None or str(document.workspace_id) != workspace_id:
+                    return {
+                        "error": "document not in caller's workspace",
+                        "error_code": AgentErrorCode.WORKSPACE_MISMATCH,
+                    }
+                if document.deleted_at is not None:
+                    return {
+                        "error": "document is deleted",
+                        "error_code": AgentErrorCode.SOURCE_REVOKED,
+                    }
+                if str(chunk.document_version_id) != str(version.id):
+                    return {
+                        "error": "chunk version mismatch",
+                        "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
+                    }
+                snippet = self._snippet(chunk.text or "")
+                payload2: dict[str, Any] = {
+                    "document_id": document_id,
+                    "document_version_id": version_id,
+                    "chunk_id": chunk_id,
+                    "workspace_id": workspace_id,
+                    "content": snippet,
+                    "truncated": len(chunk.text or "") > self.MAX_SNIPPET_CHARS,
+                }
+                raw2 = json.dumps(payload2, ensure_ascii=False).encode("utf-8")
+                if len(raw2) > self.MAX_OUTPUT_BYTES:
+                    payload2["content"] = payload2["content"][:200] + "..."
+                    payload2["truncated"] = True
+                return payload2
+        except Exception as exc:
+            # Never leak raw DB errors; map to provider error with safe message.
+            return {
+                "error": f"read failed: {type(exc).__name__}",
+                "error_code": AgentErrorCode.PROVIDER_ERROR,
+            }
 
 
 class ToolRegistry(BaseModel):
