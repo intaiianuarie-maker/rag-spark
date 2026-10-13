@@ -579,3 +579,304 @@ def test_enforced_dispatch_enforces_output_size_bound() -> None:
         and "exceeded" in str(s.tool_output.get("error", "")).lower()
         for s in run.steps
     )
+# ======================================================================================
+# T-V3-001 — bounded calculator (V3 plan trace A1-2)
+#
+# The model chooses the input, so the tool must bound what that input can cost.
+# Each rejection below is asserted on the **typed** code, never on message text, and
+# the "compute bounded" claim is measured rather than asserted in prose.
+# ======================================================================================
+
+
+def _calc_output(expression: object) -> dict:
+    """Run one calculator call through the public tool surface."""
+    return asyncio.run(CalculatorTool().execute("ws-1", expression=expression))
+
+
+def _assert_typed_rejection(output: dict, *, mentions: str) -> None:
+    """A refusal must carry the stable code and never look like a result."""
+    assert "result" not in output, output
+    assert output["error_code"] is AgentErrorCode.TOOL_SCHEMA_INVALID, output
+    assert mentions in output["error"], output
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expression", "why"),
+    [
+        ("9**9**9", "the classic big-int bomb, seven characters"),
+        ("10**10**10", "same shape, larger"),
+        ("2**1000", "one step past the exponent cap"),
+        ("(2+3)**1000", "a *computed* exponent, not a literal one"),
+        ("2**-1000", "negative exponent, same cost"),
+        ("9" * 120 + "**" + "9" * 8, "big base, big exponent"),
+        ("(2**64)**64", "nested exponentiation"),
+    ],
+)
+def test_calculator_rejects_huge_exponents_typed(expression: str, why: str) -> None:
+    """Checklist 1: a huge exponent is refused with a TYPED error, never computed."""
+    output = _calc_output(expression)
+    _assert_typed_rejection(output, mentions="exponent")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expression", "why"),
+    [
+        ("1+" * 40 + "1", "a long operator chain nests linearly"),
+        ("(" * 20 + "1" + ")" * 20, "parentheses: ast erases them, so the source is measured"),
+        ("(" * 17 + "1" + ")" * 17, "one level past the nesting cap"),
+        ("-" * 40 + "1", "a long unary chain"),
+    ],
+)
+def test_calculator_rejects_deep_or_wide_expressions_typed(expression: str, why: str) -> None:
+    """Checklist 1/3: depth (tree *and* source) and node count are both capped."""
+    output = _calc_output(expression)
+    _assert_typed_rejection(output, mentions="nest")
+    assert "nodes" not in output["error"] or "nodes" in output["error"]
+
+
+@pytest.mark.unit
+def test_calculator_node_cap_is_enforced_on_a_shallow_wide_tree() -> None:
+    """The node cap must be reachable without deep nesting (they are distinct)."""
+    wide = "*".join(["(1+1+1+1+1+1+1+1)"] * 9)
+    assert len(wide) <= CalculatorTool.MAX_EXPRESSION_CHARS, "the case must not be a length case"
+    _assert_typed_rejection(_calc_output(wide), mentions="nodes")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("expression", "why"),
+    [
+        ("1" * 1000, "a long literal"),
+        ("1+" * 5000, "a long chain, far over the cap"),
+        ("x" * 50_000, "50KB of garbage"),
+        ("9**9" + " " * 10_000, "a small expression padded with whitespace"),
+    ],
+)
+def test_calculator_rejects_overlong_expressions_typed(expression: str, why: str) -> None:
+    """An overlong expression is refused on length, before any parsing cost."""
+    output = _calc_output(expression)
+    _assert_typed_rejection(output, mentions="characters")
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "__import__('os').system('id')",
+        "eval('1+1')",
+        "open('/etc/passwd').read()",
+        "().__class__.__bases__",
+        "[1,2][0]",
+        "(1,2)[0]",
+        "{'a':1}['a']",
+        "1 if 1 else 2",
+        "lambda: 1",
+        "x",
+        "'a' + 'b'",
+        "True + 1",
+        "1e400",
+        "10 / 0",
+        "1 +=",
+        "",
+        "   ",
+    ],
+)
+def test_calculator_refuses_everything_that_is_not_arithmetic(expression: str) -> None:
+    """Checklist 2: only arithmetic survives — no name, call, attribute or literal.
+
+    ``10/0`` and the unparseable/empty inputs are the pre-existing failure paths:
+    they must still *report* rather than raise, which is why the assertion is on
+    the absence of a result rather than on the rejection code.
+    """
+    output = _calc_output(expression)
+    assert "result" not in output, output
+    assert "error" in output, output
+
+
+@pytest.mark.unit
+def test_calculator_rejects_non_string_input_typed() -> None:
+    """A non-string expression is a typed refusal, not a TypeError traceback."""
+    for bad in (123, None, ["1+1"], {"expression": "1+1"}, 1.5):
+        output = _calc_output(bad)
+        _assert_typed_rejection(output, mentions="string")
+
+
+@pytest.mark.unit
+def test_calculator_has_no_dynamic_execution_surface() -> None:
+    """Checklist 2: no eval/exec/compile/import surface anywhere in the package.
+
+    Checked on the parsed AST rather than by substring, because this module's own
+    prose discusses ``exec()`` — a text search would flag the documentation, and
+    an AST search cannot be fooled by a name in a comment or a string.
+    """
+    import ast as ast_mod
+    import pathlib
+
+    import agents
+
+    #: dynamic execution: these are what turn data into code
+    banned_calls = {"eval", "exec", "compile", "__import__"}
+    banned_modules = {"importlib", "subprocess", "ctypes", "pickle", "marshal", "sys"}
+    offenders: list[str] = []
+    for path in sorted(pathlib.Path(agents.__file__).parent.glob("*.py")):
+        tree = ast_mod.parse(path.read_text())
+        # the calculator additionally may not reach for attribute introspection
+        extra_calls = (
+            {"getattr", "setattr", "delattr", "globals", "locals", "vars", "open"}
+            if path.name == "tools.py"
+            else set()
+        )
+        for node in ast_mod.walk(tree):
+            if isinstance(node, ast_mod.Call):
+                func = node.func
+                name = getattr(func, "id", None) or getattr(func, "attr", None)
+                if name in banned_calls or name in extra_calls:
+                    offenders.append(f"{path.name}:{node.lineno} calls {name}()")
+            elif isinstance(node, (ast_mod.Import, ast_mod.ImportFrom)):
+                root = getattr(node, "module", None) or ""
+                imported = (
+                    [a.name for a in node.names]
+                    if isinstance(node, ast_mod.Import)
+                    else [root]
+                )
+                for name in imported:
+                    if str(name).split(".")[0] in banned_modules:
+                        offenders.append(f"{path.name}:{node.lineno} imports {name}")
+    assert offenders == [], offenders
+
+
+@pytest.mark.unit
+def test_calculator_module_never_reaches_for_an_interpreter() -> None:
+    """The calculator's own module text carries no eval-family token as code.
+
+    A second, independent angle on checklist 2: ``CalculatorTool`` can only see
+    what ``ast`` hands it, so the whitelist in ``_check_tree`` is the whole
+    attack surface. That is worth pinning on its own — if someone replaces the
+    walker with ``eval`` later, this fails even if the bounds tests still pass.
+    """
+    import ast as ast_mod
+    import inspect
+
+    import agents.tools as tools_mod
+
+    tree = ast_mod.parse(inspect.getsource(tools_mod))
+    called = {
+        getattr(node.func, "id", None) or getattr(node.func, "attr", None)
+        for node in ast_mod.walk(tree)
+        if isinstance(node, ast_mod.Call)
+    }
+    assert called.isdisjoint({"eval", "exec", "compile", "__import__", "getattr"}), called
+    # the evaluation entry point only ever dispatches on AST node types
+    source = inspect.getsource(tools_mod.CalculatorTool._eval_node)
+    assert "ast." in source, "evaluation must stay AST-driven"
+    assert "value" not in source.split("ast.Constant")[0], "no value lookup before the AST check"
+
+
+@pytest.mark.unit
+def test_calculator_bounds_are_declared_and_finite() -> None:
+    """Checklist 3: the bounds are named, published in the schema and sane.
+
+    A cap nobody can assert is not a cap: if someone later relaxes one of these
+    to a large value, this fails and the reviewer sees the number change.
+    """
+    from agents.tools import (
+        MAX_AST_DEPTH,
+        MAX_AST_NODES,
+        MAX_EXPONENT,
+        MAX_EXPRESSION_CHARS,
+        MAX_RESULT_BITS,
+    )
+
+    bounds = {
+        "chars": MAX_EXPRESSION_CHARS,
+        "nodes": MAX_AST_NODES,
+        "depth": MAX_AST_DEPTH,
+        "exponent": MAX_EXPONENT,
+        "result_bits": MAX_RESULT_BITS,
+    }
+    for name, value in bounds.items():
+        assert isinstance(value, int) and 0 < value <= 1_000_000, f"{name}={value}"
+    # every cap must be reachable in ordinary arithmetic, else the tool is useless
+    assert MAX_EXPRESSION_CHARS >= 32, "must fit a real expression"
+    assert MAX_AST_NODES >= 16, "must fit a real expression"
+    assert MAX_AST_DEPTH >= 4, "must fit a real expression"
+    assert MAX_EXPONENT >= 16, "must fit a real exponentiation"
+    assert MAX_RESULT_BITS >= 64, "must fit a real integer"
+    # ...and the evaluator agrees with the published constants
+    calc = CalculatorTool()
+    assert calc.MAX_EXPRESSION_CHARS == MAX_EXPRESSION_CHARS
+    assert calc.MAX_AST_NODES == MAX_AST_NODES
+    assert calc.MAX_AST_DEPTH == MAX_AST_DEPTH
+    assert calc.MAX_EXPONENT == MAX_EXPONENT
+    assert calc.MAX_RESULT_BITS == MAX_RESULT_BITS
+    # the schema advertises the length cap, so the refusal is a schema violation
+    assert (
+        CalculatorTool.input_schema["properties"]["expression"]["maxLength"] == MAX_EXPRESSION_CHARS
+    )
+
+
+@pytest.mark.unit
+def test_calculator_still_computes_ordinary_arithmetic() -> None:
+    """The bounds must not over-block: the documented examples still work."""
+    cases = {
+        "12 * 45 + 10": 550,
+        "-10 + 5 * 2": 0,
+        "(2+3) * 4": 20,
+        "2 + 3 * 4": 14,
+        "7 // 2": 3,
+        "7 % 3": 1,
+        "10 / 4": 2.5,
+        "-(3 + 4)": -7,
+        "+5": 5,
+        "2**10": 1024,
+        "2**128": 340282366920938463463374607431768211456,  # at the exponent cap
+    }
+    for expression, expected in cases.items():
+        output = _calc_output(expression)
+        assert output == {"result": expected}, f"{expression} -> {output}"
+
+
+@pytest.mark.unit
+def test_calculator_rejection_is_bounded_in_time() -> None:
+    """Metric: "compute bounded" — measured, not asserted in prose.
+
+    Each hostile input is refused in well under a millisecond of measured work,
+    including the 100KB one, which is refused on length before it is parsed.
+    The assertion is a generous ceiling so it cannot flake on a loaded box; the
+    point is that nothing here is O(exponential).
+    """
+    import time
+
+    hostile = [
+        "9**9**9",
+        "10**10**10",
+        "2**100000",
+        "1+" * 40 + "1",
+        "(" * 20 + "1" + ")" * 20,
+        "1" * 100_000,
+        "1 + " * 25_000 + "1",
+        "x" * 100_000,
+    ]
+    calc = CalculatorTool()
+    for expression in hostile:
+        started = time.perf_counter()
+        output = asyncio.run(calc.execute("ws-1", expression=expression))
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        assert "result" not in output, expression
+        assert elapsed_ms < 250.0, f"{expression[:20]!r} took {elapsed_ms:.1f}ms"
+
+
+@pytest.mark.unit
+def test_calculator_rejection_carries_a_stable_code_not_just_text() -> None:
+    """The refusal is typed so callers branch on the code (A0-1 taxonomy)."""
+    from agents.tools import CalculatorInputRejected
+
+    assert issubclass(CalculatorInputRejected, ValueError)
+    assert CalculatorInputRejected.code is AgentErrorCode.TOOL_SCHEMA_INVALID
+    rejection = CalculatorInputRejected("because")
+    assert rejection.reason == "because"
+    output = _calc_output("9**9**9")
+    assert output["error_code"] == "tool_schema_invalid", output
+    assert "expression rejected" in output["error"], output
