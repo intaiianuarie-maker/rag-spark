@@ -694,7 +694,7 @@ async def test_worker_failure_record_carries_the_tracking_id(
             await worker.record_failure(
                 _Session(),
                 job_id,
-                IngestPipelineError("internal_error", "boom", retryable=False),
+                IngestPipelineError("INTERNAL_ERROR", "boom", retryable=False),
             )
     finally:
         reset_request_id(token)
@@ -702,7 +702,7 @@ async def test_worker_failure_record_carries_the_tracking_id(
     failed = [record for record in caplog.records if record.message == "ingest_job_failed"]
     assert failed, f"expected the terminal failure log line, got: {caplog.text}"
     assert failed[-1].trace_id == str(job_id)
-    assert failed[-1].error == "internal_error"
+    assert failed[-1].error == "INTERNAL_ERROR"
 
 
 # --- 9. the taxonomy, not a parallel one -------------------------------------

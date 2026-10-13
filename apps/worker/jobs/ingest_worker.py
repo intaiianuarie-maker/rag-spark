@@ -131,7 +131,7 @@ async def process_one(job_id: uuid.UUID) -> None:
                 session,
                 job_id,
                 IngestPipelineError(
-                    "internal_error", f"{type(exc).__name__}: {exc}", retryable=True
+                    "INTERNAL_ERROR", f"{type(exc).__name__}: {exc}", retryable=True
                 ),
             )
 

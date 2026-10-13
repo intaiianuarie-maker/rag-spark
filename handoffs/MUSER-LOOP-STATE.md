@@ -123,6 +123,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   re-pins stronger) → DONE. Reviewer lacked lint tooling; coordinator ran ruff+mypy clean.
 - T-V1-023 reviewer: APPROVE (test-only scope, all controls present, hydration genuinely
   does the work, T-021 files correctly excluded) → DONE.
+- T-V1-031 re-reviewer: APPROVE (pipeline half present, engine cleanly split to T-052,
+  33 green on bare commit corroborated) → DONE. First REQUEST-CHANGES→repair→APPROVE cycle.
 - T-V1-024 reviewer: APPROVE (6/6 false frames, 6/6 positives, limits honest, 120 green) → DONE.
   Nits carried (non-blocking): 'eronic' typo + broad nu/se markers — fix opportunistically.
 - T-V1-034 reviewer: APPROVE (consumer + queue + migration-read-only + adapters + 60 green) → DONE.

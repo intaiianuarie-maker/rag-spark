@@ -22,16 +22,34 @@ HTTP API, the shared schemas and the TypeScript contract
   OPTIONAL **per enabled mode** (search / ask / ingest / graph) so a degraded
   dependency can be judged honestly instead of globally.
 
-**Wire policy (no behavior change in this ticket).** Each registry entry
-records the *exact* string currently emitted on the wire in ``ErrorSpec.wire``:
-the canonical ``UPPER_SNAKE_CASE`` value for codes introduced by the
-verified-store/answer work (``INDEX_COUNT_MISMATCH``, ``STORE_WRITE_UNVERIFIED``,
-``EMBED_UNAVAILABLE``, ``ZERO_VECTOR_REJECTED``, ``SUPERSESSION_CLEANUP_FAILED``,
-``GRAPH_INDEX_PARTIAL``), and the legacy lowercase value where the wire is
-already pinned by ``apps/web`` or by integration tests (all pre-Q0 ingestion
-and API codes, e.g. ``unsupported_mime_type``, ``not_a_member``). Migrating a
-legacy wire value to its canonical code is a *separate, explicit* decision —
-it would move a pinned string, so this ticket only registers reality.
+**Wire policy.** Each registry entry records the *exact* string emitted on the
+wire in ``ErrorSpec.wire`` (the canonical ``UPPER_SNAKE_CASE`` value unless an
+explicit legacy override is kept).
+
+- **Ingestion + indexing codes moved to the canonical uppercase wire**
+  (T-V1-049, mechanical): the raise-time literals in
+  ``packages/ingestion/normalize.py``, ``apps/worker/jobs/ingest_pipeline.py``
+  and ``apps/worker/jobs/ingest_worker.py``, the value ``normalize_code``
+  persists into ``ingestion_jobs.error_code``, and the pinned integration
+  assertions in ``tests/integration/test_ingestion_jobs.py`` all moved
+  together. ``LEGACY_ALIASES`` still resolves every pre-migration lowercase
+  string (``unsupported_mime_type`` → ``UNSUPPORTED_MIME_TYPE``), so old DB
+  rows and any late lowercase emitter read back canonical rather than falling
+  through as unknown.
+- **API envelope codes keep the legacy lowercase wire** (``not_a_member``,
+  ``invalid_token``, …): they are pinned by ``apps/web`` (auth-client,
+  settings screens) and ~20 integration assertions. Moving them needs a
+  versioned contract change plus a coordinated frontend edit — a separate,
+  explicit decision, not part of the ingestion migration.
+- **Known residue (out of T-V1-049's allowlist):**
+  ``apps/api/app/documents/upload.py`` still carries five legacy lowercase
+  inline literals (``document_too_large``, ``queue_unavailable``,
+  ``invalid_charset``, ``empty_document``, ``job_not_found``). They are
+  API-layer literals, not registry-driven, so the upload envelope keeps
+  emitting lowercase while the worker/job path for the same code is
+  uppercase; the registry documents the governed (worker) wire. A follow-up
+  ticket should sweep those five literals and their two pins.
+
 :data:`LEGACY_ALIASES` resolves both the wire value and the lowercase form of
 every canonical code back to its member, so old DB rows and new emitters meet
 in one place.
@@ -92,6 +110,12 @@ class ReasonCode(StrEnum):
     QUEUE_UNAVAILABLE = "QUEUE_UNAVAILABLE"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     NEEDS_REVIEW = "NEEDS_REVIEW"
+
+    # --- Ingestion publication fence (T-V1-019: a job may publish only the
+    # generation it was bound to, while that generation is still live) ---
+    STALE_GENERATION = "STALE_GENERATION"
+    DOCUMENT_DELETED = "DOCUMENT_DELETED"
+    GENERATION_GONE = "GENERATION_GONE"
 
     # --- Indexing (worker → Postgres FTS / vector store) ---
     FTS_INDEXING_FAILED = "FTS_INDEXING_FAILED"
@@ -282,10 +306,12 @@ _register(
     ),
 )
 
-# Ingestion pipeline / worker job failures. Wire = the exact string the
-# worker writes into ``ingestion_jobs.error_code`` today (lowercase legacy
-# literals raised by ``apps/worker/jobs/ingest_pipeline.py`` and
-# ``packages/ingestion/normalize.py``; pinned by integration tests).
+# Ingestion pipeline / worker job failures. Wire = the canonical
+# UPPER_SNAKE_CASE value the worker writes into ``ingestion_jobs.error_code``
+# (T-V1-049: the legacy lowercase literals raised by
+# ``apps/worker/jobs/ingest_pipeline.py`` and ``packages/ingestion/normalize.py``
+# were uppercased mechanically and the pinned integration assertions moved
+# with them; ``LEGACY_ALIASES`` keeps the old lowercase strings resolving).
 _register(
     ReasonCode.INGESTION_ERROR,
     ErrorSpec(
@@ -293,7 +319,6 @@ _register(
         http_status=400,
         retryable=False,
         message="The document could not be processed.",
-        wire="ingestion_error",
     ),
 )
 _register(
@@ -303,7 +328,6 @@ _register(
         http_status=404,
         retryable=False,
         message="Ingestion job not found.",
-        wire="job_not_found",
     ),
 )
 _register(
@@ -313,7 +337,6 @@ _register(
         http_status=404,
         retryable=False,
         message="The document version for this job is missing.",
-        wire="version_not_found",
     ),
 )
 _register(
@@ -323,7 +346,6 @@ _register(
         http_status=400,
         retryable=False,
         message="The document is empty.",
-        wire="empty_document",
     ),
 )
 _register(
@@ -333,7 +355,6 @@ _register(
         http_status=413,
         retryable=False,
         message="File exceeds the maximum allowed size.",
-        wire="document_too_large",
     ),
 )
 _register(
@@ -343,7 +364,6 @@ _register(
         http_status=415,
         retryable=False,
         message="The file type is not supported.",
-        wire="unsupported_mime_type",
     ),
 )
 _register(
@@ -353,7 +373,6 @@ _register(
         http_status=400,
         retryable=False,
         message="Unknown source charset.",
-        wire="invalid_charset",
     ),
 )
 _register(
@@ -363,7 +382,6 @@ _register(
         http_status=422,
         retryable=True,
         message="The document could not be parsed.",
-        wire="parse_failed",
     ),
 )
 _register(
@@ -373,7 +391,6 @@ _register(
         http_status=422,
         retryable=False,
         message="Parsing failed for this document format.",
-        wire="parse_error",
     ),
 )
 _register(
@@ -383,7 +400,6 @@ _register(
         http_status=500,
         retryable=True,
         message="Document chunking failed.",
-        wire="chunk_failed",
     ),
 )
 _register(
@@ -393,7 +409,6 @@ _register(
         http_status=413,
         retryable=False,
         message="The document produced too many elements to process.",
-        wire="too_many_elements",
     ),
 )
 _register(
@@ -403,7 +418,6 @@ _register(
         http_status=503,
         retryable=True,
         message="Ingestion queue is unavailable; try again shortly.",
-        wire="queue_unavailable",
     ),
 )
 _register(
@@ -413,7 +427,6 @@ _register(
         http_status=500,
         retryable=True,
         message="An unexpected ingestion error occurred.",
-        wire="internal_error",
     ),
 )
 _register(
@@ -426,6 +439,41 @@ _register(
     ),
 )
 
+# Ingestion publication fence (T-V1-019). The worker has emitted these three
+# as uppercase literals since that ticket (``FENCE_SUPERSEDED`` /
+# ``FENCE_DELETED`` / ``FENCE_GONE`` in ``ingest_pipeline.py``); they were not
+# registered, so ``normalize_code`` merely passed them through and the
+# taxonomy contract never saw them. T-V1-049 registers them: wire stays the
+# emitted uppercase value, all three are terminal (never retried — a retry
+# would race the same fence again) and carry safe, non-internal messages.
+_register(
+    ReasonCode.STALE_GENERATION,
+    ErrorSpec(
+        category=ErrorCategory.INGESTION,
+        http_status=409,  # superseded: the document moved on under the job
+        retryable=False,
+        message="The document was replaced while this job was running; nothing was published.",
+    ),
+)
+_register(
+    ReasonCode.DOCUMENT_DELETED,
+    ErrorSpec(
+        category=ErrorCategory.INGESTION,
+        http_status=410,  # gone: the document was deleted mid-job
+        retryable=False,
+        message="The document was deleted before this job could publish; nothing was published.",
+    ),
+)
+_register(
+    ReasonCode.GENERATION_GONE,
+    ErrorSpec(
+        category=ErrorCategory.INGESTION,
+        http_status=404,  # the generation row the job was bound to is gone
+        retryable=False,
+        message="The document generation this job was publishing no longer exists.",
+    ),
+)
+
 # Indexing: worker → Postgres FTS / vector store.
 _register(
     ReasonCode.FTS_INDEXING_FAILED,
@@ -434,7 +482,6 @@ _register(
         http_status=503,
         retryable=True,
         message="Full-text indexing failed.",
-        wire="fts_indexing_failed",
     ),
 )
 _register(
@@ -444,7 +491,6 @@ _register(
         http_status=503,
         retryable=True,
         message="Embedding or vector indexing failed.",
-        wire="qdrant_indexing_failed",
     ),
 )
 _register(
@@ -933,9 +979,12 @@ DEPENDENCY_MATRIX: dict[Dependency, DependencySpec] = {
         optional=("graph",),
         reason_code=ReasonCode.EMBED_UNAVAILABLE,
     ),
-    # Completion gateway: only Ask generates. Explicitly not probed on
-    # /ready (see readiness.py docstring) — classified here so the answer
-    # path can fail closed with a safe reason instead of a silent empty.
+    # Completion gateway: only Ask generates. It IS probed on /ready now:
+    # T-V1-027 landed the probe (``llm_gateway`` in readiness.py's
+    # ``BASE_DEPENDENCIES`` + probe set), so the old "explicitly not probed"
+    # note is obsolete. Still classified here so a probe that passes but a
+    # later generation call fails closed with a safe reason instead of a
+    # silent empty answer.
     Dependency.LLM_GATEWAY: _spec(
         Dependency.LLM_GATEWAY,
         required=("ask",),

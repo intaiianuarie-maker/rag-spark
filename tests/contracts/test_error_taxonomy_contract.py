@@ -16,7 +16,9 @@ Five locks, all service-free (no DB, no compose, no network):
    answer engine, every ``IngestPipelineError("…")`` literal in the ingest
    pipeline and every typed ``IngestionError.code`` in ``ingestion/normalize``
    resolves through the registry, and the worker persists through
-   ``normalize_code`` (identity on today's wire values ⇒ no behavior change).
+   ``normalize_code`` (emitters print the canonical code and the wire carries
+   it unchanged — T-V1-049 uppercased the legacy ingestion literals and the
+   pinned assertions together, so the stored value moved once, deliberately).
 5. **Required vs optional deps per enabled mode** — every dependency in
    ``/ready``'s probe set is classified for every mode; the answer path's
    mandatory legs map to REQUIRED deps with a registered reason code.
@@ -166,25 +168,51 @@ def test_answer_engine_literals_resolve_through_the_registry() -> None:
     assert literals == {code.value for code in ANSWER_REASON_CODES} - {"DEGRADED_RESULT"}
 
 
-def test_worker_pipeline_literals_resolve_and_wire_is_unchanged() -> None:
+def test_worker_pipeline_literals_resolve_and_wire_is_canonical() -> None:
+    """T-V1-049: the pipeline raises canonical codes, and the wire carries them.
+
+    Before this ticket the pipeline raised legacy lowercase literals and the
+    registry documented each one as its pinned wire value. Both moved
+    together, so ``normalize_code`` is still identity at the persistence
+    boundary — no hidden re-mapping.
+    """
     source = (REPO_ROOT / "apps" / "worker" / "jobs" / "ingest_pipeline.py").read_text(
         encoding="utf-8"
     )
     literals = set(re.findall(r"IngestPipelineError\(\s*\n?\s*\"([A-Za-z_]+)\"", source))
     assert literals, "expected IngestPipelineError code literals in ingest_pipeline.py"
+    lowercase = sorted(raw for raw in literals if raw != raw.upper())
+    assert lowercase == [], f"legacy lowercase code literals remain: {lowercase}"
     for raw in literals:
         resolved = canonical_code(raw)
         assert resolved is not None, f"{raw} not in the taxonomy"
-        # Identity on the current wire: this ticket changes no stored value.
+        assert raw == resolved.value, f"{raw} is not the canonical code of {resolved}"
+        # The wire carries exactly what the emitter printed.
         assert normalize_code(raw) == raw, f"{raw} would move on the wire"
+
+
+def test_publication_fence_codes_are_registered_and_terminal() -> None:
+    """T-V1-019's fence codes are in the registry (T-V1-049 scope note a)."""
+    for raw in ("STALE_GENERATION", "DOCUMENT_DELETED", "GENERATION_GONE"):
+        code = canonical_code(raw)
+        assert code is not None, f"{raw} not in the taxonomy"
+        spec = ERROR_REGISTRY[code]
+        assert spec.retryable is False, f"{raw} must never be retried"
+        assert spec.wire_value == raw, f"{raw} wire value moved"
+        message = spec.message.lower()
+        for banned in ("http://", "https://", "localhost", "127.0.0.1", "traceback", "select "):
+            assert banned not in message, f"{raw} message leaks internals"
+        assert code in JOB_STATUS_REASON_CODES[JobStatus.FAILED], f"{raw} not a failure code"
 
 
 def test_typed_ingestion_errors_resolve_through_the_registry() -> None:
     source = (REPO_ROOT / "packages" / "ingestion" / "normalize.py").read_text(
         encoding="utf-8"
     )
-    typed = set(re.findall(r'code = "([a-z_]+)"', source))
+    typed = set(re.findall(r'code = "([A-Za-z_]+)"', source))
     assert typed, "expected typed IngestionError codes in normalize.py"
+    lowercase = sorted(raw for raw in typed if raw != raw.upper())
+    assert lowercase == [], f"legacy lowercase typed codes remain: {lowercase}"
     for raw in typed:
         assert canonical_code(raw) is not None, f"{raw} not in the taxonomy"
 

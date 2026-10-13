@@ -354,7 +354,7 @@ async def test_failed_item_is_visible_with_a_canonical_code_and_the_run_continue
     report = await consumer.run_sync(_folder_config(tmp_path))
 
     assert (report.failed, report.created) == (1, 1)
-    assert report.errors == ["a.md: ingestion_error"]
+    assert report.errors == ["a.md: INGESTION_ERROR"]
     outcomes = await store.outcomes(
         SourceIdentity.from_config(_folder_config(tmp_path)), report.generation
     )

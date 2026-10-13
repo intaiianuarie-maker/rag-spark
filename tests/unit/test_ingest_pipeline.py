@@ -29,7 +29,7 @@ def test_element_limit_refuses_past_n() -> None:
     ensure_element_limit([_element() for _ in range(5)], 5)
     with pytest.raises(IngestPipelineError) as excinfo:
         ensure_element_limit([_element() for _ in range(6)], 5)
-    assert excinfo.value.code == "too_many_elements"
+    assert excinfo.value.code == "TOO_MANY_ELEMENTS"
     assert excinfo.value.retryable is False
 
 

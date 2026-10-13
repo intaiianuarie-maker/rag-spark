@@ -27,9 +27,15 @@ _NUMBERING_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\.?\s+")
 
 
 class IngestionError(Exception):
-    """Base class for typed ingestion failures (never a raw parser exception)."""
+    """Base class for typed ingestion failures (never a raw parser exception).
 
-    code = "ingestion_error"
+    ``code`` is a canonical ``ReasonCode`` value (T-V1-049 uppercased these
+    legacy lowercase literals); the worker persists it through
+    ``core.errors.normalize_code``. The pre-migration lowercase string still
+    resolves via ``core.errors.LEGACY_ALIASES``.
+    """
+
+    code = "INGESTION_ERROR"
 
     def __init__(self, message: str) -> None:
         super().__init__(message)
@@ -37,19 +43,19 @@ class IngestionError(Exception):
 
 
 class UnsupportedMimeTypeError(IngestionError):
-    code = "unsupported_mime_type"
+    code = "UNSUPPORTED_MIME_TYPE"
 
 
 class EmptyDocumentError(IngestionError):
-    code = "empty_document"
+    code = "EMPTY_DOCUMENT"
 
 
 class DocumentTooLargeError(IngestionError):
-    code = "document_too_large"
+    code = "DOCUMENT_TOO_LARGE"
 
 
 class ParseError(IngestionError):
-    code = "parse_error"
+    code = "PARSE_ERROR"
 
 
 def validate_input(

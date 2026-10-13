@@ -363,7 +363,7 @@ async def test_retry_exhaustion_is_visible_as_terminal_failure(
     await ingest_worker.record_failure(
         _Session(),  # type: ignore[arg-type]
         job_id,
-        IngestPipelineError("parse_failed", "boom", retryable=True),
+        IngestPipelineError("PARSE_FAILED", "boom", retryable=True),
     )
 
     assert job.status == "failed"

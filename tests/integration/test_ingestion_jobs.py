@@ -211,7 +211,8 @@ def test_unsupported_mime_fails_without_retry(client) -> None:
 
     status = _job_status(client, token, workspace, job_id)
     assert status["status"] == "failed"
-    assert status["error_code"] == "unsupported_mime_type"
+    # T-V1-049: the ingestion wire moved to the canonical UPPER_SNAKE_CASE code.
+    assert status["error_code"] == "UNSUPPORTED_MIME_TYPE"
     assert status["attempts"] == 1
 
 
@@ -231,7 +232,7 @@ def test_poison_message_is_capped_after_retries(client, monkeypatch: pytest.Monk
     status = _job_status(client, token, workspace, job_id)
     assert status["status"] == "failed"
     assert status["attempts"] == 3
-    assert status["error_code"] == "parse_failed"
+    assert status["error_code"] == "PARSE_FAILED"
 
 
 def test_upload_requires_authentication(client) -> None:
@@ -249,6 +250,10 @@ def test_upload_rejects_oversize_while_streaming(client, monkeypatch: pytest.Mon
     workspace = _create_workspace(client, token)
     response = _upload(client, token, workspace, "big.txt", b"x" * 4096, "text/plain")
     assert response.status_code == 413
+    # LEGACY lowercase literal, emitted inline by apps/api/app/documents/upload.py
+    # (API layer, outside T-V1-049's allowlist). The worker/job path for the same
+    # code now emits the canonical "DOCUMENT_TOO_LARGE"; this envelope is the
+    # documented residue — see the wire policy in packages/core/errors.py.
     assert response.json()["detail"]["error"] == "document_too_large"
 
 
@@ -259,4 +264,7 @@ def test_upload_rejects_unknown_charset(client) -> None:
         client, token, workspace, "x.txt", b"hello", "text/plain", charset="not-a-codec"
     )
     assert response.status_code == 400
+    # LEGACY lowercase literal from upload.py (API layer, outside T-V1-049's
+    # allowlist); INVALID_CHARSET has no worker-side emitter, so its registry
+    # entry is the only place the uppercase code lives. Documented residue.
     assert response.json()["detail"]["error"] == "invalid_charset"
