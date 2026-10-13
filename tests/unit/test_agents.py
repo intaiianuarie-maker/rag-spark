@@ -4167,3 +4167,111 @@ def test_gap_uses_production_grounder_one_grounder_rule() -> None:
     analyzer = GapAnalyzer(chunk_source=source)
     assert type(analyzer.grounder).__name__ == "ExtractiveGrounder"
 
+
+# ======================================================================================
+# T-V3-019 — Contradictions as candidates + outline (conflicting evidence stays visible)
+# ======================================================================================
+
+from agents.contradictions import (  # noqa: E402
+    CONFIDENCE_HIGH,
+    CONFIDENCE_MEDIUM,
+    ContradictionDetector,
+)
+
+
+def _contra_evidence(statement: str, chunk_id: str, content: str) -> tuple[EvidenceRecord, str]:
+    rec = EvidenceRecord(
+        run_id="run-contra",
+        trace_id="trace-1",
+        workspace_id="ws-1",
+        statement=statement,
+        citations=[Citation(document_id="doc-1", chunk_id=chunk_id, quote=statement, source_hash="h")],  # noqa: E501
+        chunk_ids=[chunk_id],
+        verdict="SUPPORTED",
+        document_id="doc-1",
+        chunk_id=chunk_id,
+        source_hash="h",
+    )
+    return rec, content
+
+
+@pytest.mark.unit
+def test_contradiction_detection_pair_both_survive_no_dropped_loser() -> None:
+    """Dropped losing sides: 0 — adversarial pair both survive."""
+    async def _run() -> None:
+        q = "What is the budget?"
+        content_a = "The budget is 900 dollars."
+        content_b = "The budget is 1900 dollars."
+        ev_a, _ = _contra_evidence("The budget is 900 dollars.", "chk-a", content_a)
+        ev_b, _ = _contra_evidence("The budget is 1900 dollars.", "chk-b", content_b)
+        source = _ChunkSource2({"chk-a": content_a, "chk-b": content_b})
+        detector = ContradictionDetector(chunk_source=source)
+        report = await detector.detect([q], {q: [ev_a, ev_b]})
+        assert len(report.contradictions) == 1
+        c = report.contradictions[0]
+        assert c.claim_a == "The budget is 900 dollars."
+        assert c.claim_b == "The budget is 1900 dollars."
+        # Both sides kept as candidates with provenance
+        assert len(report.candidates) == 2
+        assert {cand.evidence_id for cand in report.candidates} == {ev_a.id, ev_b.id}
+        assert {cand.chunk_ids[0] for cand in report.candidates} == {"chk-a", "chk-b"}
+        # Outline carries both sides with chunk ids — visible disagreement
+        assert len(report.outline_sections) == 1
+        assert "chk-a" in report.outline_sections[0] and "chk-b" in report.outline_sections[0]
+        assert "900" in report.outline_sections[0] and "1900" in report.outline_sections[0]
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_contradicted_claims_capped_at_medium_with_limitation() -> None:
+    """Contradicted claims above MEDIUM: 0 — capped with limitation naming conflict."""
+    async def _run() -> None:
+        q = "What is the budget?"
+        content_a = "The budget is 900 dollars."
+        content_b = "The budget is 1900 dollars."
+        ev_a, _ = _contra_evidence("The budget is 900 dollars.", "chk-a", content_a)
+        ev_b, _ = _contra_evidence("The budget is 1900 dollars.", "chk-b", content_b)
+        source = _ChunkSource2({"chk-a": content_a, "chk-b": content_b})
+        detector = ContradictionDetector(chunk_source=source)
+        report = await detector.detect([q], {q: [ev_a, ev_b]})
+        for cand in report.candidates:
+            assert cand.confidence != CONFIDENCE_HIGH, f"contradicted claim above MEDIUM: {cand.confidence}"  # noqa: E501
+            assert cand.confidence == CONFIDENCE_MEDIUM
+            assert cand.limitations, "missing limitation"
+            assert "Conflicting evidence" in cand.limitations[0] or "conflict" in cand.limitations[0].lower()  # noqa: E501
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_contradiction_no_fabrication_when_no_conflict() -> None:
+    """No contradictions when evidence agrees — no false positives."""
+    async def _run() -> None:
+        q = "What is the budget?"
+        content = "The budget is 900 dollars."
+        ev_a, _ = _contra_evidence("The budget is 900 dollars.", "chk-a", content)
+        ev_b, _ = _contra_evidence("The budget is 900 dollars.", "chk-a2", content)
+        source = _ChunkSource2({"chk-a": content, "chk-a2": content})
+        detector = ContradictionDetector(chunk_source=source)
+        report = await detector.detect([q], {q: [ev_a, ev_b]})
+        # Identical statements -> not contradictory
+        assert len(report.contradictions) == 0
+        assert len(report.outline_sections) == 0
+
+    asyncio.run(_run())
+
+
+@pytest.mark.unit
+def test_contradiction_uses_production_grounder_one_grounder_rule() -> None:
+    """One-grounder rule — reuses verifier seam."""
+    import inspect
+
+    from agents import contradictions as cm
+
+    src = inspect.getsource(cm)
+    assert "from answer.verification import ExtractiveGrounder" in src
+    source = _ChunkSource2({"chk-1": "The budget is 900 dollars."})
+    detector = ContradictionDetector(chunk_source=source)
+    assert type(detector.grounder).__name__ == "ExtractiveGrounder"
+
