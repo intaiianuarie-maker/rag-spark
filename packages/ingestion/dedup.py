@@ -1,9 +1,15 @@
 """Checksum dedup, immutable versions, delete tombstones (M2-001d).
 
-Postgres is fully handled here. Vector (Qdrant) and full-text (FTS) purge land
-in M3-001a behind the store interfaces; this module exposes the registration
-seam and reports which stores were purged. Original bytes remain in
-``document_versions.content`` until PD-005 moves them to MinIO.
+Postgres is fully handled here. Vector (Qdrant), full-text (FTS) and the
+document originals themselves are purged behind the store interfaces; this
+module exposes the registration seam and reports which stores were purged.
+
+Since T-V1-039 the original bytes live in object storage
+(``storage.originals``, keyed ``originals/{workspace}/{document}/{version}``)
+and Postgres keeps only ``storage_key`` + ``checksum`` — so a purge that
+tombstones rows and leaves the objects behind is a *logical* delete, not a
+delete: the original stays retrievable. T-V1-055 deletes them here too, as the
+``originals`` entry of the same per-store report.
 
 T-V1-017: **supersession** (version replace) cleans the superseded version's
 FTS rows and Qdrant points too, not only its Postgres chunk rows — otherwise a
@@ -58,6 +64,65 @@ def register_store_purger(name: str, purger: StorePurger) -> None:
 
 def registered_stores() -> tuple[str, ...]:
     return tuple(sorted(_STORE_PURGERS))
+
+
+def originals_prefix(workspace_id: uuid.UUID, document_id: uuid.UUID) -> str:
+    """The prefix that holds exactly one document's originals (T-V1-055).
+
+    ``storage.originals`` keys every original ``originals/{workspace}/
+    {document}/{version}…``, so this prefix is this document's objects and
+    nobody else's — the property that makes a prefix sweep safe, and what
+    catches an original whose key Postgres never recorded (a version row that
+    predates ``storage_key``).
+    """
+    from storage.originals import ORIGINALS_PREFIX
+
+    return f"{ORIGINALS_PREFIX}/{workspace_id}/{document_id}/"
+
+
+async def delete_document_originals(
+    *,
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    storage_keys: Sequence[str],
+) -> int:
+    """Delete a document's originals from object storage; return how many went.
+
+    T-V1-055, closing T-039's risk 1: a purge that leaves the bytes in the
+    store is a *logical* delete, not a delete — after it the original is still
+    retrievable, which is a privacy/retention hole rather than a latency one.
+
+    Two passes, because neither list alone is complete:
+
+    * every ``storage_key`` the version rows record — exact, and complete no
+      matter how many versions the document has;
+    * a sweep of :func:`originals_prefix` — the safety net for a legacy version
+      row written before ``storage_key`` existed (its object can only be found
+      by listing, since the key's extension came from a filename no longer
+      recorded anywhere) and for any object under a key Postgres no longer
+      tracks.
+
+    An absent object is **not** a failure: an original that was never written
+    (the ``EMPTY_DOCUMENT`` row without a key) has nothing to delete and the
+    adapter simply reports ``False``. A raised :class:`~storage.interfaces.StorageError`
+    is the only way this function says "the bytes may still be there", and the
+    caller reports it per-store like any other store failure — the message
+    never reaches a user, only the per-store report and the log.
+    """
+    from storage.originals import get_adapter, originals_bucket
+
+    store = get_adapter()
+    bucket = originals_bucket()
+    targets = [key for key in dict.fromkeys(storage_keys) if key]
+    listed = await store.list_objects(
+        bucket, prefix=originals_prefix(workspace_id, document_id)
+    )
+    targets.extend(obj.key for obj in listed if obj.key not in targets)
+    removed = 0
+    for key in targets:
+        if await store.delete_object(bucket, key):
+            removed += 1
+    return removed
 
 
 async def find_document_by_filename(
@@ -259,7 +324,20 @@ async def _queue_cleanup_retry(job: IngestionJob) -> None:
 async def purge_document(
     session: AsyncSession, *, workspace_id: uuid.UUID, document_id: uuid.UUID
 ) -> dict[str, bool]:
-    """Tombstone a document and remove its rows; returns a per-store report."""
+    """Tombstone a document and remove its rows; returns a per-store report.
+
+    T-V1-055: a purged document's **originals** leave the object store too
+    (T-039's open hole — the tombstone alone left the bytes retrievable). It is
+    registered as the ``originals`` store purger, so it lands in the same
+    per-store report and the same failure path as fts/qdrant/graph: a failed
+    delete is ``"originals": False``, which the caller surfaces as 207 — never
+    a false 204.
+
+    Ordering is deliberate: the object delete runs *after* the tombstone
+    commits, so a commit that fails can never destroy bytes for a document that
+    is still live. The failure mode stays "tombstoned, bytes kept" instead of
+    becoming "live document, bytes gone".
+    """
     document = await session.get(Document, document_id)
     if document is None or document.workspace_id != workspace_id:
         return {}
@@ -273,12 +351,60 @@ async def purge_document(
         .scalars()
         .all()
     )
+    # T-V1-055: which objects this document's originals live under, read through
+    # the same session this module already owns (and in the same transaction as
+    # the chunk rows about to go), so the delete can never be driven by a key
+    # list that disagrees with what was just tombstoned.
+    recorded_keys = (
+        (
+            await session.execute(
+                select(DocumentVersion.storage_key).where(
+                    DocumentVersion.document_id == document_id,
+                    DocumentVersion.storage_key.is_not(None),
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    original_keys = [key for key in recorded_keys if key]
     if version_ids:
         await session.execute(delete(ChunkRow).where(ChunkRow.document_version_id.in_(version_ids)))
     document.deleted_at = datetime.now(UTC)
     await session.commit()
 
     report: dict[str, bool] = {"postgres": True}
+
+    # T-V1-055 (T-039 risk 1): the originals leave the store too. Registered
+    # fresh on every call with the keys *this* call read — never a stale closure
+    # left over from an earlier document — and unregistered again when there is
+    # nothing to delete, exactly like the GRAPH_MODE purger below. A purge that
+    # cannot delete its objects is reported per-store by the same loop that
+    # already reports fts/qdrant/graph, so no new failure shape is invented.
+    if version_ids:
+        async def _purge_originals(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+            removed = await delete_document_originals(
+                workspace_id=ws_id,
+                document_id=doc_id,
+                storage_keys=original_keys,
+            )
+            logger.info(
+                "document_originals_purged",
+                extra={
+                    "event": "document_originals_purged",
+                    "workspace_id": str(ws_id),
+                    "document_id": str(doc_id),
+                    "objects_removed": removed,
+                    "storage_keys": len(original_keys),
+                },
+            )
+
+        register_store_purger("originals", _purge_originals)
+    else:
+        # No version rows: nothing in the store can belong to this document, and
+        # a purger left registered by an earlier purge must not fire here.
+        _STORE_PURGERS.pop("originals", None)
+
     if not _STORE_PURGERS:
         # Default lazy registration of real store purgers (TASK-Q3 / M3-001a)
         try:
