@@ -375,36 +375,6 @@ async def purge_document(
 
     report: dict[str, bool] = {"postgres": True}
 
-    # T-V1-055 (T-039 risk 1): the originals leave the store too. Registered
-    # fresh on every call with the keys *this* call read — never a stale closure
-    # left over from an earlier document — and unregistered again when there is
-    # nothing to delete, exactly like the GRAPH_MODE purger below. A purge that
-    # cannot delete its objects is reported per-store by the same loop that
-    # already reports fts/qdrant/graph, so no new failure shape is invented.
-    if version_ids:
-        async def _purge_originals(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
-            removed = await delete_document_originals(
-                workspace_id=ws_id,
-                document_id=doc_id,
-                storage_keys=original_keys,
-            )
-            logger.info(
-                "document_originals_purged",
-                extra={
-                    "event": "document_originals_purged",
-                    "workspace_id": str(ws_id),
-                    "document_id": str(doc_id),
-                    "objects_removed": removed,
-                    "storage_keys": len(original_keys),
-                },
-            )
-
-        register_store_purger("originals", _purge_originals)
-    else:
-        # No version rows: nothing in the store can belong to this document, and
-        # a purger left registered by an earlier purge must not fire here.
-        _STORE_PURGERS.pop("originals", None)
-
     if not _STORE_PURGERS:
         # Default lazy registration of real store purgers (TASK-Q3 / M3-001a)
         try:
@@ -474,6 +444,45 @@ async def purge_document(
             },
         )
         report.setdefault("graph", False)
+
+    # T-V1-055 (T-039 risk 1) + T-V1-058: the originals leave the store too.
+    # Registration **order is load-bearing**: this block must come AFTER the
+    # default fts/qdrant block above, because that block is guarded by
+    # ``if not _STORE_PURGERS`` — registering any purger before it leaves the
+    # registry non-empty and the default stores are then never registered, so
+    # a purge would report ``{"postgres": True, "originals": True}`` (a clean
+    # 204) while its lexical and vector rows survive. That is exactly the
+    # regression T-V1-058 caught, one line above the comment you are reading.
+    #
+    # Otherwise as before: registered fresh on every call with the keys *this*
+    # call read — never a stale closure left over from an earlier document —
+    # and unregistered again when there is nothing to delete, exactly like the
+    # GRAPH_MODE toggle above. A purge that cannot delete its objects is
+    # reported per-store by the same loop below that already reports
+    # fts/qdrant/graph, so no new failure shape is invented.
+    if version_ids:
+        async def _purge_originals(ws_id: uuid.UUID, doc_id: uuid.UUID) -> None:
+            removed = await delete_document_originals(
+                workspace_id=ws_id,
+                document_id=doc_id,
+                storage_keys=original_keys,
+            )
+            logger.info(
+                "document_originals_purged",
+                extra={
+                    "event": "document_originals_purged",
+                    "workspace_id": str(ws_id),
+                    "document_id": str(doc_id),
+                    "objects_removed": removed,
+                    "storage_keys": len(original_keys),
+                },
+            )
+
+        register_store_purger("originals", _purge_originals)
+    else:
+        # No version rows: nothing in the store can belong to this document, and
+        # a purger left registered by an earlier purge must not fire here.
+        _STORE_PURGERS.pop("originals", None)
 
     for name, purger in _STORE_PURGERS.items():
         try:
