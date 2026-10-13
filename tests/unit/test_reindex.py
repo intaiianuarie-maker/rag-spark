@@ -16,6 +16,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import pytest
+from retrieval.adapters.infinity_embed import EmbeddingProviderError
 from retrieval.adapters.qdrant_store import VectorStoreError
 
 from scripts import reindex_all_chunks as reindex_mod
@@ -23,6 +24,11 @@ from scripts.reindex_all_chunks import ReindexRefused, reindex, validate_vector
 
 #: Dimensions the fake provider reports and the fake index is built at.
 _DIM = 4
+
+
+async def _no_sleep(_seconds: float) -> None:
+    """Retries back off instantly in tests; the wait is not what is under test."""
+    return None
 
 
 # --------------------------------------------------------------------------
@@ -407,3 +413,104 @@ async def test_replacement_must_differ_from_the_live_collection(
     # Refused before the provider probe or any inspection.
     assert harness.inspected == []
     assert harness.stores == []
+
+
+# --------------------------------------------------------------------------
+# Part 3 — T-V1-060: one slow provider batch must not kill a 40-minute rebuild
+# --------------------------------------------------------------------------
+class _FlakyProvider:
+    """Fails the first ``fail_times`` calls with the provider's own error type."""
+
+    model_name = "BAAI/bge-m3"
+    revision = "BAAI/bge-m3"
+    dimension = _DIM
+    base_url = "http://infinity.test"
+
+    def __init__(self, fail_times: int) -> None:
+        self.fail_times = fail_times
+        self.calls = 0
+
+    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        self.calls += 1
+        if self.calls <= self.fail_times:
+            raise EmbeddingProviderError("infinity /embeddings request failed: ReadTimeout:")
+        return [[0.25] * _DIM for _ in texts]
+
+
+async def test_a_slow_batch_is_retried_and_the_run_finishes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """T-V1-060: batch 11 of a 75-batch rebuild timed out at 120 s and aborted.
+
+    The provider kept serving 200s immediately afterwards, so that batch was slow,
+    not hung, and its texts were ordinary (median 30 chars) — so the response is a
+    retry of *that* batch, never a split and never a bigger global ceiling.
+    """
+    delays: list[float] = []
+
+    async def instant_sleep(seconds: float) -> None:
+        delays.append(seconds)
+
+    monkeypatch.setattr(reindex_mod.asyncio, "sleep", instant_sleep)
+    provider = _FlakyProvider(fail_times=1)
+
+    vectors = await reindex_mod.embed_batch_with_retry(provider, ["a", "b"])  # type: ignore[arg-type]
+
+    assert vectors == [[0.25] * _DIM, [0.25] * _DIM]
+    assert provider.calls == 2, "one failure, one retry — never a silent success"
+    assert delays == [5.0], "one bounded backoff, not an unbounded spin"
+
+
+async def test_a_persistently_slow_batch_fails_loudly_and_stops_the_run(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exhausting the retries raises: a half-built replacement is never switched."""
+    monkeypatch.setattr(reindex_mod.asyncio, "sleep", _no_sleep)
+    provider = _FlakyProvider(fail_times=99)
+
+    with pytest.raises(EmbeddingProviderError, match="ReadTimeout"):
+        await reindex_mod.embed_batch_with_retry(provider, ["a"])  # type: ignore[arg-type]
+
+    assert provider.calls == reindex_mod._EMBED_BATCH_ATTEMPTS
+
+
+async def test_the_retry_budget_is_bounded_and_the_backoff_grows() -> None:
+    """The ceiling is a constant, not an open-ended retry-until-success."""
+    assert reindex_mod._EMBED_BATCH_ATTEMPTS == 3
+    assert reindex_mod._EMBED_BATCH_BACKOFF_SECONDS == (5.0, 10.0)
+
+
+async def test_a_failing_batch_prevents_the_switch(
+    harness: SimpleNamespace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """End-to-end: a provider that never answers leaves the live name alone.
+
+    This is the T-V1-060 failure mode at run level — the switch is unreachable
+    once the retries are spent, so ``knowledge`` keeps serving the old index
+    instead of being repointed at a half-built replacement.
+    """
+    monkeypatch.setattr(reindex_mod.asyncio, "sleep", _no_sleep)
+
+    class DeadProvider(_ProviderBase):
+        """Serves the dimension probe, then never answers a batch again."""
+
+        calls = 0
+
+        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+            type(self).calls += 1
+            if type(self).calls == 1:  # the probe — must still succeed
+                return [[0.25] * _DIM for _ in texts]
+            raise EmbeddingProviderError("infinity /embeddings request failed: ReadTimeout:")
+
+    monkeypatch.setattr(reindex_mod, "InfinityEmbeddingProvider", DeadProvider)
+
+    with pytest.raises(EmbeddingProviderError):
+        await reindex(collection="knowledge", replacement="knowledge_v2", batch_size=2)
+
+    # probe + one exhausted batch of retries, and nothing else.
+    assert DeadProvider.calls == 1 + reindex_mod._EMBED_BATCH_ATTEMPTS
+
+    for store in harness.stores:
+        assert all(call[0] != "promote_replacement" for call in store.calls), (
+            "a failed rebuild must never reach the switch — knowledge keeps serving"
+        )

@@ -65,13 +65,17 @@ import asyncio
 import logging
 import math
 import os
+from collections.abc import Sequence
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 from core.config import get_settings
 from ingestion.persistence import get_session_factory
-from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+from retrieval.adapters.infinity_embed import (
+    EmbeddingProviderError,
+    InfinityEmbeddingProvider,
+)
 from retrieval.adapters.pg_fts import PostgresLexicalStore
 from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreError
 from retrieval.interfaces import VectorRecord
@@ -109,12 +113,64 @@ async def probe_provider(provider: InfinityEmbeddingProvider) -> tuple[int, int]
     smaller than the configured dimension and padded by the adapter, so the
     non-zero count is reported alongside to expose the real served size).
     """
-    vectors = await provider.embed_documents([_DIMENSION_PROBE])
+    # Same bounded retry as a batch: the probe is one more POST /embeddings, and
+    # a transient timeout on it must not abort the run before it starts.
+    vectors = await embed_batch_with_retry(provider, [_DIMENSION_PROBE])
     if len(vectors) != 1:
         raise RuntimeError(f"provider probe returned {len(vectors)} vectors for 1 input")
     vector = vectors[0]
     validate_vector(vector, provider.dimension)
     return len(vector), sum(1 for x in vector if x != 0.0)
+
+
+#: One batch is one synchronous ``POST /embeddings``. T-V1-060 measured the tail:
+#: 32 ordinary chunk texts completed in 9-30 s for 11 consecutive batches, then one
+#: of the same shape (median 30 chars, longest 1279 — the corpus maximum is 1933,
+#: nothing oversized) went unanswered past the adapter's 120 s client timeout and
+#: killed a 40-minute rebuild at batch 11. The server kept answering 200s for the
+#: next requests, so that batch was slow, not hung, and no text needed splitting —
+#: the failure is provider latency tail, and the honest response is to retry *this
+#: batch* (embedding is pure: no store write happens until it returns), not to
+#: raise the ceiling for every call and not to fragment the corpus.
+_EMBED_BATCH_ATTEMPTS = 3
+#: Backoff between retries of one batch (seconds): 5 s, 10 s.
+_EMBED_BATCH_BACKOFF_SECONDS = (5.0, 10.0)
+
+
+async def embed_batch_with_retry(
+    provider: InfinityEmbeddingProvider, texts: Sequence[str]
+) -> list[list[float]]:
+    """Embed one batch, retrying a slow provider a bounded number of times.
+
+    Raises :class:`EmbeddingProviderError` when every attempt fails, so the run
+    stops loudly with the replacement half-built — which ``promote_replacement``
+    then refuses to switch. Retrying only covers the provider call: a bad vector
+    or a store failure is still a hard error on the first pass.
+    """
+    last: EmbeddingProviderError | None = None
+    for attempt in range(1, _EMBED_BATCH_ATTEMPTS + 1):
+        try:
+            return await provider.embed_documents(list(texts))
+        except EmbeddingProviderError as exc:
+            last = exc
+            if attempt == _EMBED_BATCH_ATTEMPTS:
+                break
+            delay = _EMBED_BATCH_BACKOFF_SECONDS[
+                min(attempt, len(_EMBED_BATCH_BACKOFF_SECONDS)) - 1
+            ]
+            logger.warning(
+                "embed_batch_retry",
+                extra={
+                    "event": "embed_batch_retry",
+                    "attempt": attempt,
+                    "of": _EMBED_BATCH_ATTEMPTS,
+                    "delay": delay,
+                    "texts": len(texts),
+                    "error": str(exc),
+                },
+            )
+            await asyncio.sleep(delay)
+    raise last if last is not None else EmbeddingProviderError("embedding failed")
 
 
 def provider_identity(provider: InfinityEmbeddingProvider, observed_dim: int) -> dict[str, Any]:
@@ -427,7 +483,7 @@ async def reindex(
             texts = [r.text for r in batch_rows]
 
             logger.info("Generating embeddings for batch %d-%d...", i, i + len(batch_rows))
-            vectors = await embed_provider.embed_documents(texts)
+            vectors = await embed_batch_with_retry(embed_provider, texts)
             if len(vectors) != len(batch_rows):
                 raise RuntimeError(
                     f"Embedding count mismatch: expected {len(batch_rows)}, got {len(vectors)}"
