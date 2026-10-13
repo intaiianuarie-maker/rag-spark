@@ -2226,3 +2226,135 @@ PROGRESS ROW — VERDICT: **2/2 GREEN.** `test_pipeline_reaches_ready_with_chunk
 PROGRESS ROW — NOT VACUOUS: `knowledge` went **2035 → 2039 = exactly +4** (2 runs × 2 tests × 1 point), and points are written only after parse → embed → store succeeds, so both tests drove real bge-m3 embeddings into Qdrant rather than passing by skipping the work. Log-scraping would have been the wrong proof (no `ingest_job_ready` lines captured) — the corpus delta is the stronger artifact. `/ready` before the run: ready/infinity/llm_gateway all true.
 PROGRESS ROW — RISKS: (a) debris disclosed exactly as in T-068, **+4 points** in `knowledge`, **+5 cumulative** since the T-061b census — inherent, since a passing ingest necessarily stores; nothing deleted or cleaned; (b) green ≠ "good tests" — this establishes the blocker is gone and the live ingest→embed→store path works, it does not re-audit either test's assertions; (c) two runs, one sample each — distinguishes healed from still-red, not a flake study; (d) the rest of test_ingestion_jobs.py remains unverified by me (the T-049-era file record was 5 passed / 3 failed; I have now accounted for all 3); (e) dev1's concurrent T-069 read-only forensics caused no interference; (f) foreign churn — 24 dirty paths, start and end snapshots **byte-identical**, zero drift.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-036 readiness probe (opening slice, READ-ONLY) — code2
+
+TASK: T-V1-036 readiness probe. **Executed nothing** — no suites, no benchmarks, no services, no embeds, not even `--collect-only`. Every finding is from reading files. Start HEAD `a4044d8` → end HEAD `a4044d8` (**UNMOVED**). Allowed: this row only; **no other file touched**.
+
+### VERDICT: **NOT RUNNABLE TODAY — 4 blocking flags, 0 fixed.** The record cannot honestly be produced as the card specifies until F1–F3 are resolved, and F6 must be carried as a disclosure regardless.
+
+### (1) THE RUNBOOK — card + trace sources
+
+Card: `../rag-fork-solution/tasks/MICRO-TICKETS-V1.md:536` (`### T-V1-036`, **State: QUEUED**), **Allowed files: test/infra only**. Three steps: (1) publish exact commit, toolchain/dep versions, migrations, service/model versions, browser build, index generation; (2) run on **disposable services + browser** with complete logs across seven named categories — upload→answer, citation-passage, multilingual, update/delete visibility, queue recovery, binary uploads, routing — moving service-dependent nominal units to "an honest service category", replacing sync placeholders, keeping skip/xfail/blocked counts with per-item rationale; (3) external benchmark by the benchmark owner: RP-02 frozen unbiased inputs, RP-01 actual-output report with **paired bootstrap**.
+
+**Thresholds (verbatim from the card):** grounded **≥90%**, factual **≥98%**, citations **100%**, **Recall@20 ≥95%**, abstention **≥95% per slice**. Metrics: required checks executed (not skipped) **100%**; gate targets per slice **all met**. Success: "missing deps recorded **BLOCKED, never PASS**".
+
+**Suite inventory in tree** (read by grepping test names, not by collecting):
+
+| card category | file | tests |
+|---|---|---|
+| golden path / ACL / delete / citation-integrity / multilingual | `tests/integration/test_acceptance_probes.py` | **6** (`test_acceptance_1..6`, incl. `test_acceptance_6_cross_language_translation_abstains`) |
+| citation-passage | `test_ask_route.py` (4) · `test_originals_object_store.py` (5) | object-store round-trip + `postgres_holds_no_byte_columns` |
+| update/delete visibility | `test_knowledge_reads.py` (10) | deleted-excluded + detail 404 + version/job reads |
+| queue recovery | `test_queue_claim_ack.py` (7) · `test_crash_recovery.py` · `test_worker_liveness_live.py` | |
+| routing | `test_ask_route.py` · `test_workspaces*.py` | |
+| browser | `test_web_e2e.py` (2) | **opt-in, self-skips** (see F4) |
+| landed matrix | `test_landed_probe_matrix.py` (2) → `tests/fixtures/scripts/m004_probe_checks.py` (11 cases, file present, 7181 B) | |
+
+**No run order exists in the tree.** No script sequences these; the only entry points are `make test` (full suite) / `make test-unit` / `make test-integration` (`Makefile:71-77`). A runbook must therefore be *authored* for this ticket — that is itself part of the work.
+
+**Refinement of my T-061 FLAG-5:** the doc I reported missing, `V1-Q8-Q9-BENCHMARK.md`, **does exist** — at `../rag-fork-solution/tasks/V1-Q8-Q9-BENCHMARK.md`. My earlier grep was scoped to the repo, not the fork tree. Correction recorded.
+
+### (2) "DISPOSABLE SERVICES" — the mechanism does not exist
+
+There is **one** stack and no isolation boundary:
+
+- `docker-compose.yml` — 7 services (postgres, redis, qdrant, seaweedfs, api, worker, web, infinity-rerank) and **no `profiles:` block at all**.
+- **No testcontainers, no separate DB name, no per-run schema.** The only "disposable" string in `tests/` is `test_crash_recovery.py:1` (a docstring describing the shared services).
+- Tests run against the **live** `knowledge` collection: **20 `collection="knowledge"` call sites** across the suites, and `Makefile:22` `down:` explicitly **keeps volumes** — so data survives `up`/`down` cycles. Not disposable by any definition.
+- The isolation that *does* exist is in-process only: a per-module unique `INGEST_QUEUE_PREFIX` (T-V1-057 `_queue_namespace`) and per-test uuid users/workspaces (`tests/conftest.py`).
+
+Files confirmed present: `docker-compose.yml`, `Makefile`, `tests/conftest.py`, `tests/integration/test_crash_recovery.py`. So the card's step 2 is executable *as written against the shared stack*, but "disposable" must be either built (test/infra is in the card's allowed scope) or restated in the record. **Not built here.**
+
+### (3) EXTERNAL BENCHMARK INPUTS (RP-02) — what exists, what is missing
+
+| required by RP-02 | in tree right now | status |
+|---|---|---|
+| 50–100 dev cases | `evals/q8_eval_slices.jsonl`, tracked, **50 records** (en/ro/pt/tables/multi × 10) | present, at the **bottom** of the band |
+| EN/RO/PT | slices `en`, `ro`, `pt` × 10 | present |
+| tables + multi-source | slices `tables`, `multi` × 10 | present |
+| **unanswerables** | `SLICES = ("en","ro","pt","tables","multi")` — **no unanswerables**; `grep -rn "unanswerable" evals/ tests/` → **zero hits** | **MISSING → F2** |
+| **hash-pinned loader** | `content_sha256` is a per-row fingerprint *derived from* the row (`build_q8_slices.py:46,169`); `graph_dataset_manifest.py:36` has `sha256_file`, but **no manifest pins an expected hash for the slice file**, and `test_benchmark_gate.py:59` only asserts `len(content_sha256) >= 16` | **NOT A PIN → F3** |
+| `evals/golden.jsonl` (named by `TESTING.md:60`) | **2 lines**, EN-only (`en-001`, `en-002`) | stub, not a 50–100-case corpus |
+
+Corpora the slices were built from are **present** — `/root/code/Super Rag/datasets/rag-eval` with all 5 sources (verified in my T-061 probe) — so slices *could* be rebuilt, but rebuilding is not "frozen".
+
+**Harness coverage of the five targets** — `apps/api/app/eval/metrics.py` exposes `compute_recall`, `compute_precision`, `compute_mrr`, `compute_ndcg`, `compute_citation_accuracy`, `score_faithfulness`. Only **two** are wired to a runnable harness (`evals/q9_run_benchmark.py`, T-061a):
+
+| target | harness | status |
+|---|---|---|
+| grounded ≥90% | `score_faithfulness` in Q9 | ✅ measured (lexical proxy, gold-context oracle) |
+| citations 100% | `compute_citation_accuracy` + real `verify_claims` in Q9 | ✅ measured |
+| **factual ≥98%** | none | ❌ **F1** |
+| **Recall@20 ≥95%** | `compute_recall`/`compute_mrr` exist as primitives; **no harness calls them**; the pinned slices carry no gold doc-set for retrieval recall | ❌ **F1** |
+| **abstention ≥95%** | none | ❌ **F1** |
+
+### (4) CURRENTLY-RED BASELINES the record must carry — enumerated from the ledger/my records, **not** from runs
+
+1. **Crash recovery: 6 remaining failures** — `tests/integration/test_crash_recovery.py`. History in my handoff: `7 failed / 1 passed`; T-V1-065 cleared the `parse` seam; "the other 6" are the cross-cycle harness race (T-V1-064 hypothesis, unpinned). These are **harness timeouts, not product assertions.**
+2. **`test_acceptance_probes.py::test_acceptance_5_multilingual_cross_language_retrieval`** — previously red for missing live embeddings. **Embeddings are now CLEAR (bge-m3 live), so this is very likely healed — but it must be re-verified, not assumed.** Do not carry it as a known failure without a run; equally, do not claim it green without one.
+3. **NOT red, correcting my own stale note:** the pair `test_ingest_pipeline.py::test_queue_keys_are_namespaced_per_env` + `test_queue_semantics.py::test_claim_keys_are_namespaced_like_the_rest` was recorded **PASSING** in a full unit+contracts session after T-V1-057 (CODE2-HANDOFF:1167-1168). I am no longer carrying them as known failures.
+4. **T-V1-058** — filed: 1 FTS row survives delete. Not confirmed today.
+5. **dev1's T-069 forensics — pending**, and its findings may add or reshape this list (which is the stated reason this ticket waits).
+6. **Web e2e is SKIPPED, not red** — `test_web_e2e.py:26` self-skips unless `RUN_WEB_E2E=1`. Against the card's "required checks executed (not skipped): 100%" this is a **skip that must be eliminated by setting the env var**, not carried.
+
+### (5) FLAGS THAT WOULD BLOCK THE RUN PHASE — filed, nothing fixed
+
+- **F1 — BLOCKING: 3 of the 5 RP-02 targets have no runnable harness** (factual, Recall@20, abstention). The card's success criterion is "external benchmark report meets **all five** targets with intervals". That is unachievable today without new eval work — which is **product/eval code, outside T-036's "test/infra only" allowlist**, so it needs its own ticket. *This is the largest gap.*
+- **F2 — BLOCKING: the `unanswerables` slice does not exist.** RP-02 names it explicitly; `SLICES` has 5 slices and the term appears nowhere in `evals/` or `tests/`. Without it the abstention target cannot be measured even once a harness exists.
+- **F3 — BLOCKING: the corpus is not hash-pinned.** A fingerprint computed *from* the data is not a pin; nothing detects drift, so "frozen" is an assertion rather than an enforced property. A tiny manifest + one assertion closes this.
+- **F4 — BLOCKING for "100% executed": `web e2e` self-skips** without `RUN_WEB_E2E=1`; and `make down` keeps volumes, so the "disposable services" of step 2 are the shared persistent stack. Either build disposable isolation (test/infra — inside the card's allowlist) or restate step 2 honestly.
+- **F5 — SPEC GAP: the trace sources do not resolve.** `RP-15`, `QF-15`, `RP-02`, `RP-01` appear **only inside `MICRO-TICKETS-V1.md`** — `grep -rln` across all of `rag-fork-solution/` returns that single file. There is no authoritative document defining them, so the five thresholds have no in-tree source of record beyond the card text itself.
+- **F6 — DISCLOSURE THE RECORD MUST CARRY (not fixable here): the corpus cannot evidence retrieval quality.** My T-061b census (museR spot-confirmed) found `knowledge` = 1542 legacy padded + 492 "real" of which **only 102 are authentic bge-m3** and **373 are not embeddings of their text** (median cos −0.0224), and the corpus is **entirely integration-test debris**. Acceptance **#1 and #5 can therefore go green without evidencing real multilingual retrieval quality.** The record must state this or it will be read as more than it is.
+- **F7 — the record needs a runbook that does not exist.** No script sequences the suites; order and the "honest service category" rewrite are authoring work.
+- **F8 — dependency:** T-069 forensics lands first and may reshape F1–F6. Nothing to do but wait.
+
+### VERIFY — commands and outputs (all read-only)
+
+```
+grep -n "T-V1-036" ../rag-fork-solution/tasks/MICRO-TICKETS-V1.md   → :536; card read in full
+grep -nE "profiles:" docker-compose.yml                             → (no output) NO compose profiles
+grep -rn "testcontainers\|disposable" tests/ --include="*.py"      → only test_crash_recovery.py:1 (docstring)
+grep -rhoE 'collection="knowledge"' tests/                          → 20 hits (live collection, no disposable copy)
+grep -n "^SLICES" evals/build_q8_slices.py                          → ("en","ro","pt","tables","multi")
+grep -rn "unanswerable" evals/ tests/                              → zero hits
+grep -n "sha256" evals/build_q8_slices.py evals/graph_dataset_manifest.py → fingerprint + file-hash helper, no expected-value pin
+grep -n "sha256" tests/integration/test_benchmark_gate.py           → :59 len(content_sha256) >= 16  (not a pin)
+wc -l evals/golden.jsonl                                            → 2  (EN-only stub)
+grep -nE "^def " apps/api/app/eval/metrics.py                       → recall/precision/mrr/ndcg/citation/faithfulness present
+grep -rniE "factual|recall@|abstention" evals/ apps/api/app/eval/   → zero hits (no harness uses them)
+ls -l tests/fixtures/scripts/m004_probe_checks.py                   → present, 7181 B, 11 cases
+grep -nE "RUN_WEB_E2E" tests/integration/test_web_e2e.py            → :26 opt-in skip
+grep -rln "RP-15\|QF-15" rag-fork-solution/                          → only MICRO-TICKETS-V1.md
+grep -nE "failed|red" handoffs/MUSER-LOOP-STATE.md                  → crash/T-069 context; census spot-confirmed
+git status --short (start & end)                                    → 24 foreign paths, identical sets
+```
+
+### WHY / REUSED / BUILT
+
+**WHY:** T-036 is the capstone and runs once. The two most expensive ways to discover a blocker are discovering it after a multi-hour acceptance run, and discovering it *twice* — the run produces a red, the fix changes the product, and the record is invalid anyway. Reading first converts an open-ended run into a scoped, mostly-parallelisable one.
+
+**REUSED:** existing suites, `evals/` harnesses, compose/Makefile, and my own prior probes (T-061 readiness for the Q9 harness shape, T-061b for the census, T-068/T-070 for the trio). No new harness, no new fixture, no evaluation run.
+
+**BUILT: nothing.** One handoff row.
+
+### RISKS
+
+- **(a) F1 is a scope problem, not an engineering one.** Building factual/recall/abstention metrics is eval code outside "test/infra only". I am flagging rather than freelancing; the record cannot honestly claim five targets until that is ticketed and done.
+- **(b) The red list in (4) is assembled from records, not runs — by instruction.** Item 2 in particular may well be green now; I have flagged it as *must re-verify* rather than asserting either way. Presenting a record-derived red list as measured would repeat exactly the error I flagged in T-061's provenance gap.
+- **(c) F3 means the 50-record corpus can drift silently** between now and the run, which would invalidate the baseline without any signal.
+- **(d) Nothing here was executed**, so every "exists / does not exist" claim is a file-read fact, and every "will pass / will fail" claim is explicitly *not* made.
+- **(e) FOREIGN CHURN — not mine.** 24 dirty paths at start and end; none opened, staged, edited or reverted. HEAD unmoved; no commit, deploy, restart or compose.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1036_{start,end}_status.txt`):
+- **start** (HEAD `a4044d8`): 24 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `a4044d8`, **UNMOVED**): identical set; **the only file I changed is this handoff row.**
+- 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty. **Zero suites, benchmarks, services or embeds executed.**
+
+PROGRESS ROW — TASK: T-V1-036 readiness probe, opening slice — READ-ONLY, discovery latency removed ahead of the run phase.
+PROGRESS ROW — VERDICT: **NOT RUNNABLE TODAY — 4 blocking flags, 0 fixed.** (F1) **3 of RP-02's 5 targets have no runnable harness — factual, Recall@20, abstention** (`app/eval/metrics.py` has `compute_recall`/`compute_mrr` as primitives but **no harness calls them**, and `grep factual|recall@|abstention` over `evals/`+`app/eval/` returns **zero hits**); grounded + citations are the only two wired, via T-061a. Building the other three is **eval code outside T-036's "test/infra only" allowlist** → needs its own ticket. (F2) **the `unanswerables` slice does not exist** — `SLICES=("en","ro","pt","tables","multi")`, zero grep hits for "unanswerable". (F3) **the corpus is not hash-pinned** — `content_sha256` is a fingerprint derived from the row and `test_benchmark_gate.py:59` only asserts `len(...) >= 16`; nothing detects drift, so "frozen" is an assertion, not an enforced property. (F4) **web e2e self-skips without `RUN_WEB_E2E=1`**, against the card's "required checks executed (not skipped): 100%".
+PROGRESS ROW — RUNBOOK + DISPOSABLE: card at `MICRO-TICKETS-V1.md:536` (QUEUED) gives the 5 thresholds (grounded ≥90%, factual ≥98%, citations 100%, Recall@20 ≥95%, abstention ≥95%/slice) and 7 categories; **`RP-15`/`QF-15`/`RP-02`/`RP-01` resolve NOWHERE** — `grep -rln` over all of `rag-fork-solution/` returns only the ticket file itself, so the thresholds have no in-tree source of record (F5). **"Disposable services" does not exist as a mechanism**: one compose stack, **no `profiles:`**, no testcontainers, no separate DB name, `make down` **keeps volumes**, and **20 `collection="knowledge"` call sites** run against the live collection; isolation is in-process only (T-057 queue prefix + uuid users). **No run order exists** — only `make test`/`test-unit`/`test-integration`, so the runbook must be authored (F7). Suite inventory mapped by grepping test names, not collecting.
+PROGRESS ROW — RED BASELINES (from records, NOT runs): crash recovery **6 remaining** (harness timeouts, not product assertions; T-065 cleared `parse`); `test_acceptance_5_multilingual_cross_language_retrieval` was red for missing embeddings which are now CLEAR → **must be re-verified, asserted neither way**; **correcting my own stale note**, the two queue-key-namespacing tests were recorded **PASSING** post-T-057 (CODE2-HANDOFF:1167-1168) and are no longer carried as known failures; T-V1-058 (1 FTS row survives delete) still filed; dev1's T-069 pending (F8).
+PROGRESS ROW — DISCLOSURE THE RECORD MUST CARRY (F6): acceptance **#1 and #5 can go green without evidencing real multilingual retrieval quality** — per my T-061b census (museR spot-confirmed) `knowledge` is 1542 legacy padded + 492 "real" of which **only 102 are authentic bge-m3** and **373 are not embeddings of their text** (median cos −0.0224), and the corpus is **entirely integration-test debris**. Also a correction to my T-061 FLAG-5: `V1-Q8-Q9-BENCHMARK.md` **does exist**, at `../rag-fork-solution/tasks/` — my earlier grep was repo-scoped, not fork-scoped.
+PROGRESS ROW — NEXT: push DONE-readiness to w5:p4 (plain prompt, no --wait) and go idle; the RUN phase dispatches after T-069.
