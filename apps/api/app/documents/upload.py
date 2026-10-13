@@ -73,7 +73,7 @@ def _too_large() -> HTTPException:
     return HTTPException(
         status_code=status.HTTP_413_CONTENT_TOO_LARGE,
         detail={
-            "error": "document_too_large",
+            "error": "DOCUMENT_TOO_LARGE",
             "message": "File exceeds the maximum allowed size.",
         },
     )
@@ -107,13 +107,13 @@ async def _enqueue_or_fail(session: AsyncSession, job: IngestionJob) -> None:
     except IngestQueueUnavailable as exc:
         job.status = JobStatus.FAILED.value
         job.stage = JobStage.FAILED.value
-        job.error_code = "queue_unavailable"
+        job.error_code = "QUEUE_UNAVAILABLE"
         job.error_message = "ingestion queue unavailable"
         await session.commit()
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail={
-                "error": "queue_unavailable",
+                "error": "QUEUE_UNAVAILABLE",
                 "message": "Ingestion queue is unavailable; try again shortly.",
             },
         ) from exc
@@ -150,7 +150,7 @@ async def upload_document(
         except LookupError as exc:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail={"error": "invalid_charset", "message": "Unknown source charset."},
+                detail={"error": "INVALID_CHARSET", "message": "Unknown source charset."},
             ) from exc
 
     # Stream-read with the fence applied during the read (Starlette 1.7 has no
@@ -159,7 +159,7 @@ async def upload_document(
     if not data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail={"error": "empty_document", "message": "Uploaded file is empty."},
+            detail={"error": "EMPTY_DOCUMENT", "message": "Uploaded file is empty."},
         )
 
     checksum = hashlib.sha256(data).hexdigest()
@@ -286,7 +286,7 @@ async def get_job(
     if job is None or job.workspace_id != workspace_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail={"error": "job_not_found", "message": "Ingestion job not found."},
+            detail={"error": "JOB_NOT_FOUND", "message": "Ingestion job not found."},
         )
     return JobStatusResponse(
         job_id=str(job.id),

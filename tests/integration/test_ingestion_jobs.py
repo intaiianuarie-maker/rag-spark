@@ -250,11 +250,10 @@ def test_upload_rejects_oversize_while_streaming(client, monkeypatch: pytest.Mon
     workspace = _create_workspace(client, token)
     response = _upload(client, token, workspace, "big.txt", b"x" * 4096, "text/plain")
     assert response.status_code == 413
-    # LEGACY lowercase literal, emitted inline by apps/api/app/documents/upload.py
-    # (API layer, outside T-V1-049's allowlist). The worker/job path for the same
-    # code now emits the canonical "DOCUMENT_TOO_LARGE"; this envelope is the
-    # documented residue — see the wire policy in packages/core/errors.py.
-    assert response.json()["detail"]["error"] == "document_too_large"
+    # Canonical uppercase literal, emitted inline by apps/api/app/documents/upload.py
+    # (T-V1-053 uppercased the upload.py residue; it now matches the worker/job path
+    # and the registry wire — see the wire policy in packages/core/errors.py).
+    assert response.json()["detail"]["error"] == "DOCUMENT_TOO_LARGE"
 
 
 def test_upload_rejects_unknown_charset(client) -> None:
@@ -264,7 +263,7 @@ def test_upload_rejects_unknown_charset(client) -> None:
         client, token, workspace, "x.txt", b"hello", "text/plain", charset="not-a-codec"
     )
     assert response.status_code == 400
-    # LEGACY lowercase literal from upload.py (API layer, outside T-V1-049's
-    # allowlist); INVALID_CHARSET has no worker-side emitter, so its registry
-    # entry is the only place the uppercase code lives. Documented residue.
-    assert response.json()["detail"]["error"] == "invalid_charset"
+    # Canonical uppercase literal from upload.py (T-V1-053); INVALID_CHARSET has no
+    # worker-side emitter, so this envelope assertion is where its registry wire is
+    # exercised end to end.
+    assert response.json()["detail"]["error"] == "INVALID_CHARSET"

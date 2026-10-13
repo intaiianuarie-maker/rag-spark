@@ -56,6 +56,9 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   compose hunk minimal + dated, 10 green re-run) → DONE. T-V1-043 (bge-m3) gates Q9.
 - T-V1-044 reviewer: APPROVE (deletion exact, pin test bites pre-fix, 25 green, E501 proven
   pre-existing, ruling confirmed) → DONE. T-V1-022 dispatched (dev2, hydration).
+- T-V1-049 reviewer: APPROVE (mechanical-only, registry sound, post-hoc pipeline hunk
+  confirmed literal-only, 28 green) → DONE. 57-vs-54 erratum lives in handoff prose (open,
+  trivial); budget.py codes noted for a later ticket.
 - T-V1-012 reviewer: APPROVE (4-file scope, no materialization, boundary verbatim, 413 +
   cancel paths, 78 green, byte-identity re-proven) → DONE. T-V1-013 dispatched (dev2).
 - T-V1-010 committed d134e64 (70/70 vitest, tsc clean; second stringify is 502-synthesis,

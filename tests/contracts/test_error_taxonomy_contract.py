@@ -217,6 +217,37 @@ def test_typed_ingestion_errors_resolve_through_the_registry() -> None:
         assert canonical_code(raw) is not None, f"{raw} not in the taxonomy"
 
 
+def test_upload_envelope_codes_are_canonical_uppercase() -> None:
+    """T-V1-053: upload.py emits canonical codes — no legacy lowercase residue.
+
+    The upload envelope was the last place a code went out lowercase while the
+    worker path for the same code went out uppercase. Both the HTTP ``detail``
+    codes and the ``job.error_code`` persisted on the queue-unavailable path are
+    swept together, so the wire carries one case for a given code everywhere.
+    """
+    source = (REPO_ROOT / "apps" / "api" / "app" / "documents" / "upload.py").read_text(
+        encoding="utf-8"
+    )
+    envelope = set(re.findall(r'"error":\s*"([A-Za-z_]+)"', source))
+    persisted = set(re.findall(r'error_code\s*=\s*"([A-Za-z_]+)"', source))
+    literals = envelope | persisted
+    assert literals == {
+        "DOCUMENT_TOO_LARGE",
+        "EMPTY_DOCUMENT",
+        "INVALID_CHARSET",
+        "JOB_NOT_FOUND",
+        "QUEUE_UNAVAILABLE",
+    }, f"upload.py code literals moved: {sorted(literals)}"
+    lowercase = sorted(raw for raw in literals if raw != raw.upper())
+    assert lowercase == [], f"legacy lowercase upload literals remain: {lowercase}"
+    for raw in literals:
+        resolved = canonical_code(raw)
+        assert resolved is not None, f"{raw} not in the taxonomy"
+        assert raw == resolved.value, f"{raw} is not the canonical code of {resolved}"
+        # The wire carries exactly what the emitter printed.
+        assert normalize_code(raw) == raw, f"{raw} would move on the wire"
+
+
 def test_worker_and_api_persist_through_the_registry() -> None:
     worker = (REPO_ROOT / "apps" / "worker" / "jobs" / "ingest_worker.py").read_text(
         encoding="utf-8"
