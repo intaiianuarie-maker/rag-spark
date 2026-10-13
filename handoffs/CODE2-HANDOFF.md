@@ -1468,4 +1468,55 @@ GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1064_{start,en
 
 PROGRESS ROW — TASK: T-V1-064 crash-recovery baseline after T-059 (measured; no code changed).
 PROGRESS ROW — DONE: measured per-test — **the 7 survive** (7 failed / 1 passed, same as T-054). T-V1-059 cleared exactly one (`test_after_claim_crash_is_redelivered`, the old `final_attempts == 3` signature, now gone from the run entirely — corroborated by job rows reading `ready` / `error_code: None` at attempts 1-3). The other 7 all die at the harness's own `wait_stalled()` 45s timeout, never on a product assertion. One deterministic dead seam identified: `t021_crash_worker.py`'s parse seam patches `parser_for_mime`, which the pipeline only uses as an `is None` check (real parse is `parse_with_precedence`) — the same defect T-V1-059 fixed in the dedup test, filed as a follow-up rather than fixed (out of allowlist). Six are a harness race, flagged as hypothesis. **Zero files changed**, index empty, 0 orphans, T-057 + T-054 verified intact.
+
+---
+
+## 2026-10-13 T-V1-065 (re-point the crash worker's parse stall at `parse_with_precedence`) — code2 (solo, allowlisted)
+
+TASK: T-V1-065. Repo `Super Rag/knowledge-os`. Start HEAD `d10117a` → end HEAD `d10117a` (**UNMOVED**). Allowed: `tests/fixtures/scripts/t021_crash_worker.py` (+ the crash test's parse-stall wiring only if the seam needed a call-site change — **it did not**). **No call-site change was needed; no product code touched.**
+
+**Marker tally before/after (the card's metric):**
+
+| | parse marker fired | `test_crash_during_parse` |
+|---|---|---|
+| **BEFORE** (4 prior runs) | **0 / 4** | FAIL — `crash-2 never reached stage 'parse'` |
+| **AFTER** (this run) | **1 / 1** | **PASS** — `1 passed in 70.27s` |
+
+CHANGE (**1 path, +21/−17, 2 hunks**):
+- `tests/fixtures/scripts/t021_crash_worker.py` — the `parse` stall seam re-pointed. The old shape wrapped `ingest_pipeline.parser_for_mime`, a **factory** that the pipeline calls only as an `is None` check (`ingest_pipeline.py:687`); since T-031 it no longer resolves-then-invokes anything, so `_StallingParser.parse()` was constructed and discarded and `_stall()` never ran. The new seam wraps **`parse_with_precedence`** (`ingest_pipeline.py:723`) — the resolve-**and-invoke** site — with an async wrapper that **stalls first, then delegates** to the captured original, preserving the existing contract (marker written → stall → real parse still runs once released). Module docstring's stage table updated to name the real seam instead of "the parser's ``parse``".
+
+WHY: the disclosure in this project's own T-V1-064 row. `parse` was the only crash stage that fired **0/4** while every other stage varied 2–3 of 4 — structural, not a flake — so `test_crash_during_parse_is_redelivered` could never pass. This is the identical dead-seam defect T-V1-059 fixed in `test_dedup_versions.py`, and the same fix shape applies: patch the name the pipeline *calls*, not the one it merely consults.
+
+REUSED: none — no dependency, no new file, no product code. Fixture-only monkeypatch, exactly like the other four stall seams in this file.
+
+BUILT: one async wrapper replacing one wrapper class. Nothing else custom — the `after_claim` / `index` / `embed` / `publication` seams and the `crash_stage`-unset recovery path are untouched.
+
+VERIFY (venv `/root/ko-venv`, **only the one parse test, attached in the foreground shell, never detached, never the whole file**; dev1's reindex holding ~2 GB available):
+- **Ticket gate** → `pytest tests/integration/test_crash_recovery.py::test_crash_during_parse_is_redelivered -q` → **1 passed in 70.27s**, exit 0.
+- **The marker really fired** (not a pass by other means) → newest marker dir `t021-markers-qbp_k3mc` now contains `cycle-2-parse/parse.stalled`, content `pid=3834769 stage=parse detail=parser invoked, no durable writes t=1791884264.411`, and the worker's own log carries `[t021-crash-worker pid=3834769] STALL_REACHED stage=parse detail=parser invoked, no durable writes`.
+- **Before-tally re-measured, not remembered** → `ls /root/.tmp/t021-markers-*` across the 4 prior dirs: `parse=0` in **all four**.
+- **Recovery path unaffected** → `_install_stall_seam` only runs when `crash_stage` is set, so the `crash_stage=none(recovery)` worker is untouched; the run's `recovery-2.log` shows a normal `worker_loop_starting crash_stage=none(recovery)` and the test's recovery/redelivery assertions passed with it.
+- **Lint/compile** → `ruff check tests/fixtures/scripts/t021_crash_worker.py` → **All checks passed!**; `py_compile` → OK.
+- **Scope** → `git diff -U0` shows **2 hunks, both in the one allowed file** (docstring at `:12`, seam at `:165`). No test bodies/assertions touched, T-057's `_queue_namespace` fixture and T-054's reap nets untouched (not in the diff at all), no product code.
+- **Hygiene** → 0 orphan `t021_crash_worker` processes after the run.
+
+METRICS: parse marker fires **0/4 → 1/1**; `test_crash_during_parse` **FAIL → PASS**; crash-suite standing failures **7 → 6** (by construction — this test can no longer be in the set); product-code changes: **0**; test-body/assertion changes: **0**; files changed: **1**; hunks: **2**; orphans after run: **0**.
+
+REVIEWER CHECKLIST: the parse-stage stall actually fires, proved by the marker **and** the worker's own `STALL_REACHED` line, not merely by a green test; the stall-then-proceed contract is preserved (stall first, delegate to the captured original); local-path equivalence — n/a; no product code and no call-site change was required, so nothing outside the allowlist was opened.
+
+RISKS / DISCLOSED:
+- **(a) The remaining 6 failures are untouched by design.** Per T-V1-064 they are a harness race (cross-cycle interference over the shared `t021-<rand>:` prefix), not this seam. `test_crash_during_parse` was the only *deterministic* one, and it is now green; the other five stall-stage tests still vary run-to-run and still need the per-cycle teardown + bounded-wait follow-up. **I did not re-run the whole file** (350s of contention on a RAM-pinned box, and the card scoped me to one test), so the suite's exact new standing count is *derived* (6), not re-measured.
+- **(b) The wrapper patches a module-level name on `ingest_pipeline`,** which the pipeline imports at module scope (line 44) — so the patch is seen because the pipeline calls the global, not a local binding. That is the same mechanism the four surviving seams already rely on, and it is why no call-site change was needed.
+- **(c) The stall now happens slightly earlier than "inside the parser".** It fires when the pipeline is about to parse, which is the closest reachable point to the old intent now that the pipeline calls `parse_with_precedence`. The job row is still `running`/parsing and no durable writes have happened — the stage's documented meaning is preserved.
+- **(d) `parse_with_precedence` returns a tuple `(parsed, parse_report)`;** the wrapper returns the original's value unchanged, so the pipeline's unpacking is untouched.
+- **(e) FOREIGN CHURN — not mine.** All 6 modified + 19 untracked paths at start were the V4 stream and `handoffs/*`; none opened, staged, edited or reverted. HEAD moved `833dae1 → d10117a` before my first command (others' work); it was unmoved across my ticket.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1065_{start,end}_status.txt`):
+- **start** (HEAD `d10117a`): 6 modified + 19 untracked, **all FOREIGN** — `M handoffs/{CODE1,COORDINATOR,DEV21-V4,MUSER-LOOP-STATE,REW1-REVIEW,REW2-REVIEW}-HANDOFF.md`, `M packages/workflow_engine/adapters/langflow_adapter.py`, `M tests/unit/test_workflow_langflow_adapter.py`, 16 `?? handoffs/*` + `?? tests/fixtures/workflows/` + `?? tests/unit/test_workflow_langflow_fixture.py`. **None mine.** Index empty.
+- **end** (HEAD `d10117a`, **UNMOVED**): the same foreign set **plus exactly my 1 allowed path** — `M tests/fixtures/scripts/t021_crash_worker.py` (+21/−17).
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty, 0 orphans.
+
+PROGRESS ROW — TASK: T-V1-065 re-point the crash worker's parse stall (implemented, evidence captured).
+PROGRESS ROW — DONE: the parse stall seam now wraps `parse_with_precedence` — the resolve-and-invoke site — instead of `parser_for_mime`, which T-031 reduced to an `is None` check, so the wrapper used to be built and discarded and the stage could never fire. Stall-then-delegate contract preserved; the four other seams and the recovery path untouched. **Parse marker 0/4 → 1/1, `test_crash_during_parse` FAIL → PASS (1 passed in 70.27s)**, proved by the `parse.stalled` marker and the worker's own `STALL_REACHED stage=parse` line, not just by a green test. One file, 2 hunks, no product code, no call-site change needed, ruff + py_compile clean, 0 orphans. The other 6 crash failures are the separate T-1-064 harness race, still filed.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.

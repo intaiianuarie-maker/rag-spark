@@ -9,8 +9,10 @@ injection is one *stall seam* chosen by ``T021_CRASH_STAGE``:
 
 - ``after_claim``  — stall inside ``process_one`` before any pipeline work
                      (the claim is held; the job row is still ``queued``);
-- ``parse``        — stall inside the parser's ``parse`` (job row
-                     ``running``/``parsing``; no durable writes yet);
+- ``parse``        — stall at the pipeline's parse call site
+                     ``parse_with_precedence``, where the parser is resolved
+                     *and invoked* (job row ``running``/``parsing``; no durable
+                     writes yet).
 - ``index``        — stall inside the Postgres FTS ``index`` before its
                      commit (chunk rows durable, FTS rows not);
 - ``embed``        — stall inside ``embed_documents`` before the Qdrant
@@ -160,21 +162,23 @@ def _install_stall_seam(crash_stage: str, marker_dir: Path) -> None:
     elif crash_stage == "parse":
         from jobs import ingest_pipeline
 
-        original_parser_for_mime: Any = ingest_pipeline.parser_for_mime
+        # T-V1-065: this seam used to wrap ``parser_for_mime``, but since
+        # T-031 that name is only an ``is None`` check in the pipeline
+        # (``ingest_pipeline.py``); the parser is actually *resolved and
+        # invoked* by ``parse_with_precedence``. So the wrapper was built and
+        # thrown away, ``.parse()`` never ran, and the ``parse`` stage could
+        # never fire its marker — 0/4 runs, structural rather than flaky.
+        # Same re-point as T-V1-059 applied to test_dedup_versions.py.
+        original_parse_with_precedence: Any = ingest_pipeline.parse_with_precedence
 
-        class _StallingParser:
-            def __init__(self, inner) -> None:
-                self._inner = inner
+        async def _stalling_parse_with_precedence(*args, **kwargs):
+            # Stall first, then delegate: the contract is "the parent SIGKILLs
+            # us here", and the job still has to be able to finish once the
+            # stall is released.
+            await _stall(marker_dir, "parse", "parser invoked, no durable writes")
+            return await original_parse_with_precedence(*args, **kwargs)
 
-            async def parse(self, *args, **kwargs):
-                await _stall(marker_dir, "parse", "parser invoked, no durable writes")
-                return await self._inner.parse(*args, **kwargs)
-
-        def _stalling_parser_for_mime(mime_type):
-            inner = original_parser_for_mime(mime_type)
-            return _StallingParser(inner) if inner is not None else None
-
-        ingest_pipeline.parser_for_mime = _stalling_parser_for_mime
+        ingest_pipeline.parse_with_precedence = _stalling_parse_with_precedence
     elif crash_stage == "index":
         from retrieval.adapters import pg_fts
 
