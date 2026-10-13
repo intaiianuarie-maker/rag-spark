@@ -123,6 +123,8 @@ Ticket order = build order. museR moves states; board auto-refreshes 60s.
   does the work, T-021 files correctly excluded) → DONE.
 - T-V1-024 reviewer: APPROVE (6/6 false frames, 6/6 positives, limits honest, 120 green) → DONE.
   Nits carried (non-blocking): 'eronic' typo + broad nu/se markers — fix opportunistically.
+- T-V1-034 reviewer: APPROVE (consumer + queue + migration-read-only + adapters + 60 green) → DONE.
+  Migration 0008 cleared to reach shared DB via normal boot path on next api restart.
 - T-V1-030 reviewer: APPROVE (decision sound, scoping + PD-001 reconciliation correct, all 3
   risks accepted with T-031 as proof) → DONE.
 - T-V1-031 dispatched (dev1, format matrix — the proof T-030 needs). T-V1-034 dispatched
