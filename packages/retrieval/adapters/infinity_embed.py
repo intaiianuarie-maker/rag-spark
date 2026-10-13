@@ -48,7 +48,15 @@ DEFAULT_DIMENSION = 1024
 #: via EMBEDDING_REVISION when they serve a specific revision.
 DEFAULT_REVISION = "BAAI/bge-m3"
 DEFAULT_BATCH_SIZE = 32
-DEFAULT_TIMEOUT_SECONDS = 30.0
+#: One batch is ONE synchronous POST, and bge-m3 at 1024-d is not a fast model:
+#: measured on this box, 8 chunk texts ~= 9 s, 16 ~= 8 s, 32 varies between 9 s and 30 s
+#: real, and 100 > 30 s). 30 s therefore killed *legitimate* batches — both in
+#: ``scripts/reindex_all_chunks.py`` (the documented recovery command died on
+#: its first batch) and in the live worker (``ingest_pipeline`` embeds a whole
+#: chunk batch per document), turning a slow-but-successful embed into a
+#: retryable EmbeddingProviderError. 120 s keeps that failure mode possible
+#: without making an ordinary slow batch into one.
+DEFAULT_TIMEOUT_SECONDS = 120.0
 
 #: Vectors whose L2 norm is below this threshold carry no semantic signal and
 #: would match everything equally under cosine similarity — a *manufactured*

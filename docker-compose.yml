@@ -233,7 +233,13 @@ services:
 
 
   infinity-rerank:
-    image: michaelf34/infinity:latest
+    # T-V1-060 incident: :latest drifted under us to 0.0.77, whose CLI REQUIRES
+    # an explicit subcommand (bare `infinity_emb` exits 0 with "No command
+    # given... use the v2 command") — 25 silent restarts, /ready infinity=false,
+    # ingest down stack-wide. PINNED to the version we validated + explicit
+    # command. Never float this back to :latest without re-validating.
+    image: michaelf34/infinity:0.0.77
+    command: ["v2", "--host", "0.0.0.0", "--port", "7997"]
     restart: unless-stopped
     environment:
       # T-V1-043: bge-m3 (1024-d, MIT) is THE embedding model — collections are

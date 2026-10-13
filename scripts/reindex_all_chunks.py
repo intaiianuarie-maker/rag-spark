@@ -534,8 +534,19 @@ async def main() -> None:
         help="Report provider/model/dims/counts by embedding every batch through the real "
         "provider, with ZERO writes (no collection create, no FTS insert, no Qdrant upsert)",
     )
+    # 32, not the old 100: one batch is one synchronous /embeddings POST and the
+    # adapter's client timeout is 30 s (DEFAULT_TIMEOUT_SECONDS). Measured on
+    # this box with bge-m3: 64 texts ≈ 17 s, 48 ≈ 23 s, 100 > 30 s (the POST dies
+    # with httpx.ReadTimeout), so the documented recovery command could not
+    # finish a single batch at the old default. 32 keeps ~9 s per batch — a real
+    # margin under the timeout instead of a coin flip — and the corpus costs 74
+    # requests instead of 24.
     parser.add_argument(
-        "--batch-size", type=int, default=100, help="Batch size for embedding and indexing"
+        "--batch-size",
+        type=int,
+        default=32,
+        help="Batch size for embedding and indexing (default 32: one /embeddings POST "
+        "per batch must complete inside the adapter's 30 s timeout)",
     )
     parser.add_argument(
         "--collection", type=str, default="knowledge", help="Qdrant collection name"
