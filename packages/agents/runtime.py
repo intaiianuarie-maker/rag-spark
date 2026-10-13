@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+import traceback
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -158,6 +159,59 @@ def is_limit_exceeded(state: RunState) -> bool:
 _PERSISTED_RUNS: dict[str, AgentRun] = {}
 _PERSISTED_STATES: dict[str, RunState] = {}
 _PERSISTED_USAGES: dict[str, Usage] = {}
+
+# T-V3-012: durable checkpoint via StepStore bridge — every APPROVAL/WAITING
+# and terminal state is worth resuming from; ephemeral RUNNING steps are not.
+# The checkpoint is a StepEvent with action_summary "checkpoint:..." so the
+# same redaction/bounds/monotonic apply. Ephemeral steps (e.g., intermediate
+# RUNNING tool calls) stay in-memory only.
+_CHECKPOINT_STORE: object | None = None  # StepStoreCheckpointAdapter or None
+
+
+def _get_checkpoint_store():
+    global _CHECKPOINT_STORE
+    if _CHECKPOINT_STORE is not None:
+        return _CHECKPOINT_STORE
+    # Lazy default: in-memory step store for tests, SQLite file for prod would be injected
+    try:
+        from .adapters.checkpoint import StepStoreCheckpointAdapter
+        from .step_store import InMemoryStepStore
+
+        store = InMemoryStepStore()
+        adapter = StepStoreCheckpointAdapter(store)
+        _CHECKPOINT_STORE = adapter
+        return adapter
+    except Exception:
+        return None
+
+
+def set_checkpoint_store(store) -> None:
+    global _CHECKPOINT_STORE
+    _CHECKPOINT_STORE = store
+
+
+def _maybe_checkpoint(run_id: str, state: RunState, usage: Usage, context: RunContext, agent_run: AgentRun | None = None) -> None:  # noqa: E501
+    # Only persist transitions worth resuming from: WAITING and terminal
+    if state.status not in (
+        RunStatus.WAITING_APPROVAL,
+        RunStatus.COMPLETED,
+        RunStatus.FAILED,
+        RunStatus.CANCELLED,
+        RunStatus.LIMIT_EXCEEDED,
+        RunStatus.PARTIAL,
+    ):
+        return
+    try:
+        adapter = _get_checkpoint_store()
+        if adapter is None:
+            return
+        # Collect approvals and waiting for this run
+        approvals = {k: v for k, v in _APPROVALS.items() if k[0] == run_id}
+        waiting = _WAITING.get(run_id)
+        adapter.save_run_checkpoint(run_id, state, usage, context, approvals, waiting, agent_run)
+    except Exception:
+        pass  # checkpoint write must not break the run
+
 
 # T-V3-008: approval store — scoped to (run_id, principal_id, tool_name) and
 # policy revision. An approval for run A by P authorizes nothing for run B or Q.
@@ -575,9 +629,46 @@ class AgentRuntime:
         if _existing_state is not None:
             state = _existing_state
         else:
-            state = RunState(status=RunStatus.RUNNING)
+            # Try durable checkpoint via StepStore bridge (for kill → resume byte-identical)
+            _ckpt = None
+            try:
+                _adapter_tmp = _get_checkpoint_store()
+                if _adapter_tmp is not None and hasattr(_adapter_tmp, "load_run_checkpoint"):
+                    _ckpt = _adapter_tmp.load_run_checkpoint(context.run_id)
+            except Exception:
+                _ckpt = None
+            if _ckpt is not None:
+                try:
+                    state = _ckpt["state"]
+                    # Also restore usage/approvals/waiting from checkpoint
+                    _PERSISTED_STATES[context.run_id] = state
+                    _PERSISTED_USAGES[context.run_id] = _ckpt["usage"]
+                    for k, v in (_ckpt.get("approvals") or {}).items():
+                        _APPROVALS[k] = v
+                    if _ckpt.get("waiting") is not None:
+                        _WAITING[context.run_id] = _ckpt["waiting"]
+                    # Also restore AgentRun if present for trace equality
+                    if _ckpt.get("agent_run") is not None:
+                        try:
+                            from .interfaces import AgentRun as _AR
+                            _ar = _ckpt["agent_run"]
+                            if isinstance(_ar, dict):
+                                _ar_obj = _AR.model_validate(_ar)
+                            else:
+                                _ar_obj = _ar
+                            _PERSISTED_RUNS[context.run_id] = _ar_obj
+                            # Also set _existing_run for later use
+                            _existing_run = _ar_obj
+                        except Exception:
+                            pass
+                except Exception:
+                    state = RunState(status=RunStatus.RUNNING)
+            else:
+                state = RunState(status=RunStatus.RUNNING)
         if _existing_usage is not None:
             usage = _existing_usage
+        elif "_ckpt" in locals() and locals().get("_ckpt") is not None and "usage" in locals().get("_ckpt", {}):  # noqa: E501
+            usage = locals()["_ckpt"]["usage"]
         elif _existing_run is not None:
             usage = Usage(
                 prompt_tokens=_existing_run.total_tokens,
@@ -591,6 +682,25 @@ class AgentRuntime:
         model = context.model_policy.default_model or "gpt-4o-mini"
         if _existing_run is not None:
             agent_run = _existing_run
+        elif "_ckpt" in locals() and locals().get("_ckpt") is not None and locals()["_ckpt"].get("agent_run") is not None:  # noqa: E501
+            try:
+                _ar = locals()["_ckpt"]["agent_run"]
+                from .interfaces import AgentRun as _AR2
+                if isinstance(_ar, dict):
+                    agent_run = _AR2.model_validate(_ar)
+                else:
+                    agent_run = _ar
+                _PERSISTED_RUNS[context.run_id] = agent_run
+            except Exception:
+                traceback.print_exc()
+                agent_run = AgentRun(
+                    id=context.run_id,
+                    workspace_id=context.workspace_id,
+                    goal=goal,
+                    model=model,
+                    status=AgentRunStatus.RUNNING,
+                    created_at=datetime.now(UTC).isoformat(),
+                )
         else:
             agent_run = AgentRun(
                 id=context.run_id,
@@ -843,6 +953,7 @@ class AgentRuntime:
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = state.error_detail
                 _PERSISTED_STATES[context.run_id] = state
+                _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                 break
             # Reserve tokens before LLM: estimate is max_output_tokens
             estimated = context.model_policy.max_output_tokens
@@ -886,6 +997,7 @@ class AgentRuntime:
                         agent_run.error = state.error_detail
                         _PERSISTED_STATES[context.run_id] = state
                         _PERSISTED_RUNS[context.run_id] = agent_run
+                        _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                     except InvalidRunTransitionError:
                         pass
                 break
@@ -921,6 +1033,7 @@ class AgentRuntime:
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = state.error_detail
                 _PERSISTED_STATES[context.run_id] = state
+                _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                 break
 
             text = gen_res.text.strip()
@@ -934,6 +1047,9 @@ class AgentRuntime:
                 state.transition_to(RunStatus.COMPLETED)
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = None
+                _PERSISTED_STATES[context.run_id] = state
+                _PERSISTED_RUNS[context.run_id] = agent_run
+                _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                 break
 
             if parsed.kind == "tool_call":
@@ -947,13 +1063,11 @@ class AgentRuntime:
                         try:
                             state.transition_to(
                                 RunStatus.WAITING_APPROVAL,
-                                error_code=AgentErrorCode.TOOL_NOT_ALLOWED,
-                                error_detail=f"write tool {tool_name!r} requires approval",
                             )
                         except InvalidRunTransitionError:
                             pass
                         agent_run.status = _legacy_status(state.status)
-                        agent_run.error = state.error_detail
+                        agent_run.error = f"write tool {tool_name!r} requires approval"
                         _PERSISTED_STATES[context.run_id] = state
                         _PERSISTED_RUNS[context.run_id] = agent_run
                         _PERSISTED_USAGES[context.run_id] = usage
@@ -971,6 +1085,7 @@ class AgentRuntime:
                                 timestamp=datetime.now(UTC).isoformat(),
                             )
                         )
+                        _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                         history.append(
                             ChatMessage(
                                 role=MessageRole.USER,
@@ -1002,6 +1117,7 @@ class AgentRuntime:
                     agent_run.status = _legacy_status(state.status)
                     agent_run.error = state.error_detail
                     _PERSISTED_STATES[context.run_id] = state
+                    _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                     break
                 if datetime.now(UTC) >= context.deadline:
                     state.transition_to(
@@ -1012,6 +1128,7 @@ class AgentRuntime:
                     agent_run.status = _legacy_status(state.status)
                     agent_run.error = state.error_detail
                     _PERSISTED_STATES[context.run_id] = state
+                    _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                     break
                 # Retry loop: transients only, per RetryPolicy, bounded by deadline.
                 # Each attempt is a persisted ERROR/TOOL_OUTPUT step — attempts are
@@ -1099,6 +1216,7 @@ class AgentRuntime:
                         )
                         agent_run.status = _legacy_status(state.status)
                         agent_run.error = state.error_detail
+                        _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                         # Do not continue to next LLM turn — the retry is the terminal.
                         break
                     # Bounded backoff before next attempt — capped by deadline and max_backoff.

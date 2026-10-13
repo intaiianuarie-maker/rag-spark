@@ -125,8 +125,14 @@ def _prepare_event(event: StepEvent) -> StepEvent:
         val = data.get(field)
         if isinstance(val, str):
             data[field] = _redact_text(val)
-    # Bound field lengths
-    data["action_summary"] = _bound_text(data.get("action_summary") or "", MAX_SUMMARY_CHARS) or ""
+    # Bound field lengths — checkpoint events carry the full run state and must not be truncated to 1K  # noqa: E501
+    _is_checkpoint = str(data.get("action_summary") or "").startswith("checkpoint:")
+    if _is_checkpoint:
+        # For checkpoints, allow action_summary up to MAX_EVENT_BYTES (minus overhead), not MAX_SUMMARY_CHARS  # noqa: E501
+        # Still bound, but to the larger event cap, so the JSON stays valid
+        data["action_summary"] = _bound_text(data.get("action_summary") or "", MAX_EVENT_BYTES - 1024) or ""  # noqa: E501
+    else:
+        data["action_summary"] = _bound_text(data.get("action_summary") or "", MAX_SUMMARY_CHARS) or ""  # noqa: E501
     for field in ("tool_input_ref", "tool_output_ref"):
         if data.get(field) is not None:
             data[field] = _bound_text(data[field], MAX_REF_CHARS)
