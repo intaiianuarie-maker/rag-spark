@@ -1632,3 +1632,117 @@ GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1067_{start,en
 PROGRESS ROW — TASK: T-V1-067 `T021_KEEP_MARKERS` opt-in so crash worker logs survive on failure (implemented, evidence captured).
 PROGRESS ROW — DONE: added the escape hatch T-066 filed — the `marker_dir` fixture now skips its sweep when `T021_KEEP_MARKERS` is truthy (`1`/`true`/`yes`, case-insensitive, whitespace-trimmed) and prints the surviving path; **default stays OFF**, so the accumulation fix is untouched. Fixture docstring documents name/spelling/default/when-to-use. **PROOF: 13/13 env values behaved as documented (unset/''/0/false/no/maybe → swept; 1/true/TRUE/yes/YES/'  yes  '/TrUe → survive), 0 dirs leaked (28 before → 28 after), ruff + py_compile clean, 2 hunks both inside the fixture, 0 test bodies/assertions/timeouts/product code.** Used `if/else` rather than an early `return` because a `return` in a generator's `finally` swallows teardown exceptions — verified by `gen.throw(ValueError)` propagating under both branches. Risks: (a) opt-in is per-run and unenforced, an exported var would silently re-accumulate (print keeps it visible), (b) docstring is the only user-facing doc — `docs/` is outside the allowlist, (c) truthiness spelling is mine and `on` reads as OFF, (d) **no end-to-end crash-test run by instruction** — I have not watched a real failing run's logs survive a real pytest session and am not claiming it, (e) foreign churn disclosed. First proof run reported FAIL on my own baseline bug, re-run clean.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-061 readiness probe (opening slice, READ-ONLY) — code2
+
+TASK: T-V1-061 readiness probe, opening slice. **Zero benchmark runs, zero embeds, zero searches, zero model loads.** Start HEAD `127bdd2` → end HEAD `127bdd2` (**UNMOVED**). Allowed: `handoffs/CODE2-HANDOFF.md` only. **No other file was touched.**
+
+### FINDING 0 — THE LOUD ONE: the Q9 harness does not touch bge-m3, Qdrant, or any collection at all
+
+`evals/q9_run_benchmark.py` is **hermetic by design** (its own docstring, lines 4–5: *"the gold context is supplied as the retrieval oracle (in-memory chunks), so no Qdrant, Infinity, or model gateway is needed and results are reproducible"*). Verified statically and by import, not assumed:
+
+```
+$ grep -inE "qdrant|collection|alias|dimension|bge|embed|infinity|1024|768" \
+      evals/q9_run_benchmark.py evals/run_q9_benchmark.py evals/build_q8_slices.py
+evals/q9_run_benchmark.py:5:  Qdrant, Infinity, or model gateway is needed and results are reproducible.   <- the docstring saying so
+```
+That single hit is the docstring *denying* the dependency. **No `qdrant`/`torch`/`transformers`/`sentence_transformers`/`FlagEmbedding` import at module level anywhere in the Q9 path**, and no `os.environ`/`getenv` read anywhere in it.
+
+**Consequence for the dispatch's premise:** T-V1-061 is framed as "Q9 re-verification on real bge-m3", but this harness **never calls an embedding model and never queries an index**. It therefore cannot verify bge-m3, and **dev1's T-060 alias switch neither blocks nor unblocks it**. The run phase can execute the moment it dispatches — it does not need to wait. That is the single most important thing in this row; the coordinator owns whether that is acceptable for a *formal V1 acceptance gate*.
+
+### (1) Which harness runs Q9, and the exact entry command
+
+**`evals/q9_run_benchmark.py`** is the real one. Exact command, from the repo root (script docstring line 26):
+
+```
+/root/ko-venv/bin/python3 evals/q9_run_benchmark.py
+```
+Supporting gate test (runs the same harness in-process, 3 tests): `/root/ko-venv/bin/pytest tests/integration/test_benchmark_gate.py -q`
+
+**DO NOT RUN `evals/run_q9_benchmark.py`** — it is a weaker oracle twin. Its citation check is `compute_citation_accuracy([source_id], [source_id])`, i.e. the ID compared **against itself**, tautologically `1.0`; and it scores `gold_answer` against `context` rather than any system output. It cannot fail. See FLAG-2.
+
+**The doc named in the card, `V1-Q8-Q9-BENCHMARK.md`, does not exist in tree** (`find` over the whole repo, excluding `.git`). Nearest real artifacts: `handoffs/CLINE1-V1-Q8-Q9-R1.md` (the prior pass) and `reviews/V1-Q8-Q9-REVIEW-1.md`. Recorded, not guessed around.
+
+### (2) Collection resolved by NAME or by concrete ID?
+
+**Neither — there is no collection resolution anywhere in the Q9 path.** See FINDING 0: zero hits for `collection`/`alias`. Retrieval is faked by `_retrieval_result()` building `RetrievedItem`s in memory from the record's own gold `context`, at `score=1.0`, `method=RetrievalMethod.LEXICAL`, with synthetic `workspace_id="ws-q9"`, `document_id="doc-q9"`.
+
+**So there is nothing to re-point after the switch.** Flagged loudly because the dispatch anticipated an alias-safety problem; the real answer is that the alias/collection is not on this code path at all.
+
+### (3) What does it need live? (all grep-verified)
+
+| dependency | needed? | evidence |
+|---|---|---|
+| Qdrant | **NO** | no import, no client; docstring line 5 |
+| Infinity (dims) | **NO** | no dim constant (`1024`/`768`/`dimension`) anywhere |
+| embedder / bge-m3 | **NO** | no `transformers`/`torch`/`FlagEmbedding` import; `score_faithfulness` is lexical (imports only `collections.abc.Callable`) |
+| worker | **NO** | no worker client, no queue |
+| Postgres / `DATABASE_URL` | **NO** | no `os.environ`/`getenv` in the path; `verify_claims` is called with in-memory `items` + `allowed_workspace_ids={WS}` |
+| gold corpus | **NO for the run** | `load_slices(None)` → `DEFAULT_OUT` = `evals/q8_eval_slices.jsonl`, **tracked in git**, 50 records (en/ro/pt/tables/multi × 10) |
+| gold corpus (rebuild only) | exists anyway | `/root/code/Super Rag/datasets/rag-eval` present; all 5 sources OK (`xquad.en`, `xquad.ro`, `pira-v1`, `TAT-DQA/metadata.jsonl`, `ragbench hotpotqa`) |
+
+Import closure is stdlib + `pydantic` + internal packages only. Toolchain: `/root/ko-venv` Python **3.14.4**, `pyarrow 26.0.0` present (needed only to *rebuild* slices).
+
+### (4) The previous Q9 pass — command + metrics (apples-to-apples baseline)
+
+From `handoffs/CLINE1-V1-Q8-Q9-R1.md` lines 60–71:
+
+| slice | n | groundedness | cite_validity |
+|---|---|---|---|
+| en | 10 | 1.0000 | 1.0000 |
+| ro | 10 | 1.0000 | 1.0000 |
+| pt | 10 | 0.9853 | 1.0000 |
+| tables | 10 | 1.0000 | 1.0000 |
+| multi | 10 | 0.9586 | 1.0000 |
+| **OVERALL** | **50** | **0.9888** | **1.0000** |
+
+`GATE: PASS — groundedness 0.9888 (>= 0.9), citation_validity 1.0000 (== 1.0)`
+Supporting, same handoff: `py_compile evals/*.py` OK · `pytest tests/unit/test_eval.py -q` → 12 passed in 0.21s · `ruff check evals/ apps/api/app/eval/` clean · `mypy apps/api/app/eval` no issues in 6 files · gate test 3 passed.
+
+**Exact command provenance — a disclosure:** no verbatim transcript of the bench invocation exists anywhere in the repo (`grep -rnE "python3? evals/q9_run_benchmark"` over all `*.md` → **no hits**). The command in (1) is reconstructed from the script's own docstring, and the metrics table is attributed to `evals/q9_run_benchmark.py` in the same handoff. The numbers match the card's `0.9888 / 1.0000` exactly, so the baseline is sound; but I reconstructed the command rather than read it from a log, and I am flagging that rather than presenting it as quoted evidence.
+
+Also worth recording: the prior handoff explicitly discloses this is a **gold-context oracle** run — *"it proves groundedness + citation validity when the correct context is retrieved. It does NOT measure retrieval recall/MRR (that needs the live Qdrant/FTS index and is reported separately)."* So the bge-m3 claim belongs to the *other*, live-index benchmark, not to Q9.
+
+### (5) What could block the run phase? — named flags, nothing fixed
+
+- **FLAG-1 (LOUD, coordinator decision, not a code defect): the harness cannot satisfy "re-verification on real bge-m3."** It exercises the real *verification* path (`answer.verification.verify_claims` + `ExtractiveGrounder`, with a fabricated `dead-fabricated-chunk` asserted on all 50 records) but supplies retrieval itself. If the V1 acceptance gate is meant to prove bge-m3 end-to-end, **this is the wrong harness** and a live-index retrieval/recall bench is required. If the gate is defined as groundedness + citation-validity under a gold-context oracle, then Q9 is *already* independent of the switch and can run today. **This must be settled before the run is reported as the formal acceptance gate.** Not mine to decide; fixing nothing.
+- **FLAG-2 (loud, operational): running `evals/run_q9_benchmark.py` would produce a meaningless PASS.** Its citation gate is self-comparison (`[source_id]` vs `[source_id]`) and cannot drop below 1.0. Name the file explicitly in the run dispatch. Note `reviews/V1-Q8-Q9-REVIEW-1.md` scoped **that weaker file**, while the gate test and the metrics record use `q9_run_benchmark.py` — the review trail and the measured artifact disagree; worth a look, not fixed here.
+- **FLAG-3: do NOT rebuild the slices for the re-run.** `evals/q8_eval_slices.jsonl` is a tracked frozen snapshot (50 records, built 2026-10-12). Re-running `evals/build_q8_slices.py` would need `pyarrow` and would produce different records → the `0.9888 / 1.0000` comparison stops being apples-to-apples. Rebuilding is a separate, deliberate act.
+- **FLAG-4: nothing to re-pin, nothing to go stale.** No model pin, no dim constant, no collection name, no credential exists on this path. There is no stale-pin blocker to clear post-switch.
+- **FLAG-5: the card's `V1-Q8-Q9-BENCHMARK.md` does not exist.** Recorded in (1); no substitute doc was assumed authoritative beyond the two artifacts named.
+- **FLAG-6 (process): this is a formal acceptance gate, so the run must be attached in the foreground and its full output captured**, per the standing rule that a detached run is how a previous 350 s suite orphaned 29 workers. Q9 is seconds-long and spawns no workers, so this is low-risk — but the transcript should be captured this time, which closes the provenance gap in (4).
+
+### VERIFY — commands and outputs
+
+Every command above was read-only (`grep`/`find`/`sed`/`git ls-files`), except the two explicitly benign ones:
+- **import-only probe** — `importlib` loads `evals/q9_run_benchmark.py` and calls `load_slices()`; it does **not** call `main()`, so **no benchmark was executed, nothing embedded, nothing searched, no model loaded.** Output: `module imports cleanly` · `SLICES ('en','ro','pt','tables','multi')` · gates `0.9 / 1.0` · `load_slices() -> 50 records`.
+- **toolchain check** — `python3 -V` → `3.14.4`; `pyarrow` → `26.0.0`.
+
+Ready-state summary: **module imports cleanly, pinned slices present and tracked, zero live dependencies, zero config to set.** Run phase is unblocked and does not wait on dev1.
+
+### WHY / REUSED / BUILT
+
+**WHY:** the dispatch's stated blocker (dev1's switch) does not apply to this harness, and the dispatch's named artifact does not exist. Both had to be established by reading code before the run phase dispatches, so nobody burns a slot discovering it then.
+
+**REUSED:** nothing built — probe only. Read `evals/q9_run_benchmark.py`, `evals/run_q9_benchmark.py`, `evals/build_q8_slices.py`, `apps/api/app/eval/metrics.py`, `packages/answer/{verification,hydration}.py`, `packages/retrieval/interfaces.py`, `tests/integration/test_benchmark_gate.py`, `handoffs/CLINE1-V1-Q8-Q9-R1.md`, `reviews/V1-Q8-Q9-REVIEW-1.md`.
+
+**BUILT: nothing.** No file edited except this handoff row.
+
+### RISKS
+
+- **(a) The central finding is a premise mismatch, not a bug.** If T-V1-061's acceptance intent really is "prove bge-m3", then FLAG-1 means the run phase as scoped will produce a green gate that does **not** evidence bge-m3 — the exact "flattering number" failure mode. Reported as the defensible position, not the convenient one; the decision is the coordinator's.
+- **(b) The (4) command is reconstructed from a docstring, not a log.** Numbers are exact and cross-checked; the invocation string is not quoted evidence. See FLAG-6.
+- **(c) Import probe ≠ full run.** Importability, slice count and gates are proven; the harness's actual numeric output post-run is not, by instruction. A stale/corrupt metric that only fails at scoring time would surface in the run phase, not here.
+- **(d) I did not execute `test_benchmark_gate.py`** — it calls `run_benchmark`, i.e. it *is* a bench run. Its 3 green tests come from the prior handoff, not from me today.
+- **(e) FOREIGN CHURN — not mine.** 23 dirty paths at start, all foreign (V4/workflow-engine stream + `handoffs/*`); none opened, staged, edited or reverted. HEAD unmoved.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1061_{start,end}_status.txt`):
+- **start** (HEAD `127bdd2`): 23 dirty paths, **all FOREIGN**; my T-067 paths already clean (committed by museR). Index empty.
+- **end** (HEAD `127bdd2`, **UNMOVED**): the same foreign set **plus exactly `handoffs/CODE2-HANDOFF.md`** (this row).
+- 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-061 readiness probe, opening slice — READ-ONLY, discovery latency removed ahead of the run phase.
+PROGRESS ROW — FINDING: **the Q9 harness is hermetic and never touches bge-m3, Qdrant, Infinity, the worker, a DB, or any collection — so dev1's T-060 switch neither blocks nor unblocks it, and the run phase can execute immediately.** Verified by grep (zero `qdrant|collection|alias|dimension|bge|embed|infinity|1024|768` hits in the Q9 path — the single hit is the docstring *denying* the dependency), zero model/env imports in the import closure, and an import-only probe that loaded the module and read 50 records **without calling `main()`** (no bench run, no embed, no search, no model). Entry command is `/root/ko-venv/bin/python3 evals/q9_run_benchmark.py` from repo root; **`evals/run_q9_benchmark.py` must NOT be used** — its citation check compares `source_id` against itself so it is tautologically 1.0 and cannot fail. Prior baseline for apples-to-apples: OVERALL groundedness **0.9888** / cite_validity **1.0000** on n=50 (en 1.0000, ro 1.0000, pt 0.9853, tables 1.0000, multi 0.9586), from `handoffs/CLINE1-V1-Q8-Q9-R1.md`.
+PROGRESS ROW — FLAGS: **(1) LOUD/coordinator: this harness cannot satisfy "re-verification on real bge-m3" — it supplies its own gold-context retrieval, so a green gate here would not evidence bge-m3; decide whether the V1 gate is the oracle or needs a live-index bench.** (2) LOUD: running `run_q9_benchmark.py` yields a meaningless PASS, and `reviews/V1-Q8-Q9-REVIEW-1.md` scoped that weaker file while the gate test + metrics use `q9_run_benchmark.py` — trail disagrees with measured artifact. (3) Do NOT rebuild slices — tracked frozen snapshot, rebuild would break the 0.9888 comparison. (4) Nothing to re-pin: no model pin, dims, collection name or credential on this path. (5) Card's `V1-Q8-Q9-BENCHMARK.md` does not exist in tree. (6) Run attached in foreground with transcript captured — closes the provenance gap, since the prior command exists only as a docstring, never as a logged invocation.
+PROGRESS ROW — NEXT: push DONE-readiness to w5:p4 (plain prompt, no --wait) and go idle; the RUN phase dispatches post-switch.
