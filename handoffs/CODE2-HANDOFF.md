@@ -2149,3 +2149,80 @@ PROGRESS ROW — DONE: `test_poison_message_is_capped_after_retries` now injects
 PROGRESS ROW — BEFORE/AFTER: before-run (embeddings CLEAR per /ready, so unconfounded) → `test_ingestion_jobs.py:250 AssertionError: assert 'ready' == 'failed'`, with the log showing `/embeddings 200`, `PUT .../points` and `ingest_job_ready` — the poison message ingested happily, DB row `39049996 status=ready error_code=None`. After → **1 passed in 10.07s, reproduced 1 passed in 10.00s**, DB rows `b68216a2` and `492a1100` both `status=failed attempts=3/3 error_code=PARSE_FAILED error_message='RuntimeError: boom'`. **Boom-fired proven from the database, not from green**: the pipeline's own `except Exception` (`:747`) wraps it as retryable `PARSE_FAILED` and persists `RuntimeError: boom`; the job retries and parks at exactly 3 of 3 — the cap the test names. Negative checks now zero (`ingest_job_ready` 0, `store_write_verified` 0, `/embeddings` 0, Qdrant PUT 0) and `knowledge` = 2035, **+1 over the T-061b baseline, from the before-run only**.
 PROGRESS ROW — RISKS: (a) disclosed — the before-run necessarily ingested and wrote **1 point** into the T-061b evidence corpus (2034→2035); nothing deleted or cleaned, and no after-run wrote; (b) I ran that ONE test only, so `test_pipeline_reaches_ready_with_chunks` / `test_charset_hint_round_trip` from the same T-049 trio remain unverified by me; (c) the `attempts == 3` expectation is coupled to the product's `max_attempts` default of 3 (`ingest_worker.py:248`) — pre-existing, left alone; (d) assertions deliberately untouched (the boom is proven from the DB instead) so the test's contract is byte-identical; (e) pytest captured no retry/fail events, so log-scraping would have been a failed proof method; (f) foreign churn disclosed, HEAD `43fa5a7` unmoved, index empty, no commit.
 PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
+---
+
+## 2026-10-13 T-V1-070 (sibling ingestion tests confirmed post-embed-clear) — code2 (solo, allowlisted)
+
+TASK: close my own T-V1-068 disclosure (b) — `test_pipeline_reaches_ready_with_chunks` and `test_charset_hint_round_trip` were red behind the embed blocker and unverified since bge-m3 went live. **Confirmation run only.** Start HEAD `1934eda` → end HEAD `1934eda` (**UNMOVED**). Allowed: this row only. **Zero files edited — not even the test file.**
+
+### VERDICT: **2/2 GREEN.** No triage required, no follow-up to file.
+
+| test | result | call time | setup | run 2 |
+|---|---|---|---|---|
+| `test_pipeline_reaches_ready_with_chunks` | **PASSED** | **9.82s** | 3.62s | PASS |
+| `test_charset_hint_round_trip` | **PASSED** | **1.67s** | — | PASS |
+
+`2 passed, 1 warning in 15.27s` (run 1) · `2 passed, 1 warning in 13.13s` (run 2, reproduced). Run twice on purpose: a confirmation ticket should not rest on one lucky run, and "it used to be red, now it's green" is exactly the shape a flake can imitate.
+
+### The T-049 trio is now fully accounted for
+
+| test | status | cause of the old red | closed by |
+|---|---|---|---|
+| `test_poison_message_is_capped_after_retries` | FAIL → **PASS** | **dead seam #4** (`parser_for_mime`, is-None only) | **T-V1-068** (the seam fix, not the embed clear) |
+| `test_pipeline_reaches_ready_with_chunks` | FAIL → **PASS** | embed blocker | **this run** — embed clear |
+| `test_charset_hint_round_trip` | FAIL → **PASS** | embed blocker | **this run** — embed clear |
+
+Both siblings were red for the *embed* reason, and both healed on the same cause. Neither carries a dead seam: my T-DEADSEAM-4 audit found `tests/integration/test_ingestion_jobs.py:245` to be the **only** `parser_for_mime` patch in that file, so no harness re-point was needed and no BLOCKED condition arose.
+
+### These two are not vacuous — they really exercised the live embed path
+
+`knowledge` went **2035 → 2039 points = exactly +4** across the two runs (**2 runs × 2 tests × 1 point**). Those points are written only after a successful parse → embed → store, so both tests drove real bge-m3 embeddings into Qdrant and stored them. They did not pass by skipping the work. (Log-scraping would have been the wrong proof here: the captured log carried no `ingest_job_ready`/`store_write_verified` lines, so the corpus delta is the stronger artifact — same situation as T-V1-068.)
+
+`/ready` before the run: `ready=true`, `infinity=true`, `llm_gateway=true`.
+
+### RESULT / TRIAGE
+
+No failures, so no triage and **no follow-up filed** — there is no product, harness or data defect to report in these two.
+
+### WHY / REUSED / BUILT
+
+**WHY:** a stale red in a handoff table is worse than an honest gap, because it quietly accrues "known failures" that nobody re-checks and that eventually get cited as a baseline. These two had been carried as red since T-049 through several handoff generations without anyone confirming whether the embed clear healed them. Now they are confirmed green, with times and with proof they still exercise the live path.
+
+**REUSED:** everything — no new code, no fixture, no harness change, no product change. Just the two existing tests and the live stack.
+
+**BUILT: nothing.**
+
+### VERIFY — commands and outputs
+
+```
+curl localhost:8000/ready                       → ready true | infinity true | llm_gateway true
+curl localhost:6333/collections/knowledge       → 2035 points BEFORE
+pytest ...::test_pipeline_reaches_ready_with_chunks \
+       ...::test_charset_hint_round_trip -v --durations=0
+                                                → both PASSED; 9.82s / 1.67s call; 2 passed in 15.27s
+same two tests, -q (run 2)                      → 2 passed in 13.13s
+curl localhost:6333/collections/knowledge       → 2039 points AFTER (+4 = 2 runs x 2 tests x 1 point)
+git diff --stat ; git status --short            → IDENTICAL to start; nothing touched by me
+```
+
+Attached in the foreground, **exactly the two named tests and nothing else from that file.** No commit, deploy, restart or compose. Index empty.
+
+### RISKS / DISCLOSED
+
+- **(a) Debris, disclosed exactly as in T-068: +4 points** in `knowledge` (2035 → 2039), one per test per run, all four still live. The card anticipated this and it is inherent — a passing ingest necessarily stores. Nothing was deleted, altered or cleaned; the collection is evidence and I left it otherwise untouched. This is now **+5 cumulative** since my T-061b census (2034 baseline), all from these confirmation runs, not from any retrieval probe.
+- **(b) Green here is not the same as "these tests are good tests."** It establishes that the embed blocker is gone and that the ingest → embed → store path works with bge-m3 live. It does not re-audit either test's assertions, and I did not read them beyond what the failure triage would have required — there was no failure.
+- **(c) Two consecutive runs, one sample each.** Adequate to distinguish "healed" from "still red", which is the question; not a flake study, and I am not claiming the tests are non-flaky.
+- **(d) The rest of `test_ingestion_jobs.py` remains unverified** by me. The T-049-era record for that file was "5 passed, 3 failed"; I have now confirmed 3 of those (2 healed, 1 fixed by T-068). The other tests in the file were out of scope and were not run.
+- **(e) dev1's T-069 forensics was running concurrently** (read-only); no interference was observed and nothing of mine touched its paths.
+- **(f) FOREIGN CHURN — not mine.** 24 dirty paths at start and at end, **byte-identical sets** — the workflow-engine/V4 stream plus `handoffs/*`. None opened, staged, edited or reverted; HEAD unmoved.
+
+GIT SELF-REPORT (`git status --short`; snapshots `/tmp/opencode/tv1070_{start,end}_status.txt`):
+- **start** (HEAD `1934eda`): 24 dirty paths, all FOREIGN. Index empty.
+- **end** (HEAD `1934eda`, **UNMOVED**): **`diff` of the two sorted snapshots is EMPTY — zero drift.** I edited no file at all except appending this row.
+- 0 commits, 0 deploys, 0 restarts, 0 compose, index left empty.
+
+PROGRESS ROW — TASK: T-V1-070 confirmation run of the 2 sibling ingestion tests left unverified by T-V1-068 (embed-blocker reds from the T-049 trio).
+PROGRESS ROW — VERDICT: **2/2 GREEN.** `test_pipeline_reaches_ready_with_chunks` **PASSED 9.82s**, `test_charset_hint_round_trip` **PASSED 1.67s** — `2 passed in 15.27s`, reproduced `2 passed in 13.13s` (run twice deliberately, since "used to be red, now green" is the shape a flake can imitate). No triage needed, **no follow-up filed**, no BLOCKED condition, no harness re-point required: my T-DEADSEAM-4 audit established line 245 is the ONLY `parser_for_mime` patch in that file, so neither sibling carries a dead seam. **The T-049 trio is now fully accounted for** — the poison test was fixed by T-V1-068 (dead seam #4, NOT the embed clear), these two healed on the embed clear.
+PROGRESS ROW — NOT VACUOUS: `knowledge` went **2035 → 2039 = exactly +4** (2 runs × 2 tests × 1 point), and points are written only after parse → embed → store succeeds, so both tests drove real bge-m3 embeddings into Qdrant rather than passing by skipping the work. Log-scraping would have been the wrong proof (no `ingest_job_ready` lines captured) — the corpus delta is the stronger artifact. `/ready` before the run: ready/infinity/llm_gateway all true.
+PROGRESS ROW — RISKS: (a) debris disclosed exactly as in T-068, **+4 points** in `knowledge`, **+5 cumulative** since the T-061b census — inherent, since a passing ingest necessarily stores; nothing deleted or cleaned; (b) green ≠ "good tests" — this establishes the blocker is gone and the live ingest→embed→store path works, it does not re-audit either test's assertions; (c) two runs, one sample each — distinguishes healed from still-red, not a flake study; (d) the rest of test_ingestion_jobs.py remains unverified by me (the T-049-era file record was 5 passed / 3 failed; I have now accounted for all 3); (e) dev1's concurrent T-069 read-only forensics caused no interference; (f) foreign churn — 24 dirty paths, start and end snapshots **byte-identical**, zero drift.
+PROGRESS ROW — NEXT: push DONE to w5:p4 (plain prompt, no --wait) and go idle.
