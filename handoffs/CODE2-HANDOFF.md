@@ -3577,3 +3577,58 @@ GIT SELF-REPORT (git status --short):
 
 METRICS: answers without attribution rows: **0** (every graph-served answer writes one, `list_attributions` returns 1 per answer); attribution rows pointing at foreign-workspace elements: **0** (B cannot see A's trace, `get_attribution` returns None, `list_attributions` for B is `[]`).
 
+## 2026-10-13 T-V3-024 — Evidence/report UI views (frontend lane) — code2
+
+TASK: T-V3-024 (MICRO-TICKETS-V3.md card, trace V3 plan A4b, depends T-V3-022 + T-V3-023). Evidence list + report view with exact source clicks; disputed vs supported visually distinct; unknowns shown. Metric: unknowns hidden: 0. Start HEAD 4bcb76a → end HEAD 4bcb76a (UNMOVED).
+
+**PATH CORRECTION (disclosed):** the card specifies `apps/web/app/research/[id]/page.tsx`, but `apps/web/app/` **does not exist in this repo** — the Next.js app lives at `apps/web/src/app/` (T-V3-023's agent-runs pages are at `src/app/agent-runs/`, and T-V3-024 must be disjoint from those). I created **`apps/web/src/app/research/[id]/page.tsx`** — the card's path with the `src/` prefix that this repo actually uses. Chosen over literally creating a second, unreachable `apps/web/app/` tree, which would have satisfied the card's string while breaking the route (Next 16 App Router resolves from `src/app`, and a second `app/` root would either be ignored or shadow `layout.tsx`). Flagged loudly as a deviation from the literal allowlist, since the card said "unlisted path = ticket FAILS" and the card's path does not exist to list.
+
+CHANGE:
+- `apps/web/src/app/research/[id]/page.tsx` (NEW) — client page, `"use client"`, mirroring the existing web-client pattern (`ask/page.tsx`, `agent-runs/page.tsx`, `knowledge/[collectionId]/documents-list.tsx`): same-origin calls through `auth.authFetch`, workspace scope from `useWorkspaces()`, and error/empty/loading as first-class rendered states rather than colour-only affordances. Renders the full T-V3-022 honesty package: supported evidence rows with confidence + limitations + chunk deep links; contradictions as **two SIDES side-by-side** (Side A / Side B, each with its own claim text and its own chunk links — never merged into one smoothed note); unknowns as first-class always-rendered sections with their reason code; abstention banner. Each chunk deep link points at `/knowledge/documents/{docId}/{chunkId}` — the exact doc/version/chunk, not a search result.
+- `apps/web/src/app/research/[id]/report-sections.ts` (NEW) — the pure render-contract helpers: `isDisputed` (verdict-based, mirrors `EvidenceRecord` verdicts `DISPUTED`/`CONTRADICTS`/`OPPOSING_VERDICTS`), `chunkDeepLink`, `buildReportSections`. Kept DOM-free so the repo's existing test pattern can pin them — see "repo pattern note".
+- `apps/web/src/app/research/[id]/research-report.test.ts` (NEW) — 7 tests.
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY (trace A4b): V3 needs its UI. dev1 owns T-V3-023's agent-runs pages; this ticket is the research report half, in a disjoint directory. The report API (T-V3-022) serves the full honesty package; this ticket renders it and adds nothing.
+
+REUSED:
+- Web-client pattern from `ask/page.tsx` + `agent-runs/page.tsx` + `knowledge/` pages — `auth.authFetch`, `useWorkspaces()`, `Empty`/`Badge`/`StatusChip` components, sentinel-style error handling. No new client library.
+- Wire shapes mirrored from `apps/api/app/agents/research.py` `ResearchReportResponse` (T-V3-022) — no new transport, no new endpoint.
+- Contradiction/disputed semantics mirrored from `packages/agents/contradictions.py` (S3: both sides kept, confidence capped) and `packages/agents/evidence.py` (verdict values).
+
+BUILT:
+- `report-sections.ts` — pure helpers. Needed because the repo's test pattern is pure builders, not DOM rendering (this package has **no `@testing-library/react`** and I did not add a dependency).
+- Deep-link path convention `/knowledge/documents/{docId}/{chunkId}` — extends the existing `/knowledge/documents/[documentId]` route with the chunk id as a path segment, so the viewer knows the exact chunk. **No API route touched**, no route file created to match it.
+
+**Repo pattern note (why the smoke test is not a DOM test):** `apps/web` has no DOM testing library — `ask/citations.test.ts` and friends test the pure message builders, never the React tree. The smoke test follows that: it exercises `buildReportSections`/`isDisputed`/`chunkDeepLink`, i.e. the exact decisions the reviewer checklist names. A DOM test would have required a new dependency, which is outside the card's allowlist.
+
+VERIFY:
+- `npx tsc --noEmit` → **exit 0, clean** (no output).
+- `npx eslint "src/app/research/**"` → **exit 0, no problems** (the `react-hooks/set-state-in-effect` rule required the timer-callback shape used by `agent-runs/page.tsx`, not a direct `setState` in the effect body; the page now uses that shape. `@typescript-eslint/no-explicit-any` in `report-sections.ts` was resolved with typed `unknown` + `str()`/`strList()` converters).
+- `npx vitest run src/app/research/[id]/research-report.test.ts` → **7 passed**:
+  * unknowns section always built, with reason + text — **unknowns hidden: 0**, including with `contradictions: []` (unknowns are never conditional on other sections)
+  * contradictions render as two distinct sides (`sideA.claim !== sideB.claim`, separate chunk links per side)
+  * evidence rows carry exact chunk deep links
+  * disputed evidence flagged distinctly (`evidence[1].disputed === true` vs `[0].disputed === false`)
+  * `isDisputed` verdict matrix (`DISPUTED`→true, `SUPPORTED`→false, `disputed:true`→true, `{}`→false)
+  * `chunkDeepLink` exact-path behaviour incl. the `unknown`-document fallback
+  * abstention surfaced, not hidden
+- Full web check: `npx vitest run` → **18 files / 193 tests passed** (includes my 7).
+- Reasoning-leak bar (same as T-V3-023): every visible field is a typed wire field from `ResearchReportResponse`; no chain-of-thought, no intermediate steps. No raw reasoning is rendered anywhere on the page — the render contract is covered by the wire-mirror types and the DOM-free helpers.
+- No API route, product code, or agent-runs file touched.
+
+METRICS: unknowns hidden: **0** (unknowns render unconditionally, even with no contradictions present); contradiction sides rendered: **2 per contradiction** (distinct claims + per-side chunk links); disputed rows visually distinct from supported: **yes** (destructive border/tone); exact chunk deep links per evidence row: **all**. Files: **3 new** (page, helpers, test) + handoff row. `tsc`/`eslint` clean, 193 tests green.
+
+RISKS:
+- **Path deviation from the card** (`apps/web/app/research/[id]/` → `apps/web/src/app/research/[id]/`) — disclosed above; the card's literal path does not exist, and the semantic intent (a research report route) is preserved.
+- Deep-link destination is a convention, not a live route: `/knowledge/documents/{docId}/{chunkId}` extends the existing document route, but no viewer currently reads the chunk-id segment, so a click lands on the document page with the chunk id in the URL. Wiring the viewer to scroll-to-chunk is follow-up.
+- Test is render-contract-level, not DOM-level (no `@testing-library/react` in the package and I added no dependency). The unknown/contradiction/click decisions are pinned; the actual DOM output is not pixel-pinned.
+- Wire shapes are mirrored from T-V3-022 by hand (the card's allowlist is these pages only, so I cannot introduce a shared types package). Drift between `ResearchReportResponse` and `ResearchReport` would need a types-consolidation ticket.
+- Lint rule constraints: `react-hooks/set-state-in-effect` forced the timer-callback shape; and `@typescript-eslint/no-explicit-any` forced `unknown` + converters. Both are honest adaptations to the repo's config, not suppressions — no rule is disabled or ignored.
+- FOREIGN CHURN: dev1's V3 persistence (`packages/agents/*`) and the V4 workflow-engine stream are disjoint and untouched; no commit/deploy/restart, index empty.
+
+GIT SELF-REPORT (`git status --short`; snapshots in /tmp):
+- START (HEAD 4bcb76a): 24 dirty paths, incl. dev1's `packages/agents/*`-adjacent work + workflow_engine + `handoffs/*` dirt. Index empty.
+- END (HEAD 4bcb76a UNMOVED): START's foreign set **plus exactly `?? apps/web/src/app/research/`** (my 3 new files) **plus `M handoffs/CODE2-HANDOFF.md`** (this row). No other files touched.
+- 0 foreign paths added, modified or removed by me; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+
