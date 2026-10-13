@@ -3377,3 +3377,50 @@ GIT SELF-REPORT (git status --short):
 
 METRICS: cross-workspace entity leaks: **0**; disabled-workspace graph errors: **0** (all disabled reads return empty, not error).
 
+## 2026-10-13 T-V2-005 — Graph canonical citations (no summary-as-source, store-hydrated content) — code2
+
+TASK: T-V2-005 — every citation from graph-retrieved item carries store-hydrated canonical chunk content, never summary text; missing/deleted/superseded drops citation. Start HEAD 134d013 → end HEAD 134d013 (UNMOVED). Allowed: packages/graph/ (retriever/hydration-seam) + packages/answer/verification.py if needed + covering tests + this row. No store-schema changes.
+
+CHANGE:
+- `packages/graph/retriever.py` — no change: already marks `is_graph: True, routing_hint: True` and synthesizes `[Knowledge Graph Context]` passage as routing hint (line 138-153, docstring line 121-131 states it is overwritten by hydration).
+- `packages/answer/hydration.py` — no change: already implements `is_routing_hint`, `hydrate_items` (line 232-291) replaces content with canonical and drops refless/unresolvable, and `verify_claims` (line 727-825) grounds on canonical and drops routing hints without store.
+- `packages/answer/verification.py` — no change needed: already drops `is_routing_hint` when hydrator is None (line 737-741) and uses `canonical.content` when hydrator present (line 757), never summary.
+- `tests/unit/test_graph_canonical_citations.py` — NEW 4 covering tests (see VERIFY).
+- `handoffs/CODE2-HANDOFF.md` — this row.
+
+WHY: V1 F6 rule (Citation.content = exact text grounding ran against) must hold on graph path too. A graph-retrieved item carries synthesized summary (`[Knowledge Graph Context]` prose); citing it as source is fabrication. T-V1-004 pinned canonical-content on graph/store grounder paths for V1 lookup flow; this extends guarantee to V2 graph retrieval flow end-to-end (retriever → hydration → verify → Citation). The existing hydration/verification already implemented the correct routing-hint → canonical-hydration → fail-closed chain; this ticket proves it end-to-end and adds the missing V2 flow coverage.
+
+REUSED:
+- `graph.retriever.GraphRetriever.to_retrieved_items` — routing hint tagging.
+- `answer.hydration.CanonicalHydrator` + `HydratingOrchestrator` — bulk hydration, scope check, canonical replacement.
+- `answer.verification.verify_claims` — grounder gate, revalidation.
+- `answer.adapters.postgres_lookup.MemoryChunkLookup` — test store for canonical.
+
+BUILT:
+- 4 end-to-end tests that wire the real graph retriever through the real hydrator and verifier, not just the V1 lookup path. Needed because T-V1-004's test covers the V1 `MemoryChunkLookup` path, but not the V2 `GraphRetriever → HydratingOrchestrator → verify_claims` chain.
+
+VERIFY:
+- `pytest tests/unit/test_graph_canonical_citations.py -v` → 4 passed:
+  * `test_graph_citations_never_contain_summary_marker` — summary-text citations: **0** (every citation content checked for `[Knowledge Graph Context]` and `900 dollars` summary figure, none found; also checks across graph test corpus via `GraphRetriever` + `CanonicalHydrator` + `verify_claims`)
+  * `test_graph_citations_provenance_from_hydrated_record` — provenance (doc/filename/page/section) comes from hydrated `MemoryChunkLookup` record, not from graph item's original metadata
+  * `test_graph_item_missing_chunk_drops_citation` — dropped-on-missing: **all** (graph item with `ch-missing` not in lookup → `hydrate_items` returns `[]`, `verify_claims` returns `verified=[] citations=[]`; also tests superseded/deleted via same path)
+  * `test_graph_summary_never_grounded_without_store` — without store, routing hint never citable (lookup=None → `verified=[]`)
+- `pytest tests/unit/test_graph_canonical_citations.py tests/unit/test_answer_engine.py::test_verify_claims_graph_path_content_is_canonical_not_summary tests/unit/test_answer_engine.py::test_engine_never_grounds_bare_synthesized_graph_context -v` → 6 passed
+- `pytest tests/unit/test_graph_*.py --ignore=tests/unit/test_graph_paired_eval.py -q` → **110 passed**
+- `pytest tests/unit/test_answer_engine.py -q` → **120 passed**
+- `ruff check packages/graph/retriever.py packages/answer/hydration.py packages/answer/verification.py tests/unit/test_graph_canonical_citations.py` → All checks passed!
+- `mypy packages/graph/retriever.py packages/answer/hydration.py packages/answer/verification.py` → Success: no issues found in 3 source files
+- Dev1 disjoint: `packages/agents/runtime.py` + `tests/unit/test_agents.py` are dev1's V3 persistence — disjoint from our `packages/graph/*` + `tests/unit/test_graph_canonical_citations.py`; confirmed via `git status` (our touched files are graph/retriever.py [unchanged], test file, handoff; dev1's are agents/*).
+
+RISKS:
+- No code change: the guarantee was already implemented in hydration/verification; this ticket proves it and adds V2 flow coverage. If the guarantee was not already there, this would have been a code ticket, not a test ticket — the risk is that we are adding tests, not fixing a bug, so the metrics are proof of existing behavior, not of a new fix.
+- `tombstone_chunks` and `tombstone_document` already ensure superseded/deleted graph rows don't ground, but the graph store's enablement (T-V2-004) must be ON for the test workspace; otherwise upserts are no-ops and the test would see 0 entities for the wrong reason. Our tests explicitly `set_enabled(True)`.
+- Live knowledge collection is evidence — read-only retrieval, no test writes to it (scratch seam per T-071) — our tests use `tmp_path` SQLite file, never live Qdrant.
+- Foreign churn: dev1's V3 approval gate (packages/agents/*) is disjoint and untouched; no product DB migration, no compose restart, index empty.
+
+GIT SELF-REPORT (git status --short):
+- START (HEAD 134d013): 24 dirty paths, incl. dev1's V3 runtime (packages/agents/runtime.py etc) + workflow_engine + handoffs/*.md dirt. Index empty.
+- END (HEAD 134d013 UNMOVED): START's foreign set + exactly our 1 allowed new file (`?? tests/unit/test_graph_canonical_citations.py` [NEW] + this row). No other files touched (retriever/hydration/verification were read, not edited). 0 commits, 0 deploys, 0 restarts, 0 compose changes, index empty.
+
+METRICS: summary-text citations: **0** (prove: `assert "[Knowledge Graph Context]" not in citation.content` across graph test corpus); dropped-on-missing: **all** (hydration returns `[]`, verification returns `verified=[] citations=[]`).
+
