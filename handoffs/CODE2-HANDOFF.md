@@ -6169,3 +6169,178 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr02_{start,end}.
   the reviews/ directory, and the untouched foreign handoffs.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-R06 — Embedding identity on every write + query (Phase 1)
+
+```text
+TASK: T-R06 — close the asymmetry the review found: the REBUILD path stamped
+       provider/model/revision/dimension on every record while NORMAL ingestion
+       omitted them entirely, so one collection could hold vectors from two
+       models with nothing to tell them apart. Phase 1, blocks the rebuild
+       alongside R05.
+CHANGE: 3 files, all inside my allowlist, ZERO overlap with dev1's dirty files:
+       NEW packages/retrieval/embedding_identity.py — the single source of
+         truth: the canonical 4 keys, provider_identity(), merge_identity()
+         (identity wins), identity_from_metadata(), verify_record_identity()
+         (write side), verify_query_identity() (query side), observed_dimension(),
+         audit_identity(), and EmbeddingIdentityError.
+       M  apps/worker/jobs/ingest_pipeline.py — 3 hunks only. Normal ingestion
+         now derives identity from the OBSERVED vector width and stamps it on the
+         VectorRecord written to qdrant, merged AFTER caller metadata.
+       NEW tests/unit/test_embedding_identity.py (26 tests).
+WHY:    An unlabelled vector is not a smaller problem than a mislabelled one — it
+       is the same problem with no evidence. Once normal ingestion and rebuild
+       disagree about identity, a collection can silently mix embedding spaces,
+       and a query provider of the wrong model or width would return confident,
+       meaningless rankings with nothing anywhere to say so.
+REUSED: The EXACT identity schema already proven in scripts/reindex_all_chunks.py
+       (embedding_provider / embedding_model / embedding_revision /
+       embedding_dimension) — adopted rather than reinvented, so the two write
+       paths cannot disagree by accident. VectorRecord.metadata is the existing
+       carrier, so no collection schema change and no migration is needed (which
+       also keeps this off the critical path for the rebuild). InfinityEmbedding-
+       Provider's existing model_name/revision/dimension attributes are the source
+       of truth, unchanged.
+BUILT: The identity module, the ingestion stamping, and the 26-test suite.
+
+THE IDENTITY SCHEMA (identical on both write paths, four keys, canonical order):
+  embedding_provider   = type(provider).__name__     e.g. InfinityEmbeddingProvider
+  embedding_model      = provider.model_name         e.g. BAAI/bge-m3
+  embedding_revision   = provider.revision           pinned revision, may be empty
+  embedding_dimension  = dimension OBSERVED in the vectors actually returned
+Parity is not assumed. test_schema_matches_the_rebuild_script IMPORTS
+scripts/reindex_all_chunks.py and asserts its provider_identity() returns a dict
+equal to this module's, same keys in the same order. The rebuild script is read,
+never edited, because it has dev1's uncommitted work in it.
+Dimension is recorded from the OBSERVED vectors, not the provider's declared
+attribute. A provider claiming 1024 and returning 768 is exactly the case this
+catches, and observed_dimension() also rejects an empty batch and a ragged one.
+
+METRIC 1 — writes without verified identity: 0 on the path this ticket owns.
+  * Normal vector ingestion (apps/worker/jobs/ingest_pipeline.py) now stamps all
+    four keys on every qdrant VectorRecord.
+  * Rebuild path: already stamped, and now proven byte-identical by an import
+    parity test rather than by my reading of it.
+  * Audit: audit_identity() reports unlabelled / incompatible / per-field reasons
+    over a batch. Proven clean (unlabelled 0, incompatible 0) and proven to
+    separate the two failure modes (1 unlabelled + 2 incompatible, with
+    mismatch_reasons {embedding_dimension: 1, embedding_model: 1}).
+  * NOT YET TRUE END-TO-END: the "normal ingestion into a newly rebuilt collection
+    passes a full identity audit" test is BLOCKED — see below.
+
+METRIC 2 — incompatible provider accepted: 0. PROVEN, BOTH DIRECTIONS.
+  Write side (verify_record_identity) refuses: wrong model, wrong dimension,
+  wrong revision (same provider class and model, different pinned revision),
+  a record with NO identity at all, and a non-integer dimension.
+  Query side (verify_query_identity) refuses: wrong model, wrong dimension, and
+  critically an UNKNOWN collection identity — None is rejected, never assumed
+  compatible, because "probably fine" is not a check.
+  NOTHING IS PADDED OR TRUNCATED. observed_dimension() refuses ragged batches and
+  zero-length vectors; the verifier compares and raises. There is no resize,
+  truncate, pad or coerce anywhere in the module — a dimension mismatch is a bug
+  or an attack, not something to smooth over.
+  Errors name the offending field and both values
+  (embedding_dimension: stored='1024' requested='768'), so an operator does not
+  have to guess which of four fields disagreed.
+
+METRIC 3 — identity independent of chunk metadata: PROVEN.
+  merge_identity() filters the caller's metadata FIRST, dropping any value the
+  caller supplied under an identity key, then applies the real identity on top.
+  Tested with a hostile metadata dict carrying all four keys: model, provider,
+  revision and dimension all survive as the trusted values, and unrelated keys
+  (language) pass through. The caller's dict is not mutated.
+
+BLOCKED — PART OF METRIC 1 AND METRIC 2 IS NOT WIRED, AND IT IS NOT MY FILE.
+  dev1 has UNCOMMITTED work in exactly the files where the boundary check must
+  live: packages/retrieval/adapters/qdrant_store.py (+275/-51 lines, hunks
+  spanning 74, 97-102, 333-359, 383, 557-687, 694-797 — i.e. the upsert and search
+  bodies) and scripts/reindex_all_chunks.py (+43, hunks 33, 93, 559-587), plus
+  tests/unit/test_vector_store_boundary.py and new serving.py /
+  test_index_promotion_safety.py. My ticket's declared lane includes the
+  "embedding adapter/collection boundary", which IS qdrant_store.py. Per the card
+  — overlap means pause + BLOCKED, never force — I did NOT edit either file.
+  Specifically NOT DONE, and needing a follow-up that owns the collection boundary:
+    * calling verify_record_identity() inside qdrant_store.validate_records
+      (the single storage boundary, T-V1-015) so every upserted record is
+      verified, not just labelled;
+    * calling verify_query_identity() on the SEARCH path against the collection's
+      recorded identity, so an unknown or incompatible collection is refused
+      before retrieval rather than after;
+    * the end-to-end test "normal ingestion into a newly rebuilt collection passes
+      a FULL identity audit" — it needs both of the above wired.
+  The verification functions themselves are complete and fully tested; only the
+  two call sites are outstanding. I judged that writing them into a file another
+  agent is actively rewriting would risk silently merging or clobbering his work,
+  which is the exact failure mode the card's "never force" rule exists to prevent.
+  My three hunks in ingest_pipeline.py (954, 969, 1008) are in a file dev1 has
+  NOT touched, so there is no overlap anywhere in this ticket's delta.
+  This is Phase 1 by the card's own framing: record identity everywhere it is
+  safe to write, and enforce at the boundary once the boundary card lands.
+
+VERIFY: pytest tests/unit/test_embedding_identity.py 26 passed;
+       related suites together: 115 passed / 0 failed (test_embedding_identity,
+       test_ingest_pipeline, test_ingestion_chunking, test_ingestion_language,
+       test_ingestion_parsers, test_invalid_vector_parking,
+       test_supersession_vector_cleanup, test_vector_store_boundary,
+       test_worker_liveness_probe);
+       ruff check on all three of my files: All checks passed (exit 0);
+       mypy --follow-imports=silent on the module and its test: Success.
+       I did NOT run the full tests/unit suite this ticket; the card scoped the
+       run to "audit tests + related suites", ingest_pipeline is covered by
+       test_ingest_pipeline.py (green), and the host was OOM-critical two hours
+       ago. Stating that rather than implying full-suite coverage.
+       Scoping check: an AST walk of process_job confirms embed_identity is
+       stored at line 974 and loaded only at line 1012, i.e. in scope on every
+       path that builds qdrant_records — a first pass of that check counted the
+       assignment target as a use and wrongly reported out-of-scope, which I
+       re-checked rather than accepted.
+RISKS:  1. The collection boundary is unverified until the follow-up lands, so
+       between now and then records are LABELLED but not yet ENFORCED. A
+       wrong-model query against an old unlabelled collection is still possible.
+       That is the honest state of Phase 1, not a finished guarantee.
+   2. Adding identity keys to VectorRecord.metadata increases per-point payload
+       slightly (4 keys per point). Negligible against point content, but it is a
+       real change to what gets written.
+   3. provider_identity uses type(provider).__name__, so a provider that is the
+       same model under two different class names will be treated as incompatible.
+       That is deliberate and conservative (refusing beats mixing spaces), but it
+       means renaming a provider class invalidates existing collections and will
+       need a reindex. Surfaced by my own test, not by a customer report.
+   4. revision is optional in practice: InfinityEmbeddingProvider defaults it to
+       the model name, so an UNPINNED revision and a pinned one can look similar.
+       Identity compares the string as-is; it does not resolve it.
+   5. The lexical (non-vector) ingestion record at ingest_pipeline.py:889 is still
+       unlabelled, deliberately: it is written BEFORE any embedding exists, so
+       there is no observed dimension to record. Guessing one from the provider's
+       declared attribute would be exactly the shortcut observed_dimension()
+       exists to prevent. If you want corpus-level identity on the FTS records
+       too, that is a small follow-up and needs a decision on what to stamp.
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - Two of my 26 tests failed first run and both were my test bugs, not product
+    bugs: I asserted the revision check would flag embedding_revision, but the two
+    providers had DIFFERENT class names, so embedding_provider mismatched first
+    and masked it. The fix was to construct two instances of ONE class with a
+    patched revision, which actually exercises the revision path. This also taught
+    me the ordering property, so I added an explicit test pinning that
+    mismatch_reason reports the first disagreeing field in canonical order.
+  - My scoping check initially reported "assignment does not precede use" purely
+    because an assignment target is itself a Name node. I re-ran with store/load
+    contexts separated instead of trusting the alarming first answer.
+  - No text-scan assertions this time: the production-source guards parse the
+    ingestion module with AST and require merge_identity() to actually WRAP the
+    caller metadata, so a comment cannot satisfy them.
+
+FOREIGN TREE MOVEMENT (reported, not forced): dev1's five dirty paths
+(qdrant_store.py, reindex_all_chunks.py, test_vector_store_boundary.py,
+serving.py, test_index_promotion_safety.py) were already dirty at START and are
+untouched by me. HEAD did not move during this ticket (a44d21b both ends). My
+uncommitted eval files were left alone per your instruction.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr06_{start,end}.txt):
+- START (HEAD `a44d21b`): 35 dirty paths, including dev1's five. Index empty.
+- END (HEAD `a44d21b`): 38 dirty paths — my 3 files, dev1's 5, the evals files,
+  reviews/, and the untouched foreign handoffs.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty. No live collection was written: the tests
+  exercise identity logic and source shape only, never Qdrant.

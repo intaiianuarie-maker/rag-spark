@@ -951,6 +951,11 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     try:
         from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
         from retrieval.adapters.qdrant_store import QdrantVectorStore
+        from retrieval.embedding_identity import (
+            merge_identity,
+            observed_dimension,
+            provider_identity,
+        )
 
         coll = vector_collection()
         embed_provider = InfinityEmbeddingProvider()
@@ -961,6 +966,14 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             texts = [c.text for c in result.chunks]
             try:
                 vectors = await embed_provider.embed_documents(texts)
+                # T-R06: derive identity from the dimension actually OBSERVED,
+                # not the provider's declared attribute — a provider that
+                # claims one width and returns another is the failure this
+                # catches. The same four keys the rebuild path stamps, so both
+                # write paths produce identical record metadata.
+                embed_identity = provider_identity(
+                    embed_provider, observed_dimension(vectors)
+                )
             except Exception as exc:
                 logger.error(
                     "embedding_failed", extra={"job_id": str(job.id), "error": str(exc)}
@@ -992,7 +1005,12 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                     content=c.text,
                     page=c.page,
                     section=c.section,
-                    metadata={"language": result.language, **(c.metadata or {})},
+                    # T-R06: identity is merged AFTER caller metadata, so a
+                    # chunk cannot overwrite embedding_* and mislabel its vector.
+                    metadata=merge_identity(
+                        {"language": result.language, **(c.metadata or {})},
+                        embed_identity,
+                    ),
                 )
                 for c, vec in zip(result.chunks, vectors, strict=True)
             ]
