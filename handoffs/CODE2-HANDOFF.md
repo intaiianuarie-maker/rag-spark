@@ -240,3 +240,51 @@ VERIFY:
       - git status -> zero existing files modified (only evals/ARCH-AUDIT.md and CODE2-HANDOFF.md)
 GIT:  no commit, no deploy, no compose, no restart. Containers untouched. Read-only audit.
 ```
+
+---
+
+## T-ARCH-02 — Single OpenRouter provider surface (chat+embeddings)
+
+```text
+TASK: T-ARCH-02 — Single OpenRouter provider surface (chat+embeddings).
+      Unified surface all future code calls (zero direct provider calls outside surface):
+      - gemma-4-26b-a4b-it:free FIRST with AUTOMATIC paid fallback (google/gemma-4-26b-a4b-it) on exhaustion
+      - google/gemini-embedding-2 (3072-d, metered)
+      - per-call accounting + abort lines (bounded retries, loud exhaustion)
+      - Paid gemini-generation stays LOCKED (generators are gemma free-first)
+      - Zero accounting gaps across all call paths
+CHANGE: 4 files (packages model-provider seam + evals extension + covering tests; 0 consumers touched):
+      NEW packages/models/adapters/openrouter_provider.py (OpenRouterProvider, CallStats, accounting registry, fallback, policy)
+      MODIFIED packages/models/adapters/litellm_provider.py (extends OpenRouterProvider, maintains 100% contract compatibility)
+      MODIFIED evals/embedder_clients.py (extended with OpenRouterChat and OpenRouterProvider re-exports)
+      NEW tests/unit/test_openrouter_provider.py (11 comprehensive unit/contract/smoke tests)
+WHY:  Cutover from local models to OpenRouter requires a single authoritative entry point to prevent ad-hoc
+      client drift, guarantee wave-wide free-first Gemma with automatic paid fallback, lock out paid Gemini
+      generation, enforce 3072-d Gemini embeddings, and guarantee 100% token & spend accounting.
+REUSED:
+      - packages/models/interfaces.py (LLMProvider, GenerationRequest, GenerationResult, ChatMessage)
+      - packages/retrieval/interfaces.py (EmbeddingProvider ABC)
+      - evals/embedder_clients.py (EndpointStats shape, retry backoff discipline, _check_response logic)
+      - packages/models/router_config.py (LOCAL_ONLY_SENTINEL, is_local_endpoint for T-V1-029 defense)
+BUILT:
+      - OpenRouterProvider: unified provider surface for both LLM chat generation and embeddings (sync and async).
+      - Gemma Free-First with Automatic Paid Fallback: attempts google/gemma-4-26b-a4b-it:free; on 429/402/exhaustion,
+        automatically switches to google/gemma-4-26b-a4b-it, records fallback, meters spend at published rates.
+      - Paid Gemini Generation Lock: requests for paid Gemini generation raise ProviderPolicyError pre-network.
+      - Gemini Embedding 2: google/gemini-embedding-2 (3072-d), validates vector shape, meters prompt tokens and spend.
+      - Zero Accounting Gaps: CallStats and thread-safe AccountingRegistry track calls, failures, retries,
+        free/paid counts, fallbacks, vectors, prompt/completion tokens, and cost_usd across all call paths and call sites.
+      - Abort Lines: bounded retries (3 attempts with exponential backoff: 0.5s, 1.0s); loud ProviderExhaustionError.
+      - OpenRouterChat: sync helper for evals, replacing ad-hoc urllib calls.
+VERIFY:
+      - pytest tests/unit/test_openrouter_provider.py -> 11 passed in 2.00s (including live OpenRouter wire verify!)
+      - [LIVE SMOKE REPORT] calls=2, vectors=1, tokens=27, spend_usd=$0.00000220, fallbacks=1 (real OpenRouter call verified)
+      - pytest tests/contracts/test_litellm_provider_contract.py -> 10 passed in 4.99s
+      - pytest evals/test_embedder_separation.py -> 40 passed in 5.98s
+      - Total battery: 61 passed in 11.41s across all 3 test suites
+      - ruff check packages/models/adapters/openrouter_provider.py packages/models/adapters/litellm_provider.py evals/embedder_clients.py tests/unit/test_openrouter_provider.py -> All checks passed!
+      - mypy packages/models/adapters/openrouter_provider.py packages/models/adapters/litellm_provider.py evals/embedder_clients.py tests/unit/test_openrouter_provider.py -> Success: no issues found in 4 source files
+RISKS:
+      - None in this ticket: zero consumer rewiring performed (consumers remain pointed at existing seams, and existing
+        seams now delegate to OpenRouterProvider). Consumer rewiring is isolated to T-ARCH-04.
+```
