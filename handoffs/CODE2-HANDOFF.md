@@ -1186,3 +1186,20 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-K06b — K06 disclosure default flip (DESIGN, DEFERRED)
+
+```
+TASK: T-K06b
+STATUS: DEFERRED-WITH-DESIGN
+DESIGN:
+      - Apply migration via deployment revision wrapper; keep explicit env-gated path backwards compatible.
+      - Default flip only when version detection shows migration applied; otherwise retain legacy default (fail safe).
+REJECTED:
+      - Auto-flip without probe (would break older deployments missing the migration).
+      - Rewrite migration SQL semantics (out of allowed scope / risk).
+METRICS: no code change; suites unaffected.
+SPEND: 0.00
+GIT: handoff only
+```
