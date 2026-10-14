@@ -105,6 +105,30 @@ const ERROR_CODE_LABELS: Record<RunErrorCode, string> = {
 
 const DEFAULT_LIMITS = { max_steps: 5, max_tokens: 100000, max_tool_calls: 50 };
 
+/**
+ * F-3 (T-V3-032): a CLEARED or non-numeric limit field falls back to the
+ * DEFAULT for THAT field — including max_tool_calls.
+ *
+ * Previously max_steps/max_tokens fell back but max_tool_calls did not, so a
+ * cleared tool-call field started a run with 0 (no tool calls at all) with no
+ * warning: a silent tool-less run, which is the class of thing this page
+ * refuses elsewhere.
+ *
+ * Deliberate precision: the fallback fires for blank and non-numeric input
+ * only. A parsed 0 is KEPT, because the API accepts max_tool_calls=0
+ * (router.py: ge=0) — a caller who clears the field gets the default, and a
+ * caller who means zero tools still gets zero tools. That distinction is why
+ * this is a helper rather than the old `|| DEFAULT` trick, which also turned a
+ * legitimate 0 into 5.
+ *
+ * Exported and pure so the fallback is testable without a DOM harness (there
+ * is none in this repo).
+ */
+export function startRunLimit(raw: string, fallback: number): number {
+  const parsed = Number.parseInt(raw, 10);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 function storageKey(workspaceId: string): string {
   return `agent-runs:v1:${workspaceId}`;
 }
@@ -254,9 +278,11 @@ export default function AgentRunsPage() {
       try {
         const body: StartRunBody = {
           goal: goal.trim(),
-          max_steps: Number.parseInt(maxSteps, 10) || DEFAULT_LIMITS.max_steps,
-          max_tokens: Number.parseInt(maxTokens, 10) || DEFAULT_LIMITS.max_tokens,
-          max_tool_calls: Number.parseInt(maxToolCalls, 10),
+          // F-3 (T-V3-032): all three limit fields fall back the same way — a
+          // cleared field uses the default for THAT field, never 0.
+          max_steps: startRunLimit(maxSteps, DEFAULT_LIMITS.max_steps),
+          max_tokens: startRunLimit(maxTokens, DEFAULT_LIMITS.max_tokens),
+          max_tool_calls: startRunLimit(maxToolCalls, DEFAULT_LIMITS.max_tool_calls),
         };
         const snapshot = await auth.authFetch<RunSnapshot>(
           `/v1/workspaces/${workspaceId}/agent/runs`,

@@ -5513,3 +5513,80 @@ GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4031_{start,end}
   ` M handoffs/CODE2-HANDOFF.md`.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-V3-032 — UI fix F-3 (LOW): max_tool_calls fallback vs DEFAULT_LIMITS
+
+```text
+TASK: T-V3-032 — finding F-3 from my own T-V3-029 review (LOW, the last V3 fix):
+       a cleared max_tool_calls field fell back to 0 instead of DEFAULT_LIMITS,
+       unlike its siblings, so clearing the field started a silent tool-less run.
+       One-spot fix + a test pinning the fallback for all three fields.
+CHANGE: apps/web/src/app/agent-runs/page.tsx (+26/-3): new exported pure helper
+        `startRunLimit(raw, fallback)` and the three body fields now call it:
+        max_steps: startRunLimit(maxSteps, DEFAULT_LIMITS.max_steps),
+        max_tokens: startRunLimit(maxTokens, DEFAULT_LIMITS.max_tokens),
+        max_tool_calls: startRunLimit(maxToolCalls, DEFAULT_LIMITS.max_tool_calls)
+        (was: max_tool_calls: Number.parseInt(maxToolCalls, 10) — no fallback).
+        NEW apps/web/src/app/agent-runs/start-limits.test.ts (6 tests).
+WHY:    F-3 was the third and final finding of my 029 review. A cleared field
+        silently producing a run that can call no tools is a false-default of
+        exactly the kind the rest of the page refuses (it is the same
+        user-surprise class as the partial-tone bug: the page looks fine and the
+        run is quietly crippled). It was also the one place the form was
+        inconsistent with its own fallback discipline.
+REUSED: The existing DEFAULT_LIMITS object (unchanged) and the page's own
+        parseInt-then-fallback discipline; the helper generalises it to all three
+        fields rather than adding a one-off. Exported-and-pure mirrors the
+        knowledge/status-chip.tsx precedent (and my own runStatusTone from
+        T-V3-031), so the behaviour is unit-testable in a repo with no DOM
+        harness.
+BUILT:  startRunLimit() and its 6-test suite.
+VERIFY: METRIC 1 — fields falling back to 0: 0, proven for all three fields.
+        A cleared field (empty string), whitespace-only, and non-numeric
+        ("abc", "-", "abc123") each fall back to THAT field's default: 5,
+        100000 and 50 respectively — asserted per field, so the regression
+        (max_tool_calls returning 0) fails the test by name. Parsed values are
+        kept verbatim, including a deliberate 0 for max_tool_calls. The three
+        defaults are also read back out of the page's own DEFAULT_LIMITS source
+        and asserted equal, so a changed default cannot drift from the values
+        the form seeds its inputs with. The submit path is source-checked to
+        contain no bare parseInt and no `|| DEFAULT` for any of the three
+        fields.
+        METRIC 2 — regressions: 0. tsc --noEmit exit 0; eslint on WHOLESrc exit
+        0; vitest 21 files / 216 tests passed (6 new, 0 lost; the agent-runs
+        surface went 17 to 23 tests, all green); backend tests/unit 2103
+        passed / 0 failed.
+RISKS:  1. ONE DELIBERATE PRECISION, disclosed: the fallback fires for blank and
+        non-numeric input only, so a parsed 0 is KEPT. The API accepts
+        max_tool_calls=0 (`Field(default=50, ge=0)` in apps/api/app/agents/
+        router.py), so zero tools is a legitimate, meaningful limit — my first
+        draft used `> 0` and would have converted a deliberate 0 into 50,
+        changing behaviour beyond F-3's scope. That is also why this is a helper
+        rather than the old `|| DEFAULT` trick, which turned a legitimate 0 into
+        the default in the other direction. A caller who clears the field gets
+        50; a caller who means zero still gets zero.
+        2. Behaviour note: for max_steps and max_tokens the new helper is
+        equivalent to the old `|| DEFAULT` (both are ge=1 in the API, so 0 was
+        never legal there) — no behaviour change for those two fields.
+        3. The helper is exported for testing; it is not used anywhere else, so
+        if it is ever reused for a budget-like field the 0-kept semantics must
+        be re-decided per field.
+        4. Clearing a fields and re-entering is the only path exercised; a
+        value past the API's own ceilings (max_steps le=20) is still refused by
+        the server, which is the correct place for that check and is unchanged.
+
+V3 UI STATUS: with F-1 (T-V3-030), F-2 (T-V3-031) and F-3 (this ticket) all
+landed, every finding from the T-V3-029 re-review of the T-V3-023 lane-break is
+resolved, and the V3 UI is clean per that review. No V3 findings remain open.
+
+GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4032_{start,end}.txt):
+- START (HEAD `a6f875e`): 21 dirty paths (5 modified handoffs + 16 untracked
+  handoff docs). Index empty. dev1 STANDBY, no lane conflict; HEAD unchanged
+  START→END (a6f875e both) — the tree did not move under me.
+- END (HEAD `a6f875e`): exactly my two allowlisted files plus the untouched
+  foreign handoffs: ` M apps/web/src/app/agent-runs/page.tsx`,
+  `?? apps/web/src/app/agent-runs/start-limits.test.ts`,
+  ` M handoffs/CODE2-HANDOFF.md`.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.
