@@ -48,7 +48,7 @@ from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Any, ClassVar, Final, Protocol, runtime_checkable
 
 from core.auth import ACLScope
 from core.errors import ReasonCode, spec_for
@@ -256,6 +256,36 @@ def _item_key(item: RetrievedItem) -> str:
     return item.chunk_id or item.content
 
 
+class CloudEmbeddingEgressRefused(RuntimeError):
+    """Fail-closed: a sensitive/local-only workspace cannot use a cloud embedder.
+
+    Raised conceptually (without network contact) when a sensitive workspace
+    asks for semantic or hybrid retrieval. Keyword-only retrieval keeps working.
+    """
+
+    def __init__(self, message: str = "embedding egress refused for local-only workspace"):
+        super().__init__(message)
+
+
+
+class RefusingEmbeddingProvider(EmbeddingProvider):
+    """Embedding provider that refuses before any network contact (T-A01)."""
+
+    model_name: ClassVar[str] = "local-only-refused"
+    dimension: ClassVar[int] = 0
+    revision: ClassVar[str] = "local-only-refused"
+
+    async def embed_documents(self, texts):
+        raise CloudEmbeddingEgressRefused(
+            "embedding egress refused for local-only workspace"
+        )
+
+    async def embed_query(self, text):
+        raise CloudEmbeddingEgressRefused(
+            "embedding egress refused for local-only workspace"
+        )
+
+
 class HybridRetrievalOrchestrator(RetrievalOrchestrator):
     """Product hybrid orchestrator over reused store/embedding/reranker adapters."""
 
@@ -271,6 +301,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         rerank_enabled: bool = True,
         rrf_k: int = RRF_K,
         graph: Any | None = None,
+        sensitive: bool = False,
+        local_only: bool = False,
+        workspace_sensitive: bool = False,
     ) -> None:
         self.dense = dense
         self.embedding = embedding
@@ -281,6 +314,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         self.rerank_enabled = rerank_enabled
         self.rrf_k = rrf_k
         self.graph = graph
+        self.sensitive = bool(sensitive or local_only or workspace_sensitive)
 
     # --- fan-out ----------------------------------------------------------
 
@@ -432,6 +466,37 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         if not query.strip():
             return RetrievalResult(items=[], trace_id=trace_id)
 
+        # T-A01: sensitive/local-only workspaces must not egress query
+        # embeddings. Refuse semantic/hybrid retrieval BEFORE any embedding
+        # request (keyword/graph paths keep working). Typed + logged; empty
+        # result, never a silent fallback.
+        if self.sensitive and mode in (
+            RetrievalMode.SEMANTIC,
+            RetrievalMode.HYBRID,
+            RetrievalMode.HYBRID_GRAPH,
+        ):
+            logger.warning(
+                "retrieval_egress_refused",
+                extra={
+                    "event": "retrieval_egress_refused",
+                    "leg": "embedding",
+                    "reason": "local-only workspace refused cloud embedding transport",
+                    "mode": mode.value,
+                    "trace_id": trace_id,
+                },
+            )
+            failure = LegFailure(
+                leg="embedding",
+                error_type="CloudEmbeddingEgressRefused",
+                reason_code=ReasonCode.EMBED_UNAVAILABLE,
+            )
+            return RetrievalResult(
+                items=[],
+                status=RetrievalStatus.UNAVAILABLE,
+                reason_code=ReasonCode.EMBED_UNAVAILABLE,
+                trace_id=trace_id,
+                legs_failed=(failure,),
+            )
         allowed = set(acl_scope.workspace_ids)
         query_filter = SearchFilter(workspace_ids=list(acl_scope.workspace_ids))
         if extra_filter is not None:
