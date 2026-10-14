@@ -340,7 +340,17 @@ def test_factory_has_no_silent_default_model():
     assert "DEFAULT_ANSWER_MODEL" not in code
     assert 'os.environ.get("ANSWER_MODEL"' not in code  # no env-based default in code
     assert 'model="gpt-4o-mini"' not in code  # no literal default passed in code
-    assert "def build_answer_engine(*, model: str" in source  # model is REQUIRED, no default
+    func = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "build_answer_engine"
+    )
+    # model is REQUIRED with no default — asserted via AST (not substring) so
+    # the check survives signature reflowing (R09's params broke the old
+    # single-line match while the invariant held). Coordinator repair, intent
+    # preserved: first keyword-only arg is bare `model`.
+    assert func.args.kwonlyargs and func.args.kwonlyargs[0].arg == "model"
+    assert func.args.kw_defaults[0] is None
 
 
 def test_resolve_model_is_single_source_of_truth(monkeypatch):
