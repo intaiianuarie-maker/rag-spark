@@ -424,9 +424,18 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         for ws_id in workspace_ids:
             try:
                 local_res = await self.graph.local_search(workspace_id=ws_id, query=query)
-                items.extend(self.graph.to_retrieved_items(local_res, workspace_id=ws_id))
+                local_items = self.graph.to_retrieved_items(local_res, workspace_id=ws_id)
                 global_res = await self.graph.global_search(workspace_id=ws_id, query=query)
-                items.extend(self.graph.to_retrieved_items(global_res, workspace_id=ws_id))
+                global_items = self.graph.to_retrieved_items(global_res, workspace_id=ws_id)
+                # Each graph retrieval mode contributes each chunk ref at most once,
+                # so the same evidence cannot double-vote during RRF fusion.
+                seen: set[str] = set()
+                for item in local_items + global_items:
+                    key = item.chunk_id or item.content
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(item)
             except Exception as exc:
                 report.record("graph", exc, LEG_REASON_CODES["graph"])
         return items

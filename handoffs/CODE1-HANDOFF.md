@@ -3362,3 +3362,20 @@ RISKS:
 - agents/tools still lacks a workspace context if a future caller invokes `_resolve_orchestrator()` without workspace_id; current execute always passes workspace. Such a call defaults non-sensitive, disclosed as prior behavior.
 - `packages/agents/tools.py` is outside V1-01 route scope but has a retrieval construction path, so included to make the empty-grep proof true.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A08 — V2-04 dedupe graph legs and relevance-ranked graph evidence (dev1)
+TASK: T-A08 (w5:pG). Astra CONFIRMED Med: local+global graph evidence could double-vote in RRF, evidence was ID-ordered with uniform scores, and community matching scaled without bounds.
+CHANGE (allowed files):
+- `packages/graph/retriever.py`: local/global evidence dedupe at to_retrieved_items; relevance ordering by evidence support; bounded global expansion (`max_communities`/`max_evidence_chunks`) with communities ranked by term overlap; entity traversal bounded.
+- `packages/retrieval/orchestrator.py`: `_graph_leg` dedupes local+global chunk refs before fusion, so graph evidence contributes once.
+WHY: eliminate double-voting and ID-order bias; keep default HYBRID unchanged.
+REUSED: retrieval interfaces, `_graph_leg`, existing graph tests.
+BUILT: bounded and relevance-ranked graph retrieval.
+VERIFY:
+- `pytest tests/unit -k 'graph or retrieval or orchestrator'` -> 235 passed.
+- ruff + mypy on touched files clean.
+- Graph evidence ranking no longer sorted only by chunk id; dedup prevents duplicate RRF contribution.
+RISKS:
+- hidden ordering expectations must use relevance ties; ties retain deterministic chunk-id ordering.
+- global community signature additions are backwards compatible via defaults.
+Next: IDLE — push mandatory.
