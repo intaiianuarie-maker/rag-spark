@@ -102,6 +102,12 @@ x-backend-env: &backend-env
   ANSWER_MODEL: ${ANSWER_MODEL:-nvidia/nemotron-3.5-lightning:free}
   INFINITY_URL: ${INFINITY_URL:-http://infinity-rerank:7997}
   READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
+  # T-R05 (coordinator ops): explicit collection name on BOTH services sharing
+  # this anchor (api + worker). Fail-closed :? form — export VECTOR_COLLECTION
+  # (currently the physical name; the serving alias after adoption) or compose
+  # refuses to (re)create. The switch path still refuses ambient-valued
+  # promotion until alias adoption; normal reads use this value explicitly.
+  VECTOR_COLLECTION: ${VECTOR_COLLECTION:?set VECTOR_COLLECTION to the serving collection or alias}
   # T-R01 (P0): no shipped default. The previous literal (the
   # dev-only-insecure-jwt-secret-change-me-<digits> one) was accepted by the
   # production boot path because the validator only knew the *code* default, and

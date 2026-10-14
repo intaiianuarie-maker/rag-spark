@@ -457,20 +457,23 @@ def test_drift_message_names_both_services_and_the_compose_lines() -> None:
 
 
 @pytest.mark.unit
-def test_compose_has_no_vector_collection_default_so_the_guard_is_needed() -> None:
-    """Why the guard exists: neither service pins the name today.
+def test_compose_pins_vector_collection_explicitly() -> None:
+    """The coordinator's compose change has landed (fail-closed, no default).
 
-    (Compose is outside T-R05's allowed files, so this test is the standing
-    record that the operator still has a one-line change to make.)
+    (Replaces the pre-change record below: compose now carries an explicit
+    VECTOR_COLLECTION line on the shared backend anchor, so neither service
+    can serve an ambient name without someone choosing it.)
     """
     compose_path = os.path.join(
         os.path.dirname(__file__), "..", "..", "docker-compose.yml"
     )
     with open(compose_path, encoding="utf-8") as handle:
         compose = handle.read()
-    assert "VECTOR_COLLECTION:" not in compose, (
-        "compose now pins VECTOR_COLLECTION — update the T-R05 row and drop the "
-        "drift-guard note when the coordinator's compose change lands"
+    assert "VECTOR_COLLECTION:" in compose, (
+        "compose must pin VECTOR_COLLECTION explicitly for api+worker"
+    )
+    assert "VECTOR_COLLECTION:?" in compose.replace(" ", ""), (
+        "the pin must be fail-closed (:?) with no ambient default"
     )
 
 
