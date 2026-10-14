@@ -4444,3 +4444,137 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4014_{start,end
   untracked tests/unit/test_workflow_run_budget.py mid-ticket).
 - 0 foreign paths modified by me — v3_adapter.py's git diff is empty, verified
   twice; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+---
+
+## T-V4-022 — W5 editor palette contract (node catalogue, no UI)
+
+```text
+TASK: T-V4-022 (W5) — the editor node palette as DATA + tests: every placeable
+       node type with its input/output ports, config schema reference, join/loop
+       eligibility and documentation. NO UI components, NO canvas code, NO event
+       handlers. A future canvas must render this catalogue unchanged.
+CHANGE: packages/workflow_engine/palette.py (NEW, ~560 lines) — PaletteNode /
+        PalettePort / ConfigFieldSpec models, PaletteCategory, Palette (the
+        catalogue + lookup/category/placeable accessors), PALETTE (9 entries,
+        one per NodeType) and PALETTE_MANIFEST.
+        tests/unit/test_workflow_palette.py (NEW) — 66 tests.
+        No existing file touched.
+WHY:    The canvas needs its object model before it exists, and the editor must
+        not become a second source of truth: a palette that let the editor offer
+        a node the validator refuses would be an editor bug that only shows up
+        as "this node won't place" for a user. So every palette rule is derived
+        from (or stated against) the engine's own models and validator, and the
+        tests pin agreement in BOTH directions.
+REUSED: interfaces.PortSpec/NodeType/JoinStrategy/CapabilityManifest — the
+        palette builds ports via to_port_spec(), so a palette port IS the
+        engine's port object, not a parallel description of one. The port-type
+        allowlist is IMPORTED from interfaces._SUPPORTED_PORT_TYPES rather than
+        restated, so the palette cannot drift from the validator's grammar.
+        WorkflowValidator + PALETTE_MANIFEST are used directly to prove every
+        catalogued node validates clean. Web-side there is nothing to reuse
+        because this ticket adds no UI at all.
+
+CATALOGUE STATEMENT (9 entries, one per NodeType the engine supports):
+  type        | label     | cat   | in/out ports                                     | join | loop | caps
+  ------------|-----------|-------|--------------------------------------------------|------|------|--------------------
+  trigger     | Trigger   | flow  | -            -> output:dict                       | no   | no   | -
+  retriever   | Retriever | data  | input:dict   -> output:list<dict>                 | no   | no   | retrieval
+  llm         | LLM       | model | input:any, context:list<dict>? -> output:string  | yes  | no   | llm
+  agent       | Agent     | model | input:dict, context:any -> output:any            | yes  | yes  | agent
+  tool        | Tool      | effect| input:any    -> output:any                        | no   | yes  | tool
+  condition   | Condition | ctrl  | input:any    -> result:boolean, output:any        | no   | no   | -
+  transform   | Transform | data  | input:any    -> output:any                        | no   | yes  | transform
+  http        | HTTP      | effect| input:any    -> output:any                        | no   | no   | http
+  output      | Output    | effect| input:any    -> output:any                        | no   | no   | -
+  Every entry also carries: label, category, description (docs), config_schema
+  (key name + JSON kind + required + description), required_capabilities.
+  PALETTE_MANIFEST = {supported_node_types: all 9, enabled_capabilities:
+  llm, retrieval, http, transform, agent, tool} — the manifest a shipped node
+  must place cleanly under, and the one placeable() consults.
+
+BUILT:  The catalogue as frozen pydantic models (palette entries are data, so
+        they serialise to the client unchanged); the derived eligibility rule
+        (join_eligible == len(input_ports) > 1, enforced at construction, so a
+        hand-set flag contradicting the port shape is REFUSED); the shared
+        port-type import; the probe definition a canvas would build to test a
+        drop (trigger -> node -> output, edges wired, condition_value set for
+        CONDITION); the placeable() refusal for unknown types; category
+        grouping; and the JSON serialisation path a client canvas would use.
+VERIFY: tests/unit/test_workflow_palette.py → 66 passed (also with
+        -W error::DeprecationWarning).
+        tests/unit -k "workflow or palette" → 739 passed, 0 failed (2 consecutive runs).
+        tests/unit (full) → 1911 passed, 0 failed.
+        ruff check palette.py + my test → All checks passed.
+        mypy palette.py + my test → Success.
+        METRIC 1 — palette-vs-validator agreement, BOTH directions:
+        (A) forward: every catalogued node builds a connected probe definition
+        (trigger -> node -> output with real edges, condition_value set for
+        CONDITION's outgoing edge) and WorkflowValidator().validate(...,
+        PALETTE_MANIFEST) returns valid with NO errors at all — not "no errors
+        except the ones I chose to ignore". Every port type is also accepted by
+        the engine's grammar, every required capability is in the manifest, and
+        a minimal trigger->transform->output chain assembled only from the
+        catalogue validates clean.
+        (B) reverse: set(PALETTE.types()) == set(NodeType) — all 9 types, no
+        fewer (an engine-runnable node the editor cannot offer would be drift).
+        METRIC 2 — UI code added: 0. Proven structurally, not by grep: an AST
+        scan asserts the palette imports nothing from react/next/framer-motion/
+        clsx/zustand and references none of onClick/onChange/onDragStart/
+        useState/useEffect/useMemo/forwardRef/jsx/canvas/render/Component/div/
+        span; a git-status check asserts no .tsx/.jsx, components/ or app/ path
+        was touched; and the catalogue is verified to serialise to plain JSON so
+        a canvas consumes data rather than calling into the engine.
+RISKS:  1. MY OWN CATALOGUE HAD TWO DEFECTS THE AGREEMENT TESTS CAUGHT, both
+        fixed rather than papered over:
+        (a) I declared port types "bool" (twice) and once "int"/"float" in my
+        own allowlist. The engine accepts ONLY
+        any/boolean/dict/list/number/string (+ list<…> and trailing ?), so
+        every CONDITION node was unplaceable — the editor would have offered a
+        node that could never be placed. Fixed by IMPORTING
+        interfaces._SUPPORTED_PORT_TYPES instead of naming my own list; the
+        import is what makes this class of drift impossible rather than merely
+        unfashionable. (I also declared two input ports both named "input" on
+        AGENT, which my own uniqueness rule refused.)
+        (b) I marked RETRIEVER loop_eligible, but its output type is
+        list<dict> and its input is dict — the validator's compatibility matrix
+        is identity/any-only, so a retriever can never feed itself. Corrected
+        to loop_eligible=False.
+        2. The loop-eligibility rule needed a real answer, not "no overlap":
+        CONDITION's boolean result and any input overlap, but feeding a boolean
+        back into the node's own test is inert. Rather than quietly exempt it,
+        the non-loop test now asserts that a non-loop node with type overlap
+        must be one whose overlap is documented-inert (condition/llm/http/
+        output/trigger). This is the one place the catalogue's eligibility is
+        judgement rather than pure derivation, so it is stated as an explicit
+        rule a reviewer can challenge.
+        3. The probe definition is deliberately trigger -> node -> output with
+        real edges: an edge-less probe produces ORPHANED_NODE / NO_OUTPUT_NODE
+        complaints that are properties of the probe, not the palette, so the
+        first version of the test was proving nothing. Now validate() returns
+        fully clean for every entry.
+        4. Fabricated data check: descriptions, config schemas and port
+        descriptions are written for the W5 editor, not read from the engine
+        (the engine has no docs fields). They are documentation, not authority:
+        if one contradicts the validator, the validator wins and the palette
+        doc must be corrected — which is what the agreement tests are for.
+        5. PALETTE is a module-level constant, so a canvas importing it gets a
+        shared, immutable view; mutating it in one place mutates it everywhere.
+        That is intended (one catalogue), and it is why the entries are frozen
+        models rather than plain dicts.
+
+FOREIGN NOTES (dev1's in-flight T-V4-012 work, not mine, untouched): during this
+ticket executor.py was briefly in a non-importable state (SyntaxError: "* argument
+may appear only once" at line 962 — an in-flight save), which broke every package
+import for a minute; it parsed again on its own and all suites then ran. His new
+untracked tests/unit/test_workflow_idempotency.py showed 3 failures in one run and
+then 739 passed across two consecutive runs — flaky, his file, not touched. My
+66 palette tests were green in every run including the full suite's 1911 passed.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4022_{start,end}.txt):
+- START (HEAD `546d0d`): 24 dirty paths — 6 modified handoffs, dev1's live
+  executor.py, his untracked run_budget test, 16 untracked handoff docs. Index empty.
+- END (HEAD `f5fc30b`): the same foreign set (CODE1-HANDOFF was committed,
+  run_budget was replaced by his idempotency test) PLUS exactly mine:
+  `?? packages/workflow_engine/palette.py` and `?? tests/unit/test_workflow_palette.py`.
+- 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.
