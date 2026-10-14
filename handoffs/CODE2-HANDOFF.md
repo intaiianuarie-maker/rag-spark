@@ -575,3 +575,28 @@ VERIFY:
       - ruff check packages apps/api/app -> All checks passed!
       - mypy packages apps/api/app -> Success: no issues
 GIT:  no commit, no deploy, no compose, no restart.
+
+## T-SMOKE-ALL — Full-feature smoke on post-restart stack
+
+```text
+TASK: T-SMOKE-ALL full-feature smoke before R13b.
+CHANGE: none (scratch scripts under /tmp/opencode only). Cleanup performed (doc deleted).
+WHY: release validation of rebuilt stack.
+REUSED: existing API + persisted collection knowledge__serving.
+BUILT: none.
+VERIFY:
+  Feature table:
+  1 auth lifecycle register/login/refresh: PASS
+  2 workspace create: PASS
+  3 document upload+ingest to completion: PASS (job ready, finished_at)
+  4 hybrid search returns hits: PASS
+  5 grounded ask: PASS (2 free-model generations; answer "42" cited)
+  6 V2 graph honest-unavailable: PASS (no fake graph hits; empty/None)
+  7 V4 production workflow run: PASS (completed through ProductionNodeExecutor)
+  8 infra /health /ready + worker heartbeat: PASS (/ready true; ingest job ran via worker)
+  Metered spend: $0.00 (2 free generations; no paid calls)
+  Cleanup proof: collection points 2205 -> 2204 (net 0 vs baseline 2204); scratch doc deleted.
+  Disclosed residues: scratch user + workspace remain (no delete route in API); relsmoke_test@example.com also not deletable via API.
+RISKS: leftover scratch user/workspace in DB.
+GIT: handoffs modified; evals scratch not in repo.
+```
