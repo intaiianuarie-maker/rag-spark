@@ -445,3 +445,46 @@ VERIFY:
       - mypy packages/agents/policy.py packages/agents/factories.py apps/api/app/agents/router.py tests/unit/test_v3_factories_policy_budget.py -> Success: no issues found in 4 source files
 GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched.
 ```
+
+---
+
+## T-R16 — V3 real research pipeline (Phase 3, on your R14)
+
+```text
+TASK: T-R16 — V3 real research pipeline (Phase 3, on your R14).
+      (1) planner producing real fan-out plan (sub-questions, tool/mode assignment, derived from derive_effective_run_config);
+      (2) fan-out execution through create_agent_runtime with per-run budgets enforced (spend tracked, caps trip loudly);
+      (3) source evidence collection (real retrieved chunks with provenance, ACL-scoped);
+      (4) verification pass (claim/citation check before synthesis via ExtractiveGrounder seam; deletion revalidation);
+      (5) gaps + synthesis (honest gaps stated, no fabrication, contradictions handled with capped confidence).
+CHANGE:
+      - NEW packages/agents/research_pipeline.py (ResearchPipeline, create_research_pipeline_runner executing planning -> fan-out -> evidence -> verify -> gaps/synthesis).
+      - packages/agents/planner.py (added google/gemma-4-26b-a4b-it:free to FREE_MODELS).
+      - packages/agents/__init__.py (exported ResearchPipeline, create_research_pipeline_runner).
+      - apps/api/app/agents/research.py (create_research_pipeline wired to create_research_pipeline_runner when configured; R02 unavailable contract intact when unconfigured; PolicyViolationError handled as HTTP 400).
+      - NEW tests/unit/test_v3_research_pipeline.py (8 comprehensive tests covering Metric 1 real frozen probe execution, Metric 2 uncited/unsupported rejection and deletion revalidation, Metric 3 policy widening refusal and fan-out tool budget trip, and API integration).
+WHY:  Phase 3 research pipeline executes end-to-end multi-step planning, bounded fan-out with enforced tool budgets,
+      extracts evidence with strict provenance, verifies claims through the ExtractiveGrounder seam, and synthesizes
+      honest reports where uncited or refuted claims are relegated to unknowns rather than fabricated into the report.
+REUSED:
+      - packages/agents/factories.py (resolve_agent_llm_provider, create_agent_runtime)
+      - packages/agents/policy.py (WorkspaceAgentPolicy, derive_effective_run_config, get_workspace_policy, PolicyViolationError)
+      - packages/agents/planner.py (StormPlanner, StormPlan, InMemoryPlanStore)
+      - packages/agents/evidence.py (EvidenceRecord, Citation, InMemoryEvidenceStore)
+      - packages/agents/verifier.py (EvidenceVerifier, InMemoryChunkSource)
+      - packages/agents/gap.py (GapAnalyzer, Unknown)
+      - packages/agents/contradictions.py (ContradictionDetector, Contradiction, Candidate)
+      - packages/agents/synthesis.py (GroundedSynthesizer, GroundedSentence, SynthesizedReport)
+      - packages/answer/verification.py (ExtractiveGrounder)
+METRICS:
+      - pipeline stages running on fakes/mocks: 0 (planner + fan-out + verify execute against real runtime/tools on frozen probe).
+      - synthesized claims without verified evidence: 0 (uncited claims and unsupported claims rejected into unknowns; deletion revalidation via tombstoned chunks verified).
+      - policy/budget bypasses in fan-out: 0 (above-policy max_questions and max_cost_usd refused with PolicyViolationError and HTTP 400; tool budget trip sets LIMIT_EXCEEDED / BUDGET_EXCEEDED and records BUDGET_EXHAUSTED).
+VERIFY:
+      - pytest tests/unit/test_v3_research_pipeline.py -> 8 passed in 2.16s
+      - pytest tests/unit/test_v3_research_pipeline.py tests/unit/test_research_api.py tests/unit/test_agent_unavailable_contract.py tests/unit/test_v3_factories_policy_budget.py tests/unit/test_agent_runs_api.py -> 60 passed in 132.34s
+      - pytest tests/unit/test_agents.py -> 172 passed in 6.29s
+      - ruff check packages/agents/research_pipeline.py packages/agents/planner.py packages/agents/__init__.py apps/api/app/agents/research.py tests/unit/test_v3_research_pipeline.py -> All checks passed!
+      - mypy packages/agents/research_pipeline.py apps/api/app/agents/research.py tests/unit/test_v3_research_pipeline.py -> Success: no issues found in 3 source files
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched.
+```

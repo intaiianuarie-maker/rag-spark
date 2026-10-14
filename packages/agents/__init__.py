@@ -38,6 +38,10 @@ from .policy import (
     reset_workspace_policies,
     set_workspace_policy,
 )
+from .research_pipeline import (
+    ResearchPipeline,
+    create_research_pipeline_runner,
+)
 from .runtime import (
     AgentRuntime,
     can_reserve_tokens,
@@ -69,6 +73,7 @@ __all__ = [
     "KnowledgeSearchTool",
     "ModelPolicy",
     "PolicyViolationError",
+    "ResearchPipeline",
     "RetryPolicy",
     "RunBudget",
     "RunContext",
@@ -88,6 +93,7 @@ __all__ = [
     "can_reserve_tool_call",
     "can_reserve_tool_spend",
     "create_agent_runtime",
+    "create_research_pipeline_runner",
     "derive_effective_run_config",
     "get_workspace_policy",
     "reset_workspace_policies",

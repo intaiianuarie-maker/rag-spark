@@ -63,11 +63,19 @@ def _require_workspace(principal: Principal, workspace_id: uuid.UUID) -> None:
 
 
 def create_research_pipeline():
-    """Factory seam — tests monkeypatch this to stage with fakes."""
+    """Factory seam — tests monkeypatch this to stage with fakes.
 
-    # Skeleton pipeline with in-memory chunk source and no-op planner
-    # Production would wire real LLM + planner + fanout + verifier + gap + synthesis
-    return None
+    When an LLM provider is configured (via LiteLLM / OpenRouter surface),
+    wires the real ResearchPipeline runner (T-R16).
+    When unconfigured, returns None (preserving R02 unavailable contract).
+    """
+    from agents.factories import resolve_agent_llm_provider
+    from agents.research_pipeline import create_research_pipeline_runner
+
+    llm = resolve_agent_llm_provider(call_site="agents.research")
+    if llm is None:
+        return None
+    return create_research_pipeline_runner(llm=llm)
 
 
 class SubmitResearchRequest(BaseModel):
@@ -150,8 +158,29 @@ async def submit_research(
             "generated or cited.",
         ).report(topic)
     else:
-        # Patched pipeline returns a pre-staged report dict (test-only seam).
-        report = await pipeline(topic, str(workspace_id), principal.user_id)
+        from agents.policy import PolicyViolationError
+
+        try:
+            try:
+                report = await pipeline(
+                    topic,
+                    str(workspace_id),
+                    principal.user_id,
+                    max_questions=body.max_questions,
+                )
+            except TypeError:
+                report = await pipeline(topic, str(workspace_id), principal.user_id)
+        except PolicyViolationError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "policy_violation",
+                    "message": str(exc),
+                    "field": exc.field,
+                    "requested": exc.requested,
+                    "limit": exc.limit,
+                },
+            ) from exc
     _ = source  # retained: the wired pipeline path owns its own chunk source
 
     unavailable = report.get("error_code") == UNAVAILABLE_CODE

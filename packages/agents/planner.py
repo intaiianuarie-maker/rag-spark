@@ -54,7 +54,10 @@ MAX_PLAN_BYTES = 32768
 MIN_MAX_TOKENS = 1000
 
 PLANNER_VERSION = "v1.0.0-2026-10-13"
-FREE_MODELS: frozenset[str] = frozenset({"nvidia/nemotron-3.5-lightning:free"})
+FREE_MODELS: frozenset[str] = frozenset({
+    "nvidia/nemotron-3.5-lightning:free",
+    "google/gemma-4-26b-a4b-it:free",
+})
 
 # ---------------------------------------------------------------------------
 # Typed refusal
