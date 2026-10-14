@@ -136,6 +136,25 @@ def can_reserve_tool_call(usage: Usage | None, budget: RunBudget) -> bool:
     return (usage.tool_calls or 0) + 1 <= budget.max_tool_calls
 
 
+def can_reserve_tool_spend(
+    usage: Usage | None, budget: RunBudget, tool_cost: float
+) -> bool:
+    """Pure: can we reserve ``tool_cost`` against tool spend budget and total cost budget?"""
+    if usage is None:
+        return False
+    if tool_cost < 0:
+        return False
+    used_tool_cost = usage.tool_cost_usd or 0.0
+    used_total_cost = usage.cost_usd or 0.0
+    if budget.max_tool_cost_usd is not None:
+        if round(used_tool_cost + tool_cost, 6) > budget.max_tool_cost_usd:
+            return False
+    if budget.max_cost_usd is not None:
+        if round(used_total_cost + tool_cost, 6) > budget.max_cost_usd:
+            return False
+    return True
+
+
 def can_reserve_before_llm(
     usage: Usage | None, budget: RunBudget, deadline: datetime, estimated_tokens: int
 ) -> bool:
@@ -587,7 +606,13 @@ class AgentRuntime:
         return result, StepStatus.SUCCEEDED, None
 
     def _check_step_budget(
-        self, *, state: RunState, context: RunContext, tool_calls_used: int
+        self,
+        *,
+        state: RunState,
+        context: RunContext,
+        tool_calls_used: int,
+        tool_cost_used: float = 0.0,
+        cost_used: float = 0.0,
     ) -> bool:
         """Return True when the run may take another step, else set limit state."""
         if datetime.now(UTC) >= context.deadline:
@@ -602,6 +627,32 @@ class AgentRuntime:
                 RunStatus.LIMIT_EXCEEDED,
                 error_code=AgentErrorCode.BUDGET_EXCEEDED,
                 error_detail=f"tool-call budget exceeded ({context.budget.max_tool_calls})",
+            )
+            return False
+        if (
+            context.budget.max_tool_cost_usd is not None
+            and round(tool_cost_used, 6) > context.budget.max_tool_cost_usd
+        ):
+            state.transition_to(
+                RunStatus.LIMIT_EXCEEDED,
+                error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                error_detail=(
+                    f"tool cost budget exceeded: spend ${tool_cost_used:.4f} > "
+                    f"cap ${context.budget.max_tool_cost_usd:.4f}"
+                ),
+            )
+            return False
+        if (
+            context.budget.max_cost_usd is not None
+            and round(cost_used, 6) > context.budget.max_cost_usd
+        ):
+            state.transition_to(
+                RunStatus.LIMIT_EXCEEDED,
+                error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                error_detail=(
+                    f"cost budget exceeded: spend ${cost_used:.4f} > "
+                    f"cap ${context.budget.max_cost_usd:.4f}"
+                ),
             )
             return False
         return True
@@ -730,6 +781,8 @@ class AgentRuntime:
         total_tokens = usage.prompt_tokens + usage.completion_tokens
         # tool_calls is usage.tool_calls, but also count steps with tool_name
         tool_calls = usage.tool_calls
+        total_tool_cost_usd: float = usage.tool_cost_usd or 0.0
+        total_cost_usd: float = usage.cost_usd or 0.0
         # Re-derive from the persisted run in case usage was seeded from AgentRun
         if _existing_run is not None:
             total_tokens = _existing_run.total_tokens
@@ -841,8 +894,30 @@ class AgentRuntime:
                     _PERSISTED_STATES[context.run_id] = state
                     agent_run.finished_at = datetime.now(UTC).isoformat()
                     return agent_run
+                _waiting_tool_obj = self.registry.get(w_tool)
+                _waiting_tool_cost = getattr(_waiting_tool_obj, "cost_usd", 0.0) or 0.0
+                if not can_reserve_tool_spend(usage, context.budget, _waiting_tool_cost):
+                    _cap = (
+                        context.budget.max_tool_cost_usd
+                        if context.budget.max_tool_cost_usd is not None
+                        else context.budget.max_cost_usd
+                    )
+                    state.transition_to(
+                        RunStatus.LIMIT_EXCEEDED,
+                        error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                        error_detail=(
+                            f"tool budget would be exceeded: spend "
+                            f"${total_tool_cost_usd + _waiting_tool_cost:.4f} "
+                            f"would exceed cap ${_cap:.4f}"
+                        ),
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    agent_run.finished_at = datetime.now(UTC).isoformat()
+                    return agent_run
                 # Resolve retry policy for the waiting tool
-                _tool_for_retry = self.registry.get(w_tool)
+                _tool_for_retry = _waiting_tool_obj
                 _retry_policy = (
                     _tool_for_retry.retry_policy
                     if _tool_for_retry is not None and hasattr(_tool_for_retry, "retry_policy")
@@ -853,7 +928,15 @@ class AgentRuntime:
                 while True:
                     attempt += 1
                     tool_calls += 1
-                    usage = Usage(prompt_tokens=total_tokens, completion_tokens=0, tool_calls=tool_calls)  # noqa: E501
+                    total_tool_cost_usd = round(total_tool_cost_usd + _waiting_tool_cost, 6)
+                    total_cost_usd = round(total_cost_usd + _waiting_tool_cost, 6)
+                    usage = Usage(
+                        prompt_tokens=total_tokens,
+                        completion_tokens=0,
+                        tool_calls=tool_calls,
+                        cost_usd=total_cost_usd,
+                        tool_cost_usd=total_tool_cost_usd,
+                    )
                     _PERSISTED_USAGES[context.run_id] = usage
                     _PERSISTED_RUNS[context.run_id] = agent_run
                     output, status, error_code = await self._dispatch(
@@ -918,7 +1001,13 @@ class AgentRuntime:
                                     except InvalidRunTransitionError:
                                         pass
                                 break
-                    if not self._check_step_budget(state=state, context=context, tool_calls_used=tool_calls):  # noqa: E501
+                    if not self._check_step_budget(
+                        state=state,
+                        context=context,
+                        tool_calls_used=tool_calls,
+                        tool_cost_used=total_tool_cost_usd,
+                        cost_used=total_cost_usd,
+                    ):
                         agent_run.status = _legacy_status(state.status)
                         agent_run.error = state.error_detail
                         break
@@ -967,9 +1056,13 @@ class AgentRuntime:
                 agent_run.error = state.error_detail
                 _PERSISTED_STATES[context.run_id] = state
                 break
-            # Also check step budget (tool_calls/deadline) before LLM
+            # Also check step budget (tool_calls/deadline/costs) before LLM
             if not self._check_step_budget(
-                state=state, context=context, tool_calls_used=tool_calls
+                state=state,
+                context=context,
+                tool_calls_used=tool_calls,
+                tool_cost_used=total_tool_cost_usd,
+                cost_used=total_cost_usd,
             ):
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = state.error_detail
@@ -1014,11 +1107,19 @@ class AgentRuntime:
 
             step_tokens = (gen_res.prompt_tokens or 0) + (gen_res.completion_tokens or 0)
             total_tokens += step_tokens
+            gen_cost = 0.0
+            if getattr(gen_res, "metadata", None) and isinstance(gen_res.metadata, dict):
+                val = gen_res.metadata.get("cost_usd") or gen_res.metadata.get("cost")
+                if isinstance(val, (int, float, str)):
+                    gen_cost = float(val)
+            total_cost_usd = round(total_cost_usd + gen_cost, 6)
             # Persist usage durably — survives simulated retry/restart
             usage = Usage(
                 prompt_tokens=total_tokens,  # keep simple: total as prompt for test visibility
                 completion_tokens=0,
                 tool_calls=tool_calls,
+                cost_usd=total_cost_usd,
+                tool_cost_usd=total_tool_cost_usd,
             )
             agent_run.total_tokens = total_tokens
             _PERSISTED_USAGES[context.run_id] = usage
@@ -1029,6 +1130,23 @@ class AgentRuntime:
                     error_code=AgentErrorCode.BUDGET_EXCEEDED,
                     error_detail=f"token budget exceeded ({total_tokens} > "
                     f"{context.budget.max_tokens})",
+                )
+                agent_run.status = _legacy_status(state.status)
+                agent_run.error = state.error_detail
+                _PERSISTED_STATES[context.run_id] = state
+                _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
+                break
+            if (
+                context.budget.max_cost_usd is not None
+                and round(total_cost_usd, 6) > context.budget.max_cost_usd
+            ):
+                state.transition_to(
+                    RunStatus.LIMIT_EXCEEDED,
+                    error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                    error_detail=(
+                        f"cost budget exceeded: spend ${total_cost_usd:.4f} > "
+                        f"cap ${context.budget.max_cost_usd:.4f}"
+                    ),
                 )
                 agent_run.status = _legacy_status(state.status)
                 agent_run.error = state.error_detail
@@ -1119,6 +1237,27 @@ class AgentRuntime:
                     _PERSISTED_STATES[context.run_id] = state
                     _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
                     break
+                _tool_cost = getattr(_tool_for_retry, "cost_usd", 0.0) or 0.0
+                if not can_reserve_tool_spend(usage, context.budget, _tool_cost):
+                    _cap = (
+                        context.budget.max_tool_cost_usd
+                        if context.budget.max_tool_cost_usd is not None
+                        else context.budget.max_cost_usd
+                    )
+                    state.transition_to(
+                        RunStatus.LIMIT_EXCEEDED,
+                        error_code=AgentErrorCode.BUDGET_EXCEEDED,
+                        error_detail=(
+                            f"tool budget would be exceeded: spend "
+                            f"${total_tool_cost_usd + _tool_cost:.4f} "
+                            f"would exceed cap ${_cap:.4f}"
+                        ),
+                    )
+                    agent_run.status = _legacy_status(state.status)
+                    agent_run.error = state.error_detail
+                    _PERSISTED_STATES[context.run_id] = state
+                    _maybe_checkpoint(context.run_id, state, usage, context, agent_run)
+                    break
                 if datetime.now(UTC) >= context.deadline:
                     state.transition_to(
                         RunStatus.LIMIT_EXCEEDED,
@@ -1137,11 +1276,15 @@ class AgentRuntime:
                 while True:
                     attempt += 1
                     tool_calls += 1
-                    # Persist tool_calls in usage before the spend
+                    total_tool_cost_usd = round(total_tool_cost_usd + _tool_cost, 6)
+                    total_cost_usd = round(total_cost_usd + _tool_cost, 6)
+                    # Persist tool_calls and cost in usage before the spend
                     usage = Usage(
                         prompt_tokens=total_tokens,
                         completion_tokens=0,
                         tool_calls=tool_calls,
+                        cost_usd=total_cost_usd,
+                        tool_cost_usd=total_tool_cost_usd,
                     )
                     _PERSISTED_USAGES[context.run_id] = usage
                     _PERSISTED_RUNS[context.run_id] = agent_run
@@ -1253,7 +1396,11 @@ class AgentRuntime:
                         break
                     # Check budget/deadline before next attempt.
                     if not self._check_step_budget(
-                        state=state, context=context, tool_calls_used=tool_calls
+                        state=state,
+                        context=context,
+                        tool_calls_used=tool_calls,
+                        tool_cost_used=total_tool_cost_usd,
+                        cost_used=total_cost_usd,
                     ):
                         agent_run.status = _legacy_status(state.status)
                         agent_run.error = state.error_detail

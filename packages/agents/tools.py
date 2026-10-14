@@ -94,6 +94,7 @@ class Tool(ABC):
     name: ClassVar[str]
     description: ClassVar[str]
     input_schema: ClassVar[dict[str, Any]]
+    cost_usd: float = 0.0
 
     @abstractmethod
     async def execute(self, workspace_id: str, **kwargs: Any) -> Any:
@@ -116,6 +117,11 @@ class CalculatorTool(Tool):
 
     name: ClassVar[str] = "calculator"
     description: ClassVar[str] = "Compute arithmetic expressions (e.g. '12 * 45 + 10')."
+    cost_usd: float = 0.001
+
+    def __init__(self, cost_usd: float | None = None) -> None:
+        if cost_usd is not None:
+            self.cost_usd = cost_usd
     input_schema: ClassVar[dict[str, Any]] = {
         "type": "object",
         "properties": {
@@ -368,11 +374,16 @@ class KnowledgeSearchTool(Tool):
     MAX_SEARCH_TOP_K: ClassVar[int] = MAX_SEARCH_TOP_K
     MAX_SEARCH_OUTPUT_BYTES: ClassVar[int] = MAX_SEARCH_OUTPUT_BYTES
     MAX_SNIPPET_CHARS: ClassVar[int] = MAX_SNIPPET_CHARS
+    cost_usd: float = 0.01
 
-    def __init__(self, orchestrator: Any | None = None) -> None:
+    def __init__(
+        self, orchestrator: Any | None = None, cost_usd: float | None = None
+    ) -> None:
         # ``Any`` to avoid importing the retrieval interface at runtime; the
         # only required surface is ``retrieve(query, acl_scope, context_top_k)``.
         self._orchestrator: Any | None = orchestrator
+        if cost_usd is not None:
+            self.cost_usd = cost_usd
 
     def _resolve_orchestrator(self) -> Any | None:
         if self._orchestrator is not None:
@@ -593,13 +604,18 @@ class KnowledgeReadTool(Tool):
 
     MAX_OUTPUT_BYTES: ClassVar[int] = MAX_SEARCH_OUTPUT_BYTES
     MAX_SNIPPET_CHARS: ClassVar[int] = MAX_SNIPPET_CHARS
+    cost_usd: float = 0.005
 
-    def __init__(self, chunk_reader: Any | None = None) -> None:
+    def __init__(
+        self, chunk_reader: Any | None = None, cost_usd: float | None = None
+    ) -> None:
         # ``chunk_reader`` is an injectable async callable
         # ``(document_id, version_id, chunk_id) -> ChunkRow | None`` or a
         # minimal store with ``get_chunk``. When ``None`` the tool uses the
         # persistence seam directly.
         self._chunk_reader: Any | None = chunk_reader
+        if cost_usd is not None:
+            self.cost_usd = cost_usd
 
     @staticmethod
     def _is_uuid(value: Any) -> bool:

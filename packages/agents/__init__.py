@@ -1,5 +1,9 @@
-"""Agent Runtime package (Phase 11 / Sections 25-27) + V3 typed contracts (A0)."""
+"""Agent Runtime package (Phase 11 / Sections 25-27) + V3 typed contracts (A0) + T-R14."""
 
+from .factories import (
+    create_agent_runtime,
+    resolve_agent_llm_provider,
+)
 from .interfaces import (
     RESERVED_CONTEXT_FIELDS,
     AgentConfig,
@@ -24,9 +28,26 @@ from .interfaces import (
     Usage,
     validate_tool_arguments,
 )
-from .runtime import AgentRuntime
+from .policy import (
+    EffectiveRunConfig,
+    PolicyViolationError,
+    WorkspaceAgentPolicy,
+    WorkspacePolicyStore,
+    derive_effective_run_config,
+    get_workspace_policy,
+    reset_workspace_policies,
+    set_workspace_policy,
+)
+from .runtime import (
+    AgentRuntime,
+    can_reserve_tokens,
+    can_reserve_tool_call,
+    can_reserve_tool_spend,
+)
 from .tools import (
     CalculatorTool,
+    KnowledgeReadTool,
+    KnowledgeSearchTool,
     Tool,
     ToolRegistry,
 )
@@ -42,8 +63,12 @@ __all__ = [
     "AgentStepType",
     "CalculatorTool",
     "ContextOverrideError",
+    "EffectiveRunConfig",
     "InvalidRunTransitionError",
+    "KnowledgeReadTool",
+    "KnowledgeSearchTool",
     "ModelPolicy",
+    "PolicyViolationError",
     "RetryPolicy",
     "RunBudget",
     "RunContext",
@@ -57,5 +82,16 @@ __all__ = [
     "ToolRegistry",
     "ToolSpec",
     "Usage",
+    "WorkspaceAgentPolicy",
+    "WorkspacePolicyStore",
+    "can_reserve_tokens",
+    "can_reserve_tool_call",
+    "can_reserve_tool_spend",
+    "create_agent_runtime",
+    "derive_effective_run_config",
+    "get_workspace_policy",
+    "reset_workspace_policies",
+    "resolve_agent_llm_provider",
+    "set_workspace_policy",
     "validate_tool_arguments",
 ]

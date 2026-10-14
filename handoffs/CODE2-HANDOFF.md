@@ -403,3 +403,45 @@ RISKS:
       - Ingestion pipeline relies on OpenRouter API availability and token budget.
 GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched.
 ```
+
+---
+
+## T-R14 — V3 real factories + server policy (Phase 3 opens)
+
+```text
+TASK: T-R14 — V3 real factories + server policy (Phase 3 opens).
+      (1) model router + LiteLLM/OpenRouter provider + scoped knowledge search/read tools WIRED (ARCH-02 surface);
+      (2) allowed models/tools/budget caps DERIVED from server-side policy (requests may NARROW limits, never widen org policy);
+      (3) tool budgets enforced per-run (spend tracked, cap stops execution with typed error, metered).
+CHANGE:
+      - NEW packages/agents/policy.py (WorkspaceAgentPolicy, PolicyViolationError, EffectiveRunConfig, derive_effective_run_config, WorkspacePolicyStore).
+      - NEW packages/agents/factories.py (resolve_agent_llm_provider, create_agent_runtime wiring Calculator, KnowledgeSearchTool, KnowledgeReadTool).
+      - packages/agents/interfaces.py (max_cost_usd and max_tool_cost_usd on RunBudget, tool_cost_usd on Usage).
+      - packages/agents/tools.py (cost_usd on Tool base class and CalculatorTool, KnowledgeSearchTool, KnowledgeReadTool).
+      - packages/agents/runtime.py (can_reserve_tool_spend, cost tracking in Usage, loud cap trip on budget overrun in run_enforced).
+      - packages/agents/__init__.py (exports for policy, factories, tools, and budget reservation).
+      - apps/api/app/agents/router.py (derives effective run config from workspace policy, wires knowledge tools when configured, preserves R02 unavailable contract when unconfigured).
+      - NEW tests/unit/test_v3_factories_policy_budget.py (18 tests covering policy narrowing, widening refusal, per-run budget trip, and factory wiring).
+WHY:  Phase 3 builds the configured execution path real while strictly preserving R02 unconfigured contracts.
+      Workspaces enforce server-side agent policies and per-run tool budgets so no model or request can widen
+      org limits or execute runaway tool spend silently.
+REUSED:
+      - packages/models/adapters/litellm_provider.py (create_llm_provider from T-ARCH-02)
+      - packages/models/router_config.py (load_workspace_config, route)
+      - packages/agents/tools.py (KnowledgeSearchTool, KnowledgeReadTool, CalculatorTool)
+BUILT:
+      - Server Policy: WorkspaceAgentPolicy with allowed_models, allowed_tools, max_steps, max_tokens, max_tool_calls, max_cost_usd, max_tool_cost_usd, max_wall_clock_s.
+      - Derivation: derive_effective_run_config honors narrowing requests and strictly refuses widening with typed PolicyViolationError (HTTP 400 Bad Request).
+      - Tool Budget Enforcement: can_reserve_tool_spend checks tool spend before invocation; runtime trips loudly to LIMIT_EXCEEDED with AgentErrorCode.BUDGET_EXCEEDED and states spend and cap amounts in error_detail.
+      - Real Factories: create_agent_runtime wires LLMProvider from ARCH-02 surface and registers Calculator, KnowledgeSearchTool, KnowledgeReadTool with positive per-invocation costs.
+METRICS:
+      - widening requests honored: 0 (above-policy steps, tokens, tool_calls, costs, models, and tools refused with PolicyViolationError and HTTP 400).
+      - unconfigured paths changed: 0 (R02 contract intact; test_agent_unavailable_contract.py 22/22 green untouched; zero tools registered on unconfigured paths).
+      - budget overruns silent: 0 (tool spend cap trips loudly to LIMIT_EXCEEDED / BUDGET_EXCEEDED with spend and cap explicitly stated).
+VERIFY:
+      - pytest tests/unit/test_agent_unavailable_contract.py tests/unit/test_v3_factories_policy_budget.py tests/unit/test_agent_runs_api.py tests/unit/test_research_api.py -> 52 passed in 67.84s
+      - pytest tests/unit/test_agents.py -> 172 passed in 8.05s
+      - ruff check packages/agents apps/api/app/agents tests/unit/test_v3_factories_policy_budget.py -> All checks passed!
+      - mypy packages/agents/policy.py packages/agents/factories.py apps/api/app/agents/router.py tests/unit/test_v3_factories_policy_budget.py -> Success: no issues found in 4 source files
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched.
+```

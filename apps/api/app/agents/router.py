@@ -22,8 +22,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from agents.interfaces import AgentErrorCode, ModelPolicy, RunBudget, RunContext, RunStatus
+from agents.policy import (
+    PolicyViolationError,
+    derive_effective_run_config,
+    get_workspace_policy,
+)
 from agents.runtime import AgentRuntime
-from agents.tools import CalculatorTool, ToolRegistry
+from agents.tools import CalculatorTool, KnowledgeReadTool, KnowledgeSearchTool, ToolRegistry
 from agents.unavailable import (
     MISSING_LLM_PROVIDER,
     UNAVAILABLE_CODE,
@@ -31,6 +36,7 @@ from agents.unavailable import (
 )
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, status
+from models.router_config import load_workspace_config, route
 from pydantic import BaseModel, Field
 
 from app.authz import Action, Resource, require
@@ -74,7 +80,7 @@ def _resolve_llm_provider():
     try:
         from models.adapters.litellm_provider import create_llm_provider
 
-        return create_llm_provider()
+        return create_llm_provider(call_site="agents.runtime")
     except Exception:
         # A configured-but-broken gateway is still not something to paper over
         # with a fake. Returning None keeps the outcome honest; the detail below
@@ -99,14 +105,20 @@ def create_runtime() -> AgentRuntime:
         )
     reg = ToolRegistry()
     reg.register(CalculatorTool())
+    reg.register(KnowledgeSearchTool())
+    reg.register(KnowledgeReadTool())
     return AgentRuntime(llm, reg)
 
 
 class StartRunRequest(BaseModel):
     goal: str = Field(min_length=1, max_length=4096)
-    max_steps: int = Field(default=5, ge=1, le=20)
-    max_tokens: int = Field(default=100000, ge=1)
-    max_tool_calls: int = Field(default=50, ge=0)
+    model: str | None = Field(
+        default=None, description="Requested model (must be allowed by policy)"
+    )
+    max_steps: int | None = Field(default=None, ge=1, le=20)
+    max_tokens: int | None = Field(default=None, ge=1)
+    max_tool_calls: int | None = Field(default=None, ge=0)
+    max_cost_usd: float | None = Field(default=None, ge=0.0)
     allowed_tools: list[str] = Field(default_factory=list)
 
 
@@ -155,28 +167,88 @@ async def start_run(
 ) -> StartRunResponse:
     _require_workspace(principal, workspace_id)
 
+    ws_id_str = str(workspace_id)
+    policy = get_workspace_policy(ws_id_str)
+
+    try:
+        effective_cfg = derive_effective_run_config(
+            policy,
+            goal=body.goal,
+            requested_model=body.model,
+            requested_tools=body.allowed_tools or None,
+            requested_steps=body.max_steps,
+            requested_tokens=body.max_tokens,
+            requested_tool_calls=body.max_tool_calls,
+            requested_cost_usd=body.max_cost_usd,
+        )
+    except PolicyViolationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "policy_violation",
+                "message": str(exc),
+                "field": exc.field,
+                "requested": exc.requested,
+                "limit": exc.limit,
+            },
+        ) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_policy", "message": str(exc)},
+        ) from exc
+
     # Bounded everything — RunBudget validates bounds, RunContext validates IDs
     try:
-        budget = RunBudget(max_steps=body.max_steps, max_tokens=body.max_tokens, max_tool_calls=body.max_tool_calls)  # noqa: E501
+        budget = RunBudget(
+            max_steps=effective_cfg.max_steps,
+            max_tokens=effective_cfg.max_tokens,
+            max_tool_calls=effective_cfg.max_tool_calls,
+            max_cost_usd=effective_cfg.max_cost_usd,
+            max_tool_cost_usd=effective_cfg.max_tool_cost_usd,
+            max_wall_clock_s=effective_cfg.max_wall_clock_s,
+        )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_budget", "message": str(exc)}) from exc  # noqa: E501
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_budget", "message": str(exc)},
+        ) from exc
 
     run_id = str(uuid.uuid4())
+    # Model selection: workspace router config if present and no explicit request override
+    selected_model = effective_cfg.model
+    if not body.model:
+        try:
+            ws_model_cfg = load_workspace_config(ws_id_str)
+            if ws_model_cfg:
+                routed = route("agent", ws_model_cfg)
+                if routed in effective_cfg.allowed_models:
+                    selected_model = routed
+        except Exception:
+            pass
+
     # Reuse same gates as in-process: budget reservation, approval, workspace scope, bounded.
     # Build RunContext with workspace_id from URL (not body) — cross-workspace bypass impossible.
     try:
         ctx = RunContext(
             run_id=run_id,
-            workspace_id=str(workspace_id),
+            workspace_id=ws_id_str,
             principal_id=principal.user_id,
             authz_policy_revision="rev1",
-            model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+            model_policy=ModelPolicy(
+                allowed_models=effective_cfg.allowed_models,
+                default_model=selected_model,
+            ),
             budget=budget,
-            deadline=datetime.now(UTC) + timedelta(seconds=30),
-            allowed_tools=body.allowed_tools,
+            deadline=datetime.now(UTC)
+            + timedelta(seconds=min(30.0, effective_cfg.max_wall_clock_s)),
+            allowed_tools=effective_cfg.allowed_tools,
         )
     except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_context", "message": str(exc)}) from exc  # noqa: E501
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "invalid_context", "message": str(exc)},
+        ) from exc
 
     runtime = None
     unavailable_detail: str | None = None

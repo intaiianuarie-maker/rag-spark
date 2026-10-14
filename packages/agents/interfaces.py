@@ -158,6 +158,7 @@ class Usage(BaseModel):
     completion_tokens: int = 0
     tool_calls: int = 0
     cost_usd: float | None = None
+    tool_cost_usd: float | None = None
 
 
 class RunBudget(BaseModel):
@@ -170,6 +171,8 @@ class RunBudget(BaseModel):
     max_tool_calls: int = 50
     max_wall_clock_s: float = 300.0
     max_concurrent_tools: int = 1
+    max_cost_usd: float | None = None
+    max_tool_cost_usd: float | None = None
 
     @model_validator(mode="after")
     def _validate_bounds(self) -> RunBudget:
@@ -183,6 +186,10 @@ class RunBudget(BaseModel):
             raise ValueError("max_wall_clock_s must be > 0")
         if self.max_concurrent_tools < 1:
             raise ValueError("max_concurrent_tools must be >= 1")
+        if self.max_cost_usd is not None and self.max_cost_usd < 0:
+            raise ValueError("max_cost_usd must be >= 0")
+        if self.max_tool_cost_usd is not None and self.max_tool_cost_usd < 0:
+            raise ValueError("max_tool_cost_usd must be >= 0")
         return self
 
 
