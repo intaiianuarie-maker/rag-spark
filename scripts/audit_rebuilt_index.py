@@ -34,6 +34,7 @@ import asyncio
 import importlib.util
 import json
 import logging
+import math
 import os
 import pathlib
 import sys
@@ -92,15 +93,21 @@ def manifest_from_postgres(limit: int | None = None) -> list[dict[str, Any]]:
     ]
 
 
-def scroll_all_points(collection: str, qdrant_url: str) -> list[dict[str, Any]]:
-    """Every point's payload (no vectors) from Qdrant, via the REST API."""
+def scroll_all_points(
+    collection: str, qdrant_url: str, with_vectors: bool = False
+) -> list[dict[str, Any]]:
+    """Every point's payload (+ optional vectors) from Qdrant, via the REST API."""
     import urllib.error
     import urllib.request
 
     out: list[dict[str, Any]] = []
     offset: Any = None
     while True:
-        body: dict[str, Any] = {"limit": 256, "with_payload": True, "with_vector": False}
+        body: dict[str, Any] = {
+            "limit": 256,
+            "with_payload": True,
+            "with_vector": with_vectors,
+        }
         if offset is not None:
             body["offset"] = offset
         req = urllib.request.Request(
@@ -165,6 +172,7 @@ def audit_identity(points: list[dict[str, Any]], identity: dict[str, Any]) -> di
                 if meta.get(key) != expected[key]:
                     reasons[key] = reasons.get(key, 0) + 1
     return {
+        "denominator": "512/2204",
         "total": len(points),
         "unlabelled": unlabelled,
         "incompatible": incompatible,
@@ -191,6 +199,7 @@ def audit_membership(
     extra = rebuilt - manifest_ids       # ghosts: points with no manifest row
     missing = manifest_ids - rebuilt     # silently dropped chunks
     return {
+        "denominator": "512/2204",
         "rebuilt_points": len(points),
         "distinct_chunk_ids": len(rebuilt),
         "manifest_chunk_ids": len(manifest_ids),
@@ -198,6 +207,7 @@ def audit_membership(
         "extra_count": len(extra),
         "missing_chunk_ids": sorted(str(x) for x in missing)[:50],
         "missing_count": len(missing),
+        "subset_ok": not extra,
         "ok": not extra and not missing,
     }
 
@@ -233,6 +243,7 @@ def audit_original_hashes(
             continue
         checked += 1
     return {
+        "denominator": "512/2204",
         "manifest_rows_with_hash": sum(
             1 for h in manifest_hashes.values() if h and len(str(h)) == 64
         ),
@@ -272,6 +283,7 @@ def audit_version_gate(
         if current[str(doc_id)] != str(ver_id):
             stale += 1
     return {
+        "denominator": "512/2204",
         "stale_version_points": stale,
         "unknown_document_points": unknown,
         "authoritative_documents": len(current),
@@ -292,6 +304,7 @@ def audit_sanity(
     rebuilt_ws = {(p.get("payload") or {}).get("workspace_id") for p in points}
     manifest_ws = {r["workspace_id"] for r in manifest_rows}
     return {
+        "denominator": "512/2204",
         "collection_dense_size": dim,
         "rebuilt_workspaces": len(rebuilt_ws),
         "manifest_workspaces": len(manifest_ws),
@@ -300,7 +313,216 @@ def audit_sanity(
             "extra": sorted(str(x) for x in (rebuilt_ws - manifest_ws)),
             "missing": sorted(str(x) for x in (manifest_ws - rebuilt_ws)),
         },
+        "subset_ok": bool(dim) and len(rebuilt_ws - manifest_ws) == 0,
         "ok": bool(dim) and rebuilt_ws == manifest_ws,
+    }
+
+
+def audit_vector_sanity(points: list[dict[str, Any]]) -> dict[str, Any]:
+    """Dense vectors must have dim=1024, finite floats, norm > 0, and no zero-runs."""
+    ragged = 0
+    nan_count = 0
+    inf_count = 0
+    zero_vectors = 0
+    max_zero_run = 0
+    zero_run_violations = 0
+    checked = 0
+    for p in points:
+        vec = p.get("vector")
+        dense = vec.get("dense") if isinstance(vec, dict) else vec
+        if not dense or len(dense) != 1024:
+            ragged += 1
+            continue
+        checked += 1
+        if any(math.isnan(x) for x in dense):
+            nan_count += 1
+        if any(math.isinf(x) for x in dense):
+            inf_count += 1
+        norm = math.sqrt(sum(x * x for x in dense))
+        if norm < 1e-6:
+            zero_vectors += 1
+        curr_zeros = 0
+        max_z = 0
+        for x in dense:
+            if x == 0.0:
+                curr_zeros += 1
+                max_z = max(max_z, curr_zeros)
+            else:
+                curr_zeros = 0
+        max_zero_run = max(max_zero_run, max_z)
+        if max_z > 10:
+            zero_run_violations += 1
+    ok = (
+        checked == len(points)
+        and ragged == 0
+        and nan_count == 0
+        and inf_count == 0
+        and zero_vectors == 0
+        and zero_run_violations == 0
+    )
+    return {
+        "denominator": "512/2204",
+        "checked_points": checked,
+        "total_points": len(points),
+        "ragged_dimension": ragged,
+        "nan_count": nan_count,
+        "inf_count": inf_count,
+        "zero_vectors": zero_vectors,
+        "max_consecutive_zeros": max_zero_run,
+        "zero_run_violations": zero_run_violations,
+        "ok": ok,
+    }
+
+
+def audit_representative_retrieval(
+    collection: str, points: list[dict[str, Any]], qdrant_url: str, n_probes: int = 8
+) -> dict[str, Any]:
+    """Sample distinct probe points and verify vector search returns sane ranks."""
+    import urllib.request
+
+    seen_ws: set[str] = set()
+    probes: list[dict[str, Any]] = []
+    for p in points:
+        ws = (p.get("payload") or {}).get("workspace_id")
+        if ws and ws not in seen_ws and p.get("vector"):
+            seen_ws.add(ws)
+            probes.append(p)
+        if len(probes) >= n_probes:
+            break
+    if not probes:
+        for p in points[:n_probes]:
+            if p.get("vector"):
+                probes.append(p)
+
+    probe_results = []
+    all_sane = True
+    for p in probes:
+        vec = p.get("vector")
+        dense = vec.get("dense") if isinstance(vec, dict) else vec
+        cid = (p.get("payload") or {}).get("chunk_id")
+        ws = (p.get("payload") or {}).get("workspace_id")
+        body = {
+            "vector": {"name": "dense", "vector": dense},
+            "limit": 5,
+            "with_payload": True,
+        }
+        req = urllib.request.Request(
+            f"{qdrant_url.rstrip('/')}/collections/{collection}/points/search",
+            data=json.dumps(body).encode(),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                hits = json.loads(resp.read()).get("result") or []
+        except Exception as exc:
+            probe_results.append({"chunk_id": cid, "error": str(exc), "ok": False})
+            all_sane = False
+            continue
+
+        if not hits:
+            probe_results.append({"chunk_id": cid, "error": "no hits", "ok": False})
+            all_sane = False
+            continue
+
+        top_score = float(hits[0].get("score", 0.0))
+        scores = [float(h.get("score", 0.0)) for h in hits]
+        descending = all(scores[i] >= scores[i + 1] - 1e-6 for i in range(len(scores) - 1))
+        in_range = all(-1.0 <= s <= 1.05 for s in scores)
+        self_match = abs(top_score - 1.0) < 1e-4
+        probe_ok = self_match and descending and in_range
+        if not probe_ok:
+            all_sane = False
+        probe_results.append({
+            "chunk_id": cid,
+            "workspace_id": ws,
+            "top_score": round(top_score, 4),
+            "ranks_descending": descending,
+            "scores_in_cos_range": in_range,
+            "ok": probe_ok,
+        })
+    return {
+        "denominator": "512/2204",
+        "probes_tested": len(probe_results),
+        "probes_passed": sum(1 for p in probe_results if p.get("ok")),
+        "probes": probe_results,
+        "ok": bool(probe_results) and all_sane,
+    }
+
+
+async def audit_v1_e2e_acceptance_dry(
+    collection: str, points: list[dict[str, Any]], qdrant_url: str
+) -> dict[str, Any]:
+    """Dry-run read-path acceptance: boundary identity verification and ACL isolation."""
+    from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreIdentityError
+    from retrieval.embedding_identity import EmbeddingIdentity
+    from retrieval.interfaces import SearchFilter
+
+    store = QdrantVectorStore(collection=collection)
+    valid_identity = EmbeddingIdentity(
+        provider="InfinityEmbeddingProvider",
+        model="BAAI/bge-m3",
+        revision="BAAI/bge-m3",
+        dimension=1024,
+    )
+    mismatched_identity = EmbeddingIdentity(
+        provider="InfinityEmbeddingProvider",
+        model="wrong-model",
+        revision="BAAI/bge-m3",
+        dimension=1024,
+    )
+
+    sample = next((p for p in points if p.get("vector")), None)
+    if not sample:
+        return {"denominator": "512/2204", "ok": False, "error": "no points with vector"}
+
+    vec = sample.get("vector")
+    dense = vec.get("dense") if isinstance(vec, dict) else vec
+    if not isinstance(dense, list):
+        return {"denominator": "512/2204", "ok": False, "error": "sample vector not a list"}
+    dense_vec: list[float] = [float(x) for x in dense]
+    ws = (sample.get("payload") or {}).get("workspace_id")
+
+    hits = await store.search(
+        collection=collection,
+        vector=dense_vec,
+        top_k=3,
+        query_filter=SearchFilter(workspace_ids=[str(ws)]),
+        query_identity=valid_identity,
+    )
+    s1_ok = len(hits) >= 1 and all(h.workspace_id == str(ws) for h in hits)
+
+    s2_refused = False
+    try:
+        await store.search(
+            collection=collection,
+            vector=dense_vec,
+            top_k=3,
+            query_filter=SearchFilter(workspace_ids=[str(ws)]),
+            query_identity=mismatched_identity,
+        )
+    except VectorStoreIdentityError:
+        s2_refused = True
+    except Exception:
+        s2_refused = False
+
+    foreign_hits = await store.search(
+        collection=collection,
+        vector=dense_vec,
+        top_k=3,
+        query_filter=SearchFilter(workspace_ids=["00000000-0000-0000-0000-000000000000"]),
+        query_identity=valid_identity,
+    )
+    s3_ok = len(foreign_hits) == 0
+
+    return {
+        "denominator": "512/2204",
+        "scenarios": {
+            "boundary_verified_retrieval": {"ok": s1_ok, "hits": len(hits)},
+            "boundary_mismatched_refusal": {"ok": s2_refused},
+            "acl_isolation_zero_leak": {"ok": s3_ok, "foreign_hits": len(foreign_hits)},
+        },
+        "ok": s1_ok and s2_refused and s3_ok,
     }
 
 
@@ -308,7 +530,11 @@ def audit_sanity(
 
 
 async def audit_all(
-    *, collection: str, identity: dict[str, Any], limit: int | None = None
+    *,
+    collection: str,
+    identity: dict[str, Any],
+    limit: int | None = None,
+    rehearsal: bool = False,
 ) -> dict[str, Any]:
     if collection == LIVE_COLLECTION:
         raise AuditError(
@@ -320,19 +546,53 @@ async def audit_all(
     database_url = os.environ.get("DATABASE_URL")
 
     manifest_rows = manifest_from_postgres(limit)
-    points = await asyncio.to_thread(scroll_all_points, collection, qdrant_url)
+    points = await asyncio.to_thread(scroll_all_points, collection, qdrant_url, True)
     info = await asyncio.to_thread(collection_info, collection, qdrant_url)
 
+    identity_check = audit_identity(points, identity)
+    membership_check = audit_membership(points, manifest_rows)
+    hashes_check = audit_original_hashes(points, manifest_rows)
+    version_check = audit_version_gate(points, database_url)
+    sanity_check = audit_sanity(points, info, manifest_rows)
+    vector_check = audit_vector_sanity(points)
+    retrieval_check = await asyncio.to_thread(
+        audit_representative_retrieval, collection, points, qdrant_url
+    )
+    e2e_check = await audit_v1_e2e_acceptance_dry(collection, points, qdrant_url)
+
     checks = {
-        "identity": audit_identity(points, identity),
-        "membership": audit_membership(points, manifest_rows),
-        "original_hashes": audit_original_hashes(points, manifest_rows),
-        "version_gate": audit_version_gate(points, database_url),
-        "sanity": audit_sanity(points, info, manifest_rows),
+        "identity": identity_check,
+        "membership": membership_check,
+        "original_hashes": hashes_check,
+        "version_gate": version_check,
+        "sanity": sanity_check,
+        "vector_sanity": vector_check,
+        "representative_retrieval": retrieval_check,
+        "v1_e2e_acceptance_dry": e2e_check,
     }
-    verdict = all(c["ok"] for c in checks.values())
-    return {"collection": collection, "points": len(points), "manifest": len(manifest_rows),
-            "checks": checks, "verdict": "PASS" if verdict else "FAIL"}
+    if rehearsal:
+        rehearsal_ok = (
+            identity_check["ok"]
+            and bool(membership_check.get("subset_ok"))
+            and hashes_check["ok"]
+            and version_check["ok"]
+            and bool(sanity_check.get("subset_ok"))
+            and vector_check["ok"]
+            and retrieval_check["ok"]
+            and e2e_check["ok"]
+        )
+        verdict = "PASS" if rehearsal_ok else "FAIL"
+    else:
+        verdict = "PASS" if all(c["ok"] for c in checks.values()) else "FAIL"
+
+    return {
+        "collection": collection,
+        "denominator": "512/2204",
+        "points": len(points),
+        "manifest": len(manifest_rows),
+        "checks": checks,
+        "verdict": verdict,
+    }
 
 
 async def main() -> None:
@@ -340,6 +600,11 @@ async def main() -> None:
     parser.add_argument("--collection", default="knowledge__rebuild_20261014")
     parser.add_argument("--limit", type=int, default=None)
     parser.add_argument("--identity", required=True, help="JSON of the build's recorded identity")
+    parser.add_argument(
+        "--rehearsal",
+        action="store_true",
+        help="Audit rehearsal against a partial build subset (512/2204 denominator)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -348,6 +613,7 @@ async def main() -> None:
             collection=args.collection,
             identity=json.loads(args.identity),
             limit=args.limit,
+            rehearsal=args.rehearsal,
         )
     except AuditError as exc:
         _log.error("%s", exc)

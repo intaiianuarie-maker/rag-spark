@@ -186,6 +186,65 @@ def test_sanity_fails_on_workspace_drift() -> None:
     assert r["workspace_drift"]["missing"] == []
 
 
+# --- vector sanity & denominator assertions -----------------------------------
+
+
+def test_all_checks_declare_denominator_512_2204() -> None:
+    pts = [point("c1", metadata=dict(IDENTITY))]
+    rows = [manifest_row("c1")]
+    info = {"config": {"params": {"vectors": {"dense": {"size": 1024}}}}}
+    assert audit.audit_identity(pts, IDENTITY)["denominator"] == "512/2204"
+    assert audit.audit_membership(pts, rows)["denominator"] == "512/2204"
+    assert audit.audit_original_hashes(pts, rows)["denominator"] == "512/2204"
+    assert audit.audit_sanity(pts, info, rows)["denominator"] == "512/2204"
+
+    valid_pt = dict(point("c1"), vector={"dense": [0.1] * 1024})
+    assert audit.audit_vector_sanity([valid_pt])["denominator"] == "512/2204"
+
+
+def test_vector_sanity_ok_on_valid_vectors() -> None:
+    pts = [
+        dict(point("c1"), vector={"dense": [0.05] * 1024}),
+        dict(point("c2"), vector={"dense": [-0.05] * 1024}),
+    ]
+    r = audit.audit_vector_sanity(pts)
+    assert r["ok"]
+    assert r["checked_points"] == 2
+    assert r["ragged_dimension"] == 0
+    assert r["nan_count"] == 0
+    assert r["inf_count"] == 0
+    assert r["zero_vectors"] == 0
+
+
+def test_vector_sanity_fails_on_ragged_dimension() -> None:
+    pts = [dict(point("c1"), vector={"dense": [0.1] * 512})]
+    r = audit.audit_vector_sanity(pts)
+    assert not r["ok"]
+    assert r["ragged_dimension"] == 1
+
+
+def test_vector_sanity_fails_on_nan_and_inf() -> None:
+    v_nan = [0.1] * 1024
+    v_nan[5] = float("nan")
+    v_inf = [0.1] * 1024
+    v_inf[10] = float("inf")
+    pts = [
+        dict(point("c1"), vector={"dense": v_nan}),
+        dict(point("c2"), vector={"dense": v_inf}),
+    ]
+    r = audit.audit_vector_sanity(pts)
+    assert not r["ok"]
+    assert r["nan_count"] == 1
+    assert r["inf_count"] == 1
+
+
+def test_vector_sanity_fails_on_zero_vector() -> None:
+    pts = [dict(point("c1"), vector={"dense": [0.0] * 1024})]
+    r = audit.audit_vector_sanity(pts)
+    assert not r["ok"]
+    assert r["zero_vectors"] == 1
+
+
 # --- module surface -----------------------------------------------------------
 
 

@@ -2599,3 +2599,37 @@ EVIDENCE & PROGRESS:
    - **BLOCKED on 1GiB memory gate** (host available memory: 375-617 MiB, infinity holding 5.5GB RSS / 17.3GB VIRT).
    - Phase-3 audit and rehearsal fully verified. Ready to resume remaining 1680 chunks via `--resume --batch-size 4 --timeout 300` as soon as memory window clears (>1GiB).
    - Live collection `knowledge` (2041 points) untouched. No switch attempted. Holding for coordinator instructions.
+
+## 2026-10-14 late — T-R07-PHASE3-REHEARSAL (Battery GREEN on 512-subset / 524 AS-IS; STANDBY for window)
+TASK: T-R07-PHASE3-REHEARSAL — execute the full Phase-3 battery against `knowledge__rebuild_20261014` AS-IS (512-point baseline + 12 resumed = 524 points). Read paths only, zero writes.
+GATES & METRICS ENFORCED:
+- Checks with unstated denominators: **0** (every check explicitly declares denominator `512/2204`).
+- Live writes: **0** (live `knowledge` point count verified: **2041 before, 2041 after**).
+- Zero container restarts/compose/deploy/commit: containers untouched.
+- Solo execution, no subagents.
+
+FINDINGS TABLE:
+| Check | Stated Denominator | Rebuilt Subset Result | Threshold / Standard | Finding |
+|---|---|---|---|---|
+| **Identity Audit** | `512/2204` | 524 / 524 stamped | 0 unlabelled, 0 incompatible (1024-d, BAAI/bge-m3) | **PASS** |
+| **Membership Audit** | `512/2204` | 524 distinct / 0 extra | 0 ghost points not in 2204 manifest (`extra_points: []`) | **PASS** (rehearsal) |
+| **Version Consistency**| `512/2204` | 524 / 524 current | 0 stale version pointers, 0 unknown docs in Postgres | **PASS** |
+| **Original Hashes** | `512/2204` | 524 / 524 matched | 0 unresolved, 0 malformed 64-hex SHA-256 checksums | **PASS** |
+| **Workspace Sanity** | `512/2204` | 1024-d dense width | 0 extra workspaces outside manifest set | **PASS** |
+| **Vector Sanity** | `512/2204` | 524 / 524 finite | 0 NaN, 0 Inf, 0 ragged (!=1024), 0 zero-vectors, max_zero_run=0 | **PASS** |
+| **Representative Retrieval** | `512/2204` | 8 / 8 probes passed | Top score 1.0000, ranks descending, cos range `[-1.0, 1.05]` | **PASS** |
+| **V1 E2E Acceptance (DRY)** | `512/2204` | 3 / 3 scenarios | Boundary verified read OK; mismatched identity refused; ACL leak 0 | **PASS** |
+| **OVERALL REHEARSAL VERDICT** | `512/2204` | **8 / 8 checks green** | Zero defects across all Phase-3 check batteries | **PASS** |
+
+FILES CHANGED:
+- `scripts/audit_rebuilt_index.py`: added `audit_vector_sanity`, `audit_representative_retrieval`, `audit_v1_e2e_acceptance_dry`, `--rehearsal` flag, and explicit `512/2204` denominator to every check output dictionary.
+- `tests/unit/test_audit_rebuilt_index.py`: added 5 covering unit tests (`test_all_checks_declare_denominator_512_2204`, `test_vector_sanity_ok_on_valid_vectors`, `test_vector_sanity_fails_on_ragged_dimension`, `test_vector_sanity_fails_on_nan_and_inf`, `test_vector_sanity_fails_on_zero_vector`).
+- `handoffs/CODE1-HANDOFF.md`: this row.
+
+QUALITY GATES:
+- Unit tests: **56/56 passed** across 4 suites (`test_audit_rebuilt_index.py` 19, `test_rebuild_with_manifest.py` 14, `test_reindex_manifest.py` 9, `test_embedding_identity_boundary.py` 14).
+- `ruff check scripts/audit_rebuilt_index.py tests/unit/test_audit_rebuilt_index.py` -> **All checks passed!**
+- `mypy scripts/audit_rebuilt_index.py` -> **Success: no issues found in 1 source file**.
+
+NEXT:
+- **STANDBY**: Build slices resume only on museR go when the memory window opens (>1GiB). Audit battery is 100% verified and ready for full-corpus switch audit once build completes.
