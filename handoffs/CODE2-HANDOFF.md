@@ -4314,3 +4314,133 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4020_start.txt)
 - Every modified path is inside my W4 allowlist (packages/workflow_engine/
   W4 files + covering tests + this handoff). 0 foreign paths modified by me;
   0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
+---
+
+## T-V4-014 — V3 execution-adapter seam, CONTRACT ONLY (no bridge)
+
+```text
+TASK: T-V4-014 — the contract the future production AgentRunner bridge must
+       satisfy: request/response shapes, capability-manifest mapping, error
+       taxonomy mapping (V3 errors -> workflow FAILED/CANCELLED with the node
+       named, never swallowed), and timeout/cancel propagation. Types + tests
+       ONLY: no bridge callable, no V3 import, no behaviour change; the
+       flagged-off W3 adapter keeps working against its Protocol untouched.
+CHANGE: packages/workflow_engine/adapters/v3_contract.py (NEW, ~470 lines) —
+        V3NodeRequest, V3NodeResponse, V3ErrorDetail, V3ErrorCode, V3RunStatus,
+        V3CapabilityMapping + map_manifest/assert_capability_allowed, V3Error/
+        map_error/map_response, V3DispatchLimits + validate_dispatch,
+        propagate_cancellation, assert_no_v3_import, V3ContractError.
+        tests/unit/test_workflow_v3_adapter_contract.py (NEW) — 45 tests.
+        v3_adapter.py NOT TOUCHED (verified: git diff empty, only the new file
+        is untracked alongside it).
+WHY:    v3_adapter hands the V3 authority a plain dict and returns an
+        unvalidated mapping — a working seam but not a checkable one. A bridge
+        that misspelled a request key, relayed a status the executor cannot
+        interpret, or swallowed a cancellation would look like success, which is
+        the exact false-success shape this package exists to prevent. Fixing
+        the contract before the bridge is what makes the bridge reviewable.
+REUSED: The seam's own shape: the contract's request is built by
+        V3NodeRequest.from_node() with exactly the six keys V3NodeExecutor
+        already sends, asserted key-for-key against a live dispatch in the
+        tests. V3's taxonomy is declared BY VALUE (a test imports
+        agents.interfaces and compares sorted code/status lists) so drift is a
+        failing test, never a silent divergence, while the runtime import count
+        stays 0. Capability gating reuses CapabilityManifest semantics.
+
+CONTRACT TABLE (what a bridge must satisfy):
+  field/rule                | contract
+  --------------------------|-----------------------------------------------------------
+  request keys             | node_id, node_type, node_config, workspace_id,
+                            | input_data, required_capabilities (extra=forbid)
+  request validation        | non-blank node_id/workspace_id; node_type in NodeType;
+                            | capabilities unique and <=32; payload <=256KB (refuse,
+                            | never truncate); each capability entry explicit
+  response                  | status (terminal only) + output_data +
+                            | optional error{code,message} + cancelled flag
+  status vocabulary         | completed / failed / max_steps_exceeded / budget_exceeded
+                            | (V3's terminal statuses; pending/running REFUSED as
+                            | non-terminal; there is no cancelled status in V3)
+  error vocabulary          | 13 codes == agents.interfaces.AgentErrorCode, by value
+  error -> outcome          | every code -> failed, except CANCELLED and
+                            | DEADLINE_EXCEEDED -> cancelled (never succeeded)
+  node naming               | map_error REQUIRES a node_id; a blank one is refused
+  cancellation              | cancelled flag + the CANCELLED error code; a cancelled
+                            | response must not carry another error code
+  capability mapping        | manifest.enabled_capabilities must cover every
+                            | required capability; an EMPTY manifest is refused
+                            | (it would pass every check vacuously)
+  limits                    | timeout in [0.01, 3600]s, validated not clamped
+  cancel propagation        | finished -> None; cancelled -> CANCELLED code;
+                            | timed_out -> DEADLINE_EXCEEDED; both "cancelled"
+
+BUILT:  A boundary layer that refuses everything it cannot interpret: extra
+        keys, blank ids, non-integer/duplicate/oversized capabilities,
+        non-terminal statuses, unknown codes, a completed response carrying an
+        error, a cancelled flag carrying the wrong code (or none), a failed
+        response with no error, an empty manifest, an out-of-range or NaN
+        timeout. Plus the map_error requirement that an error names its node,
+        and assert_no_v3_import() so a caller can prove the seam stays clean.
+VERIFY: tests/unit/test_workflow_v3_adapter_contract.py → 45 passed (0.86s).
+        tests/unit -k workflow → 663 passed, 0 failed.
+        tests/unit (full) → 1835 passed, 0 failed.
+        ruff check adapters/ + my test → All checks passed.
+        mypy (isolated, both files) → Success.
+        METRIC 1 — contract violations constructible = 0. Hostile batteries:
+        requests (13 malformed shapes incl. renamed keys, extra keys,
+        capabilities as ints, 40 capabilities, config/input not mappings);
+        responses (12 incl. no status, unknown/blank/non-terminal status,
+        unknown error code, completed-with-error, flag/status contradiction,
+        error as a string, output as a list); every error code and every status
+        parametrised through map_error/map_response; missing capability entry;
+        empty manifest; 5 invalid timeouts incl. NaN. Each raises
+        ValidationError or V3ContractError — none accepted.
+        METRIC 2 — V3 imports added = 0. AST scan of the contract module: no
+        module whose root is agents/packages is imported. assert_no_v3_import()
+        additionally fails on a V3-resolving global, and a test poisons a fake
+        module and asserts it fails. Only the vocabulary test imports
+        agents.interfaces, in a subprocess, to compare values.
+        METRIC 3 — existing adapter behaviour change = 0. v3_adapter.py git
+        diff is empty. The AgentRunner Protocol still has exactly
+        (self, request). adapter_enabled() returns False for absent/0/blank and
+        True for "1". V3NodeExecutor still refuses while flagged off with
+        dispatches == 0, and when enabled dispatches 1 node with EXACTLY the
+        six keys the contract describes (asserted key-set equality), and the
+        contract validates that dispatched request verbatim.
+RISKS:  1. MY FIRST DRAFT OF THE CONTRACT WAS WRONG IN A WAY ONLY THE
+        VOCABULARY TEST CAUGHT: I had declared a CANCELLED *status*. Live V3
+        (agents.interfaces.AgentRunStatus) has NO cancelled status — it has
+        completed/failed/max_steps_exceeded/budget_exceeded/pending/running, and
+        cancellation arrives as the CANCELLED *error code*. A bridge written to
+        my first contract could never have produced a status it accepts. Fixed:
+        status vocabulary is exactly V3's terminal statuses, and cancellation is
+        carried on the flag + error code. This is the contract the test suite is
+        now pinned to, and the test asserts the two vocabularies agree.
+        2. DEADLINE_EXCEEDED maps to workflow "cancelled", not "failed",
+        because a deadline is the caller running out of patience rather than the
+        node failing — my mapping table and my propagate_cancellation docstring
+        disagreed until a test caught it. Disclosed so a reviewer who expects
+        deadline=FAILED can argue it deliberately rather than discover it.
+        3. "Every capability entry explicit" is enforced by map_manifest's
+        empty-manifest refusal, not by requiring every manifest entry to appear
+        on every node — a manifest may grant more than one node needs (reported
+        as `unused` rather than refused).
+        4. The contract does not (yet) wire into V3NodeExecutor: the adapter
+        still builds its plain dict. Wiring is the bridge ticket, and the
+        from_node() helper exists so that bridge builds the identical request
+        rather than a new one. No behaviour change in this ticket by design.
+        5. The contract tightens what a bridge may return: a FAILED node MUST
+        now carry an error object (a bare {"status": "failed"} is refused), and a
+        successful node must not carry one. The current adapter's dict response
+        is not rejected by this ticket — nothing validates it yet — but a bridge
+        written to the contract will be held to it. Disclosed so the bridge
+        ticket cannot be surprised by its own contract.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4014_{start,end}.txt):
+- START (HEAD `b060006`): 22 dirty paths — 5 modified handoffs, dev1's live
+  executor.py (T-V4-012 run budgets), 16 untracked handoff docs. Index empty.
+- END (HEAD `b060006`): the same foreign set unchanged, plus exactly mine:
+  `?? packages/workflow_engine/adapters/v3_contract.py` and
+  `?? tests/unit/test_workflow_v3_adapter_contract.py` (dev1 also added his
+  untracked tests/unit/test_workflow_run_budget.py mid-ticket).
+- 0 foreign paths modified by me — v3_adapter.py's git diff is empty, verified
+  twice; 0 commits, 0 deploys, 0 restarts, 0 compose changes, index left empty.
