@@ -5590,3 +5590,197 @@ GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4032_{start,end}
   ` M handoffs/CODE2-HANDOFF.md`.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-EVAL-001ACQUIRE — HotpotQA-full acquisition + raw loader (NO scoring)
+
+```text
+TASK: T-EVAL-001ACQUIRE — acquire hotpotqa/hotpot_qa fullwiki on disk with
+       provenance, plus a raw record loader, distractor audit and span-map
+       shape. Acquisition and raw loading ONLY, ending where scoring begins.
+CHANGE: (2 new code files, 1 new dataset directory, nothing else touched)
+       NEW evals/hotpot_full.py (~560 lines) — manifest + pinned hashes,
+         streaming loader, distractor/span audit, span-map shape, CLI.
+       NEW evals/test_hotpot_full.py (26 tests).
+       NEW datasets/hotpotqa-full/ (sibling of knowledge-os, OUTSIDE the repo,
+         same location as the pre-existing rag-eval data):
+           raw/fullwiki/{test,train-000,train-001,validation}-*.parquet
+           raw/distractor/validation-00000-of-00001.parquet
+           LICENSE-AND-PROVENANCE.md
+       5 files, 414,839,695 bytes (395.6 MiB), all sha256-verified.
+WHY:    The eval wave needs raw HotpotQA with real provenance before any
+       retrieval work, and the card's own requirement — prove the data is the
+       full 10-paragraph distractor set and NOT the 4-paragraph subset — turned
+       out to be the most valuable thing this ticket produced. See FINDING.
+REUSED: Hugging Face parquet directly (no `datasets`/`huggingface_hub` in the
+       venv, so files were pulled over HTTPS with the revision pinned in the
+       URL and hashed). pyarrow 26.0.0 for reads. The hash-verify-on-load
+       pattern is lifted from my own evals/g5_corpus.py (T-075), which already
+       raises on corpus drift; the audit-as-CLI and pin-file conventions come
+       from the same file and evals/g5_hotpot_pin.json.
+BUILT:  The manifest/pin layer, the streaming loader, the audit, the span-map
+       shape, and the 26-test suite.
+
+HARD FINDING — THE CARD'S HEADLINE METRIC CANNOT BE MET, AND THE REAL CAUSE IS
+NOT THE ONE THE CARD GUESSED. I am reporting this instead of a flattering zero.
+
+  METRIC 1 as literally written — "records with !=10 distractors: 0" — is NOT 0,
+  and cannot be made 0 by acquisition. Measured, hash-verified:
+
+    config/split          records  !=10 paragraphs  !=8 distractors  gold title absent
+    fullwiki/train          90,447                838               838                0
+    fullwiki/validation      7,405                 63             5,337            5,316
+    fullwiki/test            7,405                 53            n/a (unlabeled)        0
+    distractor/validation    7,405                 60                60                0
+
+  Two separate things were being conflated, and only the second is serious:
+
+  (a) SHORT CANDIDATE SETS — 838/90,447 fullwiki train records (0.93%) and
+      63/7,405 validation records ship fewer than 10 paragraphs. This is an
+      upstream property: it is present in the `distractor` config too (60/7,405),
+      and the distractor/fullwiki train files are BYTE-IDENTICAL (same sha256).
+      No acquisition choice removes it. So 0 is unreachable here.
+
+  (b) GOLD SPANS THAT DO NOT EXIST — this is the real one. On `fullwiki`
+      validation, 5,316 of 7,405 records (71.8%) have a supporting-fact title
+      that is NOT in their own 10-paragraph candidate set, giving 7,707
+      unresolvable gold spans. Concrete examples: gold `Ed Wood` against
+      candidate `Ed Wood (film)`; gold `Scott Derrickson` missing entirely,
+      with `Hellraiser: Inferno` in its place. Cause: fullwiki's candidates come
+      from Wikipedia full-text search, so gold articles are routinely
+      disambiguated or absent.
+
+  CONSEQUENCE FOR THE HARNESS (dev1's lane, his call, not mine): any
+  supporting-fact recall/precision metric computed on `fullwiki` validation
+  would be measuring a data artifact, not retrieval. I therefore ALSO acquired
+  the `distractor` config's validation split (one extra 27 MB file, pinned and
+  hashed), where every gold title resolves — 0 absent, 1 out-of-range sentence
+  id. Its train files are byte-identical to fullwiki's, so I deliberately did
+  NOT duplicate ~332 MB. Recommend the harness use `distractor/validation`.
+  This supplement is a scope judgment call and is flagged for your approval.
+
+  WHAT THE METRIC WAS AFTER — "proving full distractors, NOT the 4-para
+  subset" — IS MET, with numbers: 89,609 of 90,447 fullwiki train records and
+  7,345 of 7,405 distractor validation records carry exactly 10 paragraphs
+  (histograms in the provenance doc). For contrast I measured the pre-existing
+  `datasets/rag-eval/ragbench-tests-v1/hotpotqa` parquet: 4 paragraphs per
+  record (400 paragraphs / 100 rows) — it is a RAGBench-annotated derivative
+  with TruLens/RAGAS columns, NOT the HotpotQA candidate set, and must not be
+  mistaken for this acquisition.
+
+  METRIC 2 — provenance fields missing: 0. MET. 20 required fields checked, 20
+  present, 0 missing (source URL, repo id, pinned revision, license name,
+  attribution + share-alike obligations, date, ticket id, internal-eval-only,
+  never-redistribute, no-live-ingestion, paper/arXiv citation, byte total,
+  audit table, the not-the-4-para proof, and all 5 file hashes).
+  METRIC 3 — scoring code written: 0. MET. No metric function exists in the
+  diff (the only grep hit for "score|precision|recall|f1" is the ban-list
+  inside my own guard test). Guard tests assert via AST that the module imports
+  nothing outside {pyarrow, stdlib} — no sentence_transformers, torch, litellm,
+  qdrant — so no bge-m3 and no retrieval can have leaked in.
+
+PROVENANCE / LICENSE. CC BY-SA 4.0, confirmed from the dataset's own metadata at
+the pinned revision 1908d6afbbead072334abe2965f91bd2709910ab. Every file was
+downloaded from a revision-pinned URL (no unpinned/latest fetch) and its local
+sha256 was checked against the LFS object id the HUB PUBLISHES for that file:
+5/5 MATCH. These are therefore upstream hashes, not merely a record of whatever
+arrived on disk. The loader re-verifies on every hash-verified load and raises
+on drift. The doc states the attribution and share-alike obligations
+explicitly, plus internal-eval-only, never-redistribute, and never-ingested-into-
+live-knowledge. No ingestion of this data into live knowledge occurred or was
+attempted.
+
+DISK DISCIPLINE (card rule 1, checked BEFORE any transfer). `df -h` first:
+51 GiB free, 75% used. I sized the full set from the Hub file listing
+(387,387,120 bytes for fullwiki) before pulling, confirmed it fits with two
+orders of magnitude of headroom, then transferred. After: 50 GiB free, 75%.
+
+VERIFY: pytest evals/test_hotpot_full.py 26 passed (57s);
+       ruff check on both files: All checks passed (exit 0);
+       mypy --follow-imports=silent -m evals.hotpot_full -m evals.test_hotpot_full:
+       Success, no issues (evals/ is a namespace pkg, so it is checked as -m);
+       python evals/hotpot_full.py: full hash-verified audit, exit 0;
+       default suite unaffected — `pytest tests/unit --collect-only` still
+       collects 2103 tests and does NOT collect my test (pytest testpaths is
+       ["tests"]; my test stays in evals/ to stay inside my allowlist and out
+       of dev1's tests/ tree). I did not run the full backend suite because I
+       touched zero product files and zero files under tests/.
+       112,662 records loaded total: 90,447 + 7,405 + 7,405 + 7,405.
+RISKS:  1. THE METRIC DISAGREEMENT IS THE HEADLINE RISK, not a code risk. If the
+       card's "0" was intended to be a hard gate, this ticket is BLOCKED on it
+       and the two sub-cases need separate rulings: (a) short candidate sets are
+       upstream and irreducible — accept and document, or filter those 838/60
+       records out of the eval slice; (b) fullwiki validation's unresolvable
+       gold spans are a correctness blocker for supporting-fact metrics, and the
+       `distractor` supplement is my proposed way out. I did not silently filter
+       or silently reinterpret either number.
+   2. dev1's `evals/vendor/hotpot_evaluate_v1.py` is the official HotpotQA
+       evaluator and his `evals/leaderboard.py` already scores answer_em/f1 and
+       supporting_fact_*, so scoring needs nothing from me — but it needs a
+       decision on WHICH SPLIT, and the numbers above are the input to that
+       decision. Convergence noted as follow-up, not chased live: I did not
+       edit, import from, or adapt any of his files.
+   3. The `fullwiki` test split (7,405 rows) is the UNLABELED official test set
+       (answer=None, empty supporting_facts) and is not scorable. The audit
+       reports labeled vs unlabeled per split and marks the distractor metric's
+       scope as 0 for it, so no harness can quietly score empty gold. Do not
+       wire it into an eval expecting answers.
+   4. `SpanTarget.chunk_key`/`chunk_text` are None by design and frozen, so
+       retrieval cannot backfill them without constructing new objects. The
+       span map is shape only — it is NOT evidence that retrieval works.
+   5. The `distractor` supplement (27 MB, one file) is beyond the literal
+       "fullwiki" ask. It is pinned, hashed and isolated in its own config
+       directory, and removing it costs nothing if you decline it. Flagged for
+       your approval rather than assumed.
+   6. Independent cross-check against the original CMU distribution was ATTEMPTED
+       and FAILED (curtis.ml.cmu.edu unreachable, connection timeout). So the
+       Hub mirror is the sole source of record and the data has not been
+       validated against upstream's own distribution. Recorded in the
+       provenance doc rather than dropped. The Hub LFS hash match is still a
+       strong integrity proof, but it proves we got what the Hub serves, not
+       that the Hub serves what CMU originally shipped.
+   7. Disk grew ~396 MiB to 415 MB used; 50 GiB still free. Fine now, but this
+       dataset is the first of an eval wave — re-check before each acquisition.
+
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - My own audit falsified my opening assumption that every record ships 10
+    paragraphs. I had written that expectation into the code and the docstring
+    before measuring. The audit caught it; the finding above is the result.
+  - 3 of my 26 tests failed on first run, all my own test bugs, all fixed before
+    push: (a) I asserted a doc phrase ("not ingested into live knowledge") that
+    the doc words as "NEVER ingested into live knowledge"; (b) my
+    no-retrieval-dependency guard was a TEXT scan over the module and was
+    defeated by the module's own docstring legitimately mentioning bge-m3 — I
+    rewrote it to use AST, which is the lesson I should already have applied;
+    (c) I unpacked one span target from a record that has two gold facts. Also
+    replaced a genuinely destructive test I had written (it renamed a real
+    dataset file to test the missing-file path) with a tmp_path-isolated
+    version before ever running it.
+  - A metric-definition flaw of my own: I first computed the distractor count
+    over ALL records, which reported a bogus 7,401 mismatches on the unlabeled
+    test split. Corrected to labeled-only with an explicit scope field.
+  - My provenance doc's byte total was wrong (415,352,695 vs the true
+    414,839,695); caught by measuring the files instead of trusting my
+    arithmetic, and corrected.
+  - My first hash-compare loop reported 4 spurious MISMATCHes because
+    `printf "%-34s"` pads with spaces and `cut -f2` returned empty. The data was
+    fine; the script was wrong.
+
+FOREIGN TREE MOVEMENT (reported, not forced). Between START and END, code1's
+files appeared mid-ticket: evals/MAPPING.md, evals/leaderboard.py,
+evals/vendor/, tests/unit/test_eval_harness.py. No filename collision with my
+two files and no import from his code into mine; the layers are cleanly disjoint
+(his = scoring, mine = acquisition). I touched none of his files and did not
+chase the convergence, per the card.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/eval001_{start,end}.txt):
+- START (HEAD `3c0b313`): 21 dirty paths (5 modified handoffs + 16 untracked
+  handoff docs). Index empty.
+- END (HEAD `3c0b313`): 27 dirty paths — my 2 files (?? evals/hotpot_full.py,
+  ?? evals/test_hotpot_full.py), code1's 4 new paths, and the untouched foreign
+  handoffs. HEAD unchanged; the tree did not move under me.
+- The acquired dataset is deliberately OUTSIDE the repo (a sibling of
+  knowledge-os, beside the pre-existing rag-eval data), so ~415 MB of
+  third-party data never enters git.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.
