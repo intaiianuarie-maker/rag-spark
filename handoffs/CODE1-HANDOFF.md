@@ -2149,3 +2149,50 @@ RISKS:
 5. `train` full audit is opt-in (`WIKIMULTIHOP_FULL_AUDIT=1`, ~30 s) so the default unit run stays fast — its counts are pinned in the test and the doc either way.
 
 Start→end `git status --short`: **23 → 27 entries** (my delta = `?? evals/wikimultihop.py`, `?? tests/unit/test_wikimultihop.py` + this row; the dataset lives outside the repo. Foreign deltas seen and untouched: `M handoffs/CODE2-HANDOFF.md`, `?? evals/test_embedder_separation.py` — dev2's T-EVAL-008 lane). **2WikiMultihopQA is on disk, pinned, audited: 435 571 evidence paths, 0 unresolvable.**
+
+## 2026-10-14 T-EVAL-009 — gemma function-call probe: PASS 8/8 (bar 80 %), T-EVAL-006 may run on gemma
+
+TASK: T-EVAL-009 (solo, ~30 min, no subagents). The gate before T-EVAL-006: prove gemma can CALL before 006 spends a battery on it. 5-10 prompts over the REAL V3 ToolSpec schemas; per prompt assert (a) a call is EMITTED (not prose about calling), (b) it PARSES as JSON with the right function name, (c) arguments match schema types. Gemma-only, free model first with automatic paid fallback + metered. No corpus, no product code, no scoring.
+
+CHANGE — **MY FILE LIST (announced): NEW `evals/gemma_call_probe.py` (probe), NEW `evals/test_gemma_call_probe.py` (20 offline tests), NEW `evals/gemma_call_probe.results.json` (live-run artifact), + this row.** Nothing else touched; dev2's `evals/embedder_*` + `evals/test_embedder_separation.py` lane untouched.
+- **007 MAPPING CHECKED FIRST.** `evals/leaderboard.MAPPING` classifies `groundedness_lexical_proxy` (and every other metric) as official-or-ours-only, with the lexical groundedness proxy OURS-ONLY and never blended. **None of it applies here** — no corpus, no retrieval, no reference answer, no scoring — so the probe asserts *well-formedness only, never quality*, and a test scans the probe's CODE (AST, not prose) to prove no quality metric is referenced and re-asserts the proxy is OURS-ONLY. Mixing a proxy in would be the exact blend 007 forbids.
+- **Real schemas, not invented ones.** `real_specs()` builds the three V3 tools (`calculator`, `knowledge_search`, `knowledge_read`) from `packages/agents/tools.py` through a real `ToolRegistry` and derives the specs with the runtime's own `AgentRuntime.spec_for` (called unbound — it touches no instance state). So the strictness pin (`additionalProperties: false`), `query` maxLength 500, `top_k` integer 1-10, the UUID patterns and the required-field sets are the product's, and tests assert the derived spec equals the tool's own declared schema plus only that pin.
+- **Ten prompts, two negative controls.** 8 call-expected (3 calculator incl. parentheses and `**`, 3 knowledge_search incl. a `top_k` integer and a non-ascii query, 2 knowledge_read incl. args given out of order) + 2 negative controls that must emit nothing (`tool_choice: auto` everywhere — nothing is forced, so the gate is honest). Per prompt: extract (native `tool_calls`, or a JSON object in text with fences/`<tool_call>` stripped — a brace-balanced scan that also recognises the `{"function": {...}}` envelope and the `"arguments"`-as-string form), check the function name, then validate arguments with `jsonschema.Draft202012Validator` against the real `ToolSpec.input_schema`. Prose about calling ("I will call the calculator…"), plain prose, an unknown tool name, unparseable native arguments, an empty response and a transport error each become a **recorded FAIL row with a reason**, never a silent pass and never a dropped row.
+- **Model path + meter.** `google/gemma-4-26b-a4b-it:free` first; on exhaustion (429 / "provider returned error" / rate-limited markers) it falls back automatically to `google/gemma-4-26b-a4b-it` and records the reason per prompt, pricing every response at the published rates ($0.09/M prompt, $0.30/M completion) and printing the spend. `--no-paid-fallback` and `--dry-run` exist for a free-only or offline rerun.
+
+WHY: 006's whole battery is wasted on a model that narrates tool use instead of emitting it. This probe answers that in ~10 calls and, on failure, prints the table of which SHAPES break and exits non-zero so 006 is blocked rather than mis-measured.
+
+REUSED: the real `packages/agents/tools.py` schemas + `AgentRuntime.spec_for` derivation + `ToolRegistry`; the 007 harness's official/ours separation rule; dev2's pattern of keeping an eval probe + its results JSON in `evals/` with its test beside it.
+
+BUILT: `evals/gemma_call_probe.py`, `evals/test_gemma_call_probe.py`, `evals/gemma_call_probe.results.json`.
+
+VERIFY — **PER-PROMPT TABLE (live run 2, the artifact in `evals/gemma_call_probe.results.json`; `mode` = how the call was emitted):**
+
+| prompt | kind | expected | mode | emitted | name_ok | args_ok | result | args seen |
+|---|---|---|---|---|---|---|---|---|
+| calc-basic | call | calculator | native | ✅ | ✅ | ✅ | **PASS** | `{"expression": "12 * 45 + 10"}` |
+| calc-precedence | call | calculator | native | ✅ | ✅ | ✅ | **PASS** | `{"expression": "(2 + 3) * 4 - 6 / 3"}` |
+| calc-powers | call | calculator | native | ✅ | ✅ | ✅ | **PASS** | `{"expression": "2 ** 10 + 1"}` |
+| search-query-only | call | knowledge_search | native | ✅ | ✅ | ✅ | **PASS** | `{"query": "termination notice period in the supplier contract"}` |
+| search-with-topk | call | knowledge_search | native | ✅ | ✅ | ✅ | **PASS** | `{"query": "SLA penalty clause", "top_k": 3}` (int, not `"3"`) |
+| search-unicode | call | knowledge_search | native | ✅ | ✅ | ✅ | **PASS** | `{"query": "Größenordnung der Umsatzsteuer Berechnung"}` |
+| read-triple | call | knowledge_read | native | ✅ | ✅ | ✅ | **PASS** | three UUIDs matching `^[0-9a-fA-F-]{36}$` |
+| read-in-uk-prose | call | knowledge_read | native | ✅ | ✅ | ✅ | **PASS** | same three UUIDs, emitted in prompt order |
+| no-call-plain | no_call | – | prose_only | ❌ | – | – | **PASS** (correctly abstained) | – |
+| no-call-refusal | no_call | – | prose_only | ❌ | – | – | **PASS** (correctly abstained) | – |
+
+- **well-formed rate: 8/8 = 1.000 over call-expected prompts (bar 0.80) → VERDICT PASS.** Reproduced on two independent live runs (run 1: 8/8 with one prompt served free; run 2: 8/8, all ten served by the fallback). Negative controls 2/2 correct. **T-EVAL-006 MAY RUN ON GEMMA.**
+- **Metric — silent non-calls: 0.** All 10 prompts appear as rows in the results artifact and in `render_table` (a test asserts one row per result and that every failing row carries an error string); the summary's `n_silent_non_calls` is derived from that invariant, and a test forces a transport error and asserts it becomes a FAIL row with the error attached, not a missing row.
+- **Meter / spend reported.** The free pool was rate-limited upstream for this host on every attempt (verified directly: HTTP 429, `"google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream … upstream_provider_shared_pool"`, provider Google AI Studio), so the wave's automatic fallback fired and every paid call was priced at the published rates: run 1 = 4 362 prompt + 427 completion tokens, **$0.000425**, 9 paid prompts (1 free); run 2 = 4 294 + 426 tokens, **$0.000514**, 10 paid prompts. **Total probe spend $0.000939.** No other model was called; no battery spent.
+- `/root/ko-venv/bin/pytest evals/test_gemma_call_probe.py -q` → **20 passed** (offline: extraction modes, prose-about-calling rejection, unknown tool, unparseable args, type/extra/missing/pattern violations via the real schemas, one-row-per-result, bar arithmetic incl. the 0.80 boundary, controls excluded from the bar, pricing, exhaustion detection, transport-error recording, 007-mapping code scan).
+- `/root/ko-venv/bin/ruff check evals/gemma_call_probe.py evals/test_gemma_call_probe.py` → **All checks passed**. `/root/ko-venv/bin/mypy evals/gemma_call_probe.py` → **Success: no issues found in 1 source file**.
+- Footprint kept light per the infra note: no large downloads, no full-suite run; only the 20 covering tests were executed (memory-tight host, load average ~8 — the probe is 10 small HTTP calls).
+
+RISKS:
+1. The evidence is a single family of models on one host at temperature 0; 8/8 twice is strong for "can it call" but it is NOT a claim about BFCL-grade accuracy — that remains 006's job, on the same schemas.
+2. The free OpenRouter pool for this host was rate-limited for the whole session, so the gate was actually met on the PAID gemma variant. Same weights, different serving quota; the metering is reported in full so the cost side is auditable.
+3. `evals/test_gemma_call_probe.py` lives in `evals/` (dev2's T-EVAL-008 precedent) rather than `tests/unit/`, so the default `testpaths = ["tests"]` run does not collect it — it must be invoked explicitly (as recorded above). Moving it is a coordinator call, not mine to make silently.
+4. `evals/gemma_call_probe.results.json` is a run artifact: a later 006 run will not overwrite it, but a re-probe will. The numbers in this row are the run-2 artifact.
+5. The probe asserts well-formedness only. It says nothing about whether the arguments are the RIGHT arguments — do not read 8/8 as tool-use quality.
+
+Start→end `git status --short`: **25 → 28 entries** (my delta = `?? evals/gemma_call_probe.py`, `?? evals/gemma_call_probe.results.json`, `?? evals/test_gemma_call_probe.py` + this row; no foreign path touched). **GATE PASSED — gemma calls cleanly on the real V3 schemas; 006 is unblocked.**

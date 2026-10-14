@@ -1,0 +1,273 @@
+{
+  "summary": {
+    "n_prompts": 10,
+    "n_call_expected": 8,
+    "n_well_formed": 8,
+    "well_formed_rate": 1.0,
+    "bar": 0.8,
+    "verdict": "PASS",
+    "n_silent_non_calls": 0,
+    "n_failures": 0,
+    "n_negative_controls": 2,
+    "n_negative_controls_correct": 2,
+    "non_call_modes": [],
+    "models_used": [
+      "google/gemma-4-26b-a4b-it"
+    ],
+    "fallbacks": [
+      {
+        "prompt_id": "calc-basic",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "calc-precedence",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "calc-powers",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "search-query-only",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "search-with-topk",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "search-unicode",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "read-triple",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "read-in-uk-prose",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "no-call-plain",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "prompt_id": "no-call-refusal",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      }
+    ],
+    "spend": {
+      "prompt_tokens": 4294,
+      "completion_tokens": 426,
+      "usd": 0.000514,
+      "paid_prompts": 10
+    }
+  },
+  "results": [
+    {
+      "prompt_id": "calc-basic",
+      "kind": "call",
+      "expected_tool": "calculator",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "expression": "12 * 45 + 10"
+      },
+      "errors": [],
+      "prompt_tokens": 408,
+      "completion_tokens": 22,
+      "cost_usd": 4.3e-05,
+      "latency_ms": 1338,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "calc-precedence",
+      "kind": "call",
+      "expected_tool": "calculator",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "expression": "(2 + 3) * 4 - 6 / 3"
+      },
+      "errors": [],
+      "prompt_tokens": 411,
+      "completion_tokens": 27,
+      "cost_usd": 4.5e-05,
+      "latency_ms": 1151,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "calc-powers",
+      "kind": "call",
+      "expected_tool": "calculator",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "expression": "2 ** 10 + 1"
+      },
+      "errors": [],
+      "prompt_tokens": 404,
+      "completion_tokens": 20,
+      "cost_usd": 4.2e-05,
+      "latency_ms": 590,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "search-query-only",
+      "kind": "call",
+      "expected_tool": "knowledge_search",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "query": "termination notice period in the supplier contract"
+      },
+      "errors": [],
+      "prompt_tokens": 405,
+      "completion_tokens": 21,
+      "cost_usd": 4.3e-05,
+      "latency_ms": 689,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "search-with-topk",
+      "kind": "call",
+      "expected_tool": "knowledge_search",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "query": "SLA penalty clause",
+        "top_k": 3
+      },
+      "errors": [],
+      "prompt_tokens": 412,
+      "completion_tokens": 24,
+      "cost_usd": 4.4e-05,
+      "latency_ms": 586,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "search-unicode",
+      "kind": "call",
+      "expected_tool": "knowledge_search",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "query": "Gr\u00f6\u00dfenordnung der Umsatzsteuer Berechnung"
+      },
+      "errors": [],
+      "prompt_tokens": 408,
+      "completion_tokens": 22,
+      "cost_usd": 4.3e-05,
+      "latency_ms": 937,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "read-triple",
+      "kind": "call",
+      "expected_tool": "knowledge_read",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "chunk_id": "33333333-3333-4333-8333-333333333333",
+        "document_id": "11111111-1111-4111-8111-111111111111",
+        "document_version_id": "22222222-2222-4222-8222-222222222222"
+      },
+      "errors": [],
+      "prompt_tokens": 511,
+      "completion_tokens": 140,
+      "cost_usd": 8.8e-05,
+      "latency_ms": 1724,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "read-in-uk-prose",
+      "kind": "call",
+      "expected_tool": "knowledge_read",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "native",
+      "emitted": true,
+      "name_ok": true,
+      "args_ok": true,
+      "well_formed": true,
+      "arguments": {
+        "chunk_id": "33333333-3333-4333-8333-333333333333",
+        "document_id": "11111111-1111-4111-8111-111111111111",
+        "document_version_id": "22222222-2222-4222-8222-222222222222"
+      },
+      "errors": [],
+      "prompt_tokens": 518,
+      "completion_tokens": 140,
+      "cost_usd": 8.9e-05,
+      "latency_ms": 1851,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "no-call-plain",
+      "kind": "no_call",
+      "expected_tool": null,
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "prose_only",
+      "emitted": false,
+      "name_ok": false,
+      "args_ok": true,
+      "well_formed": false,
+      "arguments": null,
+      "errors": [
+        "no call and no JSON in the response"
+      ],
+      "prompt_tokens": 413,
+      "completion_tokens": 8,
+      "cost_usd": 4e-05,
+      "latency_ms": 3840,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "prompt_id": "no-call-refusal",
+      "kind": "no_call",
+      "expected_tool": null,
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "mode": "prose_only",
+      "emitted": false,
+      "name_ok": false,
+      "args_ok": true,
+      "well_formed": false,
+      "arguments": null,
+      "errors": [
+        "no call and no JSON in the response"
+      ],
+      "prompt_tokens": 404,
+      "completion_tokens": 2,
+      "cost_usd": 3.7e-05,
+      "latency_ms": 363,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    }
+  ]
+}
