@@ -12,6 +12,8 @@ built, i.e. when ``/ask`` is called.
 
 from __future__ import annotations
 
+import logging
+
 from models.adapters.litellm_provider import LiteLLMProvider
 from models.router_config import is_local_model, local_gateway_url
 
@@ -23,6 +25,8 @@ from .verification import ClaimGrounder, CrossLanguageGrounder, ExtractiveGround
 #: collection). T-V1-071: the EFFECTIVE name is ``core.config.vector_collection()``,
 #: so the ingest writer, the purge/cleanup paths and this reader can never drift
 #: onto different collections; this constant stays the documented default.
+logger = logging.getLogger("knowledge_os.answer.factory")
+
 DEFAULT_COLLECTION = "knowledge"
 
 def _is_egress_sensitive_value(value: object) -> bool:
@@ -89,13 +93,30 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
     embedding request; keyword-only retrieval is unaffected.
     """
     from core.config import vector_collection
-    from graph.factory import create_graph_retriever
     from ingestion.persistence import get_session_factory
     from models.adapters.openrouter_provider import OpenRouterProvider
     from retrieval.adapters.pg_fts import PostgresLexicalStore
     from retrieval.adapters.qdrant_store import QdrantVectorStore
     from retrieval.orchestrator import HybridRetrievalOrchestrator
 
+    # T-K01: the optional graph leg is construction-gated. A typo'd
+    # GRAPH_MODE, an import failure, or an unusable store must degrade to the
+    # v1 flag-off path with a loud log — v1 routes stay green. Never propagate
+    # optional-graph construction failures into /ask or /search.
+    graph_retriever = None
+    try:
+        from graph.factory import create_graph_retriever
+
+        graph_retriever = create_graph_retriever()
+    except Exception as exc:
+        logger.warning(
+            "graph_retriever_construction_failed",
+            extra={
+                "event": "graph_retriever_construction_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
     sensitive = _egress_sensitive(**policy_kwargs)
 
     # T-V1-071: resolve here, not as a default argument (those freeze at import
@@ -121,7 +142,7 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
         collection=collection,
         reranker=reranker,
         rerank_enabled=False,
-        graph=create_graph_retriever(),
+        graph=graph_retriever,
         sensitive=sensitive,
     )
 

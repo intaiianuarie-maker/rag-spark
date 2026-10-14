@@ -3442,3 +3442,25 @@ RISKS:
 - downstream consumers may need to surface `graph_disclosure`; search route still only exposes `rerank_disclosure`, but route changes are out-of-scope for this task.
 - if a graph store becomes unavailable mid-run without changing orchestrator construction, it is indistinguishable from disabled; both now refuse or omit graph.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-K01 — G1 graph-construction failure never 500s v1 routes (dev1)
+TASK: T-K01 (w5:pG). K CONFIRMED High: `create_orchestrator` imported/invoked graph construction inline, so a bad GRAPH_MODE or import/store failure turned graph leg construction into a 500 for /ask and /search.
+CHANGE (allowed files):
+- `packages/answer/factory.py`: optional graph construction is guarded; import/construction exceptions are logged (`graph_retriever_construction_failed`) and `graph=None`, preserving v1 flag-off behavior.
+- `packages/graph/factory.py` remains the canonical fail-loud seam; answer factory degrades at the integration point.
+WHY: v1 routes and retriever stay green even when the graph leg cannot be constructed; readiness continues to report graph status independently.
+REUSED: graph factory seam and orchestrator flag-off path.
+BUILT: graph-retriever exception gate.
+VERIFY:
+- Bad mode (`GRAPH_MODE=bad-mode`) returns `graph=None` and logs loudly.
+- `sys.modules["graph.factory"] = None` simulation returns `graph=None` without traceback spill.
+- `pytest tests/unit -k 'graph or answer or factory'` -> 352 passed.
+- ruff + mypy on `packages/answer/factory.py` clean.
+Degradation table:
+| failure | result |
+|---|---|
+| bad GRAPH_MODE | log + graph=None (v1 path) |
+| import failure | log + graph=None (v1 path) |
+| store failure | log + graph=None (v1 path) |
+| flag-off / valid modes | unchanged behavior |
+Next: IDLE — push mandatory.
