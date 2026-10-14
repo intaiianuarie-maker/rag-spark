@@ -719,3 +719,17 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04 — V4 durable checkpoint store wiring
+
+```text
+TASK: T-A04 durable checkpoint store in production workflow runner.
+CHANGE:
+      - MODIFIED apps/api/app/workflows/router.py (run_workflow uses SqliteCheckpointStore at persistent path)
+WHY:  workflow checkpoints persist beyond in-memory runner state.
+VERIFY:
+      - pytest test_v4_authoring_api + test_workflow_checkpoint -> 21 passed
+      - ruff/mypy touched file -> clean
+SPEND: 0.00
+GIT: handoff only
+```

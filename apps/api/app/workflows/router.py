@@ -19,11 +19,12 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from workflow_engine.adapters.langflow_adapter import LangflowAdapter, LangflowImportError
-from workflow_engine.checkpoint import InMemoryCheckpointStore
+from workflow_engine.checkpoint import SqliteCheckpointStore
 from workflow_engine.compiler import WorkflowCompiler
 from workflow_engine.draft_store import (
     DraftConflictError,
@@ -652,7 +653,7 @@ async def run_workflow(
     try:
         plan = WorkflowCompiler.compile(draft.revision)
         executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
-        executor.configure_checkpoint_store(InMemoryCheckpointStore())
+        executor.configure_checkpoint_store(SqliteCheckpointStore(Path('/tmp/opencode/workflow_checkpoints.db')))
         run = await executor.execute(
             plan,
             draft.revision,
