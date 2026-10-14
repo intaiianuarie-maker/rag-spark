@@ -18,6 +18,9 @@ Verifies the 3 target metrics:
 
 from __future__ import annotations
 
+import os
+os.environ.setdefault("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
+
 import uuid
 from typing import Any
 

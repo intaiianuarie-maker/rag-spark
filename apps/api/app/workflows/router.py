@@ -655,8 +655,11 @@ async def run_workflow(
         executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
         try:
             executor.configure_checkpoint_store(SqliteCheckpointStore(checkpoint_db_path()))
-        except ValueError:
-            executor.configure_checkpoint_store(None)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "checkpoint_unavailable", "message": str(exc)},
+            ) from exc
         run = await executor.execute(
             plan,
             draft.revision,

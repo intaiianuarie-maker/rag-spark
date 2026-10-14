@@ -761,3 +761,17 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04d — route-level checkpoint refuse (micro-slice)
+
+```text
+TASK: T-A04d route refuses when checkpoint DB unconfigured.
+CHANGE:
+      - apps/api/app/workflows/router.py run_workflow propagates checkpoint env missing as 503 (no degraded run)
+      - covering tests set env (workflow suite green)
+VERIFY:
+      - pytest test_v4_authoring_api -> 7 passed
+      - ruff/mypy touched files -> clean
+SPEND: 0.00
+GIT: handoff only
+```
