@@ -54,7 +54,6 @@ def create_orchestrator(*, collection: str | None = None):
     from graph.factory import create_graph_retriever
     from ingestion.persistence import get_session_factory
     from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
-    from retrieval.adapters.infinity_rerank import InfinityReranker
     from retrieval.adapters.pg_fts import PostgresLexicalStore
     from retrieval.adapters.qdrant_store import QdrantVectorStore
     from retrieval.orchestrator import HybridRetrievalOrchestrator
@@ -65,13 +64,15 @@ def create_orchestrator(*, collection: str | None = None):
     dense = QdrantVectorStore(collection=collection)
     lexical = PostgresLexicalStore(session_factory=get_session_factory())
     embedding = InfinityEmbeddingProvider()
-    reranker = InfinityReranker()
+    # T-ARCH-03: Local cross-encoder cut per user order; dense-only active with disclosure.
+    reranker = None
     return HybridRetrievalOrchestrator(
         dense=dense,
         embedding=embedding,
         lexical=lexical,
         collection=collection,
         reranker=reranker,
+        rerank_enabled=False,
         graph=create_graph_retriever(),
     )
 

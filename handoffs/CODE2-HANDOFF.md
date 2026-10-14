@@ -288,3 +288,55 @@ RISKS:
       - None in this ticket: zero consumer rewiring performed (consumers remain pointed at existing seams, and existing
         seams now delegate to OpenRouterProvider). Consumer rewiring is isolated to T-ARCH-04.
 ```
+
+
+---
+
+## T-ARCH-03 — Rerank decision: verify-then-dense-only
+
+```text
+TASK: T-ARCH-03 — Rerank decision: verify-then-dense-only.
+      (1) VERIFY OpenRouter catalogue has no rerank endpoint (query https://openrouter.ai/api/v1/models, grep saved list).
+      (2) CUT local cross-encoder instantiation (keep adapter INTERFACE, refuse/raise LocalRerankerRemovedError on local construction path).
+      (3) RETRIEVAL RUNS DENSE-ONLY WITH DISCLOSURE: visible note where rerank used to run:
+          "local reranker deleted per user order, dense-only until LLM-rerank follow-up proves need".
+CHANGE: 5 files (adapter + orchestrator + factory + search endpoint + covering tests):
+      MODIFIED packages/retrieval/adapters/infinity_rerank.py (LocalRerankerRemovedError on default/local url)
+      MODIFIED packages/retrieval/orchestrator.py (DENSE_ONLY_DISCLOSURE, rerank_disclosure on RetrievalResult + item metadata)
+      MODIFIED packages/answer/factory.py (create_orchestrator sets reranker=None, rerank_enabled=False)
+      MODIFIED apps/api/app/search/search.py (SearchResponse.rerank_disclosure)
+      NEW evals/openrouter_models_catalogue.json (saved OpenRouter models catalogue query)
+      NEW tests/unit/test_rerank_cut.py (covering tests: refusal, disclosure, search response, fallback)
+WHY:  Local infinity container, 14GB image, and MiniLM cross-encoder weights were deleted per user order.
+      Catalogue verification confirms OpenRouter provides zero reranking endpoints.
+      Local cross-encoder construction must fail loudly (no silent attempts to connect to deleted local container),
+      and retrieval must run dense-only with explicit disclosure across results and chunk metadata.
+REUSED:
+      - packages/retrieval/interfaces.py (Reranker ABC, RetrievalResult, RetrievedItem)
+      - packages/retrieval/orchestrator.py (HybridRetrievalOrchestrator pipeline, trace structure)
+      - tests/contracts/test_infinity_reranker_contract.py (contract suite kept 100% green via explicit mock URLs)
+      - tests/unit/test_orchestrator.py & test_leg_failure_statuses.py (existing suite behaviors preserved)
+BUILT:
+      - OpenRouter Catalogue Audit: queried https://openrouter.ai/api/v1/models (462 models saved to evals/openrouter_models_catalogue.json).
+        Checked with: grep -i -E "rerank|cohere-rerank|voyage-rerank" evals/openrouter_models_catalogue.json -> EXACTLY 0 MATCHES.
+      - Refusal Guard: InfinityReranker raises LocalRerankerRemovedError if base_url is None or contains "7997".
+        Preserves Reranker ABC interface for mock URLs (e.g. test doubles / contract harnesses).
+      - Factory Cut: packages/answer/factory.py create_orchestrator() sets reranker=None, rerank_enabled=False.
+      - Dense-Only Disclosure:
+        * DENSE_ONLY_DISCLOSURE = "local reranker deleted per user order, dense-only until LLM-rerank follow-up proves need"
+        * RetrievalResult.rerank_disclosure carries disclosure when reranker is bypassed or degraded.
+        * Every retrieved item has item.metadata["rerank_disclosure"] populated.
+        * SearchResponse.rerank_disclosure exposes disclosure at the API level.
+      - Covering Unit Tests: tests/unit/test_rerank_cut.py tests refusal of default/local URLs, mock URL tolerance,
+        factory settings, orchestrator disclosure, reranker fallback degradation disclosure, and search endpoint disclosure.
+VERIFY:
+      - Catalogue grep proof: grep -i -E "rerank|cohere-rerank|voyage-rerank" evals/openrouter_models_catalogue.json | wc -l -> 0
+      - pytest tests/unit/test_rerank_cut.py -> 6 passed in 3.25s
+      - Targeted battery: pytest tests/unit/test_rerank_cut.py tests/contracts/test_infinity_reranker_contract.py tests/contracts/test_reranker_contract.py tests/unit/test_orchestrator.py tests/unit/test_leg_failure_statuses.py -> 82 passed in 13.65s
+      - ruff check packages/retrieval/adapters/infinity_rerank.py packages/retrieval/orchestrator.py packages/answer/factory.py apps/api/app/search/search.py tests/unit/test_rerank_cut.py -> All checks passed!
+      - mypy packages/retrieval/adapters/infinity_rerank.py packages/retrieval/orchestrator.py packages/answer/factory.py apps/api/app/search/search.py tests/unit/test_rerank_cut.py -> Success: no issues found in 5 source files
+RISKS:
+      - Dense-only retrieval may have lower top-k precision than cross-encoder reranking on some queries.
+      - Deferred LLM-rerank via Gemma will be considered in a future ticket based on recall/precision measurements.
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched.
+```

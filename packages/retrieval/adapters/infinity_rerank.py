@@ -43,8 +43,21 @@ class RerankerError(RuntimeError):
     """Raised when infinity is unreachable or returns an unexpected payload."""
 
 
+class LocalRerankerRemovedError(RerankerError):
+    """Raised when attempting local cross-encoder reranker construction (T-ARCH-03).
+
+    Per user order, the local infinity container, image, and cross-encoder weights
+    (cross-encoder/ms-marco-MiniLM-L6-v2) were removed. Retrieval runs dense-only.
+    """
+
+
 class InfinityReranker(Reranker):
-    """cross-encoder/ms-marco-MiniLM-L6-v2 cross-encoder served by infinity's ``/rerank``."""
+    """cross-encoder/ms-marco-MiniLM-L6-v2 cross-encoder served by infinity's ``/rerank``.
+
+    NOTE (T-ARCH-03): Local cross-encoder construction is cut. Instantiation targeting
+    the deleted local container (default or localhost/infinity:7997) raises
+    LocalRerankerRemovedError. The adapter interface is preserved for test stubs / contracts.
+    """
 
     model_name = os.environ.get("RERANK_MODEL", DEFAULT_MODEL)
 
@@ -57,6 +70,13 @@ class InfinityReranker(Reranker):
         client: httpx.AsyncClient | None = None,
     ) -> None:
         resolved_url = base_url or os.environ.get("INFINITY_URL") or DEFAULT_BASE_URL
+        if base_url is None or "7997" in resolved_url:
+            raise LocalRerankerRemovedError(
+                "Local cross-encoder reranker "
+                "(cross-encoder/ms-marco-MiniLM-L6-v2 on infinity:7997) "
+                "was permanently removed per user order: local weights and container deleted. "
+                "Dense-only retrieval is active."
+            )
         self.base_url = resolved_url.rstrip("/")
         self.api_key = api_key or os.environ.get("INFINITY_API_KEY")
         self.timeout = float(timeout or DEFAULT_TIMEOUT_SECONDS)

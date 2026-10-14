@@ -48,7 +48,7 @@ from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Protocol, runtime_checkable
+from typing import Any, Final, Protocol, runtime_checkable
 
 from core.auth import ACLScope
 from core.errors import ReasonCode, spec_for
@@ -80,6 +80,11 @@ RRF_K = 60
 #: ``graph`` appears when the optional graph retriever leg surfaced the item
 #: (see V2-GRAPH-PLAN G3/G4).
 TRACE_KEYS = ("dense", "sparse", "lexical", "graph", "rrf", "rerank")
+
+#: Visible disclosure when reranker is bypassed or absent (T-ARCH-03).
+DENSE_ONLY_DISCLOSURE: Final[str] = (
+    "local reranker deleted per user order, dense-only until LLM-rerank follow-up proves need"
+)
 
 
 # --- T-V1-026: honest per-leg failure statuses ------------------------------
@@ -130,6 +135,7 @@ class RetrievalResult:
     reason_code: ReasonCode | None = None
     trace_id: str = ""
     legs_failed: tuple[LegFailure, ...] = field(default_factory=tuple)
+    rerank_disclosure: str = ""
 
     @property
     def reason(self) -> str:
@@ -521,8 +527,10 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             fused_items.append(item)
 
         # Rerank (optional). A reranker outage degrades to RRF order, loudly.
+        # T-ARCH-03: When reranker is deleted/disabled/bypassed, run dense-only with disclosure.
         final_items = fused_items
         rerank_used = False
+        rerank_disclosure = ""
         if self.rerank_enabled and self.reranker is not None and fused_items:
             try:
                 reranked = await self.reranker.rerank(
@@ -538,6 +546,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                         "trace_id": trace_id,
                     },
                 )
+                rerank_disclosure = DENSE_ONLY_DISCLOSURE
             else:
                 if reranked:
                     prepared: list[RetrievedItem] = []
@@ -564,6 +573,18 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                         prepared.append(copy)
                     final_items = prepared
                     rerank_used = True
+                else:
+                    rerank_disclosure = DENSE_ONLY_DISCLOSURE
+        else:
+            rerank_disclosure = DENSE_ONLY_DISCLOSURE
+            logger.info(
+                "retrieval_dense_only",
+                extra={
+                    "event": "retrieval_dense_only",
+                    "reason": DENSE_ONLY_DISCLOSURE,
+                    "trace_id": trace_id,
+                },
+            )
 
         selected = final_items[:context_top_k]
         for item in selected:
@@ -573,6 +594,8 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             if rerank_used:
                 scores["rerank"] = float(item.score)
             item.scores = scores
+            if rerank_disclosure:
+                item.metadata["rerank_disclosure"] = rerank_disclosure
 
         # Optional-leg verdict: the items stand, the degradation is disclosed.
         # The top-level code is the STATUS-level one (``RERANK_UNAVAILABLE`` or
@@ -594,6 +617,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             reason_code=reason_code,
             trace_id=trace_id,
             legs_failed=tuple(report.failures),
+            rerank_disclosure=rerank_disclosure,
         )
 
     async def retrieve(

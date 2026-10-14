@@ -102,6 +102,7 @@ class SearchResponse(BaseModel):
     reason_code: str | None = None
     reason: str | None = None
     trace_id: str | None = None
+    rerank_disclosure: str | None = None
 
 
 def build_search_filter(*, workspace_id: str, filters: SearchFilters) -> SearchFilter:
@@ -270,6 +271,7 @@ async def search(
         reason_code=outcome.reason_code.value if outcome.reason_code else None,
         reason=outcome.reason or None,
         trace_id=outcome.trace_id or request_id_ctx.get(),
+        rerank_disclosure=getattr(outcome, "rerank_disclosure", None) or None,
     )
 
 
