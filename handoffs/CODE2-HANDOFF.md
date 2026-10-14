@@ -775,3 +775,26 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04e — route refusal test
+
+```text
+TASK: T-A04e route-level checkpoint refusal test.
+CHANGE:
+      - tests/unit/test_v4_authoring_api.py added test_run_workflow_refuses_without_checkpoint_db
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04e FIXUP
+
+```text
+TASK: T-A04e import-sort fixup.
+Ruff output: All checks passed!
+VERIFY: pytest test_v4_authoring_api -> 8 passed
+SPEND: 0.00
+GIT: handoff only
+```

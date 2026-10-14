@@ -19,6 +19,7 @@ Verifies the 3 target metrics:
 from __future__ import annotations
 
 import os
+
 os.environ.setdefault("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
 
 import uuid
@@ -375,3 +376,25 @@ def test_import_workflow_native_and_langflow():
     assert res_native.status_code == 200
     assert res_native.json()["workflow_id"] == "wf-imported-native"
     assert res_native.json()["revision"] == 1
+
+
+def test_run_workflow_refuses_without_checkpoint_db(monkeypatch):
+    monkeypatch.delenv("WORKFLOW_CHECKPOINT_DB", raising=False)
+    from app.authz.principal import get_principal
+    from app.main import app
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="user@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.ADMIN},
+    )
+    client = TestClient(app)
+    resp = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/workflows/wf-does-not-matter/run",
+        json={"revision": 1, "inputs": {}},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "checkpoint_unavailable"

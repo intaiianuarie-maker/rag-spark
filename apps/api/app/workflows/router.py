@@ -635,6 +635,14 @@ async def run_workflow(
     except AuthorizationError as exc:
         raise _handle_store_error(exc) from exc
 
+    try:
+        checkpoint_db_path()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "checkpoint_unavailable", "message": str(exc)},
+        ) from exc
+
     store = get_draft_store()
     loaded_run_draft: DraftRevision | None = None
     try:
