@@ -199,13 +199,20 @@ def get_executor(run_id: str) -> WorkflowExecutor | None:
 
 def cancel_run(workspace_id: str, run_id: str) -> WorkflowRun | None:
     """Monotonically cancel a workflow run if not already terminal."""
-    with _lock:
-        run = _runs.get((workspace_id, run_id))
-        if run is None:
-            return None
+    run = get_run(workspace_id, run_id)
+    if run is None:
+        return None
 
-        # Request cancellation on the active executor if running
+    with _lock:
+        # No live executor means no in-flight run to cancel (post-restart).
         executor = _executors.get(run_id)
+        if executor is None and run.status not in (
+            WorkflowRunStatus.COMPLETED,
+            WorkflowRunStatus.FAILED,
+            WorkflowRunStatus.CANCELLED,
+        ):
+            raise ValueError("no live executor for run")
+
         if executor is not None:
             executor.request_cancel()
 

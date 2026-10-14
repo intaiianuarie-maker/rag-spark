@@ -807,7 +807,13 @@ async def cancel_workflow_run(
             },
         )
 
-    updated_run = cancel_run(workspace_id, run_id)
+    try:
+        updated_run = cancel_run(workspace_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "no_live_executor", "message": str(exc)},
+        ) from exc
     if updated_run is None:
         updated_run = run
 

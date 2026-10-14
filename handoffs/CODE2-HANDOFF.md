@@ -1084,3 +1084,28 @@ STATUS: DEFERRED in this bounded turn (runtime state globals remain; full inject
 METRICS: spend 0.00
 GIT: handoff only
 ```
+
+## T-K09 — cancel honesty post-restart
+
+```text
+TASK: T-K09
+CHANGE:
+      - apps/api/app/workflows/store.py cancel_run raises ValueError when no live executor and run not terminal
+      - apps/api/app/workflows/router.py cancel maps ValueError -> 409 no_live_executor
+VERIFY:
+      - pytest v4 authoring suite -> 10 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K09 FIXUP
+
+```text
+TASK: T-K09 FIXUP
+VERIFY:
+      - pytest test_v4_authoring_api -> 11 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```

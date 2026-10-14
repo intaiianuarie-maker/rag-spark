@@ -422,17 +422,17 @@ def test_run_workflow_invalid_definition_returns_422():
         "name": "Invalid",
         "description": "x",
         "nodes": [
-            {"id": "trigger-1", "type": "trigger", "name": "Start", "output_ports": [{"name": "output", "type": "dict"}]},  # noqa: E501
-            {"id": "http-1", "type": "http", "name": "Http", "input_ports": [{"name": "input", "type": "any"}]},  # noqa: E501
+            {"id": "trigger-1", "type": "trigger", "name": "Start", "output_ports": [{"name": "output", "type": "dict"}]},  # noqa: E501  # noqa: E501
+            {"id": "http-1", "type": "http", "name": "Http", "input_ports": [{"name": "input", "type": "any"}]},  # noqa: E501  # noqa: E501
         ],
-        "edges": [{"id": "e1", "source_node_id": "trigger-1", "source_port": "output", "target_node_id": "http-1", "target_port": "input"}],  # noqa: E501
+        "edges": [{"id": "e1", "source_node_id": "trigger-1", "source_port": "output", "target_node_id": "http-1", "target_port": "input"}],  # noqa: E501  # noqa: E501
     }
     import requests
     _ = requests
     client = TestClient(app)
     client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/import", json={"flow_data": body})
     client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
-    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}})  # noqa: E501
+    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}})  # noqa: E501  # noqa: E501
     assert resp.status_code == 422
     detail = resp.json()["detail"]
     assert detail["error"] == "invalid_definition"
@@ -460,21 +460,46 @@ def test_run_workflow_runtime_failure_returns_coded_error():
         "name": "Runtime",
         "description": "x",
         "nodes": [
-            {"id": "trigger-1", "type": "trigger", "name": "Start", "output_ports": [{"name": "output", "type": "dict"}]},  # noqa: E501
-            {"id": "llm-1", "type": "llm", "name": "LLM", "config": {"model": "x"}, "input_ports": [{"name": "input", "type": "any"}], "output_ports": [{"name": "output", "type": "any"}]},  # noqa: E501
-            {"id": "output-1", "type": "output", "name": "End", "input_ports": [{"name": "input", "type": "any"}]},  # noqa: E501
+            {"id": "trigger-1", "type": "trigger", "name": "Start", "output_ports": [{"name": "output", "type": "dict"}]},  # noqa: E501  # noqa: E501
+            {"id": "llm-1", "type": "llm", "name": "LLM", "config": {"model": "x"}, "input_ports": [{"name": "input", "type": "any"}], "output_ports": [{"name": "output", "type": "any"}]},  # noqa: E501  # noqa: E501
+            {"id": "output-1", "type": "output", "name": "End", "input_ports": [{"name": "input", "type": "any"}]},  # noqa: E501  # noqa: E501
         ],
         "edges": [
-            {"id": "e1", "source_node_id": "trigger-1", "source_port": "output", "target_node_id": "llm-1", "target_port": "input"},  # noqa: E501
-            {"id": "e2", "source_node_id": "llm-1", "source_port": "output", "target_node_id": "output-1", "target_port": "input"},  # noqa: E501
+            {"id": "e1", "source_node_id": "trigger-1", "source_port": "output", "target_node_id": "llm-1", "target_port": "input"},  # noqa: E501  # noqa: E501
+            {"id": "e2", "source_node_id": "llm-1", "source_port": "output", "target_node_id": "output-1", "target_port": "input"},  # noqa: E501  # noqa: E501
         ],
     }
     client = TestClient(app)
     client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/import", json={"flow_data": body})
     client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
-    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}})  # noqa: E501
+    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}})  # noqa: E501  # noqa: E501
     assert resp.status_code == 200
     data = resp.json()["run"]
     assert data["status"] == "failed"
     assert data["error"].startswith("node 'llm-1' failed: LLM node")
     assert "traceback" not in resp.text.lower()
+
+
+def test_cancel_without_live_executor_returns_409(monkeypatch):
+    monkeypatch.setenv("WORKFLOW_DRAFT_DB", "/tmp/opencode/v4_test_drafts.db")
+    monkeypatch.setenv("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
+    monkeypatch.setenv("WORKFLOW_RUNS_DB", "/tmp/opencode/v4_test_runs.db")
+    monkeypatch.setenv("WORKFLOW_APPROVALS_DB", "/tmp/opencode/v4_test_approvals.db")
+    from datetime import UTC, datetime
+
+    from app.authz.principal import get_principal
+    from app.main import app
+    from app.workflows.store import save_run
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+    from workflow_engine.interfaces import WorkflowRun, WorkflowRunStatus
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID, email="u@test.org", is_authenticated=True, workspace_roles={WS_ALLOWED: Role.ADMIN}  # noqa: E501
+    )
+    wid = "wf-cancel-" + __import__("uuid").uuid4().hex[:6]
+    run = WorkflowRun(id="wfrun-cancel", workspace_id=WS_ALLOWED, workflow_id=wid, status=WorkflowRunStatus.RUNNING, created_at=datetime.now(UTC).isoformat())  # noqa: E501
+    save_run(run, None)
+    client = TestClient(app)
+    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/wfrun-cancel/cancel")
+    assert resp.status_code == 409
