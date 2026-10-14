@@ -852,3 +852,17 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04c2 (spike-first design)
+
+```text
+TASK: T-A04c2 design.
+DESIGN:
+  Accepted: new durable seam under apps/api/app/workflows (SQLite runs + approvals) outside forbidden packages/stores.
+  Rejected alternatives:
+    - agent RunStore reuse: semantic mismatch (agent vs workflow runs).
+    - edit packages/stores: forbidden and high regression risk.
+STATUS: DEFERRED-WITH-DESIGN (implementation exceeds this turn; design recorded).
+METRICS: spend 0.00.
+GIT: handoff only.
+```
