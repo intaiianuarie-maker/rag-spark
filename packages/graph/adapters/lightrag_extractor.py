@@ -170,12 +170,16 @@ class LLMBasedGraphExtractor(GraphExtractor):
             return ExtractionResult()
         violation = _reject_mixed_workspace(chunks)
         if violation is not None:
-            return ExtractionResult(errors=[violation])
+            return ExtractionResult(
+                errors=[violation],
+                failed_chunk_ids=[c.chunk_id for c in chunks],
+            )
 
         entities: list[Entity] = []
         triples: list[_RelTriple] = []
         errors: list[ExtractionError] = []
         ok_chunk_ids: list[str] = []
+        failed_chunk_ids: list[str] = []
 
         # One generation per chunk so provenance stays exact (LightRAG extracts
         # per-chunk before the merge step).
@@ -216,6 +220,7 @@ class LLMBasedGraphExtractor(GraphExtractor):
             relationships=relationships,
             errors=errors,
             chunk_ids=sorted(set(ok_chunk_ids)),
+            failed_chunk_ids=sorted(set(failed_chunk_ids)),
         )
 
     async def _extract_one(self, chunk: GraphChunk) -> _ExtractOneOutput:

@@ -3379,3 +3379,25 @@ RISKS:
 - hidden ordering expectations must use relevance ties; ties retain deterministic chunk-id ordering.
 - global community signature additions are backwards compatible via defaults.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A09 — V2-05 explicit failed chunks and total extraction failure (dev1)
+TASK: T-A09 (w5:pG). Astra CONFIRMED Med: provider errors were per-chunk records but extraction continued, upserted derivative rows, and a total extraction outage looked handled.
+CHANGE (allowed files):
+- `packages/graph/extractor.py`: `ExtractionResult` now tracks `failed_chunk_ids` distinctly from successful `chunk_ids`; mixed/total workspace failures propagate failed chunk refs.
+- `packages/graph/adapters/lightrag_extractor.py`: obstruction per chunk records failed chunk id; rule extractor keeps clean-zero as non-failing.
+- `apps/worker/jobs/graph_extraction.py`: all-attempted-chunks-failed raises and retries; mixed extraction persists partial outcome plus explicit `failed_chunks` in summary; payload remains on retry path.
+WHY: clean zero-entity output remains a success, while provider/runtime failures cannot be hidden in logs and still publish an empty graph.
+REUSED: graph error reason codes, extraction errors, queue retry/park.
+BUILT: failed-chunk tracking through extractor and worker result.
+VERIFY:
+- `pytest tests/unit -k 'graph or extraction'` -> 201 passed.
+- ruff + mypy on touched files clean.
+- Three-scenario proof:
+  | scenario | outcome |
+  | all chunks fail | total extraction refused/retried, no success publication, payload retained |
+  | mixed success | partial upsert + summary `failed_chunks`, distinguishable from success |
+  | clean zero entities | no errors, successful completion, no failed chunks |
+RISKS:
+- mixed partial upsert can leave empty/partial entity sets; caller/result discloses `failed_chunks` and retry behavior accordingly.
+- total failure raises after all chunks attempted, so latency includes all operations.
+Next: IDLE — push mandatory.

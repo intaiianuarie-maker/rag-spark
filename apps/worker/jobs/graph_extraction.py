@@ -164,9 +164,11 @@ async def process_graph_job(job_id: str) -> dict:
     except Exception as exc:
         raise RuntimeError(f"graph extraction failed: {exc}") from exc
 
+    failed_chunks = list(getattr(extraction_result, "failed_chunk_ids", []))
     if extraction_result.errors:
-        # Per-chunk errors are already recorded on result, but extraction as a
-        # whole still succeeds for other chunks. Log and continue.
+        # Per-chunk errors are recorded; log them but keep distinct outcomes:
+        # a completely failed extraction is retried, partial extraction persists
+        # with an explicit retryable failed-chunk set.
         for err in extraction_result.errors:
             logger.warning(
                 "graph_chunk_extraction_error",
@@ -174,7 +176,14 @@ async def process_graph_job(job_id: str) -> dict:
                     "event": "graph_chunk_extraction_error",
                     "job_id": job_id,
                     "error": err.reason_code,
+                    "failed_chunks": failed_chunks,
                 },
+            )
+        # Total failure — no successful chunk — must not look like success.
+        if not extraction_result.chunk_ids and failed_chunks:
+            raise RuntimeError(
+                f"graph extraction failed for all {len(failed_chunks)} chunks: "
+                + ",".join(failed_chunks)
             )
 
     # Community detection (T-V2-007): connected components, deterministic,
@@ -246,12 +255,15 @@ async def process_graph_job(job_id: str) -> dict:
             "entities": len(extraction_result.entities),
             "relationships": len(extraction_result.relationships),
             "communities": len(extraction_result.communities),
+            "failed_chunks": failed_chunks,
         },
     )
     return {
         "entities": len(extraction_result.entities),
         "relationships": len(extraction_result.relationships),
         "communities": len(extraction_result.communities),
+        "failed_chunks": failed_chunks,
+        "partial": bool(failed_chunks),
     }
 
 
