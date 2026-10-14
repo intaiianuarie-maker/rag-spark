@@ -1223,3 +1223,18 @@ BLOCKED-WITH-REASON: store draft mode at packages/apps/api/app/workflows/store.p
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-K06b-probe
+
+```
+TASK: T-K06b-probe
+CHANGE:
+      - apps/api/app/workflows/store.py added migration_applied(db_path)
+      - tests/unit/test_t_k06b_probe.py -> 4 passed
+VERIFY:
+      - applied/unapplied/missing/corrupt green
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```

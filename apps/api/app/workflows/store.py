@@ -261,3 +261,24 @@ def reset_workflow_stores() -> None:
         _approvals.clear()
         _runs.clear()
         _executors.clear()
+
+
+def migration_applied(db_path: str | None) -> bool:
+    """Return True iff the draft-revision schema is present and usable."""
+    try:
+        if not db_path:
+            return False
+        p = Path(db_path)
+        if not p.exists() or not p.is_file():
+            return False
+        with sqlite3.connect(f"file:{p}?mode=ro", uri=True) as conn:
+            tab = conn.execute(
+                "SELECT 1 FROM sqlite_master "
+                "WHERE type = 'table' AND name = 'workflow_draft_revisions'"
+            ).fetchone()
+            if not tab:
+                return False
+            conn.execute("SELECT COUNT(*) FROM workflow_draft_revisions").fetchone()
+        return True
+    except Exception:
+        return False
