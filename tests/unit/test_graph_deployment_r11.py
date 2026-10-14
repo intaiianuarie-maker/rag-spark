@@ -215,31 +215,34 @@ async def test_supervisor_gives_up_instead_of_hot_looping(monkeypatch) -> None:
     assert state.consecutive_failures == 3, state
 
 
-async def test_supervisor_backoff_is_bounded(monkeypatch) -> None:
+async def test_supervisor_backoff_is_bounded() -> None:
+    """Repeated failures stop at the cap instead of looping forever.
+
+    Previously this test raced a wall-clock timer to decide when to stop, so it
+    passed alone and failed in a larger run — a flake I shipped in T-R11. The
+    give-up path is already deterministic (the supervisor abandons after
+    max_failures), so the test now relies on that and asserts the exact count.
+    """
     from graph.consumer import run_supervised_graph_consumer
 
-    real_sleep = asyncio.sleep
-
-    async def stop_after_a_few() -> None:
-        await real_sleep(0.05)
-        stop.set()
+    attempts = {"n": 0}
 
     async def always_fails(stop: asyncio.Event) -> None:
+        attempts["n"] += 1
         raise RuntimeError("down")
 
     stop = asyncio.Event()
-    stopper = asyncio.create_task(stop_after_a_few())
     state = await run_supervised_graph_consumer(
         stop,
         consumer=always_fails,
-        backoff=0.001,
-        max_backoff=0.002,
-        max_failures=6,
+        backoff=0.0,
+        max_backoff=0.0,
+        max_failures=4,
         heartbeat_interval=3600,
     )
-    await stopper
-    assert state.restarts >= 1
-    assert state.consecutive_failures < 1000
+    assert attempts["n"] == 4, attempts
+    assert state.restarts == 4, state
+    assert state.consecutive_failures == 4, state
 
 
 async def test_supervisor_does_not_delay_shutdown(monkeypatch) -> None:

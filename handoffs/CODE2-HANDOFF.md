@@ -6657,3 +6657,139 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr11_{start,end}.
   and eval files.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose up/down, index left empty.
+---
+
+## T-R12 — Graph mode correctness: declared modes select their documented extractor
+
+```text
+TASK: T-R12 — declared extraction modes must select their DOCUMENTED
+       implementation: rule uses the rule extractor, llm uses the LLM path, and
+       any unsupported mode is REJECTED loudly. No silent substitution anywhere.
+CHANGE: 3 files, all inside my allowlist, ZERO overlap with dev1's R06b area:
+       NEW packages/graph/dispatch.py — the extraction-mode dispatch.
+       NEW tests/unit/test_graph_extraction_modes.py (17 tests).
+       M  tests/unit/test_graph_deployment_r11.py — repaired a FLAKE I shipped
+         in T-R11 (see SELF-CORRECTION). No product code changed.
+WHY:    GRAPH_MODE=llm ran the deterministic rule extractor and reported success.
+       Nothing failed, nothing looked wrong, and the operator's declared mode
+       was simply a lie. A mode is a claim about how a thing is built; silently
+       ignoring it makes the claim false while the system appears healthy.
+REUSED: BOTH implementations already existed and are reused unchanged, which is
+       why no new extractor was written:
+         rule -> packages/graph/extractor.py RuleBasedGraphExtractor (deterministic
+                regex NER + relation cues, no weights, no network)
+         llm  -> packages/graph/adapters/lightrag_extractor.py
+                LLMBasedGraphExtractor (LightRAG pattern, takes an INJECTED
+                LLMProvider, never a vendor SDK)
+       I read first as the card instructed, and the answer was that the LLM path
+       is already implemented and exported from packages.graph — it was simply
+       never selected. So no R14 model-router work was needed: LLMBasedGraph-
+       Extractor already takes a provider, and I build that provider through the
+       existing models.adapters.litellm_provider factory, keeping the router the
+       only path to a model. factory.graph_mode() is reused for normalisation.
+BUILT: The dispatch (packages/graph/dispatch.py) and the mode-matrix suite.
+
+THE MODE TABLE (one source of truth, used by the code AND the refusal message):
+  GRAPH_MODE   implementation                                    selected by
+  rule         graph.extractor.RuleBasedGraphExtractor            create_graph_extractor
+  llm          graph.adapters.lightrag_extractor.LLMBasedGraph...  create_graph_extractor
+  anything     REFUSED with the mode named                        GraphModeUnsupported
+  else         (not coerced to off, not coerced to rule)
+
+METRIC — silent substitutions: 0. PROVEN.
+  * Each declared mode traces to its exact documented class: the matrix test
+    asserts describe_mode("rule")/("llm") end with the class name, and a second
+    test asserts the CONSTRUCTED object is an instance of that class and
+    explicitly NOT the other one (both directions).
+  * The two modes are asserted to produce different types, so the matrix cannot
+    silently collapse to one implementation.
+  * llm mode NEVER degrades to rule. With no provider key configured,
+    create_graph_extractor("llm") RAISES GraphModeUnsupported naming llm and
+    saying it is refusing to run the rule extractor instead. The test also
+    asserts nothing rule-shaped came back. This is the anti-substitution
+    guarantee: falling back here would be the original bug in a different hat.
+  * Unsupported modes are refused WITH the mode named. Parametrised over
+    "neural", "rules", "LLMM", "heuristic", "" and whitespace, each asserting
+    the normalised mode appears in the message. Note "LLMM" is refused while
+    "LLM" is accepted — near-miss spellings are not silently accepted.
+  * Normalisation accepts case and whitespace (" RuLe " -> rule) so a cosmetic
+    env difference does not look like a mode error.
+  * llm mode's model name is configurable (GRAPH_LLM_MODEL, then ANSWER_MODEL,
+    then a documented default), asserted in precedence order.
+  * llm mode is driven by an INJECTED fake provider in tests: no gateway, no
+    model weights, no network, no live graph writes.
+
+BLOCKED — THE JOB PATH STILL HARDCODES THE RULE EXTRACTOR (one line, not mine).
+  apps/worker/jobs/graph_extraction.py:156 is:
+      extractor = RuleBasedGraphExtractor()
+  That file is NOT in this ticket's allowlist (packages/graph extraction
+  dispatch only), so I did NOT edit it. The dispatch is complete and tested;
+  only the call site is outstanding. The exact change:
+      from graph.dispatch import create_graph_extractor
+      extractor = create_graph_extractor()          # honours GRAPH_MODE
+  Until that lands, GRAPH_MODE=llm STILL RUNS RULE on the job path. Stating that
+  plainly rather than letting "mode matrix green" imply the goal is met.
+  I did NOT weaken anything to hide this. Instead
+  test_the_job_path_still_hardcodes_the_rule_extractor PINS THE GAP and is
+  written to FAIL the moment someone wires the dispatch in — its failure message
+  says to delete it and replace it with a behavioural assertion. So the gap
+  cannot be forgotten silently, and the day it is closed the suite tells us.
+  No collision risk: dev1's R06b work is in retrieval/qdrant, nowhere near this.
+
+VERIFY: pytest tests/unit/test_graph_extraction_modes.py 17 passed;
+       related suites together: 115 passed / 0 failed (the above plus
+       test_graph_extractor, test_graph_factory, test_graph_deployment_r11,
+       test_graph_queue_reliability, test_graph, test_graph_queued,
+       test_graph_store_sqlite, test_graph_isolation, test_graph_lifecycle,
+       test_graph_store_concurrency and the error-taxonomy contract);
+       ruff check on all three files: All checks passed (exit 0);
+       mypy --follow-imports=silent on dispatch and the new test: Success.
+       No live-graph writes: fakes and source inspection only.
+       I did NOT run the full tests/unit suite; the card scoped the run to the
+       mode matrix plus related suites. Stating that rather than implying more.
+RISKS:  1. The GOAL IS NOT YET ACHIEVED on the job path — see BLOCKED above.
+       Everything that could be built inside the allowlist is built and proven;
+       one line outside it remains.
+   2. GraphModeUnsupported is a ValueError, not a ReasonCode. That is deliberate
+       (the taxonomy contract forbids a parallel code class in packages/graph),
+       but it means an operator sees an exception rather than a disclosure code
+       on the job. If an operator-facing code is wanted, it belongs in the shared
+       taxonomy and is a separate ticket.
+   3. llm mode now REQUIRES a provider key. A deployment currently running
+       GRAPH_MODE=llm without a key would, once wired, start failing loudly
+       instead of quietly running rule. That is the intended trade — silent
+       success is worse — but it is a visible behaviour change when wired.
+   4. The llm provider is built per call to create_graph_extractor. In the job
+       path that is once per job, which may construct a gateway client per job
+       rather than reusing one. Worth hoisting to a process-level singleton when
+       the call site is wired, if the client turns out to be expensive.
+   5. My dispatch deliberately does NOT extend factory.GRAPH_MODES_ON. That
+       controls whether the graph leg is ON (retrieval); this controls WHICH
+       extractor runs. Keeping them separate means an unknown mode is refused
+       here rather than silently treated as off.
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - I SHIPPED A FLAKY TEST IN T-R11 AND IT FAILED TODAY.
+    test_supervisor_backoff_is_bounded used a wall-clock timer to decide when to
+    stop the supervisor, so it passed when run alone and failed inside the
+    larger related-suite run (restarts 0 instead of >=1). That is my defect from
+    R11, caught by running the suites together rather than in isolation. Fixed by
+    asserting the deterministic give-up path instead: exactly max_failures
+    attempts, restarts and consecutive_failures, with zero timing. Re-ran the R11
+    suite three times back to back: 17 passed each time.
+  - The mode suite was green on first run, so I did not take that as sufficient:
+    the anti-substitution test asserts the failure path as well as the success
+    path, and the two modes are asserted to be different types so a collapsed
+    matrix cannot pass.
+FOREIGN TREE MOVEMENT (reported, not forced): dev1's R06b work was in flight
+  throughout — packages/retrieval/adapters/qdrant_store.py,
+  packages/retrieval/contract_tests.py, tests/unit/test_invalid_vector_parking.py,
+  tests/unit/test_vector_store_boundary.py and a new
+  tests/unit/test_embedding_identity_boundary.py. All untouched by me; none of
+  them is near packages/graph or the worker job. HEAD did not move during the
+  ticket (a4dbd95 at both ends). My uncommitted eval files were left alone.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr12_{start,end}.txt):
+- START (HEAD `a4dbd95`): 34 dirty paths including dev1's five.
+- END (HEAD `a4dbd95`): 37 dirty paths — my 3 files, dev1's 6, evals and handoffs.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.
