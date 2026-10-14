@@ -955,3 +955,13 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K06 (deferred scope) — migration wiring disclosure
+
+```text
+TASK: T-K06
+STATUS: DEFERRED in this bounded turn (migration wiring + readiness disclosure broader than available).
+CHANGE: none.
+METRICS: spend 0.00
+GIT: handoff only
+```
