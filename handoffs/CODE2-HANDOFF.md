@@ -4578,3 +4578,176 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4022_{start,end
   `?? packages/workflow_engine/palette.py` and `?? tests/unit/test_workflow_palette.py`.
 - 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-V4-023 — W5 validator-feedback + run-timeline view models (data, no UI)
+
+```text
+TASK: T-V4-023 (W5) — pure view-model builders: validator errors to placeable
+       editor annotations (node id + port + message + severity, every
+       ValidationError maps, none dropped), and run state to a timeline model
+       (ordered node entries with status/timing/skip-reasons, terminal state
+       prominent). DATA + tests only; no UI, no canvas, no event handlers.
+CHANGE: packages/workflow_engine/view_models.py (NEW, ~470 lines) — EditorAnnotation
+        + AnnotationSeverity, ValidationFeedback, build_annotation/
+        build_annotations/build_validation_feedback, TimelineEntry +
+        TimelineEntryState, TimelineTerminalState, RunTimeline,
+        build_timeline/build_timeline_entry, ViewModelError.
+        tests/unit/test_workflow_view_models.py (NEW) — 48 tests.
+        No existing file touched.
+WHY:    The canvas needs to SHOW two things it currently cannot: why a workflow
+        will not save or run, and what a run actually did. Both must be derived
+        from the engine's own records rather than re-described, or the editor
+        becomes a second source of truth that disagrees with the validator.
+        Totality is the property that matters: an error the editor never shows
+        is a user shipping a workflow the engine rejects, and a node missing
+        from a timeline is a run the operator cannot explain.
+REUSED: interfaces (ValidationError, ValidationResult, NodeRun, WorkflowRun,
+        NodeRunStatus, WorkflowRunStatus) — the builders map the engine's own
+        models; no input type is mirrored by hand. The validator SOURCE is read
+        by the tests to enumerate every error code, so a new code fails the
+        suite rather than vanishing from the editor. The executor SOURCE is read
+        to enumerate every skip reason, so a new reason breaks the timeline
+        tests rather than being silently dropped. Pydantic for the models (same
+        convention as the palette, T-V4-022).
+
+MAPPING TABLE 1 — ValidationError -> EditorAnnotation (23 codes, TOTAL):
+  code                          | severity | blocking | port extracted from message
+  ------------------------------|----------|----------|---------------------------
+  EMPTY_WORKFLOW                | error    | yes      | -
+  NO_TRIGGER                    | error    | yes      | -
+  NO_OUTPUT_NODE                | error    | yes      | -
+  DUPLICATE_NODE_ID             | error    | yes      | -
+  DUPLICATE_EDGE_ID             | error    | yes      | -
+  DUPLICATE_PORT_NAME           | error    | yes      | "port name '...'"
+  EMPTY_PORT_NAME               | error    | yes      | -
+  CYCLE_DETECTED                | error    | yes      | - (no port named)
+  ORPHANED_NODE                 | error    | yes      | -
+  DANGLING_SOURCE               | error    | yes      | -
+  DANGLING_TARGET               | error    | yes      | -
+  DANGLING_SOURCE_PORT          | error    | yes      | "source port '...'"
+  DANGLING_TARGET_PORT          | error    | yes      | "target port '...'"
+  UNCONNECTED_REQUIRED_INPUT    | error    | yes      | "input port '...'"
+  TYPE_MISMATCH                 | error    | yes      | -
+  CONDITION_EDGE_NO_VALUE       | error    | yes      | -
+  UNSUPPORTED_NODE_TYPE         | error    | yes      | -
+  UNSUPPORTED_CAPABILITY        | error    | yes      | -
+  TOO_MANY_NODES                | error    | yes      | -
+  TOO_MANY_EDGES                | error    | yes      | -
+  NODE_FAN_OUT_TOO_HIGH         | error    | yes      | -
+  NODE_CONFIG_TOO_LARGE         | error    | yes      | -
+  GRAPH_CONFIG_TOO_LARGE        | error    | yes      | -
+  (A code outside this table RAISES ViewModelError — never skipped.)
+  All 23 are severity=error and blocking=true because every one of them stops
+  the workflow from being saved or run. The severity axis exists (and is
+  asserted to be a valid enum member) so a future non-blocking code is a table
+  edit, not a refactor.
+
+MAPPING TABLE 2 — NodeRun/WorkflowRun -> RunTimeline:
+  NodeRunStatus  -> TimelineEntryState    | WorkflowRunStatus -> TimelineTerminalState
+  pending        -> pending               | pending          -> running
+  running        -> running               | running          -> running
+  completed      -> completed             | completed        -> completed
+  failed         -> failed                | failed           -> failed
+  skipped        -> skipped               | cancelled        -> cancelled
+  NodeRun fields carried through: node_id, status, latency_ms, attempts,
+  output_data -> output_summary (only when completed with data), error ->
+  reason (failure reason for FAILED, disclosed skip reason for SKIPPED).
+  WorkflowRun fields carried: id, workspace_id, workflow_id, status, all
+  node_runs (one entry per key, NEVER fewer), final_output ->
+  final_output_summary (completed runs only), created_at, finished_at,
+  error -> run_error, failed_node_id, and duration_ms derived from the two
+  timestamps. Extra: counts per state, is_terminal_cause on the entry the run
+  names, and optional definition_nodes so a not-yet-reached node is a pending
+  "not reached" entry rather than absent.
+
+BUILT:  A TOTAL mapping table for all 23 validator codes with a refusal for
+        anything unmapped; port extraction from the message shapes the validator
+        actually writes (input port 'x', port name 'x', source/target port 'x'),
+        with None rather than a guess when no port is named; a timeline that
+        emits one entry per node run (plus a pending entry per declared-but-
+        unreached node); count/per-state summarisation so a canvas renders a
+        distribution without scanning; a "run ended without a recorded cause"
+        fallback so a non-running terminal run is never unlabelled; duration
+        parsing that returns None rather than a wrong number when timestamps
+        are unparseable; and a reason-less skip that SAYS "skipped (no reason
+        recorded)" rather than rendering a silent skip.
+VERIFY: tests/unit/test_workflow_view_models.py → 48 passed (0.39s).
+        tests/unit -k "workflow or palette" → 787 passed, 0 failed.
+        tests/unit (full) → 1959 passed, 0 failed (1 warning, a pre-existing
+        starlette/httpx deprecation in another file's import, not mine).
+        ruff check view_models.py + my test → All checks passed.
+        mypy packages/workflow_engine/ → Success, 19 source files.
+        METRIC 1 — validation errors unmapped: 0. The test reads the VALIDATOR
+        SOURCE, extracts every `code="..."` literal, and asserts the result set
+        == the mapping table's key set EXACTLY (missing on one side and stale on
+        the other both fail). Each of the 23 codes is then parametrised through
+        build_annotation and asserted to keep node_id + message. An invented
+        code, a blank code, and an unknown code inside a batch each RAISE.
+        Port extraction is asserted on the three real message shapes, and a
+        no-port message is asserted to yield None.
+        METRIC 2 — run information dropped: 0. Every node run becomes an entry
+        (key-for-key); attempts, latency_ms, output and reason are asserted to
+        survive; the executor's four skip reasons (_SKIP_BARRIER,
+        _SKIP_NO_INPUT, _SKIP_UPSTREAM, _SKIP_CANCELLED) are scraped from the
+        executor source and each round-trips verbatim; terminal states FAILED /
+        CANCELLED / COMPLETED / RUNNING are each asserted with their cause and
+        output behaviour; counts sum to node_count; declared-but-unreached nodes
+        appear as pending "not reached"; and an END-TO-END test executes a REAL
+        workflow through WorkflowExecutor and maps the actual WorkflowRun,
+        asserting 3/3 completed with the final output present.
+        METRIC 3 — UI code added: 0. AST scan: no import from
+        react/react-dom/next/framer-motion/clsx/zustand, and no reference to
+        onClick/onChange/onDragStart/useState/useEffect/useMemo/forwardRef/jsx/
+        canvas/render/Component/div/span. git-status check: no .tsx/.jsx, no
+        components/ or app/ path touched. Both models verified JSON-serialisable
+        so a canvas consumes data rather than calling into the engine.
+RISKS:  1. TWO OF MY OWN TESTS WERE WRONG BEFORE THE CODE WAS, and both are
+        disclosed: (a) my unknown-status test tried to construct a NodeRun with
+        status="not_a_status", which pydantic refuses at CONSTRUCTION — so the
+        builder's refusal branch was unreachable. Fixed by asserting the real
+        invariant instead: _ENTRY_STATES covers NodeRunStatus exactly, plus the
+        construction refusal. (b) my port test expected "Duplicate port name
+        'output'" to yield port 'output' — my extraction only knew
+        "input port '"/"output port '". The extraction was genuinely incomplete
+        for the message shapes the validator writes, so I extended it (port
+        name 'x', source/target port 'x') instead of weakening the test.
+        2. Port extraction is message-shape parsing, not a structured field:
+        ValidationError carries no port field, so the builder reads the quoted
+        token after a port-bearing phrase. If a future validator message
+        rewords that phrase, the annotation's port becomes None (safe, visible
+        as "no port") rather than a wrong port. The mitigation is the fixture
+        test pinning the three real shapes; a reword fails the test.
+        3. Severity is currently all-error/all-blocking because all 23 codes
+        genuinely block. The axis exists so a non-blocking code is a one-line
+        table edit; until one exists the enum has an unexercised member.
+        4. `definition_nodes` is optional and defaults to empty, so
+        build_timeline(run) alone is faithful to the run and complete for it;
+        supplying the definition's node ids additionally surfaces unreached
+        nodes. A canvas that forgets it sees only what the run reached, which
+        is a smaller truth rather than an invented one.
+        5. Timestamps are parsed with datetime.fromisoformat after a "Z" ->
+        "+00:00" replacement; unparseable timestamps yield duration_ms None
+        rather than a fabricated duration. created_at/finished_at are carried
+        verbatim as strings, so the editor formats them.
+        6. output_summary/reason strings are bounded (1_024 chars) — a very
+        large node output is summarised, not truncated-and-pretended-complete:
+        the bound is documented and the entry still says the node completed.
+
+FOREIGN NOTES (dev1's in-flight T-V4-013 idempotency work, not mine, untouched):
+his executor.py moved from dirty to committed mid-ticket (HEAD 11005e4 ->
+a17473a), his untracked test_workflow_idempotency.py was absorbed, and he landed
+an untracked packages/workflow_engine/connectors.py. None of my files overlap;
+his 787-pass run of "workflow or palette" and the full suite's 1959 passed both
+include my 48 tests. Note his executor.py still required WorkflowExecutor(fake)
+positional in my end-to-end test — I used the real signature, not a stub.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4023_{start,end}.txt):
+- START (HEAD `11005e4`): 23 dirty paths — 5 modified handoffs, dev1's live
+  executor.py, his untracked idempotency test, 16 untracked handoff docs. Index empty.
+- END (HEAD `a17473a`): dev1's set changed (executor committed, idempotency test
+  absorbed, his new connectors.py untracked) PLUS exactly mine:
+  `?? packages/workflow_engine/view_models.py` and
+  `?? tests/unit/test_workflow_view_models.py`.
+- 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.
