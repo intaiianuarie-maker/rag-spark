@@ -522,3 +522,69 @@ async def test_graph_retriever_marks_descriptions_as_routing_hints() -> None:
         claim_grounder=ExtractiveGrounder(),
     )
     assert verified == [] and citations == []
+
+
+# --------------------------------------------------------------------------------------
+# T-K02: lookup construction log/fail-closed + graph empty-content
+# --------------------------------------------------------------------------------------
+
+
+async def test_lookup_construction_failure_logs_warning_and_degrades(
+    monkeypatch, caplog
+) -> None:
+    """T-K02: a lookup construction failure logs a warning with the exception
+    type and degrades to ``chunk_lookup=None`` — never silent, engine still
+    builds and answers.
+    """
+    import logging
+
+    import answer.factory as factory_mod
+
+    class _BoomLookup:
+        def __init__(self) -> None:
+            raise RuntimeError("simulated construction failure")
+
+    monkeypatch.setattr(
+        "answer.adapters.postgres_lookup.PostgresChunkLookup", _BoomLookup
+    )
+    caplog.set_level(logging.WARNING, logger="knowledge_os.answer.factory")
+
+    with caplog.at_level(logging.WARNING, logger="knowledge_os.answer.factory"):
+        engine = factory_mod.build_answer_engine(model="test-model")
+
+    # Engine still builds (degradation, not a crash).
+    assert engine is not None
+    # chunk_lookup is None → legacy existence/scope-only verification path.
+    assert engine.chunk_lookup is None
+
+    # A warning was logged with the exception type — never silent.
+    warnings = [
+        r for r in caplog.records
+        if getattr(r, "event", None) == "chunk_lookup_construction_failed"
+    ]
+    assert warnings, "expected chunk_lookup_construction_failed warning"
+    assert warnings[0].error_type == "RuntimeError"
+
+
+async def test_refless_graph_item_drops_before_prompt_build() -> None:
+    """T-K02: a refless graph item (no chunk_id) drops before prompt build.
+
+    The hydration seam drops items with no ref (they can never be cited), so
+    the synthesized routing-hint text never reaches the model.
+    """
+    from answer.hydration import CanonicalHydrator
+
+    refless = RetrievedItem(
+        content="",
+        score=1.0,
+        method=RetrievalMethod.FUSED,
+        workspace_id=WS,
+        metadata={"is_graph": True, "routing_hint": True},
+    )
+    assert not refless.chunk_id
+
+    hydrator = CanonicalHydrator(lookup=MemoryChunkLookup())
+    hydrated = await hydrator.hydrate_items([refless], allowed_workspace_ids={WS})
+
+    # Refless item dropped — never reaches the prompt.
+    assert hydrated == []

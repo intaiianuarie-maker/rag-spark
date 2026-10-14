@@ -48,8 +48,10 @@ async def test_graph_citations_never_contain_summary_marker(tmp_path) -> None:
     assert search_result.evidence_chunk_ids
 
     items = retriever.to_retrieved_items(search_result, "ws-a")
-    # Items should have summary marker in content before hydration
-    assert any("[Knowledge Graph Context]" in item.content for item in items)
+    # T-K02: graph items emit EMPTY content + routing_hint marker so the
+    # synthesized hint never flows as evidence when hydration is unavailable.
+    assert all(item.content == "" for item in items)
+    assert all(item.metadata.get("routing_hint") is True for item in items)
 
     # Hydrate - should replace summary with canonical
     acl = ACLScope(user_id="u1", workspace_ids=["ws-a"])

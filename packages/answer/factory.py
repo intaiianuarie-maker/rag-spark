@@ -192,8 +192,19 @@ def build_answer_engine(
         from .adapters.postgres_lookup import PostgresChunkLookup
 
         chunk_lookup = PostgresChunkLookup()
-    except Exception:
-        pass
+    except Exception as exc:
+        # T-K02: never silent. A lookup construction failure (DB down, config
+        # error, import failure) logs a warning with the exception type and
+        # degrades to the legacy chunk_lookup=None path — the engine still
+        # builds and answers, but with existence/scope-only verification.
+        logger.warning(
+            "chunk_lookup_construction_failed",
+            extra={
+                "event": "chunk_lookup_construction_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
 
     hydrator = CanonicalHydrator(chunk_lookup)
 

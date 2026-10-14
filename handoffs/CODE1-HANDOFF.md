@@ -3498,3 +3498,28 @@ VERIFY:
 - K03 graph tests stay green: `pytest tests/unit/test_graph_retrieval_eval.py` → 7 passed.
 RISKS: none — fake signature only; no product code touched.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-K02 — F2+G4: lookup-construction log/fail-closed plus graph empty-content (dev1)
+TASK: T-K02 (w5:pG). K CONFIRMED Med: factory built PostgresChunkLookup inside bare except-pass with no log; graph routing-hint text flowed as evidence when lookup was None.
+CHANGE (allowed files):
+- `packages/answer/factory.py`: lookup construction failure now logs `chunk_lookup_construction_failed` warning with exception type; engine still builds with `chunk_lookup=None` (degraded, never silent).
+- `packages/graph/retriever.py`: `to_retrieved_items` emits `content=""` + `routing_hint` marker — synthesized hint text never flows as evidence when hydration is unavailable.
+- `tests/unit/test_graph_canonical_citations.py`: updated assertion to match new empty-content contract.
+- `tests/unit/test_bulk_hydration.py`: two new covering tests (construction-failure warning + refless-drop-before-prompt-build).
+WHY: lookup construction failure must never be silent; graph routing hints must never be mistaken for citable evidence.
+REUSED: existing CanonicalHydrator seam, MemoryChunkLookup, verify_claims.
+BUILT: warning log + empty-content emission + refless-drop proof.
+VERIFY:
+- `pytest tests/unit -k 'graph or hydration or answer_engine or chunk_lookup or bulk'` → 346 passed, 1 failed (pre-existing `test_a_store_failure_fails_closed`, fails on HEAD too).
+- Covering tests: `test_lookup_construction_failure_logs_warning_and_degrades` (warning + chunk_lookup=None) and `test_refless_graph_item_drops_before_prompt_build` (refless → []) both green.
+- ruff + mypy on touched files clean.
+Proof table:
+| scenario | outcome |
+|---|---|
+| lookup construction raises | warning logged + engine builds with chunk_lookup=None |
+| refless graph item | dropped before hydration → never reaches prompt |
+| graph item with chunk_id | empty content + routing_hint marker; hydration fills canonical |
+RISKS:
+- lookup=None means legacy existence/scope-only verification (no canonical hydration) — acceptable degradation per K triage.
+- graph items with empty content rely on hydration to fill canonical text; if hydration is unavailable the item is dropped (never cited).
+Next: IDLE — push mandatory.

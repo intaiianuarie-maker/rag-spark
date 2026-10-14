@@ -180,9 +180,11 @@ class GraphRetriever:
         if not result.summary and not result.entities:
             return items
 
-        # Routing passage (hint only): overwritten by canonical hydration
-        # before context build, and never citable on its own — see above.
-        passage = f"[Knowledge Graph Context]\n{result.summary}"
+        # T-K02: graph items emit EMPTY content + routing_hint marker so no
+        # consumer mistakes the synthesized hint for evidence. Canonical
+        # hydration (``answer.hydration.HydratingOrchestrator``) fills the
+        # real text before prompt build; when hydration is unavailable the
+        # content stays empty — the routing hint never flows as evidence.
         # Primary item carrying chunk IDs for citation resolution
         seen_chunks: set[str] = set()
         for chunk_id in result.evidence_chunk_ids:
@@ -191,7 +193,7 @@ class GraphRetriever:
             seen_chunks.add(chunk_id)
             items.append(
                 RetrievedItem(
-                    content=passage,
+                    content="",
                     score=result.score,
                     method=RetrievalMethod.FUSED,
                     workspace_id=workspace_id,
@@ -208,7 +210,7 @@ class GraphRetriever:
         if not items and result.summary:
             items.append(
                 RetrievedItem(
-                    content=passage,
+                    content="",
                     score=result.score,
                     method=RetrievalMethod.FUSED,
                     workspace_id=workspace_id,
