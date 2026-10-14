@@ -4927,3 +4927,203 @@ GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4021_{start,end}
 - 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty. NO product file touched (nothing needed
   fixing: the gate is green, so nothing was fixed and nothing was hidden).
+---
+
+## T-V4-026 — W7 parity + feature-off + restore/rollback probes
+
+```text
+TASK: T-V4-026 (W7) — prove the off-switches and the way back. Three probes,
+       all live-tree: (1) PARITY — every flagged-off surface leaves default-path
+       behaviour byte-identical; (2) FEATURE-OFF — each flag genuinely disables
+       its surface; (3) RESTORE/ROLLBACK — migration down restores scratch to
+       prior state, checkpoints resume after a simulated kill, and a rollback
+       runbook note lands in the row.
+CHANGE: tests/unit/test_w7_parity_off_rollback.py (NEW, 17 probes, ~720 lines)
+        — the three probe batteries + the ROLLBACK_RUNBOOK constant quoted in
+        this row. NO product file touched.
+WHY:    W4/W5/W7 built surface; this ticket proves the two properties a release
+        depends on: turning a feature off really turns it off (and changes
+        nothing else), and there is a proven way back. A feature that leaks past
+        its flag, or a migration with no proven rollback, is the release risk.
+REUSED: The real W3 adapter (v3_adapter: adapter_enabled / V3NodeExecutor /
+        V3AdapterDisabled), the real W6 connectors (ScheduleConnector /
+        TriggerConnector / ConnectorDisabledError / ConnectorNotArmedError), the
+        real V3 seam contract (zero runtime by construction), the real checkpoint
+        store (SqliteCheckpointStore, the durable variant), the real executor
+        seam, and the real migration SQL pair. The default-path digest runs the
+        real validate->compile->execute path in a subprocess.
+BUILT:  A byte-digest comparison of the default path's semantic trace with the
+        flag unset / "0" / "1" (three subprocesses, digest over node statuses,
+        outputs and final output — never timings); AST import-graph probes for
+        each flagged-off surface; the connector arming battery (defaults off,
+        registering inert, firing surfaces refuse, half-armed enable refused,
+        both-deps enable works); the migration rollback battery against scratch
+        sqlite with a planted unrelated table+index; a simulated-kill resume
+        through the durable checkpoint store; a replay-not-redo resume; and the
+        rollback runbook for the release pack.
+
+PROBE TABLE (17 probes, all green):
+
+  probe | what it drives | result
+  ------|----------------|----------------------------------------------
+  P1-1  | default path run 3x as subprocesses: flag unset, "0", "1" | all three
+        | (validate->compile->execute, real compiler+executor) | digests equal
+  P1-2  | default path runs to completion; AST proves executor.py imports | completes;
+        | nothing flagged off and never names the flag         | 0 flagged imports
+  P1-3  | AST import graph of __init__/executor/compiler vs the three | no flagged
+        | flagged-off surfaces                                  | surface imported
+  P2-1  | W3 adapter_adapter_enabled() over 4 shapes + execute_node | refused with
+        | on a disabled adapter                                 | V3AdapterDisabled;
+        |                                                        | dispatches == 0
+  P2-2  | adapter_enabled with the flag removed from the env      | False (defaults)
+  P2-3  | adapter_enabled over "1","true","TRUE","yes","on"," on " | True (control:
+        |                                                        | the off-switch is a
+        |                                                        | switch, not a weld)
+  P2-4  | ScheduleConnector + TriggerConnector defaults           | both disabled,
+        |                                                        | fired==0,
+        |                                                        | evaluated==0
+  P2-5  | register() then tick()/receive() while disabled          | registering is
+        |                                                        | inert (registered==1,
+        |                                                        | fired==0); both
+        |                                                        | firing surfaces raise
+        |                                                        | ConnectorDisabledError
+  P2-6  | enable(store=None, runner=None) and enable(store, None)  | both raise
+        |                                                        | ConnectorNotArmedError
+        |                                                        | "half-armed"; the
+        |                                                        | connector stays
+        |                                                        | disabled
+  P2-7  | enable(both deps) then tick()                           | enabled, fired==0,
+        |                                                        | tick answers []
+        |                                                        | (control)
+  P2-8  | AST over v3_contract.py: zero AsyncFunctionDef, and no | 0 async functions,
+        | dispatch/bridge/run_node/execute/call_v3/invoke public | no entry point
+  P2-9  | calling the contract's functions                        | pure: validation +
+        |                                                        | mapping only, and
+        |                                                        | validate_dispatch
+        |                                                        | refuses a bad timeout
+  P2-10 | assert_no_v3_import(v3_contract.__dict__)               | passes at runtime
+  P3-1  | up-SQL applied to scratch db, then down-SQL              | up is CREATE-only;
+        |                                                        | down restores the FULL
+        |                                                        | sqlite_master snapshot
+        |                                                        | (type/name/tbl_name/sql)
+        |                                                        | to pre-up; planted
+        |                                                        | table+index untouched
+  P3-2  | up→down→up→down twice                                   | idempotent, same state
+  P3-3  | real run checkpointed to SqliteCheckpointStore, all refs | phase-1 COMPLETED;
+        | dropped, store reopened (the simulated kill), then     | checkpoint survives;
+        | execute(resume=True) in a fresh executor                | phase-2 COMPLETED,
+        |                                                        | output identical
+  P3-4  | resume with a node that would explode if re-executed     | COMPLETED, so
+        |                                                        | settled nodes were
+        |                                                        | replayed, never redone
+  P3-5  | ROLLBACK_RUNBOOK content + a flag cross-check           | runbook names every
+        |                                                        | rollback lever and the
+        |                                                        | verification order
+  P3-6  | sqlite3.connect patched, every connection recorded       | every connection is
+        |                                                        | under tmp_path — no
+        |                                                        | live database touched
+
+VERIFY: tests/unit/test_w7_parity_off_rollback.py → 17 passed (twice).
+        tests/unit (full) → 2074 passed, 0 failed.
+        ruff check my probe file → All checks passed.
+        mypy (isolated) → Success, no issues found in 1 source file.
+        METRIC 1 — parity violations: 0. The default-path digest is byte-identical
+        across unset/"0"/"1" for the adapter flag (P1-1); the AST probes prove
+        the default path imports none of the three flagged-off surfaces
+        (P1-2/P1-3), so no flag has code to flip. Parity is proven on the
+        semantic trace (statuses, per-node status+output, final output), never
+        on timings, which legitimately differ.
+        METRIC 2 — off-switches that stay live: 0. W3: the disabled adapter
+        refuses with a typed error and dispatches 0 (P2-1), defaults off even
+        with the variable absent (P2-2), and still flips on when set (P2-3, the
+        control that proves it is a switch). W6: both surfaces default off,
+        registering never arms, both firing surfaces refuse while disabled, a
+        half-armed enable is refused and leaves the connector disabled, and only
+        both dependencies enable it (P2-4..P2-7). V3 seam: zero async functions
+        and no dispatch entry point exist in the contract module at all, so it
+        cannot be "live" (P2-8..P2-10).
+        METRIC 3 — rollback paths unproven: 0. Migration down restores the exact
+        prior sqlite_master snapshot and is idempotent (P3-1/P3-2); the durable
+        checkpoint survives a simulated process kill and resumes to an identical
+        completion, replaying rather than redoing (P3-3/P3-4); and the runbook
+        below is declared and cross-checked (P3-5). No probe opens a configured
+        live database (P3-6).
+RISKS:  1. MY OWN PROBE WAS WRONG FIRST, and the correction is the honest
+        finding: my first parity probe wrapped the executor IN the disabled V3
+        adapter and asserted the run still completed. It FAILED — correctly —
+        because a disabled adapter is not a pass-through: routing every node
+        through a disabled adapter fails the run (the executor refused node
+        'start' with "v3 workflow node execution is disabled"). That is the
+        feature-off guard working, not a product defect. The real parity claim
+        is stronger and is what P1-2 now proves: the adapter is never constructed
+        on the default path (AST: executor.py imports it nowhere and never names
+        the flag), so there is nothing that can differ. Disclosed because a
+        reviewer must not read the earlier failure as a product bug — and must
+        not read a pass-through wrap as a legitimate use of the adapter.
+        2. Parity is proven on the semantic trace, not on wall-clock: statuses,
+        per-node status+output and final output are digest-compared, timings are
+        not. A flag that changed only timing would not be caught here (and
+        should not be — timing is not behaviour).
+        3. Two more self-corrections, both mine, both fixed before this row: (a)
+        the parity probes initially compiled with an EMPTY CapabilityManifest, so
+        every node type was refused for a reason unrelated to parity — the probe
+        would have been proving the wrong thing; (b) two of my import-graph
+        assertions were naive text scans that matched executor.py's own docstring
+        sentence saying "the executor never imports" the adapter. Both are now
+        AST checks (a text scan is fooled by the documentation that makes the
+        claim true) and the second is exactly the shape of a check that passes
+        for the wrong reason.
+        4. The W6 connector firing surfaces are contract surfaces: tick()
+        evaluates and reports due ids, receive() accepts a delivery and records
+        it — neither starts a run (fired stays 0 until the live dispatch ticket).
+        The probes therefore prove the OFF switch and the ENTI switch, not
+        dispatch; dispatch is not this ticket's surface.
+        5. The migration rollback is proven against scratch sqlite only
+        (tmp_path, never a live database — P3-6 asserts it). Nothing was applied
+        to a real database by this ticket; the migration remains a reviewed draft.
+        6. The runbook is documentation, not machinery: it is asserted for
+        content and cross-checked where a probe could verify a claim (the flag
+        defaults), but the ordering commands themselves are for a human to run
+        during a release, and the B-1 gate is what proves they worked.
+
+ROLLBACK RUNBOOK NOTE FOR THE RELEASE PACK (the exact text the probes carry):
+  """W4/W5/W7 ROLLBACK RUNBOOK (release pack)
+  1. FEATURE FLAGS FIRST — nothing to restore. WORKFLOW_V3_ADAPTER (W3 adapter)
+     defaults OFF; to disable a release that turned it on, unset it (or set
+     "0"/"false") — the default path is byte-identical to the flag never having
+     existed (T-V4-026 probe 1). W6 connectors default OFF, and enabling requires
+     BOTH a store and a runner or the enable is refused ("half-armed"): there is
+     no partial state to roll back.
+  2. DATABASE MIGRATION (draft, NOT APPLIED at the time of this note). Apply: run
+     0001_workflow_draft_revisions.up.sql — CREATE-IF-NOT-EXISTS only, idempotent
+     and re-runnable. Roll back: run 0001_workflow_draft_revisions.down.sql —
+     drops the two indexes then the table and restores the full sqlite_master
+     snapshot to the pre-upgrade state; unrelated tables/indexes untouched
+     (proven twice, idempotently). ROWS EXIST? Export first — the down file's
+     header carries the read-only SELECT; DROP TABLE destroys rows.
+  3. WORKFLOW RUN STATE (checkpoints). A "restart" is resume=True with the same
+     run_id against the same checkpoint store: settled nodes replay, unsettled
+     work continues, and a hostile run fails again identically (no guarantee
+     laundered by the restart). There is NO checkpoint rollback: history is
+     append-only (the primary key makes a rewrite a constraint violation), so a
+     bad run is abandoned, never edited.
+  4. VERIFY AFTER ANY ROLLBACK, in this order: (a) pytest
+     tests/unit/test_b1_production_execution_gate.py — the gate is green;
+     (b) pytest tests/unit -k "workflow or palette"; (c) the T-V4-026 probes.
+  5. Do NOT roll back by hand-editing rows or by restoring an older schema file
+     over a newer one: the migration is additive by design and the append-only
+     keys make hand repairs unverifiable."""
+
+FOREIGN NOTES (dev1's T-V4-025 work, not mine, untouched and not cited per the
+card's instruction): his fault_matrix.py + its test were committed mid-ticket
+(HEAD 06298e0 -> 6432d8f) and he landed a new untracked release_pack.py. My probe
+file does not import or touch either. His in-flight failures are his to land.
+
+GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4026_{start,end}.txt):
+- START (HEAD `06298e0`): 23 dirty paths — 5 modified handoffs, dev1's
+  fault_matrix.py + its test, 16 untracked handoff docs. Index empty.
+- END (HEAD `6432d8f`): dev1's fault-matrix was committed and replaced by his new
+  release_pack.py; my delta is exactly ONE file:
+  `?? tests/unit/test_w7_parity_off_rollback.py`.
+- 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty. NO product file touched.
