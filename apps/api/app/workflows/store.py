@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 from datetime import UTC, datetime
+from pathlib import Path
 
 from workflow_engine.draft_store import DraftStore, InMemoryDraftStore
 from workflow_engine.executor import WorkflowExecutor
@@ -22,12 +23,23 @@ _runs: dict[tuple[str, str], WorkflowRun] = {}
 _executors: dict[str, WorkflowExecutor] = {}
 
 
+def draft_db_path() -> Path:
+    import os
+
+    raw = os.environ.get("WORKFLOW_DRAFT_DB")
+    if raw is None or not raw.strip():
+        raise ValueError("WORKFLOW_DRAFT_DB is required")
+    return Path(raw.strip())
+
+
 def get_draft_store() -> DraftStore:
-    """Return the active DraftStore instance, defaulting to InMemoryDraftStore."""
+    """Return the active DraftStore instance (durable Sqlite by default)."""
     global _draft_store
     with _lock:
         if _draft_store is None:
-            _draft_store = InMemoryDraftStore()
+            from stores.workflow_draft_store import SqliteDraftStore
+
+            _draft_store = SqliteDraftStore(draft_db_path())
         return _draft_store
 
 

@@ -21,6 +21,7 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
+os.environ.setdefault("WORKFLOW_DRAFT_DB", "/tmp/opencode/v4_test_drafts.db")
 
 import uuid
 from typing import Any

@@ -825,3 +825,17 @@ STATUS: DEFERRED-WITH-MAP (drafts store wiring beyond this bounded pass).
 METRICS: no store change; spend 0.00.
 GIT: handoff only.
 ```
+
+## T-A04c-drafts — durable SqliteDraftStore wiring
+
+```text
+TASK: T-A04c-drafts durable drafts.
+CHANGE:
+      - apps/api/app/workflows/store.py get_draft_store returns SqliteDraftStore from WORKFLOW_DRAFT_DB (fail-closed)
+WHY:  durable shared drafts across restart/processes.
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff/mypy store.py -> clean
+SPEND: 0.00
+GIT: handoff only
+```
