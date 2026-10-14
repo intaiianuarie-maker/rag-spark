@@ -885,3 +885,9 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 - R01 rotation executed in-container: 8594 sessions + 8707 refresh tokens revoked, secret swapped. Auth lifecycle live-proved: register 201 + login 200 + refresh 200 (test user relsmoke_test@example.com left in PG, disclosed).
 - Traffic proof: both containers carry the alias (per-call accessor per R05); live search skipped (needs workspace+ingest, metered spend, no new signal over R07/R08 alias proofs — stated). /version git_sha still unknown (known wiring gap, not this release).
 - RECON2 to dev1 @w5:pG (post-restart, box quiet load ~3.9). R13b full run gated on STABLE verdict.
+
+## 2026-10-14 — RECON2 STABLE (0315fbf); SMOKE then R13b
+- 37/37 ready-true, 0 flaps. Halt-lift already standing -> no further go. Smoke (T-SMOKE-ALL) on dev2 now; R13b queued directly behind on same pane.
+
+## 2026-10-14 — Astra review dispatched (T-REVIEW-V1V4, user order)
+- Read-only + single md deliverable reviews/ASTRA-V1-V4-2026-10-14.md. Token discipline: one version in context at a time, targeted reads, findings-only. No lane overlap (dev2 smoke live, dev1 standby).
