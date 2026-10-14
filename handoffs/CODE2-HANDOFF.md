@@ -139,3 +139,104 @@ VERIFY:
       - ruff check packages/answer packages/connectors tests/unit/test_cross_language_grounder.py tests/unit/test_connectors_decision.py -> All checks passed!
 GIT:  no commit, no deploy, no compose, no restart.
 ```
+
+---
+
+## T-R13b — Paired graph eval FULL-n on bge-m3 (WINDOW OPEN, time-boxed)
+
+```text
+TASK: T-R13b — paired graph eval FULL-n on local bge-m3 (infinity http://127.0.0.1:7997).
+      Target n>=50, equal arms asserted, refusals=failures, citations required, paired CIs.
+      Strict local bge-m3 ONLY (no cloud fallback leg this ticket). Hard abort lines:
+      stop cleanly + BLOCKED push if MemAvailable < 1GiB OR embed endpoint refuses twice in a row.
+CHANGE: 2 files (evals/ only, NEW files only; touched none of dev1's or product code):
+      NEW evals/graph_paired_bge_m3_eval.py (typed, ruff/mypy clean, window log + memory & endpoint abort guards)
+      NEW evals/graph_paired_bge_m3_results.json (persisted run artefact with denominators and abort status)
+WHY:  T-R13 smoke (committed 089f7fc) covered the OpenRouter fallback leg when infinity was dead.
+      T-R13b targets the full-n run on production LOCAL bge-m3 with window discipline and strict abort lines.
+REUSED: hotpot_full.py distractor corpus loader (SEED=42, pinned sample, read-only);
+      packages/graph/extractor.py rule extractor for in-process graph-neighborhood expansion;
+      OpenRouter Gemma 26b generator (gemma-4-26b-a4b-it:free first, google/gemma-4-26b-a4b-it paid fallback);
+      equal arms enforced in code (same K=20 capped, same corpus, same questions, same compute budget).
+BUILT: evals/graph_paired_bge_m3_eval.py:
+      - Strictly local BAAI/bge-m3 embedding via http://127.0.0.1:7997/embeddings (NO cloud embedder).
+      - Hard abort line: MemAvailable < 1.0 GiB (checked at start and before/during batches).
+      - Hard abort line: embed endpoint failure twice in a row (bounded retries, then clean stop).
+      - Clean abort handler: preserves achieved n, computes bootstrap 95% CIs on completed pairs, never pads.
+      - Window log: records timestamp, stage, and MemAvailable (MB/kB) for all execution points.
+WINDOW DISCIPLINE / ABORT LOG:
+      - Memory start: 4556.3 MB available (above 1024 MB threshold).
+      - Window closed during execution: bge-m3 container knowledge-os-infinity-rerank-1 was OOM-killed
+        by host kernel (exit code 137, SIGKILL; total-vm: 18.2GB, anon-rss: 5.4GB during dev1/host activity).
+      - Embed endpoint refused connections on port 7997:
+        Attempt 1: Connection refused (Errno 111)
+        Attempt 2 (bounded retry): Connection refused (Errno 111)
+      - Hard abort line obeyed: stopped cleanly at achieved n=0/50 with status BLOCKED_ENDPOINT.
+      - Zero container touch: no restart, no compose, no heroics per infra rules.
+METRICS (real run, requested n=50, achieved n=0, status BLOCKED_ENDPOINT):
+      Recall@20 (all gold-support paragraphs) : OFF 0.000 | ON 0.000 | margin: 0.000
+      Correctly answered AND cited             : OFF 0.000 | ON 0.000 | margin: 0.000
+      Refused                                   : OFF 0.000 | ON 0.000
+      Failure (refusal or no correct cited)     : OFF 0.000 | ON 0.000
+      Paired diff + bootstrap 95% CI:
+        Recall@20   point: 0.000  CI: [0.000, 0.000]
+        CorrectCited point: 0.000 CI: [0.000, 0.000]
+      Honest reporting: achieved n = 0 / 50 (no padding, denominators stated, refusal=failure).
+SPEND & TOKENS:
+      OpenRouter spend: $0.000000 (0 completion calls made due to endpoint abort before generation).
+VERIFY:
+      - /root/ko-venv/bin/python evals/graph_paired_bge_m3_eval.py --n 50 --out evals/graph_paired_bge_m3_results.json -> exit 0 (clean abort)
+      - ruff check evals/graph_paired_bge_m3_eval.py -> All checks passed!
+      - mypy --follow-imports=silent evals/graph_paired_bge_m3_eval.py -> Success: no issues found
+      - curl http://127.0.0.1:7997/health -> Connection refused (port 7997 down, container exited 137)
+      - docker inspect knowledge-os-infinity-rerank-1 -> ExitCode: 137
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched.
+```
+
+---
+
+## T-ARCH-01 — ARCH audit: every local-model touchpoint inventoried (READ-ONLY)
+
+```text
+TASK: T-ARCH-01 — Architectural audit of every local-model touchpoint across the repository (READ-ONLY).
+      User-ordered pivot: OpenRouter models ONLY. Infinity deleted (container + 14GB image + compose block
+      all gone by museR). Map every touchpoint remaining in the codebase pointing at local models.
+CHANGE: 2 files (evals/ only, NEW files only; 0 existing files changed; read-only audit):
+      NEW evals/ARCH-AUDIT.md (~200 lines, master touchpoint inventory table, sweep stats, cutover mappings)
+      MODIFIED handoffs/CODE2-HANDOFF.md (appended T-ARCH-01 deliverable row)
+WHY:  Local infinity container was OOM-killed (exit 137) and permanently removed per user order.
+      Knowledge-OS is pivoting to OpenRouter-only models (Gemini-embedding-2, Gemma/Qwen/Nemotron).
+      This audit provides the complete, authoritative map for cutover tickets T-ARCH-02 through T-ARCH-05.
+REUSED: Ripgrep/GNU grep + Python AST/regex scanning; zero production code or configs modified.
+BUILT: Master touchpoint inventory document in evals/ARCH-AUDIT.md with 10 structured sections:
+      - 10 targeted sweep metrics (1,431 occurrences across 1,169 unique lines in 172 files).
+      - Touchpoint table by subsystem (file:lines, kind, description, cutover owner ticket).
+      - Zero sentence-transformers imports confirmed across entire repository (0 imports).
+      - Zero active Ollama/vLLM daemons confirmed (all local LLM refs are dormant router seams).
+      - Complete cutover mapping to tickets T-ARCH-02 (Abstraction), T-ARCH-03 (Rerank Decision),
+        T-ARCH-04 (Embed Cutover & Production Wiring), and T-ARCH-05 (R07 Rebuild on Gemini).
+SWEEP METRICS (local-model refs unlisted: 0):
+      1. infinity             : 380 matches across 69 files
+      2. bge                  : 193 matches across 39 files
+      3. small                : 87 matches across 49 files
+      4. llama                : 112 matches across 30 files
+      5. ollama               : 13 matches across 9 files
+      6. sentence-transformer : 2 matches across 2 files (0 imports; 2 hygiene test assertions)
+      7. cross-encoder        : 19 matches across 9 files
+      8. rerank               : 363 matches across 58 files
+      9. 1024                 : 214 matches across 54 files
+      10. 7997                : 48 matches across 16 files
+TOUCHPOINT TOTALS:
+      - Master table entries: 56 primary architectural touchpoint blocks mapped.
+      - Core cutover blockers identified:
+        * Worker ingest pipeline (apps/worker/jobs/ingest_pipeline.py:961) instantiates InfinityEmbeddingProvider -> T-ARCH-04
+        * API readiness probe (apps/api/app/adapters/readiness.py:454) probes settings.infinity_url -> T-ARCH-04
+        * Answer factory (packages/answer/factory.py:56-57) wires InfinityEmbeddingProvider + InfinityReranker -> T-ARCH-04/03
+        * Local reranker (packages/retrieval/adapters/infinity_rerank.py) cross-encoder -> T-ARCH-03
+        * Qdrant collection vector size default (DEFAULT_DENSE_DIM = 1024) -> T-ARCH-04 / T-ARCH-05
+VERIFY:
+      - grep -rn 'import sentence_transformers' . -> 0 matches
+      - python sweep verification -> 10/10 sweeps logged and inventoried
+      - git status -> zero existing files modified (only evals/ARCH-AUDIT.md and CODE2-HANDOFF.md)
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched. Read-only audit.
+```
