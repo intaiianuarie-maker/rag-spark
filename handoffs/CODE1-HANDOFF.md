@@ -2857,3 +2857,57 @@ RISKS:
 - Offline scripts now require OpenRouter API access or credentials (`OPENROUTER_API_KEY`) when run live (metered and accounted per user order); test suites remain 100% offline and in-process via fakes.
 - Disjoint from dev2's lane (`packages/agents/`, `packages/models/`, `apps/api/app/agents/`).
 - Left uncommitted, no commit/deploy/restart.
+
+## 2026-10-14 T-R15 — V3 Durable Lifecycle: Queued Run Before 202, Worker + Stores
+TASK: T-R15
+CHANGE:
+- `packages/stores/agent_stores.py` (NEW): Built `DurableRunRecord`, `RunStore` ABC with `InMemoryRunStore` and `SqliteRunStore` implementations (durable run identity persisted in state `QUEUED` before HTTP 202 Accepted); `DurableCheckpointStore` wrapping `StepStoreCheckpointAdapter` for byte-identical resumption; global accessors `get_run_store()`, `get_step_store()`, `get_checkpoint_store()`, `get_evidence_store()`, and `reset_all_stores()` for test isolation.
+- `packages/stores/__init__.py` (NEW): Re-exports store primitives (`RunStore`, `InMemoryRunStore`, `SqliteRunStore`, `DurableRunRecord`, `DurableCheckpointStore`, `StepStore`, `SqliteStepStore`, `InMemoryStepStore`, `EvidenceStore`, `SqliteEvidenceStore`, `InMemoryEvidenceStore`, `SequenceViolationError`, `EvidenceRecord`, `Citation`, global getters/setters/resets).
+- `apps/worker/jobs/agent_worker.py` (NEW): Built `AgentLifecycleWorker` with queue pickup from `AgentRunQueue`, status transitions (`QUEUED` -> `RUNNING` -> `COMPLETED`/`WAITING_APPROVAL`/`CANCELLED`/`LIMIT_EXCEEDED`/`FAILED`), checkpoint-based recovery and resumption via StepStore bridge, ack/park handling with visible park codes (`PARK_CODE_BUDGET_EXCEEDED`, `PARK_CODE_NOT_ALLOWED`, `PARK_CODE_MISSING_RECORD`, etc.), and `run_agent_worker_loop` for supervised execution.
+- `apps/api/app/agents/lifecycle_routes.py` (NEW): Mounted endpoints enforcing server-side policy:
+  - `POST /runs/queued` & `POST /runs/async`: Validates server policy via `derive_effective_run_config` (widening = 400 Bad Request), pre-allocates durable `run_id`, persists `DurableRunRecord` in `RunStore` in state `QUEUED` first, enqueues to durable queue second, and only then returns HTTP 202 Accepted (runs accepted without pre-allocated ID = 0).
+  - `GET /runs/{run_id}/status`: Scoped workspace status lookup. Cross-workspace access returns 403 Forbidden.
+  - `GET /runs/{run_id}/history`: Returns ordered `StepEvent` audit trail from `StepStore`. Cross-workspace access returns 403 Forbidden.
+  - `GET /runs`: Lists all agent runs for a workspace.
+  - `POST /runs/{run_id}/cancel`: Enforces server-side policy and authorization. Monotonic no-op if already terminal.
+  - `POST /runs/{run_id}/approval` & `/approve`: Validates human-in-the-loop decisions server-side. Rejects actions for tools not in workspace policy `allowed_tools` with 400 Bad Request; rejects approvals on runs not in `waiting_approval` with 400 Bad Request. On approval, transitions run to `QUEUED` and enqueues to queue for worker resumption.
+- `tests/unit/test_agent_lifecycle.py` (NEW): 14 unit tests proving all 3 target metrics, queue/worker pickup, checkpoint round-trip, and policy enforcement.
+- `handoffs/CODE1-HANDOFF.md` (this row).
+
+WHY:
+- Phase 3 lifecycle behind R14: V3 agents require asynchronous, durable lifecycle operations where runs are durable before execution starts, execution resumes identically after worker crashes without lost steps, and all lifecycle operations strictly enforce server policy.
+- Metric requirements:
+  1. `runs accepted without pre-allocated ID: 0`: Proven by ordering probes and storage failure injection tests; 202 Accepted is returned ONLY after the run ID is allocated, context built, and `RunRecord(status=QUEUED)` persisted to `RunStore`.
+  2. `lost-step resumptions unrecoverable: 0`: Proven by checkpoint/step store round-trip test; simulated kill mid-run reloads state, usage, context, approvals, and step history from `DurableCheckpointStore`, allowing continuation via monotonic sequence numbers without lost steps.
+  3. `lifecycle ops bypassing policy: 0`: Proven by cross-workspace isolation (403), policy widening refusal (400), approval tool validation against workspace policy (400), and non-waiting approval refusal (400).
+
+REUSED:
+- `packages/agents/interfaces.py`: `RunContext`, `RunState`, `RunStatus`, `StepEvent`, `StepStatus`, `Usage`, `AgentErrorCode`, `ModelPolicy`, `RunBudget`.
+- `packages/agents/policy.py`: `WorkspaceAgentPolicy`, `PolicyViolationError`, `derive_effective_run_config`, `get_workspace_policy`.
+- `packages/agents/adapters/checkpoint.py`: `StepStoreCheckpointAdapter`.
+- `packages/agents/step_store.py`: `StepStore`, `InMemoryStepStore`, `SqliteStepStore`, `SequenceViolationError`.
+- `packages/agents/evidence.py`: `EvidenceStore`, `InMemoryEvidenceStore`, `SqliteEvidenceStore`, `EvidenceRecord`, `Citation`.
+- `packages/agents/queue.py`: `AgentRunQueue`, `InMemoryAgentRunQueue`, `Claim`.
+- `packages/agents/runtime.py`: `AgentRuntime`, `_PERSISTED_STATES`.
+- `apps/authz`: `Action`, `Resource`, `require`, `get_principal`.
+
+BUILT:
+- `packages/stores/agent_stores.py` & `packages/stores/__init__.py`: Durable Run, Checkpoint, Step, and Evidence stores with in-memory and SQLite backends.
+- `apps/worker/jobs/agent_worker.py`: Worker pickup with checkpoint resume, lease fence, and visible park codes.
+- `apps/api/app/agents/lifecycle_routes.py`: Server-policy enforced lifecycle endpoints (`POST /runs/queued`, `POST /runs/async`, `GET /runs/{run_id}/status`, `GET /runs/{run_id}/history`, `GET /runs`, `POST /runs/{run_id}/cancel`, `POST /runs/{run_id}/approval`).
+- `tests/unit/test_agent_lifecycle.py`: 14 comprehensive unit tests verifying the 3 metrics and end-to-end execution.
+
+VERIFY:
+- Linter: `ruff check packages/stores apps/worker/jobs/agent_worker.py apps/api/app/agents/lifecycle_routes.py tests/unit/test_agent_lifecycle.py` -> **All checks passed!**
+- Type checker: `MYPYPATH=packages:apps/api:apps/worker mypy --explicit-package-bases packages/stores apps/worker/jobs/agent_worker.py apps/api/app/agents/lifecycle_routes.py tests/unit/test_agent_lifecycle.py` -> **Success: no issues found in 5 source files**.
+- Unit tests (lifecycle): `pytest tests/unit/test_agent_lifecycle.py -v` -> **14 passed** in 2.91s.
+- Unit tests (full agent suite): `pytest tests/unit/test_agent_lifecycle.py tests/unit/test_v3_factories_policy_budget.py tests/unit/test_agent_runs_api.py` -> **38 passed** in 53.94s.
+- Invariant metrics:
+  - `runs accepted without pre-allocated ID = 0`: Verified by `test_queued_run_pre_allocates_id_before_202_accepted` and `test_runs_without_id_or_on_store_failure_never_accept_202`.
+  - `lost-step resumptions unrecoverable = 0`: Verified by `test_checkpoint_step_store_round_trip_recovers_exact_state` and `test_sqlite_step_store_and_run_store_persistence`.
+  - `lifecycle ops bypassing policy = 0`: Verified by `test_cross_workspace_lifecycle_ops_strictly_forbidden_403`, `test_queued_endpoint_refuses_policy_widening_400`, `test_approval_endpoint_enforces_server_policy_and_run_state`, and `test_cancel_endpoint_is_monotonic_and_byte_identical_on_terminal`.
+
+RISKS:
+- In production, worker instances require connection to durable queue broker (Redis) and durable database (Postgres/SQLite); the abstraction contracts are satisfied with zero regressions.
+- Dev2's R14 files were untouched (`packages/agents/factories.py`, `packages/agents/policy.py`, `packages/agents/tools.py`, `packages/agents/runtime.py`, `packages/agents/interfaces.py`, `apps/api/app/agents/router.py`).
+- Left uncommitted, no commit/deploy/restart.
