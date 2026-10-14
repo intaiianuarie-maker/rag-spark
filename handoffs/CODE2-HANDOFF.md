@@ -895,3 +895,27 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K05 — typed run failures
+
+```text
+TASK: T-K05
+CHANGE:
+      - apps/api/app/workflows/router.py compile/validation errors -> 422 safe message; runtime errors remain failed runs with coded errors.
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K05 FIXUP
+
+```text
+TASK: T-K05 FIXUP
+VERIFY:
+      - pytest test_v4_authoring_api -> 10 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```

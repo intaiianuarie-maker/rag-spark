@@ -401,3 +401,80 @@ def test_run_workflow_refuses_without_checkpoint_db(monkeypatch):
     )
     assert resp.status_code == 503
     assert resp.json()["detail"]["error"] == "checkpoint_unavailable"
+
+
+def test_run_workflow_invalid_definition_returns_422():
+    from app.authz.principal import get_principal
+    from app.main import app
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="user@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.OWNER},
+    )
+    wid = "wf-invalid-" + __import__("uuid").uuid4().hex[:6]
+    body = {
+        "id": wid,
+        "workspace_id": WS_ALLOWED,
+        "name": "Invalid",
+        "description": "x",
+        "nodes": [
+            {"id": "trigger-1", "type": "trigger", "name": "Start", "output_ports": [{"name": "output", "type": "dict"}]},  # noqa: E501
+            {"id": "http-1", "type": "http", "name": "Http", "input_ports": [{"name": "input", "type": "any"}]},  # noqa: E501
+        ],
+        "edges": [{"id": "e1", "source_node_id": "trigger-1", "source_port": "output", "target_node_id": "http-1", "target_port": "input"}],  # noqa: E501
+    }
+    import requests
+    _ = requests
+    client = TestClient(app)
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/import", json={"flow_data": body})
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}})  # noqa: E501
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_definition"
+    assert "traceback" not in resp.text.lower()
+
+
+def test_run_workflow_runtime_failure_returns_coded_error():
+    import uuid
+
+    from app.authz.principal import get_principal
+    from app.main import app
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="user@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.OWNER},
+    )
+    wid = "wf-runtime-" + uuid.uuid4().hex[:6]
+    body = {
+        "id": wid,
+        "workspace_id": WS_ALLOWED,
+        "name": "Runtime",
+        "description": "x",
+        "nodes": [
+            {"id": "trigger-1", "type": "trigger", "name": "Start", "output_ports": [{"name": "output", "type": "dict"}]},  # noqa: E501
+            {"id": "llm-1", "type": "llm", "name": "LLM", "config": {"model": "x"}, "input_ports": [{"name": "input", "type": "any"}], "output_ports": [{"name": "output", "type": "any"}]},  # noqa: E501
+            {"id": "output-1", "type": "output", "name": "End", "input_ports": [{"name": "input", "type": "any"}]},  # noqa: E501
+        ],
+        "edges": [
+            {"id": "e1", "source_node_id": "trigger-1", "source_port": "output", "target_node_id": "llm-1", "target_port": "input"},  # noqa: E501
+            {"id": "e2", "source_node_id": "llm-1", "source_port": "output", "target_node_id": "output-1", "target_port": "input"},  # noqa: E501
+        ],
+    }
+    client = TestClient(app)
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/import", json={"flow_data": body})
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}})  # noqa: E501
+    assert resp.status_code == 200
+    data = resp.json()["run"]
+    assert data["status"] == "failed"
+    assert data["error"].startswith("node 'llm-1' failed: LLM node")
+    assert "traceback" not in resp.text.lower()

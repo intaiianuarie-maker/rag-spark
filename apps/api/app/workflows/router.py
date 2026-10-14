@@ -659,7 +659,15 @@ async def run_workflow(
     run_id = f"wfrun-{uuid.uuid4().hex[:8]}"
 
     try:
-        plan = WorkflowCompiler.compile(draft.revision)
+        try:
+            plan = WorkflowCompiler.compile(draft.revision)
+        except Exception as exc:
+            # Invalid definition: refuse as HTTP 422 with a safe, no-raw-text message.
+            safe = "invalid workflow definition"
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "invalid_definition", "message": safe},
+            ) from exc
         executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
         try:
             executor.configure_checkpoint_store(SqliteCheckpointStore(checkpoint_db_path()))
@@ -674,13 +682,17 @@ async def run_workflow(
             initial_input=request.inputs,
             run_id=run_id,
         )
+    except HTTPException:
+        raise
     except Exception as exc:
+        # Node/runtime failures: coded error on persisted run, raw text stays server-side.
+        safe_code = "runtime_failure"
         run = WorkflowRun(
             id=run_id,
             workspace_id=workspace_id,
             workflow_id=workflow_id,
             status=WorkflowRunStatus.FAILED,
-            error=str(exc),
+            error=f"{safe_code}: {type(exc).__name__}",
             created_at=datetime.now(UTC).isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
         )
