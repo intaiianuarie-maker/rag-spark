@@ -41,17 +41,17 @@ pytestmark = pytest.mark.unit
 
 
 class _Provider:
-    """Stand-in for InfinityEmbeddingProvider: same three identity attributes."""
+    """Stand-in for OpenRouterProvider: same three identity attributes."""
 
-    model_name = "BAAI/bge-m3"
-    revision = "BAAI/bge-m3"
-    dimension = 1024
+    model_name = "google/gemini-embedding-2"
+    revision = "google/gemini-embedding-2"
+    dimension = 3072
 
 
 class _OtherModel(_Provider):
-    model_name = "google/gemini-embedding-2"
-    revision = "gemini-embedding-2@2026-10"
-    dimension = 3072
+    model_name = "BAAI/bge-m3"
+    revision = "bge-m3@legacy"
+    dimension = 1024
 
 
 def _same_class_different_revision():
@@ -62,26 +62,26 @@ def _same_class_different_revision():
     first and the revision check would never be reached.
     """
     class _Rev:
-        model_name = "BAAI/bge-m3"
-        revision = "BAAI/bge-m3"
-        dimension = 1024
+        model_name = "google/gemini-embedding-2"
+        revision = "google/gemini-embedding-2"
+        dimension = 3072
 
     plain = _Rev()
     pinned = _Rev()
-    pinned.revision = "BAAI/bge-m3@sha256:deadbeef"
+    pinned.revision = "google/gemini-embedding-2@sha256:deadbeef"
     return plain, pinned
 
 
 class _LyingProvider(_Provider):
-    """Declares 1024 but returns 768 — the case observed_dimension exists for."""
+    """Declares 3072 but returns 1536 — the case observed_dimension exists for."""
 
-    model_name = "BAAI/bge-m3"
-    dimension = 1024
+    model_name = "google/gemini-embedding-2"
+    dimension = 3072
 
 
-def _identity(dim: int = 1024, model: str = "BAAI/bge-m3") -> EmbeddingIdentity:
+def _identity(dim: int = 3072, model: str = "google/gemini-embedding-2") -> EmbeddingIdentity:
     return EmbeddingIdentity(
-        provider="_Provider", model=model, revision="BAAI/bge-m3", dimension=dim
+        provider="_Provider", model=model, revision="google/gemini-embedding-2", dimension=dim
     )
 
 
@@ -107,8 +107,8 @@ def test_schema_matches_the_rebuild_script() -> None:
     drift apart without this test failing.
     """
     rebuild = _rebuild_module()
-    theirs = rebuild.provider_identity(_Provider(), 1024)
-    ours = provider_identity(_Provider(), 1024).as_metadata()
+    theirs = rebuild.provider_identity(_Provider(), 3072)
+    ours = provider_identity(_Provider(), 3072).as_metadata()
     assert ours == theirs, "normal-ingestion identity has drifted from the rebuild path"
     assert tuple(ours.keys()) == IDENTITY_KEYS
 
@@ -128,8 +128,8 @@ def test_identity_keys_are_exactly_the_reviewed_set() -> None:
 
 
 def test_identity_is_recorded_from_the_observed_dimension() -> None:
-    identity = provider_identity(_LyingProvider(), 768)
-    assert identity.dimension == 768, "declared width was trusted over the observed one"
+    identity = provider_identity(_LyingProvider(), 1536)
+    assert identity.dimension == 1536, "declared width was trusted over the observed one"
 
 
 def test_identity_refuses_a_provider_with_no_model() -> None:
@@ -137,7 +137,7 @@ def test_identity_refuses_a_provider_with_no_model() -> None:
         model_name = ""
 
     with pytest.raises(EmbeddingIdentityError, match="model_name"):
-        provider_identity(Nameless(), 1024)
+        provider_identity(Nameless(), 3072)
 
 
 @pytest.mark.parametrize("bad_dim", [0, -1])
@@ -168,10 +168,10 @@ def test_caller_metadata_cannot_overwrite_trusted_identity() -> None:
         "embedding_dimension": 42,
     }
     merged = merge_identity(hostile, _identity())
-    assert merged["embedding_model"] == "BAAI/bge-m3"
+    assert merged["embedding_model"] == "google/gemini-embedding-2"
     assert merged["embedding_provider"] == "_Provider"
-    assert merged["embedding_revision"] == "BAAI/bge-m3"
-    assert merged["embedding_dimension"] == 1024
+    assert merged["embedding_revision"] == "google/gemini-embedding-2"
+    assert merged["embedding_dimension"] == 3072
     # non-identity metadata survives untouched
     assert merged["language"] == "en"
 
@@ -194,14 +194,14 @@ def test_write_refuses_a_wrong_model() -> None:
 
 def test_write_refuses_a_wrong_dimension() -> None:
     with pytest.raises(EmbeddingIdentityError, match="embedding_dimension"):
-        verify_record_identity(_identity().as_metadata(), _identity(dim=3072))
+        verify_record_identity(_identity().as_metadata(), _identity(dim=1024))
 
 
 def test_write_refuses_a_wrong_revision() -> None:
     """Same provider class and model, different pinned revision — not comparable."""
     plain, pinned = _same_class_different_revision()
-    requested = provider_identity(pinned, 1024)
-    stored = provider_identity(plain, 1024).as_metadata()
+    requested = provider_identity(pinned, 3072)
+    stored = provider_identity(plain, 3072).as_metadata()
     assert stored["embedding_provider"] == requested.as_metadata()["embedding_provider"]
     with pytest.raises(EmbeddingIdentityError, match="embedding_revision"):
         verify_record_identity(stored, requested)
@@ -231,7 +231,7 @@ def test_query_refuses_a_wrong_model() -> None:
 
 def test_query_refuses_a_wrong_dimension() -> None:
     with pytest.raises(EmbeddingIdentityError, match="embedding_dimension"):
-        verify_query_identity(_identity(), _identity(dim=3072))
+        verify_query_identity(_identity(), _identity(dim=1024))
 
 
 def test_query_refuses_an_unknown_collection_identity() -> None:
@@ -248,12 +248,12 @@ def test_a_matching_identity_passes_both_directions() -> None:
 
 def test_error_names_the_offending_field_not_just_a_hash() -> None:
     try:
-        verify_record_identity(_identity(dim=1024).as_metadata(), _identity(dim=768))
+        verify_record_identity(_identity(dim=3072).as_metadata(), _identity(dim=1536))
     except EmbeddingIdentityError as exc:
         assert "embedding_dimension" in str(exc)
-        assert "1024" in str(exc) and "768" in str(exc)
+        assert "3072" in str(exc) and "1536" in str(exc)
     else:  # pragma: no cover - the call must raise
-        raise AssertionError("a 1024 record must not verify against a 768 provider")
+        raise AssertionError("a 3072 record must not verify against a 1536 provider")
 
 
 # --------------------------------------------------------------------------
@@ -266,7 +266,7 @@ def test_audit_reports_unlabelled_and_incompatible_separately() -> None:
         _identity().as_metadata(),                       # good
         _identity().as_metadata(),                       # good
         {"language": "en"},                              # unlabelled
-        _identity(dim=768).as_metadata(),                # wrong dimension
+        _identity(dim=1536).as_metadata(),               # wrong dimension
         _identity(model="other").as_metadata(),          # wrong model
     ]
     report = audit_identity(records, _identity())
@@ -288,17 +288,17 @@ def test_audit_of_a_clean_collection_is_all_zero() -> None:
 
 
 def test_identity_roundtrips_through_metadata() -> None:
-    original = provider_identity(_OtherModel(), 3072)
+    original = provider_identity(_OtherModel(), 1024)
     assert identity_from_metadata(original.as_metadata()) == original
 
 
 def test_two_providers_never_compare_equal_by_accident() -> None:
-    bge = provider_identity(_Provider(), 1024)
-    gemini = provider_identity(_OtherModel(), 3072)
-    assert not bge.matches(gemini)
+    gemini = provider_identity(_Provider(), 3072)
+    bge = provider_identity(_OtherModel(), 1024)
+    assert not gemini.matches(bge)
     # Provider names differ first (they are class names), so the reason names
     # provider — that is the first disagreeing field in canonical order.
-    assert "embedding_provider" in bge.mismatch_reason(gemini)
+    assert "embedding_provider" in gemini.mismatch_reason(bge)
 
 
 def test_mismatch_reason_is_reported_in_canonical_field_order() -> None:

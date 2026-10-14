@@ -53,7 +53,7 @@ def create_orchestrator(*, collection: str | None = None):
     from core.config import vector_collection
     from graph.factory import create_graph_retriever
     from ingestion.persistence import get_session_factory
-    from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+    from models.adapters.openrouter_provider import OpenRouterProvider
     from retrieval.adapters.pg_fts import PostgresLexicalStore
     from retrieval.adapters.qdrant_store import QdrantVectorStore
     from retrieval.orchestrator import HybridRetrievalOrchestrator
@@ -63,7 +63,8 @@ def create_orchestrator(*, collection: str | None = None):
     collection = collection or vector_collection()
     dense = QdrantVectorStore(collection=collection)
     lexical = PostgresLexicalStore(session_factory=get_session_factory())
-    embedding = InfinityEmbeddingProvider()
+    # T-ARCH-04: OpenRouter gemini-embedding-2 (3072-d) default embedding provider.
+    embedding = OpenRouterProvider(call_site="answer.orchestrator")
     # T-ARCH-03: Local cross-encoder cut per user order; dense-only active with disclosure.
     reranker = None
     return HybridRetrievalOrchestrator(

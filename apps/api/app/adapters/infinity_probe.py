@@ -20,6 +20,13 @@ from core.health import DependencyStatus
 
 async def probe(infinity_url: str, timeout_seconds: float) -> DependencyStatus:
     name = "infinity"
+    if not infinity_url or not infinity_url.strip():
+        return DependencyStatus(
+            name=name,
+            reachable=False,
+            latency_ms=0.0,
+            error="infinity service unconfigured or removed per user order (T-ARCH-04)",
+        )
     start = time.perf_counter()
     url = infinity_url.rstrip("/")
     try:

@@ -53,15 +53,15 @@ COLL = "knowledge_test_r06b"
 OTHER = "knowledge_test_r06b_other"
 
 BASE = EmbeddingIdentity(
-    provider="GemmaStub", model="bge-m3", revision="rev-7", dimension=DIM
+    provider="GemmaStub", model="google/gemini-embedding-2", revision="rev-gemini", dimension=DIM
 )
 #: Same model, different pinned revision: not comparable (dev2's rule).
 OTHER_REV = EmbeddingIdentity(
-    provider="GemmaStub", model="bge-m3", revision="rev-8", dimension=DIM
+    provider="GemmaStub", model="google/gemini-embedding-2", revision="rev-gemini-2", dimension=DIM
 )
 #: Same model at another width: also not comparable.
 OTHER_DIM = EmbeddingIdentity(
-    provider="GemmaStub", model="bge-m3", revision="rev-7", dimension=DIM * 2
+    provider="GemmaStub", model="google/gemini-embedding-2", revision="rev-gemini", dimension=DIM * 2
 )
 UNKNOWN_MODEL = EmbeddingIdentity(
     provider="OtherProvider", model="text-embed-3", revision="rev-1", dimension=DIM
@@ -406,8 +406,8 @@ async def test_e2e_ingestion_into_a_rebuilt_collection_passes_a_full_identity_au
     # --- 1. normal ingestion: identity stamped by the same helpers the
     # production write paths use (provider_identity + merge_identity).
     class GemmaStub:
-        model_name = "bge-m3"
-        revision = "rev-7"
+        model_name = "google/gemini-embedding-2"
+        revision = "rev-gemini"
 
     vectors = [[0.4, 0.3, 0.2, 0.1] for _ in range(4)]
     identity = provider_identity(GemmaStub(), observed_dimension(vectors))

@@ -5,7 +5,7 @@ NOTICES.md). Adapter speaks Qdrant HTTP via qdrant-client; no Qdrant type
 crosses the VectorStore ABC boundary — we return plain RetrievedItem.
 
 Design: one collection with two named vectors
-  - "dense"  : bge-m3 1024-d, Cosine (served by infinity)
+  - "dense"  : google/gemini-embedding-2 3072-d, Cosine (T-ARCH-04)
   - "sparse" : BM25-like SparseVector (hash-truncated vocab)
 
 SearchFilter → payload Filter (workspace_ids, document_ids, language,
@@ -107,12 +107,17 @@ from ..serving import (
     rollback_command,
     serving_alias_name,
 )
-from .infinity_embed import _is_zero_vector
 
 DENSE_NAME = "dense"
 SPARSE_NAME = "sparse"
-DEFAULT_DENSE_DIM = 1024
+DEFAULT_DENSE_DIM = 3072
 SPARSE_VOCAB = 30000  # hash-truncated vocab for BM25-like sparse
+ZERO_VECTOR_TOLERANCE = 1e-9
+
+
+def _is_zero_vector(vector: Sequence[float]) -> bool:
+    """Return True when the vector's L2 norm is negligibly small."""
+    return math.hypot(*vector) < ZERO_VECTOR_TOLERANCE
 
 _token_re = re.compile(r"\w+", re.UNICODE)
 

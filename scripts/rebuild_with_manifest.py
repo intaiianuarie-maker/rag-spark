@@ -40,6 +40,10 @@ from collections.abc import Sequence
 from typing import Any
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+for _p in ("packages", "apps/api", "apps/worker", "."):
+    _path_str = str((_REPO_ROOT / _p).resolve())
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
 
 
 def _load(name: str, relpath: str) -> Any:
@@ -54,6 +58,34 @@ def _load(name: str, relpath: str) -> Any:
 _reindex = _load("reindex_all_chunks", "scripts/reindex_all_chunks.py")
 _manifest = _load("reindex_manifest", "scripts/reindex_manifest.py")
 _serving = _load("retrieval_serving", "packages/retrieval/serving.py")
+
+from retrieval.adapters.infinity_embed import EmbeddingProviderError  # noqa: E402
+from retrieval.interfaces import EmbeddingProvider  # noqa: E402
+
+import evals.embedder_clients as ec  # noqa: E402
+
+
+class GeminiEmbedding2(ec.GeminiEmbedding2, EmbeddingProvider):
+    """OpenRouter GeminiEmbedding2 adapted to EmbeddingProvider."""
+
+    model_name = ec.GEMINI_EMBEDDING_MODEL
+    revision = ec.GEMINI_EMBEDDING_MODEL
+
+    async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
+        try:
+            return await asyncio.to_thread(self.embed, texts)
+        except Exception as exc:
+            raise EmbeddingProviderError(f"{type(exc).__name__}: {exc}") from exc
+
+    async def embed_query(self, text: str) -> list[float]:
+        try:
+            vectors = await asyncio.to_thread(self.embed, [text])
+            return vectors[0]
+        except Exception as exc:
+            raise EmbeddingProviderError(f"{type(exc).__name__}: {exc}") from exc
+
+    async def aclose(self) -> None:
+        self.close()
 
 #: Tooling used by this script only.
 _log = logging.getLogger("rebuild")
@@ -193,17 +225,24 @@ async def build(
     dry_run: bool,
     resume: bool = False,
     request_timeout: float | None = None,
+    provider_type: str = "gemini",
 ) -> dict[str, Any]:
     """The Phase-2 build. Returns a build report summary."""
     assert_scratch_target(collection)
 
-    from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
     effective_timeout = float(
-        request_timeout or os.environ.get("INFINITY_TIMEOUT_SECONDS", "300.0")
+        request_timeout
+        or os.environ.get("OPENROUTER_TIMEOUT_SECONDS")
+        or os.environ.get("INFINITY_TIMEOUT_SECONDS", "300.0")
     )
-    provider = InfinityEmbeddingProvider(timeout=effective_timeout)
+    provider: Any
+    if provider_type == "infinity":
+        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+        provider = InfinityEmbeddingProvider(timeout=effective_timeout)
+    else:
+        provider = GeminiEmbedding2(timeout=effective_timeout)
 
     _log.info("fetching manifest (limit=%s)...", limit)
     t0 = time.monotonic()
@@ -254,6 +293,12 @@ async def build(
             )
         already: set[str] = set()
         if inspection["exists"] and existing_points:
+            if inspection.get("dims") is not None and inspection["dims"] != identity.dimension:
+                raise RebuildRefused(
+                    f"existing collection {collection!r} has dimension {inspection['dims']} "
+                    f"!= provider dimension {identity.dimension} — cannot resume across "
+                    "incompatible vector sizes; delete the scratch collection first"
+                )
             # Read-only: which chunk ids already landed, so resume is a skip
             # rather than a rebuild.
             already = await asyncio.to_thread(
@@ -278,6 +323,7 @@ async def build(
                     "duration_s": round(time.monotonic() - t0, 1),
                     "resumed": True,
                     "complete": True,
+                    "spend": provider.stats.as_row() if hasattr(provider, "stats") else None,
                 }
 
         # 3) Batch loop: embed → stamp identity → verified upsert.
@@ -321,6 +367,10 @@ async def build(
                 _log.info("indexed batch %d/%d (total %d)", i // batch_size + 1, n_batches, written)
     finally:
         await store.close()
+        if hasattr(provider, "aclose"):
+            await provider.aclose()
+        elif hasattr(provider, "close"):
+            provider.close()
 
     return {
         "collection": collection,
@@ -331,6 +381,7 @@ async def build(
         "batch_size": batch_size,
         "duration_s": round(time.monotonic() - t0, 1),
         "resumed": bool(already),
+        "spend": provider.stats.as_row() if hasattr(provider, "stats") else None,
     }
 
 
@@ -375,6 +426,12 @@ async def main() -> None:
     parser.add_argument("--batch-size", type=int, default=DEFAULT_BATCH_SIZE)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
+        "--provider",
+        default="gemini",
+        choices=["gemini", "infinity"],
+        help="Embedding provider to wire (default: gemini via GeminiEmbedding2)",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="Continue a partially-built target: skip chunk ids already present "
@@ -399,6 +456,7 @@ async def main() -> None:
             dry_run=args.dry_run,
             resume=args.resume,
             request_timeout=args.timeout,
+            provider_type=args.provider,
         )
     except RebuildRefused as exc:
         _log.error("%s", exc)

@@ -41,6 +41,10 @@ import sys
 from typing import Any
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[1]
+for _p in ("packages", "apps/api", "apps/worker", "."):
+    _path_str = str((_REPO_ROOT / _p).resolve())
+    if _path_str not in sys.path:
+        sys.path.insert(0, _path_str)
 
 
 def _load(name: str, relpath: str) -> Any:
@@ -146,7 +150,9 @@ def collection_info(collection: str, qdrant_url: str) -> dict[str, Any]:
 # --- the checks --------------------------------------------------------------
 
 
-def audit_identity(points: list[dict[str, Any]], identity: dict[str, Any]) -> dict[str, Any]:
+def audit_identity(
+    points: list[dict[str, Any]], identity: dict[str, Any], denominator: str = "512/2204"
+) -> dict[str, Any]:
     """Every point carries identity AND it is the build's own identity."""
     from retrieval.embedding_identity import IDENTITY_KEYS, identity_from_metadata
 
@@ -172,7 +178,7 @@ def audit_identity(points: list[dict[str, Any]], identity: dict[str, Any]) -> di
                 if meta.get(key) != expected[key]:
                     reasons[key] = reasons.get(key, 0) + 1
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "total": len(points),
         "unlabelled": unlabelled,
         "incompatible": incompatible,
@@ -183,7 +189,9 @@ def audit_identity(points: list[dict[str, Any]], identity: dict[str, Any]) -> di
 
 
 def audit_membership(
-    points: list[dict[str, Any]], manifest_rows: list[dict[str, Any]]
+    points: list[dict[str, Any]],
+    manifest_rows: list[dict[str, Any]],
+    denominator: str = "512/2204",
 ) -> dict[str, Any]:
     """chunk_id set equality, plus the two directional error lists."""
     rebuilt = {
@@ -199,7 +207,7 @@ def audit_membership(
     extra = rebuilt - manifest_ids       # ghosts: points with no manifest row
     missing = manifest_ids - rebuilt     # silently dropped chunks
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "rebuilt_points": len(points),
         "distinct_chunk_ids": len(rebuilt),
         "manifest_chunk_ids": len(manifest_ids),
@@ -213,7 +221,9 @@ def audit_membership(
 
 
 def audit_original_hashes(
-    points: list[dict[str, Any]], manifest_rows: list[dict[str, Any]]
+    points: list[dict[str, Any]],
+    manifest_rows: list[dict[str, Any]],
+    denominator: str = "512/2204",
 ) -> dict[str, Any]:
     """Every rebuilt point's chunk id maps to the manifest row's original hash.
 
@@ -243,7 +253,7 @@ def audit_original_hashes(
             continue
         checked += 1
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "manifest_rows_with_hash": sum(
             1 for h in manifest_hashes.values() if h and len(str(h)) == 64
         ),
@@ -255,7 +265,7 @@ def audit_original_hashes(
 
 
 def audit_version_gate(
-    points: list[dict[str, Any]], database_url: str | None
+    points: list[dict[str, Any]], database_url: str | None, denominator: str = "512/2204"
 ) -> dict[str, Any]:
     """Every point's document_version_id IS its document's current pointer."""
     import psycopg
@@ -283,7 +293,7 @@ def audit_version_gate(
         if current[str(doc_id)] != str(ver_id):
             stale += 1
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "stale_version_points": stale,
         "unknown_document_points": unknown,
         "authoritative_documents": len(current),
@@ -292,7 +302,10 @@ def audit_version_gate(
 
 
 def audit_sanity(
-    points: list[dict[str, Any]], info: dict[str, Any], manifest_rows: list[dict[str, Any]]
+    points: list[dict[str, Any]],
+    info: dict[str, Any],
+    manifest_rows: list[dict[str, Any]],
+    denominator: str = "512/2204",
 ) -> dict[str, Any]:
     """Dense width == collection config; workspace set == manifest set."""
     vectors = ((info.get("config") or {}).get("params") or {}).get("vectors", {})
@@ -304,7 +317,7 @@ def audit_sanity(
     rebuilt_ws = {(p.get("payload") or {}).get("workspace_id") for p in points}
     manifest_ws = {r["workspace_id"] for r in manifest_rows}
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "collection_dense_size": dim,
         "rebuilt_workspaces": len(rebuilt_ws),
         "manifest_workspaces": len(manifest_ws),
@@ -318,8 +331,10 @@ def audit_sanity(
     }
 
 
-def audit_vector_sanity(points: list[dict[str, Any]]) -> dict[str, Any]:
-    """Dense vectors must have dim=1024, finite floats, norm > 0, and no zero-runs."""
+def audit_vector_sanity(
+    points: list[dict[str, Any]], expected_dim: int = 1024, denominator: str = "512/2204"
+) -> dict[str, Any]:
+    """Dense vectors must have dim=expected_dim, finite floats, norm > 0, and no zero-runs."""
     ragged = 0
     nan_count = 0
     inf_count = 0
@@ -330,7 +345,7 @@ def audit_vector_sanity(points: list[dict[str, Any]]) -> dict[str, Any]:
     for p in points:
         vec = p.get("vector")
         dense = vec.get("dense") if isinstance(vec, dict) else vec
-        if not dense or len(dense) != 1024:
+        if not dense or len(dense) != expected_dim:
             ragged += 1
             continue
         checked += 1
@@ -361,9 +376,10 @@ def audit_vector_sanity(points: list[dict[str, Any]]) -> dict[str, Any]:
         and zero_run_violations == 0
     )
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "checked_points": checked,
         "total_points": len(points),
+        "expected_dimension": expected_dim,
         "ragged_dimension": ragged,
         "nan_count": nan_count,
         "inf_count": inf_count,
@@ -375,7 +391,11 @@ def audit_vector_sanity(points: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def audit_representative_retrieval(
-    collection: str, points: list[dict[str, Any]], qdrant_url: str, n_probes: int = 8
+    collection: str,
+    points: list[dict[str, Any]],
+    qdrant_url: str,
+    n_probes: int = 8,
+    denominator: str = "512/2204",
 ) -> dict[str, Any]:
     """Sample distinct probe points and verify vector search returns sane ranks."""
     import urllib.request
@@ -442,7 +462,7 @@ def audit_representative_retrieval(
             "ok": probe_ok,
         })
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "probes_tested": len(probe_results),
         "probes_passed": sum(1 for p in probe_results if p.get("ok")),
         "probes": probe_results,
@@ -451,7 +471,11 @@ def audit_representative_retrieval(
 
 
 async def audit_v1_e2e_acceptance_dry(
-    collection: str, points: list[dict[str, Any]], qdrant_url: str
+    collection: str,
+    points: list[dict[str, Any]],
+    qdrant_url: str,
+    target_identity: dict[str, Any] | None = None,
+    denominator: str = "512/2204",
 ) -> dict[str, Any]:
     """Dry-run read-path acceptance: boundary identity verification and ACL isolation."""
     from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreIdentityError
@@ -459,27 +483,41 @@ async def audit_v1_e2e_acceptance_dry(
     from retrieval.interfaces import SearchFilter
 
     store = QdrantVectorStore(collection=collection)
-    valid_identity = EmbeddingIdentity(
-        provider="InfinityEmbeddingProvider",
-        model="BAAI/bge-m3",
-        revision="BAAI/bge-m3",
-        dimension=1024,
-    )
-    mismatched_identity = EmbeddingIdentity(
-        provider="InfinityEmbeddingProvider",
-        model="wrong-model",
-        revision="BAAI/bge-m3",
-        dimension=1024,
-    )
+    if target_identity:
+        valid_identity = EmbeddingIdentity(
+            provider=str(target_identity.get("embedding_provider", "GeminiEmbedding2")),
+            model=str(target_identity.get("embedding_model", "google/gemini-embedding-2")),
+            revision=str(target_identity.get("embedding_revision", "google/gemini-embedding-2")),
+            dimension=int(target_identity.get("embedding_dimension", 3072)),
+        )
+        mismatched_identity = EmbeddingIdentity(
+            provider=str(target_identity.get("embedding_provider", "GeminiEmbedding2")),
+            model="wrong-model",
+            revision=str(target_identity.get("embedding_revision", "google/gemini-embedding-2")),
+            dimension=int(target_identity.get("embedding_dimension", 3072)),
+        )
+    else:
+        valid_identity = EmbeddingIdentity(
+            provider="InfinityEmbeddingProvider",
+            model="BAAI/bge-m3",
+            revision="BAAI/bge-m3",
+            dimension=1024,
+        )
+        mismatched_identity = EmbeddingIdentity(
+            provider="InfinityEmbeddingProvider",
+            model="wrong-model",
+            revision="BAAI/bge-m3",
+            dimension=1024,
+        )
 
     sample = next((p for p in points if p.get("vector")), None)
     if not sample:
-        return {"denominator": "512/2204", "ok": False, "error": "no points with vector"}
+        return {"denominator": denominator, "ok": False, "error": "no points with vector"}
 
     vec = sample.get("vector")
     dense = vec.get("dense") if isinstance(vec, dict) else vec
     if not isinstance(dense, list):
-        return {"denominator": "512/2204", "ok": False, "error": "sample vector not a list"}
+        return {"denominator": denominator, "ok": False, "error": "sample vector not a list"}
     dense_vec: list[float] = [float(x) for x in dense]
     ws = (sample.get("payload") or {}).get("workspace_id")
 
@@ -516,7 +554,7 @@ async def audit_v1_e2e_acceptance_dry(
     s3_ok = len(foreign_hits) == 0
 
     return {
-        "denominator": "512/2204",
+        "denominator": denominator,
         "scenarios": {
             "boundary_verified_retrieval": {"ok": s1_ok, "hits": len(hits)},
             "boundary_mismatched_refusal": {"ok": s2_refused},
@@ -549,16 +587,21 @@ async def audit_all(
     points = await asyncio.to_thread(scroll_all_points, collection, qdrant_url, True)
     info = await asyncio.to_thread(collection_info, collection, qdrant_url)
 
-    identity_check = audit_identity(points, identity)
-    membership_check = audit_membership(points, manifest_rows)
-    hashes_check = audit_original_hashes(points, manifest_rows)
-    version_check = audit_version_gate(points, database_url)
-    sanity_check = audit_sanity(points, info, manifest_rows)
-    vector_check = audit_vector_sanity(points)
+    expected_dim = int(identity.get("embedding_dimension", 1024))
+    denom = "512/2204" if rehearsal else f"{len(points)}/{len(manifest_rows)}"
+
+    identity_check = audit_identity(points, identity, denominator=denom)
+    membership_check = audit_membership(points, manifest_rows, denominator=denom)
+    hashes_check = audit_original_hashes(points, manifest_rows, denominator=denom)
+    version_check = audit_version_gate(points, database_url, denominator=denom)
+    sanity_check = audit_sanity(points, info, manifest_rows, denominator=denom)
+    vector_check = audit_vector_sanity(points, expected_dim=expected_dim, denominator=denom)
     retrieval_check = await asyncio.to_thread(
-        audit_representative_retrieval, collection, points, qdrant_url
+        audit_representative_retrieval, collection, points, qdrant_url, denominator=denom
     )
-    e2e_check = await audit_v1_e2e_acceptance_dry(collection, points, qdrant_url)
+    e2e_check = await audit_v1_e2e_acceptance_dry(
+        collection, points, qdrant_url, target_identity=identity, denominator=denom
+    )
 
     checks = {
         "identity": identity_check,
@@ -587,7 +630,7 @@ async def audit_all(
 
     return {
         "collection": collection,
-        "denominator": "512/2204",
+        "denominator": denom,
         "points": len(points),
         "manifest": len(manifest_rows),
         "checks": checks,

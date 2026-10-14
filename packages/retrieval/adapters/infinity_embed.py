@@ -73,6 +73,15 @@ class EmbeddingProviderError(RuntimeError):
     """Raised when infinity is unreachable or returns an unexpected payload."""
 
 
+class LocalEmbeddingRemovedError(EmbeddingProviderError):
+    """Raised when attempting local infinity/bge-m3 embedding construction (T-ARCH-04).
+
+    Per user order, the local infinity container, image, and bge-m3 weights
+    were removed. Production embeddings cut over to google/gemini-embedding-2 (3072-d)
+    via OpenRouterProvider.
+    """
+
+
 class InfinityEmbeddingProvider(EmbeddingProvider):
     """bge-m3 embeddings served by infinity's ``/embeddings`` endpoint."""
 
@@ -92,6 +101,12 @@ class InfinityEmbeddingProvider(EmbeddingProvider):
         client: httpx.AsyncClient | None = None,
     ) -> None:
         resolved_url = base_url or os.environ.get("INFINITY_URL") or DEFAULT_BASE_URL
+        if base_url is None or "7997" in resolved_url:
+            raise LocalEmbeddingRemovedError(
+                "Local infinity embedding provider (BAAI/bge-m3 on infinity:7997) "
+                "was permanently removed per user order: local weights and container deleted. "
+                "google/gemini-embedding-2 (3072-d) via OpenRouterProvider is active."
+            )
         self.base_url = resolved_url.rstrip("/")
         self.api_key = api_key or os.environ.get("INFINITY_API_KEY")
         self.query_prefix = query_prefix

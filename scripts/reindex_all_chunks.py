@@ -83,15 +83,18 @@ from urllib.parse import quote
 import httpx
 from core.config import get_settings
 from ingestion.persistence import get_session_factory
+from models.adapters.openrouter_provider import OpenRouterProvider
 from retrieval.adapters.infinity_embed import (
     EmbeddingProviderError,
     InfinityEmbeddingProvider,
 )
 from retrieval.adapters.pg_fts import PostgresLexicalStore
 from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreError
-from retrieval.interfaces import VectorRecord
+from retrieval.interfaces import EmbeddingProvider, VectorRecord
 from retrieval.serving import assert_explicit_collection, serving_alias_name
 from sqlalchemy import text
+
+_OriginalInfinityEmbeddingProvider = InfinityEmbeddingProvider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("reindex")
@@ -117,7 +120,7 @@ def validate_vector(vector: list[float], expected_dim: int) -> None:
         raise ValueError("Manufactured all-zero vector rejected")
 
 
-async def probe_provider(provider: InfinityEmbeddingProvider) -> tuple[int, int]:
+async def probe_provider(provider: EmbeddingProvider) -> tuple[int, int]:
     """Embed one probe text through the REAL provider.
 
     Returns ``(observed_dim, nonzero_dim)`` — the dimensions the provider
@@ -161,7 +164,7 @@ _EMBED_BATCH_BACKOFF_SECONDS = (15.0, 30.0, 45.0)
 
 
 async def embed_batch_with_retry(
-    provider: InfinityEmbeddingProvider, texts: Sequence[str]
+    provider: EmbeddingProvider, texts: Sequence[str]
 ) -> list[list[float]]:
     """Embed one batch, retrying a slow provider a bounded number of times.
 
@@ -170,11 +173,11 @@ async def embed_batch_with_retry(
     then refuses to switch. Retrying only covers the provider call: a bad vector
     or a store failure is still a hard error on the first pass.
     """
-    last: EmbeddingProviderError | None = None
+    last: Exception | None = None
     for attempt in range(1, _EMBED_BATCH_ATTEMPTS + 1):
         try:
             return await provider.embed_documents(list(texts))
-        except EmbeddingProviderError as exc:
+        except Exception as exc:
             last = exc
             if attempt == _EMBED_BATCH_ATTEMPTS:
                 break
@@ -196,7 +199,7 @@ async def embed_batch_with_retry(
     raise last if last is not None else EmbeddingProviderError("embedding failed")
 
 
-def provider_identity(provider: InfinityEmbeddingProvider, observed_dim: int) -> dict[str, Any]:
+def provider_identity(provider: Any, observed_dim: int) -> dict[str, Any]:
     """Provider identity stamped into every record's metadata (T-V1-014 metric)."""
     return {
         "embedding_provider": type(provider).__name__,
@@ -392,7 +395,12 @@ async def reindex(
         )
 
     session_factory = get_session_factory()
-    embed_provider = InfinityEmbeddingProvider()
+    # T-ARCH-04: Default to OpenRouterProvider (google/gemini-embedding-2, 3072-d).
+    # If a test monkeypatches InfinityEmbeddingProvider, honor the test override.
+    if InfinityEmbeddingProvider is not _OriginalInfinityEmbeddingProvider:
+        embed_provider: Any = InfinityEmbeddingProvider()
+    else:
+        embed_provider = OpenRouterProvider(call_site="reindex_all_chunks")
 
     # 1) REAL provider probe — measure the dims it returns, never assume 1024.
     observed_dim, nonzero_dim = await probe_provider(embed_provider)

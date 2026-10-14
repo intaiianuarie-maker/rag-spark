@@ -949,7 +949,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     _log_stage(job, JobStage.EMBEDDING.value)
 
     try:
-        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+        from models.adapters.openrouter_provider import OpenRouterProvider
         from retrieval.adapters.qdrant_store import QdrantVectorStore
         from retrieval.embedding_identity import (
             merge_identity,
@@ -958,7 +958,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         )
 
         coll = vector_collection()
-        embed_provider = InfinityEmbeddingProvider()
+        embed_provider = OpenRouterProvider(call_site="ingest_pipeline")
         qdrant = QdrantVectorStore(collection=coll)
         try:
             await qdrant.ensure_collection(collection=coll, dimension=embed_provider.dimension)

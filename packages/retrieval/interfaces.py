@@ -177,11 +177,11 @@ class LexicalStore(ABC):
 
 
 class EmbeddingProvider(ABC):
-    """Embedding adapter boundary (bge-m3 by default)."""
+    """Embedding adapter boundary (google/gemini-embedding-2 by default, T-ARCH-04)."""
 
-    model_name: ClassVar[str] = ""
-    dimension: ClassVar[int] = 0
-    revision: ClassVar[str] = ""
+    model_name: ClassVar[str] = "google/gemini-embedding-2"
+    dimension: ClassVar[int] = 3072
+    revision: ClassVar[str] = "google/gemini-embedding-2"
 
     @abstractmethod
     async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:

@@ -340,3 +340,66 @@ RISKS:
       - Deferred LLM-rerank via Gemma will be considered in a future ticket based on recall/precision measurements.
 GIT:  no commit, no deploy, no compose, no restart. Containers untouched.
 ```
+
+---
+
+## T-ARCH-04 — Embed cutover: ingestion+answer+rebuild default to gemini-3072
+
+```text
+TASK: T-ARCH-04 — Embed cutover: ingestion+answer+rebuild default to gemini-3072 (THE cutover).
+      (1) Ingestion record creation + embedding adapter boundary + rebuild records + reader factory
+          default to ARCH-02 surface (OpenRouterProvider, google/gemini-embedding-2, 3072-d).
+          Zero code paths construct an infinity/bge-m3 provider by default.
+      (2) Remove infinity wiring/defaults (INFINITY_URL="", bge-m3 pins/assumptions updated to gemini/3072).
+      (3) Dimension config 3072 for fresh collections; mixed-space writes strictly rejected at dimension gate.
+CHANGE: 10 files (core config + probe + storage + interfaces + adapters + pipelines + tests + env):
+      MODIFIED packages/core/config.py (infinity_url="", embedding_model="google/gemini-embedding-2", embedding_dimension=3072, embedding_revision="google/gemini-embedding-2")
+      MODIFIED apps/api/app/adapters/infinity_probe.py (handles unconfigured/empty infinity_url gracefully without error)
+      MODIFIED packages/retrieval/interfaces.py (EmbeddingProvider class attributes default to google/gemini-embedding-2 / 3072)
+      MODIFIED packages/retrieval/adapters/qdrant_store.py (DEFAULT_DENSE_DIM=3072, local _is_zero_vector helper, decouple from infinity_embed)
+      MODIFIED packages/retrieval/adapters/infinity_embed.py (LocalEmbeddingRemovedError raised on default construction or :7997)
+      MODIFIED packages/answer/factory.py (create_orchestrator wires OpenRouterProvider(call_site="answer.orchestrator"))
+      MODIFIED apps/worker/jobs/ingest_pipeline.py (EMBEDDING stage wires OpenRouterProvider(call_site="ingest_pipeline"))
+      MODIFIED packages/models/adapters/openrouter_provider.py (accepts call_site in __init__)
+      MODIFIED scripts/reindex_all_chunks.py (defaults embed_provider to OpenRouterProvider(call_site="reindex_all_chunks"))
+      MODIFIED .env.example (INFINITY_URL="", added EMBEDDING_MODEL=google/gemini-embedding-2, EMBEDDING_DIMENSION=3072)
+      MODIFIED tests/unit/test_embedding_identity.py (baselined on google/gemini-embedding-2 / 3072-d)
+      MODIFIED tests/unit/test_embedding_identity_boundary.py (updated BASE to google/gemini-embedding-2)
+      NEW tests/unit/test_embed_cutover.py (10 targeted tests asserting cutover guarantees)
+WHY:  User ordered complete pivot to OpenRouter models; local infinity container and weights deleted.
+      All production and reindex embedding paths must default to google/gemini-embedding-2 (3072-d).
+      Vector spaces are incompatible: 1024-d vectors cannot mix with 3072-d collections (refusal, not conversion).
+REUSED:
+      - packages/models/adapters/openrouter_provider.py (OpenRouterProvider from T-ARCH-02)
+      - packages/retrieval/embedding_identity.py (provider_identity, merge_identity, verify_record_identity)
+      - packages/retrieval/adapters/qdrant_store.py (validate_records, VectorStoreInvalidVector, REJECT_DIMENSION)
+      - tests/contracts/test_infinity_embedding_contract.py (contract kept 100% green via ephemeral stub ports)
+BUILT:
+      - Guarded Local Provider: InfinityEmbeddingProvider() without args or targeting :7997 immediately raises LocalEmbeddingRemovedError.
+      - Default Cloud Embedding: Answer orchestrator factory, worker ingestion pipeline, and reindex script default to OpenRouterProvider (google/gemini-embedding-2, 3072-d).
+      - Default Collection Dimension: Qdrant DEFAULT_DENSE_DIM updated to 3072.
+      - Dimension Gate Verification: validate_records(..., expected_dim=3072) rejects 1024-d records with REJECT_DIMENSION.
+      - Identity Gate Verification: verify_record_identity / verify_query_identity refuse mismatched bge-m3 / gemini-embedding-2 writes and queries.
+      - Safe Probe: Infinity probe handles empty infinity_url cleanly (reports reachable=False, latency 0.0, disabled message).
+      - Test Suite: tests/unit/test_embed_cutover.py covering all 3 required metrics and failure modes.
+PROOFS:
+      - Default-constructed paths resolving to local providers: 0.
+        * InfinityEmbeddingProvider() raises LocalEmbeddingRemovedError (asserted in test_embed_cutover.py)
+        * InfinityEmbeddingProvider(base_url="http://localhost:7997") raises LocalEmbeddingRemovedError (asserted)
+        * Ingestion pipeline wires OpenRouterProvider (asserted AST/static)
+        * Reindex script defaults to OpenRouterProvider (asserted AST/static)
+        * Answer orchestrator wires OpenRouterProvider (asserted in test_embed_cutover.py)
+      - 1024-assumptions surviving in live paths: 0.
+        * Swept packages/ and apps/ for 1024: 0 live model assumptions (only byte math e.g. 1024*1024 and docstrings).
+      - Mixed-space writes possible: 0.
+        * validate_records([legacy_1024_record], expected_dim=3072) raises VectorStoreInvalidVector(REJECT_DIMENSION).
+        * verify_record_identity refuses legacy bge-m3 identity against gemini-embedding-2 collection.
+VERIFY:
+      - pytest tests/unit/test_embed_cutover.py tests/unit/test_embedding_identity.py tests/unit/test_embedding_identity_boundary.py tests/unit/test_reindex.py tests/unit/test_orchestrator.py tests/contracts/test_infinity_embedding_contract.py tests/contracts/test_embedding_provider_contract.py -> 129 passed in 20.54s
+      - python3 -m py_compile on all modified files -> 0 errors
+      - Sweep re-runs confirmed: git grep -n "InfinityEmbeddingProvider(" packages/ apps/ scripts/reindex_all_chunks.py -> 0 active calls.
+RISKS:
+      - Existing physical collections with 1024-d bge-m3 points cannot receive 3072-d gemini vectors; fresh scratch collections must be used during rebuild/migration (by design; gate refuses mixed writes).
+      - Ingestion pipeline relies on OpenRouter API availability and token budget.
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched.
+```

@@ -57,8 +57,13 @@ class Settings(BaseSettings):
     #: the fence/supersession/purge cleanups and the search path.
     vector_collection: str = "knowledge"
 
-    # --- infinity (bge-m3 embeddings + rerank; PD-002, :7997) ---
-    infinity_url: str = "http://localhost:7997"
+    # --- infinity (bge-m3 embeddings + rerank removed per user order; T-ARCH-04) ---
+    infinity_url: str = ""
+
+    # --- Embeddings (google/gemini-embedding-2; 3072-d; T-ARCH-04) ---
+    embedding_model: str = "google/gemini-embedding-2"
+    embedding_dimension: int = 3072
+    embedding_revision: str = "google/gemini-embedding-2"
 
     # --- MinIO / SeaweedFS S3 (document originals; PD-005) ---
     minio_endpoint: str = "http://localhost:8333"

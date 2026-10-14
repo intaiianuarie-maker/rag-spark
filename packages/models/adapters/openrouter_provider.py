@@ -390,6 +390,7 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         sync_client: httpx.Client | None = None,
         require_local: bool = False,
         default_call_site: str = "default",
+        call_site: str | None = None,
         max_attempts: int = MAX_ATTEMPTS,
         backoff_base_seconds: float = BACKOFF_BASE_SECONDS,
         allow_paid_fallback: bool = True,
@@ -410,7 +411,7 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
             or (os.environ.get("DEEPSEEK_API_KEY") if "deepseek.com" in self.base_url else None)
         )
         self.timeout = timeout
-        self.default_call_site = default_call_site
+        self.default_call_site = call_site or default_call_site
         self.max_attempts = max_attempts
         self.backoff_base_seconds = backoff_base_seconds
         self.allow_paid_fallback = allow_paid_fallback
