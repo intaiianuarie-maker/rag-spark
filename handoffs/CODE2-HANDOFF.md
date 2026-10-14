@@ -1062,3 +1062,16 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K07 — attribution bare pass logged
+
+```text
+TASK: T-K07
+CHANGE:
+      - packages/answer/engine.py outer bare pass -> logger.warning with error_type
+WHY:  graph attribution loss no longer silent.
+VERIFY:
+      - ruff/mypy packages/answer/engine.py clean
+SPEND: 0.00
+GIT: handoff only
+```

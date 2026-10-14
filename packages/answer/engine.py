@@ -654,7 +654,13 @@ class AnswerEngine:
                                 "error": f"{type(exc).__name__}: {exc}",
                             },
                         )
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning(
+                "graph_attribution_lost",
+                extra={
+                    "event": "graph_attribution_lost",
+                    "error_type": type(exc).__name__,
+                },
+            )
 
         return self._disclose(self._disclose_source(answer, items), outcome)
