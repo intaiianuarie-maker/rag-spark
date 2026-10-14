@@ -1013,3 +1013,27 @@ TASK: T-K06a-seam FIXUP-2
 VERIFY: ruff clean; 1 passed
 SPEND: 0.00
 ```
+
+## T-K06a — store modes plus migration status disclosure
+
+```text
+TASK: T-K06a
+CHANGE:
+      - MODIFIED apps/api/app/api/health.py (ready/version disclose store_modes and draft_migration)
+VERIFY:
+      - pytest test_v4_authoring_api -> 10 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06a FIXUP
+
+```text
+TASK: T-K06a FIXUP
+VERIFY:
+      - pytest disclosure + v4 -> 12 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
