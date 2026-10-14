@@ -38,6 +38,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
+from .checkpoint import (
+    CheckpointStore,
+    ResumableExecutor,
+    ResumeStateError,
+    WorkflowCheckpoint,
+    checkpoint_boundary,
+)
 from .interfaces import (
     ExecutionEdgeInfo,
     ExecutionPlan,
@@ -61,6 +68,68 @@ _SKIP_BARRIER = "barrier-incomplete"
 _SKIP_NO_INPUT = "no-active-inbound-edge"
 _SKIP_UPSTREAM = "upstream-skipped"
 _SKIP_CANCELLED = "cancelled"
+
+# ---------------------------------------------------------------------------
+# T-V4-013: idempotency under redelivery — the rule, stated.
+#
+# An idempotency KEY is ``(run_id, node_id)``; the FINGERPRINT is the
+# canonical form of the work the key stands for (node id, type, config,
+# input).  Executing a node consults the ledger FIRST:
+#
+# * key unseen                      → execute, then record (output once);
+# * key seen, SAME fingerprint      → replay the recorded output without
+#                                     executing (effect once, recorded once);
+# * key seen, DIFFERENT fingerprint → :class:`IdempotencyKeyConflict`, loudly
+#                                     (a key reused for different work is a
+#                                     delivery error, never a silent hit).
+#
+# The same ledger serves retries, resumes and duplicate dispatches, because
+# all three reduce to "execute this key again".
+# ---------------------------------------------------------------------------
+
+
+class IdempotencyKeyConflict(RuntimeError):
+    """The same idempotency key was presented for different work."""
+
+
+def _fingerprint(node: NodeSpec, node_input: dict[str, Any] | Any) -> str:
+    """Canonical fingerprint of one node's work (id, type, config, input)."""
+    return json.dumps(
+        {
+            "node_id": node.id,
+            "type": str(node.type),
+            "config": node.config,
+            "input": node_input,
+        },
+        sort_keys=True,
+        default=str,
+    )
+
+
+class IdempotencyLedger:
+    """Records executed keys → outputs; replays on same-fingerprint hits."""
+
+    def __init__(self) -> None:
+        self._entries: dict[tuple[str, str], tuple[str, Any]] = {}
+
+    def lookup(self, key: tuple[str, str], fingerprint: str) -> tuple[bool, Any]:
+        """Return ``(hit, output)``; raise on a fingerprint mismatch."""
+        entry = self._entries.get(key)
+        if entry is None:
+            return False, None
+        recorded_fp, output = entry
+        if recorded_fp != fingerprint:
+            raise IdempotencyKeyConflict(
+                f"idempotency key {key} was recorded for different work "
+                f"(fingerprint mismatch); refusing to replay or re-execute"
+            )
+        return True, output
+
+    def record(self, key: tuple[str, str], fingerprint: str, output: Any) -> None:
+        self._entries[key] = (fingerprint, output)
+
+    def keys(self) -> set[tuple[str, str]]:
+        return set(self._entries)
 
 # ---------------------------------------------------------------------------
 # T-V4-010: per-node bounds — stated, with defaults and reasons.
@@ -176,6 +245,9 @@ class _NodeOutcome:
     error: str | None = None
     attempts: int = 0
     latency_ms: float = 0.0
+    #: True when the output was replayed from the idempotency ledger or a
+    #: checkpoint rather than executed (T-V3-013 duplicate delivery).
+    replayed: bool = False
 
 
 def _output_bytes(result: Any) -> int:
@@ -359,6 +431,144 @@ class WorkflowExecutor:
         self._clock: Callable[[], float] = time.monotonic
         #: Accounting of the most recent run (observability; asserted in tests).
         self.last_envelope: _RunEnvelope | None = None
+        # T-V4-013: idempotency ledger + checkpoint seam (both injectable).
+        self._ledger = IdempotencyLedger()
+        self._checkpoint_store: CheckpointStore | None = None
+        #: Checkpoint writes that failed (observability; a failed checkpoint
+        #: must not kill the run, but it must not be silent either).
+        self.checkpoint_failures: int = 0
+
+    # ------------------------------------------------------------------ #
+    # T-V4-013: idempotency + checkpoint seam configuration
+    # ------------------------------------------------------------------ #
+    @staticmethod
+    def _seed_ledger_from_checkpoint(
+        run_id: str,
+        revision: WorkflowRevision,
+        plan: ExecutionPlan,
+        checkpoint: WorkflowCheckpoint,
+        initial_input: dict[str, Any],
+        ledger: IdempotencyLedger,
+    ) -> None:
+        """Record the settled nodes' work into *ledger* from the checkpoint.
+
+        Each settled node's input is reconstructed exactly as the pre-kill
+        run computed it (the trigger from ``initial_input``; every other node
+        from the checkpointed predecessor outputs via the plan's
+        ``input_mapping``), so the fingerprint is the one a redelivery of
+        that same work will present.
+        """
+        nodes_by_id = {n.id: n for n in revision.spec.nodes}
+        steps_by_node = {s.node_id: s for s in plan.steps}
+        outputs = dict(checkpoint.node_outputs)
+        for nid in checkpoint.completed_nodes:
+            node = nodes_by_id.get(nid)
+            if node is None or nid not in checkpoint.node_outputs:
+                continue
+            step = steps_by_node.get(nid)
+            if node.type is NodeType.TRIGGER or step is None:
+                node_input: Any = initial_input
+            else:
+                node_input = WorkflowExecutor._build_input(step, outputs)
+            ledger.record(
+                (run_id, nid),
+                _fingerprint(node, node_input),
+                checkpoint.node_outputs[nid],
+            )
+    def configure_idempotency_ledger(self, ledger: IdempotencyLedger | None) -> None:
+        """Install the dedup ledger (``None`` installs a fresh in-memory one)."""
+        self._ledger = ledger if ledger is not None else IdempotencyLedger()
+
+    def configure_checkpoint_store(self, store: CheckpointStore | None) -> None:
+        """Install the checkpoint seam used for cancel/resume durability."""
+        self._checkpoint_store = store
+
+    # ------------------------------------------------------------------ #
+    # T-V4-013: checkpoint save/load across the seam
+    # ------------------------------------------------------------------ #
+    async def _load_checkpoint(self, run_id: str) -> WorkflowCheckpoint | None:
+        """Newest checkpoint for ``run_id`` (``None`` when none is stored)."""
+        if self._checkpoint_store is None:
+            return None
+        return await self._checkpoint_store.latest(run_id)
+
+    async def _save_checkpoint(
+        self,
+        run_id: str,
+        revision: WorkflowRevision,
+        plan: ExecutionPlan,
+        initial_input: dict[str, Any],
+        run: WorkflowRun,
+        *,
+        run_complete: bool = False,
+        run_failed: bool = False,
+        checkpoint_seed: WorkflowCheckpoint | None,
+    ) -> None:
+        """Persist the run's settled set (T-V4-013).
+
+        Saved after every settled node, so a cancel/envelope/terminal
+        settlement resumes from exactly the last settled node.  Best-effort:
+        a failed checkpoint write is counted (``checkpoint_failures``), never
+        silently ignored and never fatal to the run — but it means a later
+        resume starts from the last checkpoint that did land.
+        """
+        if self._checkpoint_store is None:
+            return
+        settled = [
+            (node_id, record)
+            for node_id, record in run.node_runs.items()
+            if record.status == NodeRunStatus.COMPLETED
+        ]
+        if checkpoint_seed is not None:
+            already = set(checkpoint_seed.completed_nodes)
+            new_settled = [(nid, rec) for nid, rec in settled if nid not in already]
+            if not new_settled and not run_complete and not run_failed:
+                return  # nothing new since the resume point
+        completed_nodes = [
+            nid
+            for nid, rec in settled
+        ]
+        node_outputs = {
+            nid: rec.output_data for nid, rec in settled if rec.output_data is not None
+        }
+        last_node_id = completed_nodes[-1] if completed_nodes else None
+        checkpoint = WorkflowCheckpoint(
+            run_id=run_id,
+            workflow_id=revision.spec.id,
+            revision_id=plan.revision_hash,
+            workspace_id=revision.spec.workspace_id,
+            status=run.status.value,
+            boundary=(
+                checkpoint_boundary(
+                    node_type=(
+                        next(
+                            (
+                                n.type
+                                for n in revision.spec.nodes
+                                if n.id == last_node_id
+                            ),
+                            "",
+                        )
+                        if last_node_id
+                        else ""
+                    ),
+                    run_complete=run_complete,
+                    run_failed=run_failed,
+                    previously_completed=checkpoint_seed is not None,
+                )
+                or "settled"
+            ),
+            initial_input=initial_input,
+            completed_nodes=completed_nodes,
+            node_outputs=node_outputs,
+            node_runs={nid: rec for nid, rec in settled},
+            revision_hash=plan.revision_hash,
+            checkpointed_at=datetime.now(UTC).isoformat(),
+        )
+        try:
+            await self._checkpoint_store.append(checkpoint)
+        except Exception:
+            self.checkpoint_failures += 1
 
     # ------------------------------------------------------------------ #
     # T-V4-012: run-level envelope configuration
@@ -421,13 +631,16 @@ class WorkflowExecutor:
     def agent_executor(self) -> NodeExecutor | None:
         return self._agent_executor
 
-    def _executor_for(self, node: NodeSpec) -> NodeExecutor:
+    def _executor_for(
+        self, node: NodeSpec, override: NodeExecutor | None = None
+    ) -> NodeExecutor:
         """Routing rule (stated): AGENT nodes go to the injected seam when one
         is wired; every other node (and AGENT with no seam wired) goes to the
-        injected executor.  There is no third path."""
+        run's primary executor (the injected one, or the resume replay
+        wrapper when continuing from a checkpoint).  There is no third path."""
         if node.type is NodeType.AGENT and self._agent_executor is not None:
             return self._agent_executor
-        return self._executor
+        return override if override is not None else self._executor
 
     def configure_bounds(
         self,
@@ -481,8 +694,18 @@ class WorkflowExecutor:
         plan: ExecutionPlan,
         revision: WorkflowRevision,
         initial_input: dict[str, Any],
+        *,
+        run_id: str | None = None,
+        resume: bool = False,
     ) -> WorkflowRun:
-        """Execute a compiled plan and return a ``WorkflowRun``."""
+        """Execute a compiled plan and return a ``WorkflowRun``.
+
+        T-V4-013: ``run_id`` fixes the run's identity across deliveries and
+        resumes (the idempotency key is ``(run_id, node_id)``); ``resume=True``
+        continues from the newest checkpoint for that run — settled nodes are
+        replayed from the checkpoint (never re-executed) and the unsettled
+        remainder continues exactly.
+        """
         # Verify plan matches revision: recompute hash from spec and compare
         # against the hash stored in the plan at compile time.  This catches
         # post-compile mutations to revision.spec (top-level or nested).
@@ -494,7 +717,38 @@ class WorkflowExecutor:
                 f"after compilation"
             )
 
-        run_id = f"wfrun-{uuid.uuid4().hex[:8]}"
+        run_id = run_id or f"wfrun-{uuid.uuid4().hex[:8]}"
+        # A fresh delivery starts a fresh ledger pass for this run id; resume
+        # re-seeds it from the checkpoint below.
+        self._cancel = asyncio.Event()
+        checkpoint: WorkflowCheckpoint | None = None
+        base_executor = self._executor
+        if resume:
+            checkpoint = await self._load_checkpoint(run_id)
+            if checkpoint is not None:
+                if checkpoint.workspace_id and checkpoint.workspace_id != revision.spec.workspace_id:  # noqa: E501
+                    raise ResumeStateError(
+                        "resume workspace mismatch: "
+                        f"{revision.spec.workspace_id!r} != checkpointed "
+                        f"{checkpoint.workspace_id!r}"
+                    )
+                if checkpoint.revision_hash and checkpoint.revision_hash != plan.revision_hash:
+                    raise ResumeStateError(
+                        "resume revision mismatch: the checkpoint was taken "
+                        f"for revision {checkpoint.revision_hash}, this plan "
+                        f"is {plan.revision_hash}"
+                    )
+                # The T-V4-016 wrapper replays checkpointed outputs and
+                # delegates the rest — the core loop stays untouched.
+                base_executor = ResumableExecutor(self._executor, checkpoint)
+                # Re-seed the idempotency ledger from the checkpoint with the
+                # work each settled node actually did (its input reconstructed
+                # from the checkpointed outputs), so a redelivery AFTER the
+                # resume still dedups — and a key reused for different work
+                # still conflicts.
+                self._seed_ledger_from_checkpoint(
+                    run_id, revision, plan, checkpoint, initial_input, self._ledger
+                )
         now = datetime.now(UTC).isoformat()
 
         run = WorkflowRun(
@@ -548,6 +802,9 @@ class WorkflowExecutor:
                 node_outputs=node_outputs,
                 ready=ready,
                 envelope=envelope,
+                run_id=run_id,
+                executor_override=base_executor,
+                checkpoint_seed=checkpoint,
             )
         except asyncio.CancelledError:
             # External task cancellation: settle the in-flight node, end
@@ -580,16 +837,35 @@ class WorkflowExecutor:
         node_outputs: dict[str, dict[str, Any]],
         ready: deque[str],
         envelope: _RunEnvelope,
+        run_id: str,
+        executor_override: NodeExecutor,
+        checkpoint_seed: WorkflowCheckpoint | None,
     ) -> WorkflowRun:
-        """The readiness loop (extracted so the caller can settle on cancel)."""
+        """The readiness loop (extracted so the caller can settle on cancel).
+
+        T-V4-013: ``run_id`` fixes the idempotency keys; ``executor_override``
+        is this run's primary executor (replay wrapper when resuming);
+        ``checkpoint_seed`` names the checkpoint a resume started from (None
+        on a fresh delivery).
+        """
         while ready:
             # T-V4-009: cancellation is observed before every dispatch — a
             # cancelled run never proceeds to COMPLETED.
             if self._cancel.is_set():
+                # T-V4-013: persist the settled set BEFORE ending, so the
+                # resume starts from the last settled node.
+                await self._save_checkpoint(
+                    run_id, revision, plan, initial_input, run,
+                    run_failed=True, checkpoint_seed=checkpoint_seed,
+                )
                 return self._finish_cancelled(run, nodes_by_id)
             # T-V4-012: the run deadline is observed before every dispatch —
             # no node starts once the envelope's wall-clock is spent.
             if envelope.deadline_exceeded():
+                await self._save_checkpoint(
+                    run_id, revision, plan, initial_input, run,
+                    run_failed=True, checkpoint_seed=checkpoint_seed,
+                )
                 return self._finish_deadline(run, nodes_by_id, envelope)
 
             node_id = ready.popleft()
@@ -683,6 +959,8 @@ class WorkflowExecutor:
                 node,
                 node_input,
                 revision.spec.workspace_id,
+                run_id=run_id,
+                executor_override=executor_override,
                 timeout_s=effective_timeout,
                 timeout_reason=timeout_reason,
             )
@@ -693,11 +971,9 @@ class WorkflowExecutor:
             if outcome.ok:
                 node_run.status = NodeRunStatus.COMPLETED
                 node_run.output_data = outcome.result
-                result = outcome.result
             else:
                 node_run.status = NodeRunStatus.FAILED
                 node_run.error = outcome.error
-                result = None
             run.node_runs[node_id] = node_run
             # Run-level accounting: one executed node, charged once (its
             # attempts + bounded backoff) — the deadline is NOT double-counted.
@@ -705,6 +981,10 @@ class WorkflowExecutor:
             # The envelope outranks the node's own outcome: a run whose
             # wall-clock or budget is spent ends on the envelope, named.
             if envelope.deadline_exceeded():
+                await self._save_checkpoint(
+                    run_id, revision, plan, initial_input, run,
+                    run_failed=True, checkpoint_seed=checkpoint_seed,
+                )
                 return self._finish_deadline(
                     run, nodes_by_id, envelope, last_node_id=node_id
                 )
@@ -718,6 +998,10 @@ class WorkflowExecutor:
                 run.failed_node_id = node_id
                 run.finished_at = datetime.now(UTC).isoformat()
                 self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                await self._save_checkpoint(
+                    run_id, revision, plan, initial_input, run,
+                    run_failed=True, checkpoint_seed=checkpoint_seed,
+                )
                 return run
             if envelope.nodes_exceeded():
                 run.status = WorkflowRunStatus.FAILED
@@ -729,6 +1013,10 @@ class WorkflowExecutor:
                 run.failed_node_id = node_id
                 run.finished_at = datetime.now(UTC).isoformat()
                 self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                await self._save_checkpoint(
+                    run_id, revision, plan, initial_input, run,
+                    run_failed=True, checkpoint_seed=checkpoint_seed,
+                )
                 return run
             if not outcome.ok:
                 # T-V4-009 terminal honesty + T-V4-010 named bound breach:
@@ -739,12 +1027,18 @@ class WorkflowExecutor:
                 run.failed_node_id = node_id
                 run.finished_at = datetime.now(UTC).isoformat()
                 self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                await self._save_checkpoint(
+                    run_id, revision, plan, initial_input, run,
+                    run_failed=True, checkpoint_seed=checkpoint_seed,
+                )
                 return run
-            result = outcome.result
-            node_run.status = NodeRunStatus.COMPLETED
-            node_run.output_data = result
-            run.node_runs[node_id] = node_run
-            node_outputs[node_id] = result
+            # T-V4-013: the settled set grows — persist it so a cancel or a
+            # kill resumes from exactly this node.
+            await self._save_checkpoint(
+                run_id, revision, plan, initial_input, run,
+                checkpoint_seed=checkpoint_seed,
+            )
+            node_outputs[node_id] = outcome.result
 
             # Process outgoing edges.
             newly_ready: list[str] = []
@@ -763,10 +1057,10 @@ class WorkflowExecutor:
                 ready.append(nid)
 
             if node.type == NodeType.OUTPUT:
-                if isinstance(result, dict) and "output" in result:
-                    run.final_output = result["output"]
+                if isinstance(outcome.result, dict) and "output" in outcome.result:
+                    run.final_output = outcome.result["output"]
                 else:
-                    run.final_output = result
+                    run.final_output = outcome.result
 
         # Mark all unprocessed nodes as skipped (disclosed, with reason).
         # A join node that never got to evaluate its barrier is named as
@@ -796,9 +1090,20 @@ class WorkflowExecutor:
             run.error = f"node '{node_id}' failed: {failed[0].error}"
             run.failed_node_id = node_id
             run.finished_at = datetime.now(UTC).isoformat()
+            await self._save_checkpoint(
+                run_id, revision, plan, initial_input, run,
+                run_failed=True, checkpoint_seed=checkpoint_seed,
+            )
             return run
 
-        return self._finalize(run, plan, nodes_by_id, incoming_count)
+        finalized = self._finalize(run, plan, nodes_by_id, incoming_count)
+        await self._save_checkpoint(
+            run_id, revision, plan, initial_input, finalized,
+            run_complete=finalized.status == WorkflowRunStatus.COMPLETED,
+            run_failed=finalized.status == WorkflowRunStatus.FAILED,
+            checkpoint_seed=checkpoint_seed,
+        )
+        return finalized
 
     # ------------------------------------------------------------------ #
     # T-V4-010: bounded node execution (timeout, output cap, retry cap)
@@ -809,6 +1114,8 @@ class WorkflowExecutor:
         node_input: dict[str, Any] | Any,
         workspace_id: str,
         *,
+        run_id: str = "",
+        executor_override: NodeExecutor | None = None,
         timeout_s: float | None = None,
         timeout_reason: str | None = None,
     ) -> _NodeOutcome:
@@ -830,10 +1137,20 @@ class WorkflowExecutor:
         value; the outcome records the attempt count either way.
         """
         started = time.perf_counter()
+        # T-V4-013: the idempotency ledger is consulted BEFORE any execution —
+        # a redelivery of the same key replays the recorded output; a key
+        # presented for different work raises (never silently re-executed).
+        key = (run_id, node.id)
+        fingerprint = _fingerprint(node, node_input)
+        hit, recorded = self._ledger.lookup(key, fingerprint)
+        if hit:
+            return _NodeOutcome(
+                ok=True, result=recorded, attempts=0, latency_ms=0.0, replayed=True
+            )
         attempts = 0
         last_error: str | None = None
         # T-V4-011: this node's executor — the seam for AGENT nodes when wired.
-        executor = self._executor_for(node)
+        executor = self._executor_for(node, executor_override)
         effective_timeout = (
             self._node_timeout_s if timeout_s is None else timeout_s
         )
@@ -893,6 +1210,7 @@ class WorkflowExecutor:
                         attempts=attempts,
                         latency_ms=(time.perf_counter() - started) * 1000.0,
                     )
+                self._ledger.record(key, fingerprint, result)
                 return _NodeOutcome(
                     ok=True,
                     result=result,
