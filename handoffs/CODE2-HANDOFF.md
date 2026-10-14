@@ -839,3 +839,16 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04c-proofs
+
+```text
+TASK: T-A04c-proofs
+CHANGE:
+      - NEW tests/unit/test_t_a04c_draft_proofs.py (restart + bad path + parity)
+VERIFY:
+      - tests 10 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
