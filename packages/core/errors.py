@@ -108,6 +108,7 @@ class ReasonCode(StrEnum):
     CHUNK_FAILED = "CHUNK_FAILED"
     TOO_MANY_ELEMENTS = "TOO_MANY_ELEMENTS"
     QUEUE_UNAVAILABLE = "QUEUE_UNAVAILABLE"
+    GRAPH_ENQUEUE_FAILED = "GRAPH_ENQUEUE_FAILED"
     INTERNAL_ERROR = "INTERNAL_ERROR"
     NEEDS_REVIEW = "NEEDS_REVIEW"
 
@@ -409,6 +410,19 @@ _register(
         http_status=413,
         retryable=False,
         message="The document produced too many elements to process.",
+    ),
+)
+_register(
+    ReasonCode.GRAPH_ENQUEUE_FAILED,
+    ErrorSpec(
+        category=ErrorCategory.INGESTION,
+        http_status=503,
+        # Retryable: the graph queue is a broker, so a retry re-attempts the
+        # enqueue. T-R10: this code previously existed only as a raised literal
+        # in the ingest pipeline and was ABSENT from the taxonomy, which failed
+        # the error-taxonomy contract test.
+        retryable=True,
+        message="Graph extraction could not be queued; the document is not fully indexed yet.",
     ),
 )
 _register(

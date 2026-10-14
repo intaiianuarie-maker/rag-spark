@@ -6344,3 +6344,160 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr06_{start,end}.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty. No live collection was written: the tests
   exercise identity logic and source shape only, never Qdrant.
+---
+
+## T-R10 — Graph queue reliability: typed failures + durable receipts
+
+```text
+TASK: T-R10 — (1) enqueue_graph_extraction PROPAGATES a typed failure with
+       GRAPH_ENQUEUE_FAILED registered in the shared taxonomy; (2) caller can
+       tell graph-disabled (clean skip) from graph-enabled-but-queue-down (loud
+       failure + retry); (3) publish path atomic or recoverably reconciled, and
+       replay idempotent. Close the RED taxonomy contract test at HEAD.
+CHANGE: 4 files, all inside my allowlist, ZERO overlap with dev1's dirty files:
+       M packages/graph/queue.py (4 hunks) — enqueue_graph_job now writes the
+         payload AND the queue entry in ONE Lua script (atomic), then reads the
+         job back as a durable RECEIPT before returning an id.
+       M apps/worker/jobs/graph_extraction.py (1 hunk, line 98) — the swallowed
+         exception now RE-RAISES instead of returning None.
+       M packages/core/errors.py (2 hunks) — ReasonCode.GRAPH_ENQUEUE_FAILED added
+         and registered in ERROR_REGISTRY.
+       NEW tests/unit/test_graph_queue_reliability.py (13 tests).
+WHY:    The graph queue could lose a job and REPORT SUCCESS. That is the worst
+       combination in a pipeline: the operator sees a clean log and a READY
+       document, and no graph rows exist. The user believes their document is
+       fully indexed when it is not, and nothing in the system will ever
+       contradict them.
+REUSED: The existing GraphQueueUnavailable exception rather than inventing a new
+       error type — which also keeps packages/graph/ free of a parallel taxonomy,
+       a rule the contract test enforces (test_graph_layer_has_no_parallel_taxonomy
+       fails on any local Reason/ErrorCode class or raw reason_code literal, and
+       my new test mirrors that rule). The existing T-V1-020 claim/ack Lua pattern
+       for script style. The existing IngestPipelineError("GRAPH_ENQUEUE_FAILED",
+       retryable=True) at the call-site, which was already correct and simply
+       never fired. JOB_STATUS_REASON_CODES auto-derives FAILED from the registry,
+       so the new code is job-visible with no extra wiring.
+
+THE HEADLINE DEFECT, REPRODUCED BEFORE THE FIX.
+  enqueue_graph_extraction caught the broker failure, logged a warning, and
+  `return None` — the SAME value it returns when graph is merely disabled. So:
+      graph OFF                  -> None -> clean skip            (correct)
+      graph ON, broker DOWN      -> None -> caller logs graph_job_enqueued
+                                          -> document goes READY
+                                          -> no graph job exists      (WRONG)
+  The caller literally could not distinguish "nothing was supposed to happen"
+  from "the thing that was supposed to happen did not happen". Fixed by
+  re-raising: `None` now means exactly one thing, graph is disabled.
+  Note the pipeline ALWAYS raised IngestPipelineError("GRAPH_ENQUEUE_FAILED") on
+  this path — the raise was never the bug. The bug was that the swallow upstream
+  meant the raise never fired.
+
+SECOND DEFECT: THE ENQUEUE WAS NOT ATOMIC AND NOT DURABLE.
+  Before: `hset(payloads, job_id, payload)` then `lpush(queue, job_id)` as two
+  separate commands. A crash between them leaves either an orphaned payload
+  nothing will ever claim, or a queued job id whose payload was never stored —
+  which a worker pops and then fails on. It also returned job_id WITHOUT reading
+  it back, so a "successful" enqueue was not proof of durability.
+  After: one Lua script does HSET+LPUSH atomically (all-or-nothing), then a
+  second script HGETs the payload and LPOSs the queue and only then is the
+  enqueue considered durable. If the read-back fails, GraphQueueUnavailable is
+  raised rather than handing back an id no worker can claim.
+
+METRIC — broker failures logging false success: 0. PROVEN BY INJECTION.
+  * Broker refuses the write -> GraphQueueUnavailable raised, and the fake broker
+    is asserted to hold NO payload and NO queued job (no debris).
+  * enqueue_graph_extraction under the same outage RAISES (was: returned None).
+  * Disabled vs broken are proven distinguishable in ONE test: GRAPH_MODE=off
+    returns None AND the broker is asserted never touched (zero calls), while
+    GRAPH_MODE=rule with a dead broker raises. A clean skip can no longer be
+    mistaken for a failure, or a failure for a skip.
+  * No graph_job_enqueued log on the failure path, and the document cannot reach
+    READY, because the raise now actually fires and it propagates out of
+    process_job. Pinned structurally by a test asserting the enqueue call site
+    precedes publish_job_if_generation_live in the source: a raise is only
+    meaningful if no READY write has already happened.
+  These are non-vacuous by construction — at HEAD the propagate test finds no
+  exception at all, and the old hset/lpush calls do not exist on the fake broker.
+
+METRIC — taxonomy test: GREEN. Reproduced first, closed last.
+  At HEAD: tests/contracts/test_error_taxonomy_contract.py::test_worker_pipeline_
+  literals_resolve_and_wire_is_canonical FAILED with
+  "AssertionError: GRAPH_ENQUEUE_FAILED not in the taxonomy" (1 failed, 17 passed).
+  After: 18 passed. GRAPH_ENQUEUE_FAILED is now a real ReasonCode and a registered
+  ErrorSpec (category INGESTION, http_status 503, retryable=True), so it is
+  automatically valid on a FAILED job via the derived JOB_STATUS_REASON_CODES map.
+  It needed NO frontend change: the TS mirror test only pins AnswerReasonCode /
+  AnswerStatus / JobStatus / Dependency / ServiceMode, not the full ReasonCode set,
+  and this is an INGESTION-category code.
+
+DURABLE RECEIPTS AND REPLAY.
+  * The write is ONE script (asserted: exactly one write call per enqueue).
+  * An unconfirmed enqueue is treated as a failure, not a success.
+  * A returned job id is asserted to be BOTH in the payloads hash and in the
+    queue — that is the receipt.
+  * Replay: two enqueues of the same version produce two independent confirmed
+    jobs, with len(queue) == len(payloads) asserted so an orphan or a
+    double-queued entry cannot hide. Dedup is deliberately NOT done here;
+    extraction idempotency lives at the store layer via deterministic node ids,
+    and silently collapsing enqueues here would hide a genuine double-fire.
+  * Replay AFTER a failure recovers cleanly: the failed attempt leaves nothing
+    behind and the retry is confirmed.
+
+VERIFY: pytest tests/unit/test_graph_queue_reliability.py 13 passed;
+       tests/contracts/test_error_taxonomy_contract.py 18 passed (was 17+1 FAILED);
+       related suites together: 105 passed / 0 failed (the taxonomy contract plus
+       test_graph, test_graph_queued, test_graph_factory, test_graph_lifecycle,
+       test_graph_extractor, test_graph_isolation, test_graph_store_sqlite,
+       test_graph_store_concurrency, test_queue_semantics and test_ingest_pipeline);
+       ruff check on all four of my files: All checks passed (exit 0);
+       mypy --follow-imports=silent on queue, graph_extraction, errors and the
+       new test: Success, no issues.
+       No live-queue writes: the broker is a scratch fake injected over
+       graph.queue.get_client; no Redis, no compose, nothing started.
+       I did NOT run the full tests/unit suite; the card scoped the run to
+       failure-injection + taxonomy contract + related suites, and the host was
+       OOM-critical earlier today. Stating that rather than implying more.
+RISKS:  1. Behaviour change: a graph-queue outage now fails the ingest job
+       (retryable) instead of quietly producing a READY document. That is the
+       intended fix, but any run that relied on the old silent-success path will
+       now retry or park where it previously appeared to succeed.
+   2. The receipt read-back is one extra round trip per enqueue. Two round trips
+       instead of one, plus one script. That is a real latency cost on the ingest
+       path; it buys durability, and it is two local Redis calls, but it is not
+       free and should be watched if enqueue throughput ever matters.
+   3. The receipt check catches "not retrievable", not "lost later". If the broker
+       loses data after a confirmed receipt (no AOF, eviction), this ticket does
+       not detect it. Durability of the queue itself is still a broker concern.
+   4. GraphQueueUnavailable still subclasses RuntimeError and is caught by the
+       broad `except Exception` at the enqueue call-site, so the typed taxonomy
+       code arrives via the pipeline's own translation rather than directly from
+       the queue layer. The taxonomy rule forbids the graph package declaring its
+       own code class, so this indirection is deliberate.
+   5. The publish path itself was already atomic (publish_job_if_generation_live
+       re-asserts the fence in its own WHERE clause per T-V1-050) and I did not
+       change it; I only proved the enqueue failure now happens BEFORE it. If the
+       intent was to make publish reconcilable too, that is not addressed here.
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - My first attempt to register the error code produced
+    "TypeError: _register() takes 2 positional arguments but 4 were given": my
+    insertion landed INSIDE the existing _register(code, spec) call wrapper,
+    splicing my ErrorSpec between the call and its first argument. I read the
+    real structure and closed the wrapper properly instead of retrying blindly.
+  - The first run of my own suite was green immediately, so I checked
+    non-vacuity by reasoning about HEAD rather than assuming: at HEAD the
+    propagate test finds no exception, and the old hset/lpush calls do not exist
+    on the fake, so the atomicity and propagation tests could not have passed
+    before. I did not weaken any assertion to get green.
+FOREIGN TREE MOVEMENT (reported, not forced): dev1's R05 work continued during
+  the ticket — packages/retrieval/adapters/qdrant_store.py and
+  handoffs/CODE1-HANDOFF.md became dirty after my START snapshot, alongside the
+  reindex/vector-store files already dirty. I touched none of them. HEAD did not
+  move (a426587 at both ends). My uncommitted eval files were left alone per your
+  standing instruction.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr10_{start,end}.txt):
+- START (HEAD `a426587`): 34 dirty paths, including dev1's six. Index empty.
+- END (HEAD `a426587`): 40 dirty paths — my 4 files, dev1's 6+1, the evals files,
+  reviews/, and the untouched foreign handoffs.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty. No live queue was written.

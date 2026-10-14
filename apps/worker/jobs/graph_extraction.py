@@ -95,7 +95,14 @@ async def enqueue_graph_extraction(
                 "error": f"{type(exc).__name__}: {exc}",
             },
         )
-        return None
+        # T-R10: PROPAGATE. This used to `return None`, which is the same value
+        # the graph-disabled skip returns — so a queue outage was
+        # indistinguishable from "graph is off", the caller logged
+        # graph_job_enqueued, and the document went READY with no graph job
+        # anything would ever claim. A clean skip and a loud failure must not
+        # share a return value. `None` now means exactly one thing: graph is
+        # disabled and nothing was supposed to happen.
+        raise
 
 
 async def process_graph_job(job_id: str) -> dict:

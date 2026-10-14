@@ -45,6 +45,28 @@ end
 return moved
 """
 
+#: T-R10: payload and queue entry are written by ONE script. Two separate
+#: commands could interleave a crash between them and leave either an orphaned
+#: payload nothing will ever claim, or (worse, on a retry) a queued job id whose
+#: payload was never stored — a worker that pops it and finds nothing. Redis
+#: runs a script atomically, so the pair is now all-or-nothing.
+_ENQUEUE_LUA = """
+redis.call('HSET', KEYS[1], ARGV[1], ARGV[2])
+redis.call('LPUSH', KEYS[2], ARGV[1])
+return 1
+"""
+
+#: T-R10: durable receipt. A successful LPUSH return value is the broker
+#: accepting the write, not proof the job is retrievable. This reads the job back
+#: out of both structures and only then is the enqueue considered durable.
+_ENQUEUE_RECEIPT_LUA = """
+local payload = redis.call('HGET', KEYS[1], ARGV[1])
+if not payload then return 0 end
+local depth = redis.call('LPOS', KEYS[2], ARGV[1])
+if not depth then return 0 end
+return 1
+"""
+
 _CLAIM_LUA = """
 local job = redis.call('RPOP', KEYS[1])
 if not job then return false end
@@ -208,12 +230,39 @@ async def enqueue_graph_job(
     # + store payload separately. For now enqueue the JSON payload itself as
     # the job identifier (like ingestion does with job_id). To keep claim
     # string simple, enqueue job_id and store payload in hash
+    # T-R10: atomic write, then a read-back receipt. A job id is only returned
+    # when the payload is stored AND the id is actually in the queue, so the
+    # caller can treat a returned id as durable. Previously a broker error
+    # between the two writes (or a swallowed error) produced a caller that
+    # believed the job was queued when nothing would ever claim it.
     try:
         client = get_client()
-        await client.hset(f"graph:{_prefix()}payloads", job_id, payload)
-        await client.lpush(queue_key(), job_id)
+        await client.eval(
+            _ENQUEUE_LUA,
+            2,
+            f"graph:{_prefix()}payloads",
+            queue_key(),
+            job_id,
+            payload,
+        )
     except RedisError as exc:
         raise GraphQueueUnavailable("graph queue unavailable") from exc
+    try:
+        receipt = await client.eval(
+            _ENQUEUE_RECEIPT_LUA,
+            2,
+            f"graph:{_prefix()}payloads",
+            queue_key(),
+            job_id,
+        )
+    except RedisError as exc:
+        raise GraphQueueUnavailable("graph queue unavailable") from exc
+    if int(receipt or 0) != 1:
+        # The write reported success but the job is not retrievable. Treat it
+        # as a failure rather than handing back an id that no worker can claim.
+        raise GraphQueueUnavailable(
+            "graph queue did not confirm the enqueue; no durable job receipt"
+        )
     return job_id
 
 
