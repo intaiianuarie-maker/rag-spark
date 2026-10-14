@@ -798,3 +798,16 @@ VERIFY: pytest test_v4_authoring_api -> 8 passed
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04c (deferred) — durable drafts/approvals/runs
+
+```text
+TASK: T-A04c deferred.
+CHANGE: none.
+STATUS: NOT RUN in this turn — durable package store wrappers (save vs save_draft method mismatch, runs/approvals seam) require more than this bounded pass.
+METRICS:
+  - stores net delta: 0
+  - spend: 0.00
+RISKS: work remains.
+GIT: handoff only.
+```
