@@ -375,3 +375,92 @@ async def test_graph_off_is_byte_identical_v1() -> None:
     "HYBRID_GRAPH(graph=None) and HYBRID must produce byte-identical "
     "serialized output on identical fixtures"
     )
+
+
+# --------------------------------------------------------------------------------------
+# T-K08: cross-leg dedup + per-mode graph damping
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.unit
+async def test_k08_cross_leg_duplicate_contributes_once() -> None:
+    """A graph chunk ref already surfaced by dense/lexical gets NO second RRF vote.
+
+    The graph score still appears in the trace (disclosure), but the fused
+    score is identical to the dense-only baseline — proving the duplicate
+    contributed once, not twice.
+    """
+    orch = await _build_orchestrator_with_graph()
+    acl = ACLScope(user_id="u1", workspace_ids=[WS])
+
+    # Baseline: HYBRID (no graph leg at all).
+    orch.graph = None
+    baseline = await orch.retrieve(
+        query="What did Alice's employer acquire?",
+        acl_scope=acl,
+        mode=RetrievalMode.HYBRID,
+        dense_top_k=20,
+        lexical_top_k=20,
+        sparse_top_k=0,
+        fusion_top_k=20,
+    )
+
+    # HYBRID_GRAPH with graph present: all 3 chunks are duplicates of dense/lexical.
+    orch.graph = GraphRetriever(_build_graph_store())
+    hybrid_graph = await orch.retrieve(
+        query="What did Alice's employer acquire?",
+        acl_scope=acl,
+        mode=RetrievalMode.HYBRID_GRAPH,
+        dense_top_k=20,
+        lexical_top_k=20,
+        sparse_top_k=0,
+        fusion_top_k=20,
+    )
+
+    baseline_scores = {item.chunk_id: item.score for item in baseline if item.chunk_id}
+    hg_scores = {item.chunk_id: item.score for item in hybrid_graph if item.chunk_id}
+
+    # Fused scores must be identical — graph added no second vote.
+    assert baseline_scores == hg_scores, (
+        "cross-leg duplicate graph chunk must not get a second RRF vote"
+    )
+
+    # But the graph score IS recorded in the trace (disclosure, not silent).
+    assert any("graph" in item.scores for item in hybrid_graph), (
+        "graph leg score must appear in trace even when deduped"
+    )
+
+
+@pytest.mark.unit
+async def test_k08_rrf_weights_damp_graph_leg() -> None:
+    """reciprocal_rank_fusion applies per-ranking weights (T-K08 damping)."""
+    from retrieval.orchestrator import reciprocal_rank_fusion
+
+    # Two rankings both surface "doc-a"; second ranking is damped to 0.5.
+    rankings = [["doc-a", "doc-b"], ["doc-a", "doc-c"]]
+    fused = reciprocal_rank_fusion(rankings, k=60, weights=[1.0, 0.5])
+
+    # doc-a gets 1/(60+1) + 0.5/(60+1) = 1.5/61
+    expected_a = 1.5 / 61
+    assert abs(fused["doc-a"] - expected_a) < 1e-12
+
+    # doc-b gets full vote from ranking 1 only (rank 2 → 1/(60+2)).
+    assert abs(fused["doc-b"] - 1.0 / 62) < 1e-12
+
+    # doc-c gets damped vote from ranking 2 only (rank 2 → 0.5/(60+2)).
+    assert abs(fused["doc-c"] - 0.5 / 62) < 1e-12
+
+    # Default (no weights) is byte-identical to all-ones weights.
+    fused_default = reciprocal_rank_fusion(rankings, k=60)
+    fused_ones = reciprocal_rank_fusion(rankings, k=60, weights=[1.0, 1.0])
+    assert fused_default == fused_ones
+
+
+@pytest.mark.unit
+async def test_k08_graph_leg_weight_and_cap_constants() -> None:
+    """GRAPH mode keeps full weight; HYBRID_GRAPH damps to 0.5 and caps at 10."""
+    from retrieval.orchestrator import GRAPH_FUSION_CAP, GRAPH_LEG_WEIGHT
+
+    assert GRAPH_LEG_WEIGHT[RetrievalMode.GRAPH] == 1.0
+    assert GRAPH_LEG_WEIGHT[RetrievalMode.HYBRID_GRAPH] == 0.5
+    assert GRAPH_FUSION_CAP == 10

@@ -3464,3 +3464,23 @@ Degradation table:
 | store failure | log + graph=None (v1 path) |
 | flag-off / valid modes | unchanged behavior |
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-K08 — G3-remainder: cross-leg dedup + per-mode graph damping (dev1)
+TASK: T-K08 (w5:pG). K CONFIRMED Med: A08 deduped within the graph leg, but graph refs still double-counted against dense/lexical hits in RRF fusion; constant 1.0/0.9 scores with no per-mode damping left the table-QA flood path open.
+CHANGE (allowed files):
+- `packages/retrieval/orchestrator.py`: cross-leg dedup — graph chunk refs already surfaced by dense/lexical get NO second RRF vote (trace still records the graph score); per-mode graph damping via `GRAPH_LEG_WEIGHT` (GRAPH=1.0, HYBRID_GRAPH=0.5) and `GRAPH_FUSION_CAP=10`; `reciprocal_rank_fusion` accepts per-ranking `weights`.
+- `packages/graph/retriever.py`: chunk_scores accumulation capped at 1.0 (local + global) — scoring bounds only.
+- `tests/unit/test_graph_retrieval_eval.py`: 3 new tests proving dedup-once, RRF weight damping, and weight/cap constants.
+WHY: graph evidence must supplement — never dominate — dense/lexical in hybrid fusion; default HYBRID (graph-absent) stays byte-identical.
+REUSED: existing RRF fusion pipeline, graph leg seam, MemoryGraphStore fixtures.
+BUILT: cross-leg dedup (trace-without-double-vote), per-mode graph weight damping, graph fusion cap, bounded chunk_scores.
+VERIFY:
+- `pytest tests/unit -k 'graph or retrieval or orchestrator or fusion or rrf'` → 245 passed.
+- ruff + mypy on touched files clean.
+- Dedup proof: `test_k08_cross_leg_duplicate_contributes_once` — fused scores identical to dense-only baseline; graph score present in trace.
+- Damping proof: `test_k08_rrf_weights_damp_graph_leg` — weighted RRF math exact; `test_k08_graph_leg_weight_and_cap_constants` — GRAPH=1.0, HYBRID_GRAPH=0.5, cap=10.
+- HYBRID-absent-graph unchanged: `test_graph_off_is_byte_identical_v1` still green.
+RISKS:
+- graph leg now contributes less in HYBRID_GRAPH mode (damped 0.5); recall of graph-only chunks may drop slightly in hybrid queries — acceptable trade-off per K triage (table-QA flood was the larger risk).
+- GRAPH_FUSION_CAP=10 is a policy constant; if a workspace has >10 relevant graph-only chunks, the excess are dropped from fusion (still traced in graph leg output, just not ranked).
+Next: IDLE — push mandatory.

@@ -88,6 +88,21 @@ DENSE_ONLY_DISCLOSURE: Final[str] = (
     "local reranker deleted per user order, dense-only until LLM-rerank follow-up proves need"
 )
 
+# --- T-K08: per-mode graph damping -----------------------------------------
+# The graph leg is an *optional* supplement in HYBRID_GRAPH mode, never a
+# dominant vote. Damping caps the graph leg's RRF weight per mode so a
+# table-QA flood of graph refs cannot outrank dense/lexical evidence.
+# GRAPH mode (graph-only) keeps full weight — it is the only leg.
+GRAPH_LEG_WEIGHT: Final[dict[RetrievalMode, float]] = {
+    RetrievalMode.GRAPH: 1.0,
+    RetrievalMode.HYBRID_GRAPH: 0.5,
+}
+
+# Cap on how many graph items may enter fusion in HYBRID_GRAPH mode. Bounds
+# the total graph vote mass regardless of how many chunks the graph leg
+# surfaced (the "table-mode graph capped" proof).
+GRAPH_FUSION_CAP: Final[int] = 10
+
 
 # --- T-V1-026: honest per-leg failure statuses ------------------------------
 
@@ -236,19 +251,31 @@ class SparseRetriever(Protocol):
 
 
 def reciprocal_rank_fusion(
-    rankings: Sequence[Sequence[str]], *, k: int = RRF_K
+    rankings: Sequence[Sequence[str]],
+    *,
+    k: int = RRF_K,
+    weights: Sequence[float] | None = None,
 ) -> dict[str, float]:
-    """RRF: ``score(d) = Σ 1/(k + rank)`` over the rankings that contain ``d``.
+    """RRF: ``score(d) = Σ w_i / (k + rank_i)`` over the rankings that contain ``d``.
 
     ``math.fsum`` makes the accumulation exactly rounded and independent of the
     order of the rankings, satisfying `check_rrf_determinism`.
+
+    ``weights`` optionally scales each ranking's contribution (default 1.0 for
+    every ranking). T-K08 uses this to damp the optional graph leg in
+    ``HYBRID_GRAPH`` mode so graph evidence supplements — never dominates —
+    the dense/lexical legs. The default ``HYBRID`` mode is byte-identical
+    because its graph ranking is empty (weight never applied).
     """
     if k < 1:
         raise ValueError(f"k must be >= 1, got {k}")
+    if weights is not None and len(weights) != len(rankings):
+        raise ValueError("weights must match rankings length")
     contributions: dict[str, list[float]] = {}
-    for ranking in rankings:
+    for idx, ranking in enumerate(rankings):
+        w = 1.0 if weights is None else float(weights[idx])
         for rank, doc_id in enumerate(ranking, start=1):
-            contributions.setdefault(doc_id, []).append(1.0 / (k + rank))
+            contributions.setdefault(doc_id, []).append(w / (k + rank))
     return {doc_id: math.fsum(values) for doc_id, values in contributions.items()}
 
 
@@ -604,22 +631,66 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             "graph": [i for i in graph_items if self._in_scope(i, allowed, public)],
         }
 
-        # Raw per-leg scores for the trace (item key -> {leg: score}). A leg that
-        # did not surface an item simply has no key (documented trace rule).
+        # T-K08 cross-leg dedup: a graph chunk ref already surfaced by a
+        # dense/sparse/lexical leg must contribute ONCE across the whole fusion,
+        # not a second full-strength RRF vote. The graph leg still records its
+        # score in the trace (so the item carries ``graph`` in ``scores``), but
+        # the duplicate is excluded from the graph ranking so it cannot
+        # double-count. Chunks surfaced ONLY by the graph leg get a full graph
+        # vote. Default HYBRID has no graph items → no-op (byte-identical).
         trace: dict[str, dict[str, float]] = {}
         by_key: dict[str, RetrievedItem] = {}
+        non_graph_keys = {
+            _item_key(item)
+            for leg_name in ("dense", "sparse", "lexical")
+            for item in legs[leg_name]
+        }
+        graph_ranking_items: list[RetrievedItem] = []
+        for item in legs["graph"]:
+            key = _item_key(item)
+            if key in non_graph_keys:
+                # Record the graph score in the trace but do NOT add a second
+                # RRF vote — the chunk already contributes via its primary leg.
+                trace.setdefault(key, {}).setdefault("graph", item.score)
+                by_key.setdefault(key, item)
+            else:
+                graph_ranking_items.append(item)
+
+        # T-K08 per-mode graph damping: cap the number of graph-only items
+        # entering fusion and damp the graph leg's RRF weight so graph evidence
+        # supplements rather than dominates. GRAPH mode keeps full weight.
+        graph_weight = GRAPH_LEG_WEIGHT.get(mode, 1.0)
+        if mode == RetrievalMode.HYBRID_GRAPH and len(graph_ranking_items) > GRAPH_FUSION_CAP:
+            graph_ranking_items = graph_ranking_items[:GRAPH_FUSION_CAP]
+
+        # Raw per-leg scores for the trace (item key -> {leg: score}). A leg that
+        # did not surface an item simply has no key (documented trace rule).
+        # trace/by_key already contain graph-dedup records from above.
         rankings: list[list[str]] = []
-        for leg_name in ("dense", "sparse", "lexical", "graph"):
+        leg_order = ("dense", "sparse", "lexical")
+        leg_weights: list[float] = []
+        for leg_name in leg_order:
             items = legs[leg_name]
             if not items:
                 continue
             rankings.append([_item_key(item) for item in items])
+            leg_weights.append(1.0)
             for item in items:
                 key = _item_key(item)
                 trace.setdefault(key, {}).setdefault(leg_name, item.score)
                 by_key.setdefault(key, item)
 
-        fused = reciprocal_rank_fusion(rankings, k=self.rrf_k)
+        # Graph ranking: only graph-only items get an RRF vote (duplicates were
+        # traced above). Apply per-mode damping weight.
+        if graph_ranking_items:
+            rankings.append([_item_key(item) for item in graph_ranking_items])
+            leg_weights.append(graph_weight)
+            for item in graph_ranking_items:
+                key = _item_key(item)
+                trace.setdefault(key, {}).setdefault("graph", item.score)
+                by_key.setdefault(key, item)
+
+        fused = reciprocal_rank_fusion(rankings, k=self.rrf_k, weights=leg_weights)
         ranked_keys = sort_fused(fused)[:fusion_top_k]
 
         fused_items: list[RetrievedItem] = []

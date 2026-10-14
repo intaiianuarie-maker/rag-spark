@@ -59,11 +59,11 @@ class GraphRetriever:
         for ent in subgraph_entities:
             for chunk_id in ent.chunk_ids:
                 evidence_chunk_ids.add(chunk_id)
-                chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + 1.0
+                chunk_scores[chunk_id] = min(chunk_scores.get(chunk_id, 0.0) + 1.0, 1.0)
         for rel in subgraph_rels:
             for chunk_id in rel.chunk_ids:
                 evidence_chunk_ids.add(chunk_id)
-                chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + 1.0
+                chunk_scores[chunk_id] = min(chunk_scores.get(chunk_id, 0.0) + 1.0, 1.0)
 
         # Rank evidence by graph relevance (mention support), not chunk id order.
         ordered_evidence = sorted(
@@ -144,7 +144,9 @@ class GraphRetriever:
                 if ent:
                     for chunk_id in ent.chunk_ids:
                         evidence_chunks.add(chunk_id)
-                        chunk_scores[chunk_id] = chunk_scores.get(chunk_id, 0.0) + float(overlap)
+                        chunk_scores[chunk_id] = min(
+                            chunk_scores.get(chunk_id, 0.0) + float(overlap), 1.0
+                        )
         ordered_evidence = sorted(
             evidence_chunks,
             key=lambda chunk_id: (-chunk_scores.get(chunk_id, 0.0), chunk_id),
