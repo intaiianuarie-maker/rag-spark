@@ -20,6 +20,7 @@ from graph.consumer import (
     graph_mode,
     run_supervised_graph_consumer,
 )
+from jobs.agent_worker import run_supervised_agent_consumer
 from jobs.ingest_worker import run_worker
 
 from worker.adapters.redis_broker import RedisBroker
@@ -54,6 +55,10 @@ async def run() -> None:
 
     worker_task = asyncio.create_task(run_worker(stop))
 
+    agent_task = asyncio.create_task(
+        run_supervised_agent_consumer(stop), name="agent-lifecycle-consumer"
+    )
+
     # T-R11: the graph extraction consumer, supervised. GRAPH_MODE=off (the
     # default) starts nothing and touches no graph code, so the flag-off path
     # stays byte-identical to before. When on, the consumer runs beside
@@ -83,6 +88,7 @@ async def run() -> None:
         if graph_task is not None:
             # The supervisor also honours stop_event, so this returns promptly.
             await graph_task
+        await agent_task
         await broker.close()
         logger.info("worker_stopped", extra={"event": "worker_stopped"})
 

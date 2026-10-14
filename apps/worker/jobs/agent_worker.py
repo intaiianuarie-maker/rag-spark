@@ -242,3 +242,28 @@ async def run_agent_worker_loop(
         except Exception as exc:
             logger.error("worker_loop_error", extra={"error": str(exc)})
             await asyncio.sleep(poll_interval_s)
+
+
+async def run_supervised_agent_consumer(
+    stop_event: asyncio.Event,
+    *,
+    worker: AgentLifecycleWorker | None = None,
+    poll_interval_s: float = 0.1,
+) -> None:
+    """Supervise the agent lifecycle consumer until ``stop_event`` is set."""
+    if worker is None:
+        worker = AgentLifecycleWorker()
+
+    try:
+        while not stop_event.is_set():
+            try:
+                await run_agent_worker_loop(worker, stop_event, poll_interval_s=poll_interval_s)
+                if stop_event.is_set():
+                    break
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # pragma: no cover - defensive supervision
+                logger.error("agent_lifecycle_consumer_crashed", extra={"error": str(exc)})
+                await asyncio.sleep(poll_interval_s)
+    except asyncio.CancelledError:
+        raise
