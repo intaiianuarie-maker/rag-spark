@@ -62,6 +62,13 @@ _log = logging.getLogger("audit")
 
 LIVE_COLLECTION = "knowledge"
 
+DEFAULT_IDENTITY: dict[str, Any] = {
+    "embedding_provider": "GeminiEmbedding2",
+    "embedding_model": "google/gemini-embedding-2",
+    "embedding_revision": "google/gemini-embedding-2",
+    "embedding_dimension": 3072,
+}
+
 
 class AuditError(RuntimeError):
     """The audit could not complete — reported, never silently green."""
@@ -332,7 +339,7 @@ def audit_sanity(
 
 
 def audit_vector_sanity(
-    points: list[dict[str, Any]], expected_dim: int = 1024, denominator: str = "512/2204"
+    points: list[dict[str, Any]], expected_dim: int = 3072, denominator: str = "512/2204"
 ) -> dict[str, Any]:
     """Dense vectors must have dim=expected_dim, finite floats, norm > 0, and no zero-runs."""
     ragged = 0
@@ -483,32 +490,23 @@ async def audit_v1_e2e_acceptance_dry(
     from retrieval.interfaces import SearchFilter
 
     store = QdrantVectorStore(collection=collection)
-    if target_identity:
-        valid_identity = EmbeddingIdentity(
-            provider=str(target_identity.get("embedding_provider", "GeminiEmbedding2")),
-            model=str(target_identity.get("embedding_model", "google/gemini-embedding-2")),
-            revision=str(target_identity.get("embedding_revision", "google/gemini-embedding-2")),
-            dimension=int(target_identity.get("embedding_dimension", 3072)),
-        )
-        mismatched_identity = EmbeddingIdentity(
-            provider=str(target_identity.get("embedding_provider", "GeminiEmbedding2")),
-            model="wrong-model",
-            revision=str(target_identity.get("embedding_revision", "google/gemini-embedding-2")),
-            dimension=int(target_identity.get("embedding_dimension", 3072)),
-        )
-    else:
-        valid_identity = EmbeddingIdentity(
-            provider="InfinityEmbeddingProvider",
-            model="BAAI/bge-m3",
-            revision="BAAI/bge-m3",
-            dimension=1024,
-        )
-        mismatched_identity = EmbeddingIdentity(
-            provider="InfinityEmbeddingProvider",
-            model="wrong-model",
-            revision="BAAI/bge-m3",
-            dimension=1024,
-        )
+    tgt = target_identity or DEFAULT_IDENTITY
+    tgt_prov = str(tgt.get("embedding_provider", DEFAULT_IDENTITY["embedding_provider"]))
+    tgt_mod = str(tgt.get("embedding_model", DEFAULT_IDENTITY["embedding_model"]))
+    tgt_rev = str(tgt.get("embedding_revision", DEFAULT_IDENTITY["embedding_revision"]))
+    tgt_dim = int(tgt.get("embedding_dimension", DEFAULT_IDENTITY["embedding_dimension"]))
+    valid_identity = EmbeddingIdentity(
+        provider=tgt_prov,
+        model=tgt_mod,
+        revision=tgt_rev,
+        dimension=tgt_dim,
+    )
+    mismatched_identity = EmbeddingIdentity(
+        provider=tgt_prov,
+        model="wrong-model",
+        revision=tgt_rev,
+        dimension=tgt_dim,
+    )
 
     sample = next((p for p in points if p.get("vector")), None)
     if not sample:
@@ -570,7 +568,7 @@ async def audit_v1_e2e_acceptance_dry(
 async def audit_all(
     *,
     collection: str,
-    identity: dict[str, Any],
+    identity: dict[str, Any] | None = None,
     limit: int | None = None,
     rehearsal: bool = False,
 ) -> dict[str, Any]:
@@ -580,6 +578,10 @@ async def audit_all(
         )
     from core.config import get_settings
 
+    resolved_identity = dict(DEFAULT_IDENTITY)
+    if identity:
+        resolved_identity.update(identity)
+
     qdrant_url = os.environ.get("QDRANT_URL") or get_settings().qdrant_url
     database_url = os.environ.get("DATABASE_URL")
 
@@ -587,10 +589,11 @@ async def audit_all(
     points = await asyncio.to_thread(scroll_all_points, collection, qdrant_url, True)
     info = await asyncio.to_thread(collection_info, collection, qdrant_url)
 
-    expected_dim = int(identity.get("embedding_dimension", 1024))
+    default_dim = DEFAULT_IDENTITY["embedding_dimension"]
+    expected_dim = int(resolved_identity.get("embedding_dimension", default_dim))
     denom = "512/2204" if rehearsal else f"{len(points)}/{len(manifest_rows)}"
 
-    identity_check = audit_identity(points, identity, denominator=denom)
+    identity_check = audit_identity(points, resolved_identity, denominator=denom)
     membership_check = audit_membership(points, manifest_rows, denominator=denom)
     hashes_check = audit_original_hashes(points, manifest_rows, denominator=denom)
     version_check = audit_version_gate(points, database_url, denominator=denom)
@@ -600,7 +603,7 @@ async def audit_all(
         audit_representative_retrieval, collection, points, qdrant_url, denominator=denom
     )
     e2e_check = await audit_v1_e2e_acceptance_dry(
-        collection, points, qdrant_url, target_identity=identity, denominator=denom
+        collection, points, qdrant_url, target_identity=resolved_identity, denominator=denom
     )
 
     checks = {
@@ -642,7 +645,11 @@ async def main() -> None:
     parser = argparse.ArgumentParser(description="T-R07 Phase-3 rebuild audit (read-only)")
     parser.add_argument("--collection", default="knowledge__rebuild_20261014")
     parser.add_argument("--limit", type=int, default=None)
-    parser.add_argument("--identity", required=True, help="JSON of the build's recorded identity")
+    parser.add_argument(
+        "--identity",
+        default=None,
+        help="JSON of the build's recorded identity (defaults to GeminiEmbedding2 3072-d)",
+    )
     parser.add_argument(
         "--rehearsal",
         action="store_true",
@@ -651,10 +658,11 @@ async def main() -> None:
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
+    identity_payload = json.loads(args.identity) if args.identity else None
     try:
         report = await audit_all(
             collection=args.collection,
-            identity=json.loads(args.identity),
+            identity=identity_payload,
             limit=args.limit,
             rehearsal=args.rehearsal,
         )

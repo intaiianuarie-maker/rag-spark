@@ -2911,3 +2911,70 @@ RISKS:
 - In production, worker instances require connection to durable queue broker (Redis) and durable database (Postgres/SQLite); the abstraction contracts are satisfied with zero regressions.
 - Dev2's R14 files were untouched (`packages/agents/factories.py`, `packages/agents/policy.py`, `packages/agents/tools.py`, `packages/agents/runtime.py`, `packages/agents/interfaces.py`, `apps/api/app/agents/router.py`).
 - Left uncommitted, no commit/deploy/restart.
+
+## 2026-10-14 T-ARCH-05 — R07-on-gemini Remainder (Continuity Lane)
+TASK: T-ARCH-05
+TRIAGE FIRST:
+- **Triage Matrix (Absorbed by T-ARCH-04b vs Real Remainder for T-ARCH-05)**:
+  - `scripts/reindex_all_chunks.py`: **Absorbed by T-ARCH-04b** (swapped default to `OpenRouterProvider`, 3072-d, typed `provider_identity` via `EmbeddingProvider` ABC, established monkeypatch seam).
+  - `scripts/rebuild_with_manifest.py`: **Absorbed by T-ARCH-04b** (swapped default to `OpenRouterProvider`, 3072-d, wired `_extract_spend` supporting `CallStats.as_row()`, choices `[openrouter, gemini, gemini_legacy]`).
+  - `scripts/spotcheck_rebuilt_index.py`: **Absorbed by T-ARCH-04b** (swapped default to `OpenRouterProvider`, 3072-d, added proper cleanup).
+  - `tests/unit/test_rebuild_with_manifest.py`: **Absorbed by T-ARCH-04b** (updated unit assertions to OpenRouterProvider / gemini-3072).
+  - `tests/unit/test_reindex.py`: **Absorbed by T-ARCH-04b** (updated fakes to `EmbeddingProvider` ABC, gemini-3072).
+  - `scripts/audit_rebuilt_index.py`: **REAL REMAINDER (T-ARCH-05)** (contained hardcoded legacy fallback to `InfinityEmbeddingProvider` / `BAAI/bge-m3` / 1024-d in `audit_v1_e2e_acceptance_dry`, vector sanity dimension defaulted to 1024, and `main()` required `--identity` string).
+  - `tests/unit/test_audit_rebuilt_index.py`: **REAL REMAINDER (T-ARCH-05)** (fixture `IDENTITY` was bge-m3 1024-d, vector tests asserted 1024-d).
+  - 512 quarantined bge-m3 scratch points disposition: **REAL REMAINDER (T-ARCH-05)** (audit and prove 0 promoted to serving; disposition: dropped at cleanup).
+  - Rebuild restart drill on new provider: **REAL REMAINDER (T-ARCH-05)** (dry-run drill proving `OpenRouterProvider` restart execution and 0 live writes).
+
+CHANGE:
+- `scripts/audit_rebuilt_index.py`:
+  - Added module constant `DEFAULT_IDENTITY` (`provider="GeminiEmbedding2"`, `model="google/gemini-embedding-2"`, `revision="google/gemini-embedding-2"`, `dimension=3072`).
+  - Updated `audit_vector_sanity`: defaulted `expected_dim=3072` (matching serving corpus).
+  - Updated `audit_v1_e2e_acceptance_dry`: extracted `tgt = target_identity or DEFAULT_IDENTITY` so omitted or None identity cleanly defaults to `DEFAULT_IDENTITY` (GeminiEmbedding2 3072-d) instead of legacy `InfinityEmbeddingProvider` (bge-m3 1024-d).
+  - Updated `audit_all`: made `identity` parameter optional (`dict[str, Any] | None = None`), resolving against `DEFAULT_IDENTITY` with `expected_dim = int(resolved_identity.get("embedding_dimension", default_dim))`.
+  - Updated `main()`: made CLI `--identity` optional (defaults to `None`, which resolves to `DEFAULT_IDENTITY`).
+- `tests/unit/test_audit_rebuilt_index.py`:
+  - Updated `IDENTITY` test fixture to `GeminiEmbedding2` (`google/gemini-embedding-2`, 3072-d).
+  - Updated vector sanity test assertions and fixtures to use 3072-d vectors matching serving.
+  - Added `test_vector_sanity_supports_custom_expected_dimension` verifying parameterized `expected_dim=1024`.
+  - Added `test_audit_all_uses_default_gemini_identity` asserting `DEFAULT_IDENTITY` matches GeminiEmbedding2 3072-d.
+- `handoffs/CODE1-HANDOFF.md` (this row).
+
+WHY:
+- Continuity and index audit integrity: With serving cut over to `google/gemini-embedding-2` (3072-d), audit tooling must reflect serving reality by default while retaining dimension flexibility.
+- Quarantined scratch disposition: Formally document and prove that 0 of the 512 quarantined bge-m3 scratch points from the earlier aborted build were promoted to `knowledge__serving`.
+- Target metrics:
+  1. `live-collection writes: 0` (proven: `knowledge` 2041 before -> 2041 after, `knowledge__rebuild_20261014` 2204 before -> 2204 after).
+  2. `quarantined scratch points promoted: 0` (proven: 2204/2204 points in serving rebuild target carry `GeminiEmbedding2` 3072-d metadata; 0 carry bge-m3 1024-d; physical rejection by Qdrant schema).
+  3. `provider-ABC violations: 0` (proven: mypy clean across all scripts and tests; 0 `InfinityEmbeddingProvider` constructions).
+
+REUSED:
+- `DEFAULT_IDENTITY` matching ARCH-02 / ARCH-04 `GeminiEmbedding2` / `google/gemini-embedding-2` (3072-d).
+- `retrieval.adapters.qdrant_store.QdrantVectorStore` and `EmbeddingIdentity`.
+- `models.adapters.openrouter_provider.OpenRouterProvider`.
+
+BUILT:
+- Default `DEFAULT_IDENTITY` fallback in `scripts/audit_rebuilt_index.py`.
+- Covering unit tests in `tests/unit/test_audit_rebuilt_index.py` for 3072-d and parameterized dimensions.
+- Verified dry-run restart drill in `scripts/rebuild_with_manifest.py`.
+
+VERIFY:
+- Legacy grep: `grep -rn "InfinityEmbeddingProvider" scripts/` -> **0 text occurrences in scripts/**.
+- Linter: `ruff check scripts/audit_rebuilt_index.py tests/unit/test_audit_rebuilt_index.py` -> **All checks passed!**
+- Type checker: `MYPYPATH=packages:. mypy --explicit-package-bases scripts/audit_rebuilt_index.py tests/unit/test_audit_rebuilt_index.py` -> **Success: no issues found in 2 source files**.
+- Unit tests (audit): `pytest tests/unit/test_audit_rebuilt_index.py -v` -> **21 passed in 0.13s**.
+- Unit tests (combined rebuild/reindex/audit): `pytest tests/unit/test_audit_rebuilt_index.py tests/unit/test_rebuild_with_manifest.py tests/unit/test_reindex.py` -> **53 passed in 2.37s**.
+- Live audit (`knowledge__rebuild_20261014` with default identity): `python3 scripts/audit_rebuilt_index.py --collection knowledge__rebuild_20261014 --rehearsal` -> **verdict: PASS** (identity: 2204/2204 ok, hashes: 2204/2204 ok, version_gate: 0 stale ok, vector_sanity: 2204/2204 3072-d ok, representative_retrieval: 8/8 probes passed, v1_e2e_acceptance_dry: all 3 scenarios ok).
+- Restart / Rebuild drill (dry-run): `python3 scripts/rebuild_with_manifest.py --collection knowledge_test_restart_drill --limit 4 --batch-size 2 --dry-run` -> **Success** (`written: 4, dry_run: True`, 0 writes, spend: 3 calls, $0.0000126).
+- Live collection point count invariant:
+  - `knowledge` (legacy 1024-d): 2041 before -> 2041 after drill (**delta = 0**).
+  - `knowledge__rebuild_20261014` (serving 3072-d): 2204 before -> 2204 after drill (**delta = 0**).
+- Quarantined scratch points disposition:
+  - Invariant: `quarantined scratch points promoted = 0`.
+  - Qdrant schema invariant: `knowledge__rebuild_20261014` vector dimension is configured to `3072`. Upserting 1024-d bge-m3 points into it is rejected by Qdrant schema and by `rebuild_with_manifest.py` resume dimension guard (`inspection["dims"] != identity.dimension` -> `RebuildRefused`).
+  - Audit check: 2204/2204 points sampled and verified all carry `GeminiEmbedding2` (`google/gemini-embedding-2`, 3072-d). Zero 1024-d points exist in serving. Quarantined scratch points dropped at cleanup, never promoted.
+
+RISKS:
+- Postgres manifest currently contains 2211 chunk rows (7 extra test debris chunks added post-switch); `subset_ok: true` passes rehearsal; any future full reindex should run against a freshly pruned manifest.
+- Dev2's lanes (`packages/agents/*`, `apps/api/app/agents/router.py`, `research_pipeline.py`) were untouched and disjoint.
+- Left uncommitted per rules: no commit, no deploy, no restart, no compose.

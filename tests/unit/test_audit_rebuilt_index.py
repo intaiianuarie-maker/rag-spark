@@ -33,10 +33,10 @@ audit = _load("audit_rebuilt_index", "scripts/audit_rebuilt_index.py")
 pytestmark = [pytest.mark.unit]
 
 IDENTITY = {
-    "embedding_provider": "InfinityEmbeddingProvider",
-    "embedding_model": "BAAI/bge-m3",
-    "embedding_revision": "BAAI/bge-m3",
-    "embedding_dimension": 1024,
+    "embedding_provider": "GeminiEmbedding2",
+    "embedding_model": "google/gemini-embedding-2",
+    "embedding_revision": "google/gemini-embedding-2",
+    "embedding_dimension": 3072,
 }
 
 
@@ -170,9 +170,9 @@ async def test_version_gate_rejects_the_live_collection_outright() -> None:
 def test_sanity_ok_when_workspaces_match_and_dim_present() -> None:
     pts = [point("c1"), point("c2")]
     rows = [manifest_row("c1"), manifest_row("c2")]
-    info = {"config": {"params": {"vectors": {"dense": {"size": 1024}}}}}
+    info = {"config": {"params": {"vectors": {"dense": {"size": 3072}}}}}
     r = audit.audit_sanity(pts, info, rows)
-    assert r["ok"] and r["collection_dense_size"] == 1024
+    assert r["ok"] and r["collection_dense_size"] == 3072
 
 
 def test_sanity_fails_on_workspace_drift() -> None:
@@ -192,20 +192,20 @@ def test_sanity_fails_on_workspace_drift() -> None:
 def test_all_checks_declare_denominator_512_2204() -> None:
     pts = [point("c1", metadata=dict(IDENTITY))]
     rows = [manifest_row("c1")]
-    info = {"config": {"params": {"vectors": {"dense": {"size": 1024}}}}}
+    info = {"config": {"params": {"vectors": {"dense": {"size": 3072}}}}}
     assert audit.audit_identity(pts, IDENTITY)["denominator"] == "512/2204"
     assert audit.audit_membership(pts, rows)["denominator"] == "512/2204"
     assert audit.audit_original_hashes(pts, rows)["denominator"] == "512/2204"
     assert audit.audit_sanity(pts, info, rows)["denominator"] == "512/2204"
 
-    valid_pt = dict(point("c1"), vector={"dense": [0.1] * 1024})
+    valid_pt = dict(point("c1"), vector={"dense": [0.1] * 3072})
     assert audit.audit_vector_sanity([valid_pt])["denominator"] == "512/2204"
 
 
 def test_vector_sanity_ok_on_valid_vectors() -> None:
     pts = [
-        dict(point("c1"), vector={"dense": [0.05] * 1024}),
-        dict(point("c2"), vector={"dense": [-0.05] * 1024}),
+        dict(point("c1"), vector={"dense": [0.05] * 3072}),
+        dict(point("c2"), vector={"dense": [-0.05] * 3072}),
     ]
     r = audit.audit_vector_sanity(pts)
     assert r["ok"]
@@ -224,9 +224,9 @@ def test_vector_sanity_fails_on_ragged_dimension() -> None:
 
 
 def test_vector_sanity_fails_on_nan_and_inf() -> None:
-    v_nan = [0.1] * 1024
+    v_nan = [0.1] * 3072
     v_nan[5] = float("nan")
-    v_inf = [0.1] * 1024
+    v_inf = [0.1] * 3072
     v_inf[10] = float("inf")
     pts = [
         dict(point("c1"), vector={"dense": v_nan}),
@@ -239,10 +239,24 @@ def test_vector_sanity_fails_on_nan_and_inf() -> None:
 
 
 def test_vector_sanity_fails_on_zero_vector() -> None:
-    pts = [dict(point("c1"), vector={"dense": [0.0] * 1024})]
+    pts = [dict(point("c1"), vector={"dense": [0.0] * 3072})]
     r = audit.audit_vector_sanity(pts)
     assert not r["ok"]
     assert r["zero_vectors"] == 1
+
+
+def test_vector_sanity_supports_custom_expected_dimension() -> None:
+    pts = [dict(point("c1"), vector={"dense": [0.05] * 1024})]
+    r = audit.audit_vector_sanity(pts, expected_dim=1024)
+    assert r["ok"]
+    assert r["expected_dimension"] == 1024
+
+
+def test_audit_all_uses_default_gemini_identity() -> None:
+    assert audit.DEFAULT_IDENTITY["embedding_provider"] == "GeminiEmbedding2"
+    assert audit.DEFAULT_IDENTITY["embedding_dimension"] == 3072
+    assert audit.DEFAULT_IDENTITY["embedding_model"] == "google/gemini-embedding-2"
+
 
 
 # --- module surface -----------------------------------------------------------
