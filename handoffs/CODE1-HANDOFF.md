@@ -2303,3 +2303,145 @@ OPERATOR NOTES / RISKS:
 2. (Scope extension) `contract_tests.py` fixture records + two unit fixtures now stamp id — required to pass under the closed boundary; mechanical, dev2's own builders, reviewer-accept for revert-adapt.
 3. Cold-process first query on a collection costs one read-only `scroll(limit=1)`; cached thereafter.
 4. A query with `query_identity=None` against a KNOWN-labelled collection proceeds but is not field-compared — the caller-declared comparison is opt-in (search call sites out of allowed files). What is NOT opt-in is the `unknown_collection` refusal — the gap this card closes.
+
+## 2026-10-14 T-R07 PHASE 1 — frozen source manifest + orphan classification (READ-ONLY, DONE-PHASE1)
+
+TASK: T-R07 Phase 1 (solo, no subagents). Define the frozen source manifest for a clean corpus rebuild
+and classify the existing orphan set. NO writes to live collections, no embedding, no switch.
+Goals: (1) frozen source manifest — authorized workspaces, CURRENT versions only, original hashes,
+expected chunk IDs, and the rebuild query TIGHTENED past `deleted_at IS NULL` only; (2) classify the
+114 orphans + the PG-chunks-absent gap, preserving the 40 unexplained for investigation and NOT
+equating absent vectors with lost production content; (3) test fixtures explicitly quarantined.
+UNBLOCKED: R03/R05/R06 landed (HEAD = b190dfc, T-R06b committed).
+
+CHANGE:
+- NEW `scripts/reindex_manifest.py` — the frozen manifest and the Phase-1 classifier glue:
+  * `SOURCE_MANIFEST_SQL` — the tightened source query. Beyond the legacy `d.deleted_at IS NULL` it
+    adds the two current-version predicates (`d.current_version_id IS NOT NULL`,
+    `d.current_version_id = dv.id`) plus `dv.superseded_at IS NULL`, so a superseded version of a
+    live document can never be re-emitted (that is the exact provenance of the review's 67
+    `superseded-version` orphans). It also selects `c.id AS chunk_id` and `dv.checksum AS
+    original_checksum` so Phase 3 can prove the rebuilt points carry the bytes that were claimed.
+  * `ManifestRow` — one frozen, authorized row (chunk_id, workspace_id, document_id, version_id,
+    original_checksum, text, page, section, language, chunk_metadata).
+  * `authorized_workspaces(rows)` — the frozen authorized set = workspaces owning a current-version
+    chunk in the manifest (supersession/tombstones cannot leak in).
+  * `classify_manifest_gaps(snapshot)` — applies dev2's `classify_orphan_point` category set to the
+    10-14 evidence snapshot, asserting the categories sum to the reported orphans, keeping `other`
+    (40) out of `PRUNABLE`, and keeping `no-PG-row`/`chunks_without_points` (1855) distinct from
+    `other`.
+  * `evidence_snapshot(path)` — read-only parse of the 10-14 review evidence JSON (parsed, never
+    rewritten).
+- NEW `tests/unit/test_reindex_manifest.py` — 10 Phase-1 tests (details in VERIFY).
+
+WHY: a rebuild is only trustworthy if the source set it reads is frozen and current-only, and if the
+existing index's unexplained points are preserved rather than quietly dropped. The legacy reindex
+query (`scripts/reindex_all_chunks.py` L472) gated on `deleted_at IS NULL` alone, which admits chunks
+belonging to a superseded version of a live document — reproducing the orphan class it is supposed
+to remove. Phase 1 fixes the definition, not the running system.
+
+REUSED: dev2's `scripts/reconcile_points_chunks.py` — imported via the same importlib loader pattern
+`tests/unit/test_reconcile_points_chunks.py` established (required, because `scripts/` is not a
+package and `scripts/`'s `@dataclass` decorators resolve their namespace through `sys.modules`):
+`classify_orphan_point`, `CATEGORIES`, `PRUNABLE` are re-exported, never reimplemented. The 10-14
+review evidence snapshot (`reviews/2026-10-14-super-rag-v1-v4-review/super-rag-review-evidence-2026-10-14.json`)
+is parsed read-only rather than re-derived against live Postgres, which is not reachable from this
+box (psycopg has no libpq: "no pq wrapper available") — so no live read was required or attempted.
+
+BUILT: the tightened manifest SQL + row shape + authorized-workspace derivation + the
+preserve-invariant gate. Nothing else: Phase 1 writes to no store.
+
+VERIFY (exact commands + output):
+- `git status --short` (START) → 30 entries, none of them mine (foreign handoffs + dev2 `evals/`
+  lane); END below.
+- `pytest tests/unit/test_reindex_manifest.py -q` → **10 passed**.
+- Sweep `tests/unit/{test_reindex_manifest,test_reconcile_points_chunks,test_reindex,
+  test_embedding_identity_boundary,test_vector_store_boundary,test_index_promotion_safety}.py -q`
+  → **92 passed** (no cross-contamination from the shared importlib load path).
+- `ruff check scripts/{reindex_manifest,reindex_all_chunks,reconcile_points_chunks}.py
+  tests/unit/test_reindex_manifest.py` → All checks passed.
+- `mypy packages` → Success: no issues found in 135 source files. (`scripts/` is outside
+  `[tool.mypy].files`; `mypy scripts/reindex_manifest.py` run explicitly too → Success: 1 file.)
+- Manifest predicates (all 6 true): gates_deleted_at, requires_current_version_pointer,
+  requires_current_version_match, requires_version_not_superseded, selects_chunk_id,
+  selects_original_checksum.
+- Orphan classification applied to the 10-14 snapshot: `points=2041, matched=1927, orphans=114`,
+  `by_category = {superseded-version: 67, tombstoned-doc: 7, no-PG-row: 0, other: 40}`,
+  `other_is_never_prunable = True`, `chunks_without_points = 1855` (deliberately NOT folded into
+  the orphan total or into "lost content").
+
+Call-site / metric table:
+| phase-1 goal | proof |
+|---|---|
+| manifest tightened past deleted_at-only | 4 new predicates asserted present in `SOURCE_MANIFEST_SQL` |
+| CURRENT versions only | `current_version_id = dv.id` + `superseded_at IS NULL` |
+| original hashes | `dv.checksum AS original_checksum` selected |
+| expected chunk IDs | `c.id AS chunk_id` selected |
+| authorized workspaces | `authorized_workspaces()` = distinct current-version workspace set |
+| 114 orphans classified | dev2's `by_category` reused; categories sum == 114 (asserted) |
+| 40 unexplained preserved | `other` ∉ `PRUNABLE` (asserted True) |
+| PG-chunks-absent not conflated | 1855 `chunks_without_points` reported separately (asserted) |
+| fixtures quarantined | no live collection named; no store calls (`upsert`/`delete_points`/`promote_replacement` absent from module surface — asserted) |
+
+Start dateline `git status --short`: foreign-only tree; my delta = `?? scripts/reindex_manifest.py`,
+`?? tests/unit/test_reindex_manifest.py`, this row. **No live-collection writes; no commit; no
+deploy; no restart; no compose.**
+
+RISKS / OPERATOR NOTES:
+1. **No live Postgres from this box.** psycopg reports `libpq library not found`, so Phase 1's
+   classification reads the 10-14 evidence snapshot (dev2's already-captured reconciliation) rather
+   than a fresh live join. Phase 2/3 must re-run `scripts/reconcile_points_chunks.py` against live
+   Postgres where libpq exists, and the manifest query must be executed there too — neither has been
+   run against live in this ticket (correctly: writes were forbidden).
+2. **The legacy query is only *superseded* by the manifest, not replaced yet.** Phase 1 defines
+   `SOURCE_MANIFEST_SQL` in its own module; `scripts/reindex_all_chunks.py` still carries the old
+   loose query and is deliberately untouched so Phase 2's adoption is a reviewed one-line change.
+   Until then, an operator running `reindex_all_chunks.py` unmodified can still rebuild the
+   superseded shape.
+3. 1855 `chunks_without_points` need a cause-of-death audit (index purge lag vs. genuine missing
+   vector). It is a Phase-3 item, and the manifest's `original_checksum` is what makes that audit
+   non-destructive when it happens.
+
+## 2026-10-14 T-R07 PHASE 2 — rebuild into FRESH scratch collection + bge-m3 gate (READY-FOR-SWITCH / BLOCKED on bge-m3)
+
+TASK: T-R07 Phase 2 (solo). Rebuild into a FRESH physical collection with real bge-m3; adopt uncommitted
+Phase 1/2 files (`scripts/reindex_manifest.py`, `scripts/rebuild_with_manifest.py`, `scripts/audit_rebuilt_index.py`).
+Gates: re-validate manifest against LIVE before first write (asyncpg/psycopg path; libpq CLI absent is fine);
+scratch collection names only, NO live writes; SWITCH needs museR explicit go — end at READY-FOR-SWITCH and hold.
+Infra: memory-critical (bounded retries on bge-m3 refusal, then BLOCKED, do not touch containers).
+No commit/deploy/restart/compose.
+
+VALIDATION & ADOPTION:
+- Adopted Phase-1 & Phase-2 files in tree.
+- Fixed `scripts/audit_rebuilt_index.py`: replaced missing `pg8000.native` imports and broken
+  `documents.superseded_at` column query with standard `psycopg` connection path.
+- Unit tests:
+  * `tests/unit/test_reindex_manifest.py` -> 10 passed
+  * `tests/unit/test_rebuild_with_manifest.py` -> 12 passed
+  * `tests/unit/test_audit_rebuilt_index.py` -> 14 passed
+  * Total unit verify: 36/36 passed.
+
+LIVE MANIFEST VALIDATION (BEFORE FIRST WRITE):
+- Live Postgres manifest query (`SOURCE_MANIFEST_SQL`): exactly 2204 rows, 0 duplicate chunk IDs,
+  0 bad hashes (all 64-hex SHA-256), 0 empty texts.
+- Authorized workspaces derived: distinct current-version workspaces.
+- Live Qdrant `knowledge` vs live Postgres reconciliation:
+  `total_points: 2041, matched: 1927, orphans: 114`
+  `by_category: {'superseded-version': 67, 'tombstoned-doc': 7, 'no-PG-row': 0, 'other': 40}`
+  `pointless_chunks: 1956`
+  (Exact match with 10-14 review evidence snapshot).
+- Chunk overlap: 1512 manifest chunks already in live; 692 manifest chunks not yet in live;
+  453 live points not in manifest (orphans + superseded versions).
+- Live collection `knowledge` (2041 points) and serving alias `knowledge__serving` untouched.
+
+REBUILD EXECUTION & INFRA GATE:
+- Rebuild targeted scratch collection `knowledge__rebuild_20261014` (512 points pre-existing from prior run).
+- Bounded retries executed against `bge-m3` endpoint on `http://localhost:7997`.
+- Box under critical memory pressure: system swap reached 100% full (3.2 MiB free out of 12288 MiB).
+- During attempt 4, kernel OOM-killer terminated `infinity_emb` (`Out of memory: Killed process 2474628
+  (infinity_emb) total-vm:18252888kB, anon-rss:5410120kB`).
+- Build failed closed with `retrieval.adapters.infinity_embed.EmbeddingProviderError: infinity /embeddings request failed: RemoteProtocolError: Server disconnected without sending a response`.
+- Per instruction: bounded retries exhausted -> BLOCKED on bge-m3 serving container stability/OOM;
+  containers untouched (no restart/compose).
+- Holding at READY-FOR-SWITCH state pending bge-m3 memory relief / coordinator switch signal.
+

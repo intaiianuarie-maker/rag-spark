@@ -979,7 +979,13 @@ class QdrantVectorStore(VectorStore):
             )
         except Exception:
             return None
-        points = getattr(page, "points", None) or []
+        # qdrant-client's ``scroll`` returns the PAIR
+        # (points, next_page_offset), not an object with ``.points``. Reading
+        # ``page.points`` (the T-R06b shape) resolves to None on a real client,
+        # so every collection read as ``unknown`` and every query was refused
+        # — which a stubbed object hid exactly. The contract is asserted in
+        # tests/unit/test_embedding_identity_boundary.py.
+        points = page[0] if isinstance(page, tuple) else list(page or [])
         if not points:
             return None
         payload = getattr(points[0], "payload", None) or {}

@@ -123,12 +123,16 @@ class StubQdrant:
         target = self._target(collection_name)
         info = self.collections.get(target)
         if not info:
-            return SimpleNamespace(points=[])
+            return ([], None)
         points = [
             SimpleNamespace(id=pid, payload=entry["payload"])
             for pid, entry in list(info["points"].items())[:limit]
         ]
-        return SimpleNamespace(points=points)
+        # REAL qdrant-client contract: scroll returns the PAIR
+        # (points, next_page_offset). The old stub returned
+        # SimpleNamespace(points=...), which let _collection_identity_of
+        # resolve every collection to None and refuse every query (T-R07).
+        return (points, None)
 
     async def query_points(self, *, collection_name: str, **kwargs: Any) -> Any:
         # Reached only AFTER the identity gate passed.
