@@ -31,7 +31,15 @@ from .interfaces import (
     SourceItem,
 )
 
+#: Release decision (T-R09): V1 ships as upload-only; continuous sync scheduling
+#: and automated worker consumption are M6-pending. QueuedSyncConsumer and
+#: adapters are fully implemented and verified in-tree for on-demand / scoped use.
+V1_SHIP_MODE = "upload-only"
+M6_STATUS = "pending"
+
 __all__ = [
+    "M6_STATUS",
+    "V1_SHIP_MODE",
     "Connector",
     "ConnectorConfig",
     "ConnectorDiscovery",
@@ -44,6 +52,7 @@ __all__ = [
     "WebConnector",
     "create_connector",
 ]
+
 
 
 def create_connector(config: ConnectorConfig, *, page_size: int | None = None) -> Connector:

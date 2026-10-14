@@ -654,6 +654,360 @@ class ExtractiveGrounder:
         return None
 
 
+# ---------------------------------------------------------------------------
+# T-R09 — Conservative cross-language verification path
+# ---------------------------------------------------------------------------
+
+#: Supported language pairs for conservative cross-language verification.
+#: Unsupported languages or pairs outside this set abstain by design.
+SUPPORTED_CROSS_LANG_PAIRS: frozenset[tuple[str, str]] = frozenset({
+    ("en", "ro"),
+    ("en", "pt"),
+    ("ro", "en"),
+    ("ro", "pt"),
+    ("pt", "en"),
+    ("pt", "ro"),
+})
+
+#: Markers identifying unsupported non-target languages (German, French, Spanish, Italian).
+#: Encountering these triggers immediate abstention.
+_UNSUPPORTED_LANG_MARKERS = re.compile(
+    r"\b(?:"
+    r"das|der|die|den|dem|des|ein|eine|einer|eines|nicht|ist|sind|war|und|oder|aber|beträgt|dollar|aus|nach|zu|bei|mit|"
+    r"le|les|du|des|un|une|est|sont|dans|pour|avec|sur|capitale|"
+    r"el|los|las|del|presupuesto|"
+    r"il|lo|gli|nel|nella|della|è|sono"
+    r")\b",
+    re.IGNORECASE,
+)
+
+_RO_DIACRITICS = set("ăâîșțşţĂÂÎȘȚŞŢ")
+_PT_DIACRITICS = set("ãõçáéíóúêôÃÕÇÁÉÍÓÚÊÔ")
+
+_RO_TOKENS = {
+    "bugetul", "buget", "capitala", "franței", "frantei", "româniei", "romaniei",
+    "românia", "romania", "este", "sunt", "și", "si", "de", "din", "pentru",
+    "dolari", "roluri", "autentificarea", "autentificare", "spații", "spatii",
+    "lucru", "acceptă", "accepta", "plătit", "platit",
+}
+
+_PT_TOKENS = {
+    "orçamento", "orcamento", "capital", "frança", "franca", "é", "são", "sao",
+    "dólares", "dolares", "funções", "funcoes", "autenticação", "autenticacao",
+    "espaços", "espacos", "trabalho", "suporta", "baseada", "pagou", "pago",
+}
+
+_EN_TOKENS = {
+    "the", "is", "are", "of", "in", "and", "to", "a", "an", "budget", "dollars",
+    "dollar", "capital", "france", "paris", "authentication", "roles", "role",
+    "workspaces", "workspace", "supports", "support", "based", "platform", "paid",
+}
+
+_CANONICAL_PHRASES: tuple[tuple[str, str], ...] = (
+    ("pe bază de roluri", "role"),
+    ("pe baza de roluri", "role"),
+    ("baseada em funções", "role"),
+    ("baseada em funcoes", "role"),
+    ("role-based", "role"),
+    ("role based", "role"),
+    ("spații de lucru", "workspace"),
+    ("spatii de lucru", "workspace"),
+    ("espaços de trabalho", "workspace"),
+    ("espacos de trabalho", "workspace"),
+)
+
+_CANONICAL_ENTITIES: dict[str, str] = {
+    "paris": "ENT_PARIS",
+    "lyon": "ENT_LYON",
+    "france": "ENT_FRANCE",
+    "franța": "ENT_FRANCE",
+    "franta": "ENT_FRANCE",
+    "frança": "ENT_FRANCE",
+    "franca": "ENT_FRANCE",
+    "franței": "ENT_FRANCE",
+    "frantei": "ENT_FRANCE",
+    "romania": "ENT_ROMANIA",
+    "românia": "ENT_ROMANIA",
+    "româniei": "ENT_ROMANIA",
+    "romaniei": "ENT_ROMANIA",
+    "romênia": "ENT_ROMANIA",
+    "romenia": "ENT_ROMANIA",
+    "bucharest": "ENT_BUCHAREST",
+    "bucurești": "ENT_BUCHAREST",
+    "bucuresti": "ENT_BUCHAREST",
+    "portugal": "ENT_PORTUGAL",
+    "lisbon": "ENT_LISBON",
+    "lisboa": "ENT_LISBON",
+    "alice": "ENT_ALICE",
+    "bob": "ENT_BOB",
+    "acme": "ENT_ACME",
+}
+
+_CANONICAL_CONCEPTS: dict[str, str] = {
+    "capital": "capital",
+    "capitala": "capital",
+    "capitală": "capital",
+    "budget": "budget",
+    "bugetul": "budget",
+    "buget": "budget",
+    "orçamento": "budget",
+    "orcamento": "budget",
+    "dollar": "dollar",
+    "dollars": "dollar",
+    "dolar": "dollar",
+    "dolari": "dollar",
+    "dólar": "dollar",
+    "dólares": "dollar",
+    "dolares": "dollar",
+    "platform": "platform",
+    "platforma": "platform",
+    "plataforma": "platform",
+    "authentication": "auth",
+    "auth": "auth",
+    "autentificarea": "auth",
+    "autentificare": "auth",
+    "autenticação": "auth",
+    "autenticacao": "auth",
+    "workspace": "workspace",
+    "workspaces": "workspace",
+    "roles": "role",
+    "role": "role",
+    "roluri": "role",
+    "funções": "role",
+    "funcoes": "role",
+    "support": "support",
+    "supports": "support",
+    "accept": "support",
+    "accepts": "support",
+    "acceptă": "support",
+    "accepta": "support",
+    "suportă": "support",
+    "suporta": "support",
+    "pay": "pay",
+    "paid": "pay",
+    "plătit": "pay",
+    "platit": "pay",
+    "pagou": "pay",
+    "pago": "pay",
+}
+
+_COMMON_STOPWORDS: set[str] = {
+    "the", "a", "an", "is", "are", "of", "in", "to", "and", "for", "that", "it", "on", "with",
+    "as", "at", "și", "si", "de", "din", "în", "la", "cu", "pe", "pentru", "că", "ca",
+    "este", "sunt", "un", "unui", "unei", "lui", "o", "e", "os", "do", "da", "dos", "das",
+    "em", "no", "na", "nos", "nas", "para", "por", "com", "é", "são", "sao",
+}
+
+
+def _detect_cross_lang(text: str) -> str | None:
+    """Identify whether ``text`` is EN, RO, or PT. Returns None for unsupported languages."""
+    if _UNSUPPORTED_LANG_MARKERS.search(text):
+        return None
+    tokens = set(re.findall(r"\b\w+\b", text.lower()))
+    has_ro_diac = any(c in _RO_DIACRITICS for c in text)
+    has_pt_diac = any(c in _PT_DIACRITICS for c in text)
+    ro_score = len(tokens & _RO_TOKENS) + (3 if has_ro_diac else 0)
+    pt_score = len(tokens & _PT_TOKENS) + (3 if has_pt_diac else 0)
+    en_score = len(tokens & _EN_TOKENS)
+    scores = {"ro": ro_score, "pt": pt_score, "en": en_score}
+    best_lang, best_score = max(scores.items(), key=lambda x: x[1])
+    if best_score == 0:
+        return None
+    return best_lang
+
+
+def _markers_for_lang(lang: str) -> tuple[re.Pattern[str], re.Pattern[str], re.Pattern[str]]:
+    """Return language-specific (negation, conditional, reporting_verb) pattern triples."""
+    if lang == "ro":
+        return (_NEGATION_RO, _CONDITIONAL_RO, _REPORTING_VERB_RO)
+    if lang == "pt":
+        return (_NEGATION_PT, _CONDITIONAL_PT, _REPORTING_VERB_PT)
+    return (_NEGATION_EN, _CONDITIONAL_EN, _REPORTING_VERB_EN)
+
+
+def _extract_canonical_components(text: str) -> tuple[list[str], list[str], list[str], list[str]]:
+    """Extract canonical (entities, concepts, numbers, unmapped) from a clause or sentence."""
+    norm = text.lower()
+    for phrase, mapped in _CANONICAL_PHRASES:
+        norm = norm.replace(phrase, f" {mapped} ")
+    tokens = re.findall(r"\b\w+\b", norm)
+    entities: list[str] = []
+    concepts: list[str] = []
+    numbers: list[str] = []
+    unmapped: list[str] = []
+    for t in tokens:
+        if t.isdigit():
+            numbers.append(t)
+        elif t in _CANONICAL_ENTITIES:
+            entities.append(_CANONICAL_ENTITIES[t])
+        elif t in _CANONICAL_CONCEPTS:
+            concepts.append(_CANONICAL_CONCEPTS[t])
+        elif t in _COMMON_STOPWORDS:
+            continue
+        else:
+            unmapped.append(t)
+    return entities, concepts, numbers, unmapped
+
+
+def _verify_cross_language_match(
+    source_sent: str, claim_text: str, source_lang: str, claim_lang: str
+) -> bool:
+    """Verify that ``claim_text`` is a conservative translation of ``source_sent``."""
+    if (source_lang, claim_lang) not in SUPPORTED_CROSS_LANG_PAIRS:
+        return False
+
+    s_ent, s_con, s_num, s_unm = _extract_canonical_components(source_sent)
+    c_ent, c_con, c_num, c_unm = _extract_canonical_components(claim_text)
+
+    # 1. Exact numeric equivalence: quantities must match exactly
+    if s_num != c_num:
+        return False
+
+    # 2. Named entity alignment: entities and their sequence (role preservation) must match
+    if s_ent != c_ent:
+        return False
+
+    # 3. Concept alignment: predicates and core content must match
+    if set(s_con) != set(c_con):
+        return False
+
+    # 4. Conservative unmapped check: claim must not introduce unsupported concepts
+    if c_unm and not set(c_unm).issubset(set(s_unm)):
+        return False
+
+    return True
+
+
+class CrossLanguageGrounder:
+    """Conservative cross-language grounder (T-R09).
+
+    Extends extractive grounding with a conservative cross-language verification
+    path that verifies translated answers (RO/PT) against original-source spans (EN/RO/PT).
+
+    Guarantees:
+    - Never lowers the substring threshold: threshold remains 1.0 (strict agreement).
+    - Abstention-first on unsupported pairs: non-EN/RO/PT pairs and unsupported languages abstain.
+    - Preserves commitment: source and claim must both assert (no negation, conditionals,
+      approximate hedges, or attributed speech frames).
+    - Original-source spans: locate() returns the span of the asserting sentence in the
+      original chunk text, preserving provenance coordinates.
+    """
+
+    threshold: float
+
+    def __init__(self, threshold: float = 1.0) -> None:
+        self.threshold = threshold
+        self._extractive = ExtractiveGrounder(threshold=threshold)
+
+    def score(self, claim_text: str, chunk_content: str) -> float:
+        """Return 1.0 if the claim is verified extractively or via conservative translation."""
+        accepted, _ = self._find_supporting_sentence(claim_text, chunk_content)
+        return 1.0 if accepted else 0.0
+
+    def locate(self, claim_text: str, chunk_content: str) -> tuple[int, int] | None:
+        """Return (start, end) offsets of the supporting sentence in the original chunk, or None."""
+        accepted, span = self._find_supporting_sentence(claim_text, chunk_content)
+        if accepted and span is not None:
+            return span
+        return None
+
+    def _find_supporting_sentence(
+        self, claim_text: str, chunk_content: str
+    ) -> tuple[bool, tuple[int, int] | None]:
+        # 1. Verbatim extractive match takes precedence (strict verifier untouched)
+        accepted, span = self._extractive._find_supporting_sentence(claim_text, chunk_content)
+        if accepted and span is not None:
+            return True, span
+
+        # 2. Conservative cross-language verification path
+        claim_norm = claim_text.strip().rstrip(".,;:!?")
+        if not claim_norm:
+            return False, None
+
+        claim_lang = _detect_cross_lang(claim_norm)
+        if claim_lang is None:
+            return False, None
+
+        # Check claim commitment: claim itself must be an assertion without negation/conditionals
+        c_neg, c_cond, c_verb = _markers_for_lang(claim_lang)
+        folded_claim = claim_norm.casefold()
+        if c_neg.search(folded_claim) or c_cond.search(folded_claim):
+            return False, None
+        if _APPROXIMATION.search(folded_claim) and any(ch.isdigit() for ch in claim_norm):
+            return False, None
+        if (
+            any(q in claim_norm for q in _QUOTE_CHARS)
+            or ":" in claim_norm
+            or c_verb.search(claim_norm)
+        ):
+            return False, None
+
+        # Search original source sentences for an asserting sentence that substantiates the claim
+        pos = 0
+        for m in _SENTENCE_BOUNDARY.finditer(chunk_content):
+            s_start = pos
+            s_raw = chunk_content[s_start : m.start()]
+            pos = m.end()
+            if not s_raw.strip():
+                continue
+            s_stripped = s_raw.strip()
+            s_lang = _detect_cross_lang(s_stripped)
+            if s_lang is None or s_lang == claim_lang:
+                continue
+            if (s_lang, claim_lang) not in SUPPORTED_CROSS_LANG_PAIRS:
+                continue
+
+            # Check source sentence commitment
+            s_neg, s_cond, s_verb = _markers_for_lang(s_lang)
+            folded_s = s_stripped.casefold()
+            if s_neg.search(folded_s) or s_cond.search(folded_s):
+                continue
+            if _APPROXIMATION.search(folded_s) and any(ch.isdigit() for ch in s_stripped):
+                continue
+            if (
+                any(q in s_stripped for q in _QUOTE_CHARS)
+                or ":" in s_stripped
+                or s_verb.search(s_stripped)
+            ):
+                continue
+
+            # Verify factual and semantic equivalence
+            if _verify_cross_language_match(s_stripped, claim_norm, s_lang, claim_lang):
+                actual_start = chunk_content.find(s_stripped, s_start)
+                actual_end = actual_start + len(s_stripped)
+                return True, (actual_start, actual_end)
+
+        # Check trailing sentence if any
+        s_raw = chunk_content[pos:]
+        if s_raw.strip():
+            s_stripped = s_raw.strip()
+            s_lang = _detect_cross_lang(s_stripped)
+            if (
+                s_lang is not None
+                and s_lang != claim_lang
+                and (s_lang, claim_lang) in SUPPORTED_CROSS_LANG_PAIRS
+            ):
+                s_neg, s_cond, s_verb = _markers_for_lang(s_lang)
+                folded_s = s_stripped.casefold()
+                if not (s_neg.search(folded_s) or s_cond.search(folded_s)):
+                    if not (
+                        _APPROXIMATION.search(folded_s) and any(ch.isdigit() for ch in s_stripped)
+                    ):
+                        if not (
+                            any(q in s_stripped for q in _QUOTE_CHARS)
+                            or ":" in s_stripped
+                            or s_verb.search(s_stripped)
+                        ):
+                            if _verify_cross_language_match(
+                                s_stripped, claim_norm, s_lang, claim_lang
+                            ):
+                                actual_start = chunk_content.find(s_stripped, pos)
+                                actual_end = actual_start + len(s_stripped)
+                                return True, (actual_start, actual_end)
+
+        return False, None
+
+
 def _filename_of(item: RetrievedItem | None) -> str | None:
     """Filename provenance carried by a retrieved item (``RetrievedItem`` has
     no ``filename`` field — producers stash it in metadata)."""

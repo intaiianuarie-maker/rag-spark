@@ -17,7 +17,7 @@ from models.router_config import is_local_model, local_gateway_url
 
 from .engine import AnswerEngine
 from .hydration import CanonicalHydrator, HydratingOrchestrator
-from .verification import ExtractiveGrounder
+from .verification import ClaimGrounder, CrossLanguageGrounder, ExtractiveGrounder
 
 #: Production collection the hybrid orchestrator reads/writes (single v1
 #: collection). T-V1-071: the EFFECTIVE name is ``core.config.vector_collection()``,
@@ -76,7 +76,13 @@ def create_orchestrator(*, collection: str | None = None):
     )
 
 
-def build_answer_engine(*, model: str, collection: str | None = None) -> AnswerEngine:
+def build_answer_engine(
+    *,
+    model: str,
+    collection: str | None = None,
+    cross_language: bool = False,
+    claim_grounder: ClaimGrounder | None = None,
+) -> AnswerEngine:
     """Construct the answer engine from settings (lazy; safe to call per request).
 
     T-V1-028: ``model`` is a REQUIRED, explicit input — the factory holds **no**
@@ -119,6 +125,14 @@ def build_answer_engine(*, model: str, collection: str | None = None) -> AnswerE
 
     hydrator = CanonicalHydrator(chunk_lookup)
 
+    if claim_grounder is not None:
+        grounder = claim_grounder
+    elif cross_language:
+        grounder = CrossLanguageGrounder()
+    else:
+        # Default: strict extractive grounder untouched
+        grounder = ExtractiveGrounder()
+
     return AnswerEngine(
         orchestrator=HydratingOrchestrator(create_orchestrator(collection=collection), hydrator),
         llm=_llm_provider_for(model),
@@ -127,5 +141,6 @@ def build_answer_engine(*, model: str, collection: str | None = None) -> AnswerE
         chunk_lookup=hydrator if chunk_lookup is not None else None,
         # v1-rereview Q5: ground every citation via conservative extractive
         # check (claim text must be verbatim in the chunk) — interim v1 mode.
-        claim_grounder=ExtractiveGrounder(),
+        # T-R09: or conservative cross-language grounder when opted in.
+        claim_grounder=grounder,
     )

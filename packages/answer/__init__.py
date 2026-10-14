@@ -18,6 +18,7 @@ from __future__ import annotations
 from .engine import AnswerEngine, AnswerEngineError
 from .interfaces import ChunkLookup
 from .models import Answer, Citation, Claim
+from .verification import CrossLanguageGrounder, ExtractiveGrounder
 
 __all__ = [
     "Answer",
@@ -26,4 +27,7 @@ __all__ = [
     "ChunkLookup",
     "Citation",
     "Claim",
+    "CrossLanguageGrounder",
+    "ExtractiveGrounder",
 ]
+

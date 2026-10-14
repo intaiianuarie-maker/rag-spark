@@ -67,9 +67,16 @@ SYNC_JOB_PREFIX = "sync:"
 #: :func:`load_workspace_sources`).
 WORKSPACE_CONNECTOR_CONFIG_ENV = "WORKSPACE_CONNECTOR_CONFIG"
 
+#: Release decision (T-R09): V1 ships as upload-only; continuous sync scheduling
+#: and automated worker consumption are M6-pending. QueuedSyncConsumer is available
+#: for scoped/on-demand execution.
+V1_SHIP_MODE = "upload-only"
+M6_STATUS = "pending"
+
 #: Safety cap on pages per run — a misbehaving adapter that returns the same
 #: page forever must fail loudly instead of looping.
 DEFAULT_MAX_PAGES = 10_000
+
 
 
 class ItemStatus(StrEnum):

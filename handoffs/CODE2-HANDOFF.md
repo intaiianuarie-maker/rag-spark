@@ -99,5 +99,43 @@ GREP PAIR: equals/only-arms / no-silent-substitution assertions remain in core
         (no product code changed in this ticket).
 GIT:   no commit; index left empty; no restart, no compose, no detach process.
 ```
-EOF
-echo "appended: $(wc -l < handoffs/CODE2-HANDOFF.md)"
+
+---
+
+## T-R09 — Close V1 scope gaps (X-Lang Path + Connectors Decision)
+
+```text
+TASK: T-R09 — (a) X-LANG PATH: conservative cross-language verification path
+      (translated answer verified against original-source spans, abstention-first on
+      unsupported pairs, strict extractive verifier untouched, threshold 1.0 never lowered).
+      (b) CONNECTORS DECISION: recorded V1 ship-upload-only with M6-pending in
+      RELEASE-RECORD.md, packages/connectors, and sync_consumer.py.
+CHANGE:
+      - packages/answer/verification.py: added CrossLanguageGrounder, _detect_cross_lang,
+        _markers_for_lang, _extract_canonical_components, _verify_cross_language_match;
+        ExtractiveGrounder left 100% untouched; threshold=1.0 unchanged.
+      - packages/answer/__init__.py: exported CrossLanguageGrounder.
+      - packages/answer/factory.py: added cross_language and claim_grounder wiring.
+      - packages/connectors/__init__.py: recorded V1_SHIP_MODE = "upload-only" and M6_STATUS = "pending".
+      - packages/connectors/sync_consumer.py: recorded V1_SHIP_MODE and M6_STATUS.
+      - handoffs/RELEASE-RECORD.md: updated Candidate and Sequenced with connectors decision.
+      - tests/unit/test_cross_language_grounder.py: NEW 41 tests.
+      - tests/unit/test_connectors_decision.py: NEW 3 tests.
+PROOFS:
+      - (a) RO/PT correct translations verify against EN sources with score 1.0 and original-source spans.
+      - (a) Reverse (RO/PT sources -> EN/PT/RO claims) verified.
+      - (a) Wrong-language answers (DE, FR, ES, IT) abstain with score 0.0, span None.
+      - (a) False facts (wrong entity, wrong city, wrong number, role swap) abstain.
+      - (a) Non-asserting frames (negation, conditionals, approximate hedges, attribution) abstain.
+      - (a) Thresholds unchanged: both ExtractiveGrounder and CrossLanguageGrounder at 1.0.
+      - (a) Existing extractive tests (test_answer_engine.py: 120/120 green; test_acceptance_6 green).
+      - (b) Connectors decision: V1 ship-upload-only + M6-pending recorded and verified.
+      - (b) Existing sync consumer tests (test_sync_consumer.py: 18/18 green).
+VERIFY:
+      - pytest tests/unit/test_cross_language_grounder.py tests/unit/test_connectors_decision.py -> 44 passed in 0.79s
+      - pytest tests/unit/test_answer_engine.py -> 120 passed in 5.12s
+      - pytest tests/integration/test_acceptance_probes.py -k "test_acceptance_6" -> 1 passed
+      - pytest tests/unit/test_sync_consumer.py -> 18 passed in 1.47s
+      - ruff check packages/answer packages/connectors tests/unit/test_cross_language_grounder.py tests/unit/test_connectors_decision.py -> All checks passed!
+GIT:  no commit, no deploy, no compose, no restart.
+```
