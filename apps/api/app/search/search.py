@@ -103,6 +103,7 @@ class SearchResponse(BaseModel):
     reason: str | None = None
     trace_id: str | None = None
     rerank_disclosure: str | None = None
+    filters_truncated: bool = False
 
 
 def build_search_filter(*, workspace_id: str, filters: SearchFilters) -> SearchFilter:
@@ -278,6 +279,11 @@ async def search(
         reason=outcome.reason or None,
         trace_id=outcome.trace_id or request_id_ctx.get(),
         rerank_disclosure=getattr(outcome, "rerank_disclosure", None) or None,
+        filters_truncated=(
+            len(narrowed) == 0
+            and len(results) > 0
+            and body.filters.date is not None
+        ),
     )
 
 

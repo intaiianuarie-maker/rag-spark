@@ -1159,3 +1159,30 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-K10 — date filter disclosure
+
+```
+TASK: T-K10
+CHANGE:
+      - apps/api/app/search/search.py added filters_truncated disclosure when date narrows to empty
+VERIFY:
+      - pytest tests/unit/test_search_endpoint -> 12 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K10 FIXUP
+
+```
+TASK: T-K10 FIXUP
+VERIFY:
+      - tests/unit/test_search_endpoint -> 14 passed
+        (date-narrows-to-empty disclosure true; plain empty false)
+      - ruff/mypy clean with zero noqa in apps/api/app/search/search.py
+SPEND: 0.00
+GIT: handoff only
+```

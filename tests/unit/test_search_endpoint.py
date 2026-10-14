@@ -237,3 +237,29 @@ def test_search_graph_and_hybrid_graph_modes_accepted(monkeypatch) -> None:
     assert res_hybrid_graph.json()["mode"] == "hybrid_graph"
     assert orch.calls[-1]["mode"] == "hybrid_graph"
 
+
+def test_search_date_narrows_to_empty_sets_filters_truncated(monkeypatch) -> None:
+    orch = _FakeOrchestrator(
+        [
+            _item(chunk_id="c-1", metadata={"created_at": "2026-10-01"}),
+            _item(chunk_id="c-2", metadata={"created_at": "2026-09-01"}),
+        ]
+    )
+    client = _client(monkeypatch, orch)
+    response = client.post(
+        f"/v1/workspaces/{WS_ID}/search",
+        json={"query": "q", "filters": {"date": "2026-12-01"}},
+    )
+    body = response.json()
+    assert response.status_code == 200, response.text
+    assert body["results"] == []
+    assert body["filters_truncated"] is True
+
+
+def test_search_plain_empty_does_not_set_filters_truncated(monkeypatch) -> None:
+    orch = _FakeOrchestrator([])
+    client = _client(monkeypatch, orch)
+    response = client.post(f"/v1/workspaces/{WS_ID}/search", json={"query": "q"})
+    body = response.json()
+    assert response.status_code == 200, response.text
+    assert body["filters_truncated"] is False
