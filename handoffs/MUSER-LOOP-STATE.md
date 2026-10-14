@@ -891,3 +891,6 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 
 ## 2026-10-14 — Astra review dispatched (T-REVIEW-V1V4, user order)
 - Read-only + single md deliverable reviews/ASTRA-V1-V4-2026-10-14.md. Token discipline: one version in context at a time, targeted reads, findings-only. No lane overlap (dev2 smoke live, dev1 standby).
+
+## 2026-10-14 — Repo public + pushed (user orders)
+- rag-spark PRIVATE->PUBLIC; origin/main 46fbf67->cbc4833 fast-forward (194 commits), 0 unpushed. DISCLOSED: old dev-default JWT literal lives in public history (rotated away at release, unverifiable under new secret); live secret never committed (inline-only).
