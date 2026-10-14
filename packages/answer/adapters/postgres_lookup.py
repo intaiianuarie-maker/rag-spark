@@ -19,6 +19,9 @@ from uuid import UUID
 
 from sqlalchemy import bindparam, text
 
+from ..hydration import (
+    CanonicalStoreUnavailable,
+)
 from ..interfaces import ChunkLookup
 from ..models import Citation
 
@@ -151,7 +154,7 @@ class PostgresChunkLookup(ChunkLookup):
             logger.warning(
                 "postgres_chunk_lookup_failed", extra={"chunk_id": chunk_id, "error": str(exc)}
             )
-            return None
+            raise CanonicalStoreUnavailable("canonical chunk store unavailable during get") from exc
 
     async def get_many(self, chunk_ids: Sequence[str]) -> dict[str, Citation]:
         """Bulk resolve (T-V1-047): **one** query for the whole batch.
@@ -191,7 +194,9 @@ class PostgresChunkLookup(ChunkLookup):
                 "postgres_chunk_lookup_failed",
                 extra={"chunk_ids": len(ids), "error": str(exc)},
             )
-            return {}
+            raise CanonicalStoreUnavailable(
+                "canonical chunk store unavailable during get_many"
+            ) from exc
 
         resolved: dict[str, Citation] = {}
         for row in rows:
@@ -203,3 +208,8 @@ class PostgresChunkLookup(ChunkLookup):
     async def get_content(self, chunk_id: str) -> str | None:
         cit = await self.get(chunk_id)
         return cit.content if cit else None
+
+CanonicalStoreUnavailableError = CanonicalStoreUnavailable
+StoreUnavailable = CanonicalStoreUnavailable
+StoreUnavailableError = CanonicalStoreUnavailable
+CanonicalStoreUnavialable = CanonicalStoreUnavailable

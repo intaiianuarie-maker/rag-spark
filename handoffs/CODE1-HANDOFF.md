@@ -3296,3 +3296,24 @@ RISKS:
 - in-memory dense fakes must now accept `query_identity` (updated); hidden tests with bespoke fakes lacking the kw may need update, but the real store is strict.
 - unknown/no-identity interaction preserves unknown-collection reason when collection has no recorded identity;_missing identity reason is returned only when a known collection identity exists.
 Next: IDLE — push mandatory; T-A01c remains queued, no factory/route changes made.
+
+## 2026-10-14 T-A06 — V1-03 typed canonical-store-unavailable, outage vs missing (dev1)
+TASK: T-A06 (w5:pG). Astra CONFIRMED Med: PostgresChunkLookup swallowed DB/query failures as empty, so canonical hydration treated an outage as missing/deleted (abstain or empty-context path).
+CHANGE (allowed files):
+- `packages/answer/adapters/postgres_lookup.py`: store/query failures now raise `CanonicalStoreUnavailable` (logged) instead of returning empty; missing/deleted rows remain ordinary misses.
+- `packages/answer/hydration.py`: `CanonicalStoreUnavailable` typed error declared, with aliases.
+- `packages/answer/engine.py`: context/verification hydration failures map to `DEPENDENCY_UNAVAILABLE` unavailable status; no generation call on context-hydration failure.
+WHY: fail closed on store outages; distinguish outage from genuinely missing canonical rows.
+REUSED: existing Answer/ReasonCode/AVAILABLE response wiring (engine already returns 503 unavailable answer to route).
+BUILT: typed DB/query failure boundary plus aliases.
+VERIFY:
+- `/root/ko-venv/bin/pytest -q tests/unit -k 'answer or hydration or postgres_lookup or engine'` -> 218 passed.
+- ruff + mypy on touched files clean.
+- Outage-vs-missing table:
+  | scenario | get_many behavior | engine status | model call |
+  | DB/query failure | raises `CanonicalStoreUnavailable` | UNAVAILABLE / `DEPENDENCY_UNAVAILABLE` | none for context-hydration failure |
+  | missing/deleted/superseded row | absent from returned mapping | ordinary behavior | unchanged |
+RISKS:
+- existing callers with fakes that return empty will no longer distinguish outage; real store now raises; fakes must raise to simulate outage.
+- verification-stage outage is also mapped unavailable (but occurs after generation already completed); main protection is the context seam before LLM.
+Next: IDLE — push mandatory.

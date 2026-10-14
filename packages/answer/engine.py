@@ -64,6 +64,7 @@ from retrieval.interfaces import (
 )
 from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retrieval_outcome
 
+from .hydration import CanonicalStoreUnavailable
 from .interfaces import ChunkLookup
 from .models import Answer, AnswerStatus, Claim, Confidence, ConfidenceLevel
 from .prompts import SYSTEM_PROMPT, build_prompt, parse_model_output
@@ -183,12 +184,39 @@ class AnswerEngine:
         graph leg (G4). ACL-before-ranking and citation verification apply to
         every mode.
         """
-        items = await self.orchestrator.retrieve(
-            query=query,
-            acl_scope=acl_scope,
-            mode=mode,
-            context_top_k=self.max_context_items,
-        )
+        try:
+            items = await self.orchestrator.retrieve(
+                query=query,
+                acl_scope=acl_scope,
+                mode=mode,
+                context_top_k=self.max_context_items,
+            )
+        except CanonicalStoreUnavailable as exc:
+            logger.warning(
+                "canonical_store_unavailable",
+                extra={
+                        "event": "canonical_store_unavailable",
+                        "error_type": type(exc).__name__,
+                        "trace_id": request_id_ctx.get(),
+                    },
+            )
+            return await self._finalize(
+                Answer(
+                    answer="I cannot answer this question right now.",
+                    status=AnswerStatus.UNAVAILABLE,
+                    reason_code=ReasonCode.DEPENDENCY_UNAVAILABLE.value,
+                    reason="Canonical chunk store unavailable during hydration.",
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="Store unavailable during canonical hydration",
+                    ),
+                    trace_id=request_id_ctx.get(),
+                    claims=[],
+                    citations=[],
+                ),
+                items=[],
+                outcome=None,
+            )
         # T-V1-026: the orchestrator published the honest outcome of that call
         # on a context-local slot (works through the hydration decorator and
         # through test doubles, which publish nothing and read as healthy).
@@ -293,13 +321,40 @@ class AnswerEngine:
         allowed: set[str] | None = set(acl_scope.workspace_ids)
         if acl_scope.include_public:
             allowed = None  # public scope: existence is the only check
-        verified, citations = await verify_claims(
-            claims,
-            items,
-            chunk_lookup=self.chunk_lookup,
-            allowed_workspace_ids=allowed,
-            claim_grounder=self.claim_grounder,
-        )
+        try:
+            verified, citations = await verify_claims(
+                claims,
+                items,
+                chunk_lookup=self.chunk_lookup,
+                allowed_workspace_ids=allowed,
+                claim_grounder=self.claim_grounder,
+            )
+        except CanonicalStoreUnavailable as exc:
+            logger.warning(
+                "canonical_store_unavailable",
+                extra={
+                        "event": "canonical_store_unavailable",
+                        "error_type": type(exc).__name__,
+                        "trace_id": request_id_ctx.get(),
+                    },
+            )
+            return await self._finalize(
+                Answer(
+                    answer="I cannot answer this question right now.",
+                    status=AnswerStatus.UNAVAILABLE,
+                    reason_code=ReasonCode.DEPENDENCY_UNAVAILABLE.value,
+                    reason="Canonical chunk store unavailable during verification.",
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="Store unavailable during canonical verification",
+                    ),
+                    trace_id=request_id_ctx.get(),
+                    claims=[],
+                    citations=[],
+                ),
+                items=items,
+                outcome=outcome if "outcome" in locals() else None,
+            )
 
         answer_text = parsed["answer"].strip()
         lower_ans = answer_text.lower()
