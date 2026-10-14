@@ -3424,3 +3424,21 @@ RISKS:
 - retry write failure delays ACK until lease expiry; recovery then redelivers or promotes the delayed retry if it succeeded.
 - permanent park leaves payload deletion best effort after the failed-state write.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A11 — V2-07 refuse explicit graph when disabled, disclose omission (dev1)
+TASK: T-A11 (w5:pG). Astra CONFIRMED Med: flag-off left GraphRetriever None; explicit GRAPH/HYBRID_GRAPH requests could become silent empty results, indistinguishable from a legitimate blank graph.
+CHANGE (allowed files):
+- `packages/retrieval/orchestrator.py`: explicit `GRAPH` mode now refuses typed-unavailable when `graph is None`; `HYBRID_GRAPH` adds `graph_disclosure`/`graph_omitted` when the graph leg is disabled; default `HYBRID` is unchanged and graph-free.
+- No changes to forbidden roots.
+WHY: graph is an explicit operation and optional hybrid augmentation, never a silent-empty success.
+REUSED: ReasonCode.GRAPH_UNAVAILABLE, RetrievalResult legs_failed, disclosure fields.
+BUILT: explicit refusal and disclosure path.
+VERIFY:
+- `pytest tests/unit -k 'graph or retrieval or orchestrator'` -> 235 passed.
+- ruff + mypy on `packages/retrieval/orchestrator.py` clean.
+- Graph-only-when-disabled refuses before search; hybrid_graph omits graph explicitly; HYBRID passes unchanged.
+- No bare empty on explicit graph path; refusal result is `UNAVAILABLE` with graph leg.
+RISKS:
+- downstream consumers may need to surface `graph_disclosure`; search route still only exposes `rerank_disclosure`, but route changes are out-of-scope for this task.
+- if a graph store becomes unavailable mid-run without changing orchestrator construction, it is indistinguishable from disabled; both now refuse or omit graph.
+Next: IDLE — push mandatory.

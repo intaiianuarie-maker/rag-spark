@@ -138,6 +138,9 @@ class RetrievalResult:
     trace_id: str = ""
     legs_failed: tuple[LegFailure, ...] = field(default_factory=tuple)
     rerank_disclosure: str = ""
+    #: T-A11: explicit graph leg omission disclosure (never a silent empty).
+    graph_disclosure: str = ""
+    graph_omitted: bool = False
 
     @property
     def reason(self) -> str:
@@ -522,6 +525,29 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 query_filter.metadata[_k] = _v
             if extra_filter.document_ids:
                 query_filter.document_ids = list(extra_filter.document_ids)
+        graph_disclosure = ""
+        # T-A11: an explicit graph/graph-only request must not become a silent
+        # empty success when the graph retriever is unavailable. Refuse loudly.
+        if mode is RetrievalMode.GRAPH and self.graph is None:
+            failure = LegFailure(
+                leg="graph",
+                error_type="GraphUnavailable",
+                reason_code=ReasonCode.GRAPH_UNAVAILABLE,
+            )
+            return RetrievalResult(
+                items=[],
+                status=RetrievalStatus.UNAVAILABLE,
+                reason_code=ReasonCode.GRAPH_UNAVAILABLE,
+                trace_id=trace_id,
+                legs_failed=(failure,),
+                graph_disclosure="graph retrieval unavailable: graph retriever is disabled",
+                graph_omitted=True,
+            )
+        if mode is RetrievalMode.HYBRID_GRAPH and self.graph is None:
+            graph_disclosure = (
+                "graph leg omitted: graph retriever disabled/unavailable; baseline hybrid returned"
+            )
+
         # Mode selector: keyword = lexical-only (M3-003 FTS), semantic = dense-only
         # (M3-001 Qdrant), hybrid = default (existing RRF fusion, unchanged),
         # graph = graph-only, hybrid_graph = dense + lexical + graph fusion.
@@ -678,6 +704,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             if rerank_disclosure:
                 item.metadata["rerank_disclosure"] = rerank_disclosure
 
+        if mode is RetrievalMode.HYBRID_GRAPH and any(f.leg == "graph" for f in report.failures):
+            graph_disclosure = "graph leg unavailable; baseline hybrid returned"
+
         # Optional-leg verdict: the items stand, the degradation is disclosed.
         # The top-level code is the STATUS-level one (``RERANK_UNAVAILABLE`` or
         # the generic ``DEGRADED_RESULT``) so it always satisfies
@@ -699,6 +728,8 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             trace_id=trace_id,
             legs_failed=tuple(report.failures),
             rerank_disclosure=rerank_disclosure,
+            graph_disclosure=graph_disclosure,
+            graph_omitted=bool(graph_disclosure),
         )
 
     async def retrieve(
