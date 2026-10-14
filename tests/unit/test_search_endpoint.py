@@ -80,7 +80,7 @@ def _client(monkeypatch, orchestrator):
 
     # Route calls module-level app.search.search.create_orchestrator
     # (lazy factory seam); that single target is what tests patch.
-    monkeypatch.setattr(search_module, "create_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(search_module, "create_orchestrator", lambda sensitive=False: orchestrator)
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
     return TestClient(app)
@@ -123,7 +123,7 @@ def test_search_requires_authentication(monkeypatch) -> None:
         )
 
     orch = _FakeOrchestrator([_item()])
-    monkeypatch.setattr(search_module, "create_orchestrator", lambda: orch)
+    monkeypatch.setattr(search_module, "create_orchestrator", lambda sensitive=False: orch)
     app = create_app()
     app.dependency_overrides[get_principal] = _deny
     client = TestClient(app)
@@ -139,7 +139,7 @@ def test_search_forbidden_for_non_member(monkeypatch) -> None:
     from fastapi.testclient import TestClient
 
     orch = _FakeOrchestrator([_item()])
-    monkeypatch.setattr(search_module, "create_orchestrator", lambda: orch)
+    monkeypatch.setattr(search_module, "create_orchestrator", lambda sensitive=False: orch)
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal(workspaces={})
     client = TestClient(app)

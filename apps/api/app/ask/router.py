@@ -243,7 +243,12 @@ async def ask(
         },
     )
 
-    engine: AnswerEngine = build_answer_engine(model=resolved_model)
+    # T-A01b: carry the workspace egress policy into retrieval/embedding.
+    _workspace_config = load_workspace_config(str(workspace_id))
+    _egress_sensitive = (
+        _workspace_config.sensitive if _workspace_config is not None else False
+    )
+    engine: AnswerEngine = build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)
 
     try:
         answer = await engine.answer(

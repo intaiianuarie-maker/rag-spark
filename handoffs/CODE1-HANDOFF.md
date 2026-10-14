@@ -3230,3 +3230,48 @@ RISKS:
 - VERDICT: **STABLE** — T-R13b may proceed if user lifts eval halt. No readiness flaps; real deps all healthy; Qdrant/PG responsive; sufficient swap+available memory; foreign load remains present but no resource starvation observed vs RECON1 (load ~10 -> ~4.4, free memory 1.7GB -> 4.2GB available, ready degraded -> true 37/37).
 - Residual: foreign opencode/codex/hermes load could spike; re-check if evals start. No code/database writes performed.
 Next: IDLE — appended row + push mandatory.
+
+## 2026-10-14 T-A01 — V1-01 workspace egress policy in retrieval/embedding (dev1)
+TASK: T-A01 (w5:pG). Astra CONFIRMED High: sensitive workspaces could egress at embed time because answer.factory hardwired OpenRouterProvider and create_orchestrator ignored policy. Carry workspace egress policy into retrieval/embedding selection.
+CHANGE (allowed files):
+- `packages/retrieval/orchestrator.py`: added `CloudEmbeddingEgressRefused`, `RefusingEmbeddingProvider`, and sensitive/local-only/allied flags on `HybridRetrievalOrchestrator`; `retrieve_result()` refuses SEMANTIC/HYBRID/HYBRID_GRAPH before any embedding call (KEYWORD/GRAPH keep working). Typed + logged (`retrieval_egress_refused`).
+- `packages/answer/factory.py`: `create_orchestrator`/`build_answer_engine` accept policy kwargs (`sensitive`, `local_only`, etc.); sensitive path avoids OpenRouter embedding transport and builds a refusing provider; normal path byte-identical.
+WHY: local-only generation transport (T-V1-029) did not cover embeddings; this closes retrieval egress for sensitive workspaces or refuses semantic/hybrid with typed unavailable status.
+REUSED: existing honest-leg/unavailable result path, `EMBED_UNAVAILABLE` reason code; no new silent fallback.
+BUILT: `RefusingEmbeddingProvider` (zero network) and duck-typed policy coercion.
+VERIFY:
+- smoke: sensitive semantic -> `unavailable / EMBED_UNAVAILABLE`; sensitive hybrid same; no embedding request attempted.
+- `/root/ko-venv/bin/pytest -q tests/unit -k 'orchestrator or factory or local_only or answer'` -> 262 passed.
+- `/root/ko-venv/bin/ruff check packages/answer/factory.py packages/retrieval/orchestrator.py` -> all checks passed.
+- `/root/ko-venv/bin/mypy packages/answer/factory.py packages/retrieval/orchestrator.py` -> success (no issues).
+- non-sensitive default behavior unchanged (OpenRouter provider still used when sensitive is false/absent).
+Both key states: with OPENROUTER configured or absent, sensitive refs resolve to refusal; unsensitive keeps OpenRouter; no silent fallback.
+RISKS:
+- callers must pass egress policy through (handled via broad policy kwargs; Ask/Search handlers not in allowed files this ticket); until handlers pass it, default remains non-sensitive (byte-identical and honestly disclosed).
+- refusals currently return `EMBED_UNAVAILABLE` + legs_failed, matching orchestrator failure contract; exact exception type is `CloudEmbeddingEgressRefused`/`RefusingEmbeddingProvider`.
+Next: IDLE — push mandatory; evals gated on stability/user halt lift.
+
+## 2026-10-14 T-A01b — thread egress policy through Ask/Search handlers (dev1)
+TASK: T-A01b (w5:pG). Closes live half of V1-01: wire T-A01 seam into handlers so egress policy actually reaches retrieval/embedding.
+CHANGE (allowed handlers only):
+- `apps/api/app/ask/router.py`: resolves workspace config via `load_workspace_config`, passes `sensitive` to `build_answer_engine`.
+- `apps/api/app/search/search.py`: `create_orchestrator(*, sensitive=False)` seam; resolves workspace `_egress_sensitive`; passes it through.
+- Updated call-site-sensitive test mocks in `tests/unit/test_ask_query_class.py`, `test_search_endpoint.py`, `test_rerank_cut.py`, `test_leg_failure_statuses.py`.
+WHY: seam existed (T-A01) but handlers defaulted to non-sensitive, leaving sensitive workspaces able to egress at read time.
+REUSED: T-A01 refusing embedding provider, egress policy, honest unavailable status.
+BUILT: workspace sensitivity plumbing in both routes.
+VERIFY:
+- grep call sites: `build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)` and `create_orchestrator(sensitive=_egress_sensitive)` both include policy.
+- `/root/ko-venv/bin/pytest -q tests/unit/test_ask_query_class.py tests/unit/test_search_endpoint.py tests/unit/test_rerank_cut.py tests/unit/test_leg_failure_statuses.py` -> ask 16 passed, search/rerank/legs ~50 passed.
+- `/root/ko-venv/bin/pytest -q tests/integration/test_ask_route.py` -> 4 passed.
+- ruff + mypy on both handlers clean.
+- non-sensitive route behavior unchanged (tests pass; import/fakes updated).
+Call-site table:
+| handler | old | new |
+|---|---|---|
+| Ask | `build_answer_engine(model=resolved_model)` | `build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)` |
+| Search | `create_orchestrator()` | `create_orchestrator(sensitive=_egress_sensitive)` |
+RISKS:
+- agents/tools and eval router remain unchanged (forbidden by this ticket); if sensitive semantic retrieval is expected there, separate ticket needed. Search tests updated for new keyword.
+- workspace policy default unresolvable resolves to non-sensitive (matching prior behavior); a malformed store entry could thus under-protect a sensitive workspace if policy config absent, but config presence is authoritative in current architecture.
+Next: IDLE — push mandatory (no local-only change lost), evals remain halted by user order.

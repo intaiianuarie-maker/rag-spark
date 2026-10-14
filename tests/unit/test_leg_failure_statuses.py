@@ -496,7 +496,7 @@ def _client(monkeypatch, orchestrator):
     from app.main import create_app
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(search_module, "create_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(search_module, "create_orchestrator", lambda sensitive=False: orchestrator)
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
     return TestClient(app)

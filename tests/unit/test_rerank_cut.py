@@ -148,7 +148,7 @@ async def test_search_endpoint_returns_rerank_disclosure(monkeypatch: pytest.Mon
     """Search API route returns rerank_disclosure on response and items."""
     orch = await _orchestrator(reranker=None, rerank_enabled=False)
 
-    monkeypatch.setattr("app.search.search.create_orchestrator", lambda: orch)
+    monkeypatch.setattr("app.search.search.create_orchestrator", lambda sensitive=False: orch)
 
     ws_id = uuid.uuid4()
     # Mock require authorization check

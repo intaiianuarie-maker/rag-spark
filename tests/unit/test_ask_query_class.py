@@ -142,7 +142,7 @@ async def _ask(monkeypatch, *, override_model: str | None = None, query: str | N
 
     engine = _FakeEngine()
 
-    def _fake_factory(*, model: str):
+    def _fake_factory(*, model: str, sensitive: bool = False):
         # T-V1-028: the handler must thread the router's pick into the factory
         # as its REQUIRED model — capture it so tests can assert the exact
         # identity that would reach the provider.
@@ -320,5 +320,5 @@ def test_ask_handler_path_has_no_hardcoded_model():
     assert source.count("resolved_model, reason = resolve_model(") == 1  # single call-site
     # The router's pick is threaded into the factory as its REQUIRED model; there
     # is no second assignment that could overwrite it (T-V1-028 single source).
-    assert source.count("build_answer_engine(model=resolved_model)") == 1
+    assert source.count("build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)") == 1
     assert "engine.model =" not in source
