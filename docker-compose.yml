@@ -259,45 +259,10 @@ services:
       - api
 
 
-  infinity-rerank:
-    # T-V1-060 incident: :latest drifted under us to 0.0.77, whose CLI REQUIRES
-    # an explicit subcommand (bare `infinity_emb` exits 0 with "No command
-    # given... use the v2 command") — 25 silent restarts, /ready infinity=false,
-    # ingest down stack-wide. PINNED to the version we validated + explicit
-    # command. Never float this back to :latest without re-validating.
-    image: michaelf34/infinity:0.0.77
-    command: ["v2", "--host", "0.0.0.0", "--port", "7997"]
-    restart: unless-stopped
-    environment:
-      # T-V1-043: bge-m3 (1024-d, MIT) is THE embedding model — collections are
-      # 1024-d and the adapter pins BAAI/bge-m3 / 1024 by default. The reranker
-      # stays on the same server (multi-model); INFINITY_URL is unchanged.
-      # NB: this image (michaelf34/infinity:latest) reads INFINITY_MODEL_ID /
-      # INFINITY_ENGINE — the legacy INFERENCE_* names are silently ignored and
-      # the default bge-small loads instead (caught in T-V1-043 recon). The
-      # engine enum here is torch|ctranslate2|optimum|neuron (no 'onnx'), and
-      # multi-model lists are SEMICOLON-separated (a comma is kept as one id).
-      INFINITY_MODEL_ID: BAAI/bge-m3;cross-encoder/ms-marco-MiniLM-L6-v2
-      INFINITY_ENGINE: torch
-      # T-V1-060 incident #2: the listener WEDGED under sustained embedding load
-      # (process spinning at ~99% CPU, instant connection refusals, no crash).
-      # Cause: torch's thread pool grabs all 4 vCPUs and starves uvicorn's
-      # event loop, so the server stops accepting. Capped to 2 threads, leaving
-      # CPU for the serving loop; embed throughput cost is acceptable on this
-      # box (build batches measured 9-30s, retry budget covers the tail).
-      TORCH_NUM_THREADS: "2"
-      OMP_NUM_THREADS: "2"
-      MKL_NUM_THREADS: "2"
-      PORT: "7997"
-    ports:
-      # T-V1-037 — CLOSING the public infinity question (review 2026-10-09
-      # finding-01; V1-COMPLETION-PLAN §2 item 1). Not public, not justified
-      # public: api/worker reach this model server over the compose network at
-      # http://infinity-rerank:7997 (see INFINITY_URL above), which never touches
-      # the host proxy, so a public publish buys nothing and exposes an
-      # unauthenticated model server off-box. 127.0.0.1 keeps host-local debug
-      # only. Reversible only via an explicit DECISIONS.md row, never by default.
-      - "127.0.0.1:7997:7997"
+  # ARCH pivot 2026-10-14 (user order, OpenRouter-only): infinity-rerank service
+  # REMOVED with its 14.3GB image (container+image deleted). Local bge-m3/reranker
+  # gone; eval embeds gemini-embedding-2, prod cutover rides T-ARCH-04. Do NOT
+  # re-add without reversing this decision on record.
 
 volumes:
   # T-R11: the ONE persistent graph store shared by api and worker.
