@@ -166,29 +166,83 @@ def test_llm_model_name_is_configurable_and_has_a_default(monkeypatch) -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_job_path_still_hardcodes_the_rule_extractor() -> None:
-    """PINS THE KNOWN GAP, so it cannot be forgotten silently.
+def test_the_job_path_constructs_its_extractor_through_the_dispatch() -> None:
+    """The job path no longer names an extractor class at all.
 
-    ``handle_graph_job`` still constructs ``RuleBasedGraphExtractor()``
-    directly. The dispatch exists and is tested, but until that one line calls
-    it, GRAPH_MODE=llm still runs rule. This test is written to FAIL when
-    someone wires the dispatch in — at which point it should be deleted and
-    replaced by an assertion that the job path honours the mode.
+    Replaces the T-R12 gap pin. That test asserted the hardcoded rule extractor
+    was still present and failed once wired; this asserts the job path delegates
+    to the mode dispatch and names no implementation, so it cannot silently
+    drift back to one.
     """
     import pathlib
 
     source = pathlib.Path("apps/worker/jobs/graph_extraction.py").read_text(
         encoding="utf-8"
     )
-    assert "extractor = RuleBasedGraphExtractor()" in source, (
-        "the job path no longer hardcodes the rule extractor: the dispatch is "
-        "wired in. DELETE this test and add one asserting handle_graph_job "
-        "honours GRAPH_MODE."
+    assert "extractor = RuleBasedGraphExtractor()" not in source, (
+        "the job path hardcodes the rule extractor again"
     )
-    assert "create_graph_extractor" not in source, (
-        "the dispatch is now used by the job path: replace this test with a "
-        "behavioural assertion."
+    assert "create_graph_extractor" in source, "the job path must use the dispatch"
+    assert "RuleBasedGraphExtractor()" not in source, (
+        "the job path must not construct any extractor class directly"
     )
+
+
+def test_job_path_honours_rule_mode_behaviourally(monkeypatch) -> None:
+    """The JOB PATH's own constructor, called with GRAPH_MODE=rule."""
+    from graph.extractor import RuleBasedGraphExtractor
+    from jobs.graph_extraction import create_graph_extractor as job_constructor
+
+    monkeypatch.setenv("GRAPH_MODE", "rule")
+    extractor = job_constructor()
+    assert isinstance(extractor, RuleBasedGraphExtractor)
+
+
+def test_job_path_honours_llm_mode_behaviourally(monkeypatch) -> None:
+    """The JOB PATH's own constructor, called with GRAPH_MODE=llm.
+
+    The provider is faked at the model-router boundary, so this exercises the
+    real dispatch the job uses without a gateway or model weights. Before
+    T-R12b this exact call could only ever return the rule extractor.
+    """
+    from graph.adapters import LLMBasedGraphExtractor
+    from graph.extractor import RuleBasedGraphExtractor
+    from jobs.graph_extraction import create_graph_extractor as job_constructor
+
+    fake = _FakeProvider()
+    monkeypatch.setenv("GRAPH_MODE", "llm")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
+    monkeypatch.setenv("GRAPH_LLM_MODEL", "fake-model")
+    monkeypatch.setattr(
+        "models.adapters.litellm_provider.create_llm_provider", lambda **kw: fake
+    )
+    extractor = job_constructor()
+    assert isinstance(extractor, LLMBasedGraphExtractor), (
+        "GRAPH_MODE=llm still built the rule extractor on the job path"
+    )
+    assert not isinstance(extractor, RuleBasedGraphExtractor)
+
+
+def test_job_path_refuses_an_unsupported_mode_behaviourally(monkeypatch) -> None:
+    from graph.dispatch import GraphModeUnsupported
+    from jobs.graph_extraction import create_graph_extractor as job_constructor
+
+    monkeypatch.setenv("GRAPH_MODE", "neural")
+    with pytest.raises(GraphModeUnsupported) as excinfo:
+        job_constructor()
+    assert "neural" in str(excinfo.value), "the refusal must name the mode"
+
+
+def test_job_path_refuses_llm_mode_with_no_provider(monkeypatch) -> None:
+    """llm mode must fail loudly rather than degrade to rule."""
+    from graph.dispatch import GraphModeUnsupported
+    from jobs.graph_extraction import create_graph_extractor as job_constructor
+
+    monkeypatch.setenv("GRAPH_MODE", "llm")
+    for key in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY"):
+        monkeypatch.delenv(key, raising=False)
+    with pytest.raises(GraphModeUnsupported):
+        job_constructor()
 
 
 def test_dispatch_is_exported_from_the_package() -> None:

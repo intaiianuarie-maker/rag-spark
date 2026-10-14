@@ -6793,3 +6793,109 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr12_{start,end}.
 - END (HEAD `a4dbd95`): 37 dirty paths — my 3 files, dev1's 6, evals and handoffs.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-R12b — Job-path mode wiring: the 1-line dispatch call (closes my own pinned gap)
+
+```text
+TASK: T-R12b — apps/worker/jobs/graph_extraction.py line 156 becomes
+       create_graph_extraction() honouring GRAPH_MODE; delete the T-R12 gap pin
+       and replace it with a behavioural assertion proving the job path honours
+       the mode in BOTH directions.
+CHANGE: 2 files, exactly the card's allowlist:
+       M  apps/worker/jobs/graph_extraction.py — ONE line plus ONE import:
+            - from graph.extractor import GraphChunk, RuleBasedGraphExtractor
+            + from graph.dispatch import create_graph_extractor
+            + from graph.extractor import GraphChunk
+            ...
+            - extractor = RuleBasedGraphExtractor()
+            + extractor = create_graph_extractor()
+          Plus a 4-line comment recording WHY, so the next reader does not
+          "simplify" it back to a hardcoded class.
+       M  tests/unit/test_graph_extraction_modes.py — pin deleted, replaced with
+          five behavioural tests (21 pass, was 17).
+WHY:    This is the last line between a proven dispatch and a real one. Until it
+       landed, GRAPH_MODE=llm still ran the rule extractor on the only path that
+       matters, so the mode was still a lie in production. I closed my own gap
+       rather than leaving it documented and open.
+REUSED: The T-R12 dispatch unchanged (packages/graph/dispatch.py) — this ticket
+       calls it, it does not modify it. GraphChunk still imported from
+       graph.extractor (the input type, not the implementation). No new extractor,
+       no new dependency, no model-routing change.
+
+THE PIN SWAP, IN THE ORDER THE CARD REQUIRED.
+  Deleted first, replaced immediately, run once at the end — never a mid-swap run
+  that leaves the suite red for no reason.
+  * DELETED: test_the_job_path_still_hardcodes_the_rule_extractor. It existed to
+    fail when the gap closed, which it now would have.
+  * REPLACED WITH (all behavioural, none structural-only):
+      1. the job path constructs via the dispatch and names NO extractor class;
+      2. GRAPH_MODE=rule  -> the job path's own constructor yields
+         RuleBasedGraphExtractor;
+      3. GRAPH_MODE=llm   -> the job path's own constructor yields
+         LLMBasedGraphExtractor and explicitly NOT the rule one;
+      4. GRAPH_MODE=neural (unsupported) -> refused, mode named;
+      5. GRAPH_MODE=llm with no provider key -> refused, never degraded to rule.
+
+METRIC — job path honouring mode: PROVEN BOTH DIRECTIONS, BEHAVIOURALLY.
+  These tests call `jobs.graph_extraction.create_graph_extractor`, which is the
+  exact binding handle_graph_job invokes, under a real GRAPH_MODE in the
+  environment. That is behaviour, not structure: a source assertion cannot show
+  which class comes back, and this does. For llm the provider is faked at the
+  model-router boundary (create_llm_provider), so the real dispatch runs with no
+  gateway and no model weights.
+  Non-vacuity: before this change the job module did not import
+  create_graph_extractor at all, so tests 2-5 could not even import the name —
+  they are incapable of passing against the pre-swap code.
+
+METRIC — suite green throughout: PROVEN.
+  modes suite 21 passed after the delete+replace+run motion, with no
+  intermediate red run. Related suites together 144 passed / 0 failed.
+
+VERIFY: pytest tests/unit/test_graph_extraction_modes.py 21 passed;
+       related suites together: 144 passed / 0 failed (modes, extractor, factory,
+       deployment_r11, queue_reliability, six graph suites, queue_semantics,
+       ingest_pipeline and the error-taxonomy contract);
+       ruff check on both changed files: All checks passed (exit 0);
+       mypy --follow-imports=silent on the job module and the modes test: Success.
+       No live-graph writes: fakes at the router boundary and source inspection
+       only. No commit, no deploy, no restart, no compose.
+RISKS:  1. This is a REAL behaviour change on the job path, and it is the
+       intended one: a deployment running GRAPH_MODE=llm without a configured
+       provider key will now FAIL LOUDLY where it previously ran rule quietly.
+       That is the bug being fixed, but it is a visible change for anyone whose
+       environment declared llm without wiring a key — they should set the key or
+       declare rule before this lands.
+   2. llm mode now does real LLM extraction, so cost, latency and non-determinism
+       come with it where before there were none (the rule extractor was
+       deterministic and free). That is what the mode promises; anyone enabling
+       it should know.
+   3. The llm provider is constructed per job, not per process. If the gateway
+       client proves expensive, hoist it — I left it alone because this ticket is
+       one line plus a pin swap and R12 flagged the same point.
+   4. Five of the six tests in the modes file still exercise the dispatch directly
+       rather than handle_graph_job end to end; running the real job needs a DB
+       and a queue, which is outside "no live writes". The binding under test is
+       the job module's own, so the wiring is covered, but a full end-to-end job
+       under llm mode is still untested and would be a reasonable follow-up.
+SELF-CORRECTIONS: none needed this ticket — the change was the one line the card
+  specified, the pin swap was mechanical, and the suite was green on the first run
+  after the swap. I am reporting that plainly rather than manufacturing a
+  correction; the flake I introduced in R11 was found and fixed in T-R12.
+FOREIGN TREE MOVEMENT (reported, not forced) — WORTH YOUR ATTENTION.
+  At START, dev1's R06b work was dirty in packages/retrieval/adapters/
+  qdrant_store.py and packages/retrieval/contract_tests.py. By END both were
+  CLEAN while HEAD had NOT moved (27662da at both ends). HEAD not moving means
+  those uncommitted changes were reverted, stashed or rewritten — not committed.
+  I did not touch either file and had no reason to; I am reporting the
+  observation because it is not my change and it may be intentional. The other
+  R06b files (tests/unit/test_invalid_vector_parking.py,
+  test_vector_store_boundary.py, new test_embedding_identity_boundary.py) stayed
+  dirty throughout. My uncommitted eval files were left alone.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr12b_{start,end}.txt):
+- START (HEAD `27662da`): 34 dirty paths including dev1's five.
+- END (HEAD `27662da`): 34 dirty paths — my 2 files, dev1's remaining 3, evals
+  and handoffs.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.

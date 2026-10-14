@@ -23,7 +23,8 @@ import logging
 import os
 import uuid
 
-from graph.extractor import GraphChunk, RuleBasedGraphExtractor
+from graph.dispatch import create_graph_extractor
+from graph.extractor import GraphChunk
 from graph.factory import graph_db_path, graph_mode
 from graph.queue import (
     Claim,
@@ -152,8 +153,12 @@ async def process_graph_job(job_id: str) -> dict:
         for row in chunk_rows
     ]
 
-    # Extraction - deterministic, no model weights
-    extractor = RuleBasedGraphExtractor()
+    # Extraction - the declared GRAPH_MODE selects the implementation
+    # (T-R12b). Previously this hardcoded RuleBasedGraphExtractor, so
+    # GRAPH_MODE=llm silently ran the rule extractor and reported success.
+    # The dispatch refuses an unknown mode and refuses llm mode with no
+    # provider rather than degrading to rule.
+    extractor = create_graph_extractor()
     try:
         extraction_result = await extractor.extract(graph_chunks)
     except Exception as exc:
