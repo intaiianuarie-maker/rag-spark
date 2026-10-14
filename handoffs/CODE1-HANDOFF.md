@@ -3155,3 +3155,33 @@ RISKS:
 - Applications that bypassed `DraftStore` or attempted direct in-place SQLite `UPDATE`/`DELETE` will now fail hard with `IntegrityError` at the trigger boundary (the desired security guarantee).
 - Dev2's R19 lane (`apps/api/app/v4/`, `apps/web/`) remains completely untouched and disjoint.
 - Standing rules honored: no commit, no deploy, no restart, no compose; scratch/test DBs only, never live collections.
+
+## 2026-10-14 T-R13b-RECON — stability window reconnaissance (read-only, dev1)
+TASK: T-R13b-RECON (w5:pG, dev1 relocated) — evidence whether a stable window for the full-n paired eval exists right now. Read-only ops only; NO eval, NO compose, NO restarts, NO writes. Sampled /health + /ready over ~9.3 min (37 samples, 15s interval); captured memory/swap/top; observed foreign sessions without touching them; baselined Qdrant + Postgres.
+CHANGE (docs only): appended this recon row to `handoffs/CODE1-HANDOFF.md`. No product-code edits, no attach. sampling script `/tmp/opencode/recon_sample.sh` (scratch, not committed).
+WHY: coordinator/dev1 relocation + user-ordered HALT on evals; establish whether a stability window exists before T-R13b full-n paired eval is (ever) resumed. Verdict drives scheduling.
+REUSED: existing live stack (knowledge-os-api :8000, postgres :5432, qdrant :6333); no new tooling.
+BUILT: nothing product-side. Scratch sampler output retained at `/tmp/opencode/recon_samples.csv` (37 rows).
+VERIFY (exact probes):
+- whoami/date/uptime at start: root, Wed Oct 14 21:01:05 CEST 2026, up 6d 9h, load avg 7.01/4.58/3.43 (rose to ~10.12 during run).
+- /health: 37/37 HTTP 200; p50 7.0 ms; max 3032.6 ms. /ready: 37/37 HTTP 200; p50 383.9 ms; p95 581.0 ms; max 1057.5 ms; ready=false on ALL 37 samples (0 flips); deps: postgres True, redis True, qdrant True, minio True, infinity False (ConnectError: Temporary failure in name resolution), worker True, llm_gateway True. ready-flap HTTP 0%; ready-state flips 0 (stuck DEGRADED).
+- Memory/swap: `free -m`: Mem total 7935, used 4330, free 1693, available 3605; Swap total 12287, used 5320, free 6967. `swapon`: /swapfile 4G (3.2G used), /swap-eval 8G (2.0G used). top 1-shot: 65.4% us, 11.5% sy, 19.2% id, 12 zombies, 267 tasks.
+- Foreign sessions (observe only, untouched): hermes gateways (pid 1048, 3128514, cron 3210485 ~19% CPU) + cline hub (pid 121928) + 4+ codex app-server daemons + 6 opencode sessions (pids 2230828, 2623864, 2623982, 2624276, 3179404, 3207656) — heavy concurrent load; not interacted with.
+- Qdrant baseline (read-only): /readyz "all shards are ready" in 104 ms; /collections reachable. Postgres (read-only): pg_isready accepting; SELECT 1 = 111.6 ms; 13 public tables enumerated in 455.0 ms; no psql binary (used docker exec + psycopg).
+RISKS:
+- VERDICT: **UNSTABLE** — T-R13b full-n paired eval must NOT run now. /ready is stuck degraded (infinity DNS failure = embedding/model server unreachable), heavy foreign CPU load (load avg ~10 on 8-core box), and ~1.7 GB RAM free despite +8G swap-eval headroom. Re-run only after coordinator resolves infinity hostname (F1) and foreign load quiets; evals remain HALTED by user order.
+Table (snapshot):
+| metric | value |
+|---|---|
+| samples (15s, ~9.3m) | 37 |
+| /health HTTP flap | 0% (37/37 200) |
+| /ready HTTP flap | 0% (37/37 200) |
+| /ready state | degraded 100% (0 flips; infinity=False) |
+| ready probe p50 | 383.9 ms (p95 581.0, max 1057.5) |
+| health probe p50 | 7.0 ms (max 3032.6) |
+| Mem free / available | 1693 MB / 3605 MB |
+| Swap free (of 12287) | 6967 MB (incl. /swap-eval 8G, 2G used) |
+| load avg | 7.01/4.58/3.43 → 10.12 |
+| Qdrant /readyz | 104 ms (ready) |
+| Postgres SELECT 1 | 111.6 ms (ready; 13 tables) |
+Next: IDLE — appended row + push mandatory (herdr w5:p4, no --wait). No commit, no deploy, no eval.
