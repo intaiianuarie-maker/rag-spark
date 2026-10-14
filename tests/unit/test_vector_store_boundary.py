@@ -39,8 +39,12 @@ from retrieval.interfaces import VectorRecord
 pytestmark = [pytest.mark.unit]
 
 DIM = 4
-LIVE = "knowledge"
-REPLACEMENT = "knowledge_replacement"
+# T-R05: this suite is offline and names no live collection. The names are
+# scratch-shaped so a reviewer can see at a glance that the live name is not
+# here by accident; the stub client means no Qdrant is contacted either way.
+LIVE = "knowledge_test_boundary"
+REPLACEMENT = "knowledge_test_boundary_replacement"
+SERVING = "knowledge_test_boundary__serving"
 
 
 # --------------------------------------------------------------------------------------
@@ -352,12 +356,42 @@ async def test_promotion_with_dimension_mismatch_leaves_prior_index_serving() ->
 
 
 async def test_verified_replacement_is_switched_in() -> None:
-    """Happy path: only a fully verified replacement takes over the name."""
+    """Happy path: the serving ALIAS is repointed atomically, nothing deleted.
+
+    T-R05 replaced the old behaviour, which deleted the serving collection and
+    then re-issued the name as an alias — a two-step shape whose failure mode
+    is "no index at all". The serving name is now adopted as an alias first
+    (additive) and promotion is a single atomic repoint that retains the
+    superseded collection as the rollback target.
+    """
     store, client = make_live_store()
     client.seed(REPLACEMENT, points=3)
 
-    await store.promote_replacement(live=LIVE, replacement=REPLACEMENT, expected_points=3)
+    adopted = await store.ensure_serving_alias(physical=LIVE, alias=SERVING)
+    assert adopted.target == LIVE
+    assert client.deleted == [], "adoption is additive: no collection is deleted"
 
-    assert LIVE not in client.dimensions, "the superseded index is retired after the switch"
-    assert client.aliases[LIVE] == REPLACEMENT
+    result = await store.promote_replacement(
+        live=SERVING, replacement=REPLACEMENT, expected_points=3
+    )
+
+    assert client.aliases[SERVING] == REPLACEMENT
     assert len(client.points[REPLACEMENT]) == 3
+    # T-R05: the previous physical collection survives for rollback.
+    assert result.retained_previous is True
+    assert result.previous_target == LIVE
+    assert len(client.points[LIVE]) == 3, "the superseded index is retained, not deleted"
+    assert client.deleted == [], "promotion deletes nothing"
+
+
+async def test_promotion_refuses_a_serving_name_that_is_a_physical_collection() -> None:
+    """The delete-to-promote shape is refused, not performed."""
+    store, client = make_live_store()
+    client.seed(REPLACEMENT, points=3)
+
+    with pytest.raises(VectorStoreError, match="physical collection, not an alias"):
+        await store.promote_replacement(live=LIVE, replacement=REPLACEMENT, expected_points=3)
+
+    assert client.deleted == [], "no serving data may be deleted to make room"
+    assert len(client.points[LIVE]) == 3, "the prior index still serves"
+    assert len(client.points[REPLACEMENT]) == 3, "the replacement stays intact"

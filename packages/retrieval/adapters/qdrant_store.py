@@ -71,6 +71,7 @@ import os
 import re
 import uuid
 from collections.abc import Awaitable, Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any
 
 from core.config import get_settings
@@ -93,6 +94,12 @@ from qdrant_client.http.models import (
 )
 
 from ..interfaces import RetrievalMethod, RetrievedItem, SearchFilter, VectorRecord, VectorStore
+from ..serving import (
+    ServingAliasState,
+    adopt_command,
+    rollback_command,
+    serving_alias_name,
+)
 from .infinity_embed import _is_zero_vector
 
 DENSE_NAME = "dense"
@@ -323,6 +330,33 @@ def _is_active_version(payload: Mapping[str, Any], active: Mapping[str, str | No
     return payload_version is not None and str(payload_version) == active_version
 
 
+@dataclass(frozen=True)
+class PromotionResult:
+    """What a promotion (or rollback) did, and how to undo it.
+
+    T-R05. The previous physical collection is RETAINED — this result is the
+    operator's rollback handle, which is why ``retained_previous`` is always
+    true for an executed promotion.
+    """
+
+    serving: str
+    previous_target: str
+    new_target: str
+    retained_previous: bool
+    recovery_command: str
+    executed: bool
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "executed": self.executed,
+            "serving": self.serving,
+            "previous_target": self.previous_target,
+            "new_target": self.new_target,
+            "retained_previous": self.retained_previous,
+            "recovery_command": self.recovery_command,
+        }
+
+
 class QdrantVectorStore(VectorStore):
     """Qdrant hybrid store — implements retrieval.interfaces.VectorStore.
 
@@ -346,6 +380,9 @@ class QdrantVectorStore(VectorStore):
         self._default_collection = collection
         #: Collection → configured dense dimension, learned once (T-V1-015).
         self._dimensions: dict[str, int] = {}
+        #: T-R05: serving alias → the physical collection it served before the
+        #: last promotion, so a rollback has a target without asking the caller.
+        self._previous_target: dict[str, str] = {}
         #: T-V1-018 pre-evidence gate: who answers "which version is active".
         #: Defaults to the documents table; tests inject their own resolver.
         self._active_version_resolver: ActiveVersionResolver = (
@@ -517,29 +554,163 @@ class QdrantVectorStore(VectorStore):
         except Exception as e:
             raise VectorStoreError(f"upsert failed for {collection}: {e}") from e
 
+    async def ensure_serving_alias(
+        self,
+        *,
+        physical: str,
+        alias: str | None = None,
+    ) -> ServingAliasState:
+        """Adopt a stable serving alias pointing at the retained old collection.
+
+        T-R05. **Additive only**: this creates the alias and never deletes,
+        renames or writes anything, so the serving name keeps resolving to the
+        old collection through the whole promotion. Qdrant has no rename, which
+        is precisely why the old code deleted the serving collection to free its
+        name — deleting was the bug, not the requirement.
+
+        Idempotent: if the alias already exists its current target is returned
+        unchanged (a repoint is ``promote_replacement``'s job, never a side
+        effect of adopting).
+        """
+        if not physical:
+            raise VectorStoreError("physical collection name required")
+        alias_name = alias or serving_alias_name(physical)
+        state = await self.serving_alias_state(alias_name)
+        if state.target is not None:
+            return state
+        try:
+            await self._client.update_collection_aliases(
+                change_aliases_operations=[
+                    CreateAliasOperation(
+                        create_alias=CreateAlias(collection_name=physical, alias_name=alias_name)
+                    )
+                ]
+            )
+        except Exception as e:
+            raise VectorStoreError(
+                f"could not create serving alias {alias_name!r} -> {physical!r} "
+                f"({type(e).__name__}: {e}) — {physical!r} is untouched and still serving; "
+                f"re-run: {adopt_command(alias_name, physical)}"
+            ) from e
+        return await self.serving_alias_state(alias_name)
+
+    async def serving_alias_state(self, alias: str) -> ServingAliasState:
+        """Where the serving alias points right now (read-only)."""
+        aliases = await self._client.get_aliases()
+        entries = getattr(aliases, "aliases", None) or []
+        for entry in entries:
+            name = getattr(entry, "alias_name", None)
+            if name == alias:
+                return ServingAliasState(
+                    alias=alias,
+                    target=str(getattr(entry, "collection_name", "") or "") or None,
+                    serving_name_is_physical=False,
+                )
+        # No alias by that name: is the name itself a physical collection?
+        if await self._client.collection_exists(alias):
+            return ServingAliasState(
+                alias=alias, target=alias, serving_name_is_physical=True
+            )
+        return ServingAliasState(alias=alias, target=None, serving_name_is_physical=False)
+
+    async def serving_target(self, alias: str) -> str | None:
+        """The physical collection the serving alias resolves to (read-only)."""
+        return (await self.serving_alias_state(alias)).target
+
+    async def verify_serving_readable(
+        self, name: str, *, expected_points: int | None = None
+    ) -> dict[str, Any]:
+        """Read-only proof that ``name`` currently serves something readable."""
+        state = await self.serving_alias_state(name)
+        target = state.target
+        if target is None:
+            return {
+                "name": name,
+                "readable": False,
+                "points": 0,
+                "reason": f"{name!r} resolves to no collection (alias missing, not adopted)",
+            }
+        points = await self._point_count(target)
+        readable = points is not None
+        return {
+            "name": name,
+            "resolves_to": target,
+            "readable": readable,
+            "points": points or 0,
+            "meets_expected": expected_points is None or (points or 0) >= expected_points,
+        }
+
+    async def rollback_promotion(
+        self, live: str, *, to: str | None = None
+    ) -> PromotionResult:
+        """Atomically repoint the serving alias back to a retained collection.
+
+        The recorded previous target is used when ``to`` is omitted. The
+        target is verified readable **before** the repoint, so a rollback can
+        never leave the alias pointing at nothing.
+        """
+        state = await self.serving_alias_state(live)
+        target = to or self._previous_target.get(live)
+        if not target:
+            raise VectorStoreError(
+                f"no previous target recorded for {live!r}; pass to=<collection> explicitly"
+            )
+        if not await self._client.collection_exists(target):
+            raise VectorStoreError(
+                f"rollback target {target!r} does not exist — {live!r} left serving "
+                f"{state.target!r}"
+            )
+        before = state.target
+        try:
+            await self._client.update_collection_aliases(
+                change_aliases_operations=[
+                    DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=live)),
+                    CreateAliasOperation(
+                        create_alias=CreateAlias(collection_name=target, alias_name=live)
+                    ),
+                ]
+            )
+        except Exception as e:
+            raise VectorStoreError(
+                f"rollback of {live!r} to {target!r} failed ({type(e).__name__}: {e}) — "
+                f"{live!r} still serves {before!r}"
+            ) from e
+        self._previous_target[live] = before or ""
+        return PromotionResult(
+            serving=live,
+            previous_target=before or "",
+            new_target=target,
+            retained_previous=before is not None,
+            recovery_command=rollback_command(live, before) if before else "",
+            executed=True,
+        )
+
     async def promote_replacement(
         self,
         *,
         live: str,
         replacement: str,
         expected_points: int = 0,
-    ) -> None:
-        """Switch ``live`` over to a fully built ``replacement`` (T-V1-015).
+    ) -> PromotionResult:
+        """Switch the serving alias over to a fully built ``replacement``.
 
-        The second half of *build replacement, then switch*. **Verification
-        comes first and is entirely read-only**: the replacement must exist,
-        report the same dense dimension as the live index, and hold at least
+        T-V1-015 verification, T-R05 switch. **Verification comes first and is
+        entirely read-only**: the replacement must exist, report the same dense
+        dimension as the current serving target, and hold at least
         ``expected_points`` points. Any verification failure raises and
-        performs no destructive call at all, so a failed or interrupted
-        rebuild leaves the prior index serving exactly as before.
+        performs no destructive call at all, so a failed or interrupted rebuild
+        leaves the prior index serving exactly as before.
 
-        Only after verification does the switch run: if ``live`` is a real
-        collection it is deleted and the name is immediately re-issued as an
-        alias to ``replacement`` (Qdrant has no rename, so the old collection
-        can only retire once the replacement is proven); if ``live`` is
-        already an alias it is repointed atomically in a single alias request
-        and the superseded physical collection is left in place for the
-        operator to drop. The prior index is never deleted before this point.
+        The switch itself is **one atomic alias repoint** — a single
+        ``update_collection_aliases`` request carrying both the delete-alias and
+        the create-alias operation — and the serving name must already BE an
+        alias (:meth:`ensure_serving_alias`). The superseded physical collection
+        is **retained** as the rollback target: this method never deletes the
+        serving collection, never deletes the previous target, and never
+        converts the serving name into an alias by deleting what was behind it.
+        A serving name that is still a physical collection is REFUSED with the
+        adoption command, because the only old way to free that name was to
+        delete it — the outage shape T-R05 exists to remove.
         """
         if not live or not replacement:
             raise VectorStoreError("live and replacement collection names are required")
@@ -576,42 +747,62 @@ class QdrantVectorStore(VectorStore):
                     f"{replacement_dim}-d — nothing promoted; {live!r} is untouched"
                 )
 
-        # --- switch phase: only reachable with a verified replacement ------
-        try:
-            if live_is_collection:
-                await self._client.delete_collection(live)
-                operations: list[Any] = [
-                    CreateAliasOperation(
-                        create_alias=CreateAlias(collection_name=replacement, alias_name=live)
-                    )
-                ]
-                await self._client.update_collection_aliases(change_aliases_operations=operations)
-            else:
-                aliases = await self._client.get_aliases()
-                existing = [
-                    a.alias_name
-                    for a in getattr(aliases, "aliases", []) or []
-                    if a.alias_name == live
-                ]
-                operations = [
-                    CreateAliasOperation(
-                        create_alias=CreateAlias(collection_name=replacement, alias_name=live)
-                    )
-                ]
-                if existing:
-                    operations.insert(
-                        0, DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=live))
-                    )
-                await self._client.update_collection_aliases(change_aliases_operations=operations)
-        except VectorStoreError:
-            raise
-        except Exception as e:
+        # --- serving-name contract (T-R05) --------------------------------
+        # The serving name must be a STABLE ALIAS. If it is still a physical
+        # collection we refuse: the only way to convert it would be to delete
+        # it, which is the outage shape this ticket removes.
+        state = await self.serving_alias_state(live)
+        if state.serving_name_is_physical:
             raise VectorStoreError(
-                f"switch to {replacement!r} failed after verification ({type(e).__name__}: "
-                f"{e}) — inspect {live!r}/{replacement!r} before retrying"
+                f"serving name {live!r} is a physical collection, not an alias — refusing to "
+                f"delete it to promote. Adopt the stable serving alias first (additive, "
+                f"nothing is deleted): {adopt_command(serving_alias_name(live), live)}. "
+                f"{live!r} keeps serving and {replacement!r} stays intact."
+            )
+        if state.target is None:
+            raise VectorStoreError(
+                f"serving alias {live!r} does not exist — nothing promoted. Adopt it first: "
+                f"{adopt_command(serving_alias_name(live), live)}"
+            )
+        previous_target = state.target
+        if previous_target == replacement:
+            raise VectorStoreError(
+                f"{live!r} already serves {replacement!r} — nothing to promote"
+            )
+
+        # --- switch phase: ONE atomic alias repoint, nothing deleted -------
+        try:
+            await self._client.update_collection_aliases(
+                change_aliases_operations=[
+                    DeleteAliasOperation(delete_alias=DeleteAlias(alias_name=live)),
+                    CreateAliasOperation(
+                        create_alias=CreateAlias(collection_name=replacement, alias_name=live)
+                    ),
+                ]
+            )
+        except Exception as e:
+            # The single request is atomic server-side, so a failure here means
+            # the alias still points at the previous target: the old index is
+            # serving and the replacement is intact.
+            raise VectorStoreError(
+                f"atomic repoint of {live!r} -> {replacement!r} failed "
+                f"({type(e).__name__}: {e}) — nothing was deleted; {live!r} still serves "
+                f"{previous_target!r} and {replacement!r} is intact. Verify with "
+                f"verify_serving_readable({live!r}); to force the switch later, re-run the "
+                f"promotion, and to go back explicitly: "
+                f"{rollback_command(live, previous_target)}"
             ) from e
         self._dimensions[live] = replacement_dim
         self._dimensions[replacement] = replacement_dim
+        self._previous_target[live] = previous_target
+        return PromotionResult(
+            serving=live,
+            previous_target=previous_target,
+            new_target=replacement,
+            retained_previous=True,
+            recovery_command=rollback_command(live, previous_target),
+            executed=True,
+        )
 
     async def count_ids(self, *, collection: str, ids: Sequence[str]) -> int:
         """Count how many of ``ids`` currently exist as points in the collection.

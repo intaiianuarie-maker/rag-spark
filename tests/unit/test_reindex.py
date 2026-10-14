@@ -18,12 +18,16 @@ from typing import Any
 import pytest
 from retrieval.adapters.infinity_embed import EmbeddingProviderError
 from retrieval.adapters.qdrant_store import VectorStoreError
+from retrieval.serving import serving_alias_name
 
 from scripts import reindex_all_chunks as reindex_mod
 from scripts.reindex_all_chunks import ReindexRefused, reindex, validate_vector
 
 #: Dimensions the fake provider reports and the fake index is built at.
 _DIM = 4
+#: Scratch names (T-R05): the live collection is never named in this suite.
+LIVE = "knowledge_test_reindex"
+REPLACEMENT = "knowledge_test_reindex_v2"
 
 
 async def _no_sleep(_seconds: float) -> None:
@@ -156,13 +160,30 @@ class _VectorStoreBase:
         self.calls.append(("upsert", collection, list(records)))
         return len(records)
 
+    async def ensure_serving_alias(
+        self, *, physical: str, alias: str | None = None
+    ) -> Any:
+        """T-R05: the additive adoption step the script performs before a switch."""
+        name = alias or serving_alias_name(physical)
+        self.calls.append(("ensure_serving_alias", physical, name))
+        return SimpleNamespace(alias=name, target=physical, serving_name_is_physical=False)
+
     async def promote_replacement(
         self, *, live: str, replacement: str, expected_points: int = 0
-    ) -> None:
+    ) -> Any:
         self.calls.append(("promote_replacement", live, replacement, expected_points))
         error = self.harness.promote_error
         if error is not None:
             raise error
+        previous = serving_alias_name(live)
+        return SimpleNamespace(
+            serving=live,
+            previous_target=previous,
+            new_target=replacement,
+            retained_previous=True,
+            recovery_command=f"rollback_promotion({live!r}, to={previous!r})",
+            executed=True,
+        )
 
     async def close(self) -> None:
         self.calls.append(("close",))
@@ -273,23 +294,28 @@ async def test_dry_run_refusal_reports_a_blocked_switch_plan(
 
 
 async def test_real_run_builds_into_the_replacement_then_promotes_it(
-    harness: SimpleNamespace, caplog: pytest.LogCaptureFixture
+    harness: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     caplog.set_level(logging.INFO, logger="reindex")
+    # T-R05: the switch path refuses an ambient collection name, so the test
+    # states the name explicitly. Scratch names only — never the live one.
+    monkeypatch.setenv("VECTOR_COLLECTION", LIVE)
 
-    indexed = await reindex(collection="knowledge", replacement="knowledge_v2", batch_size=2)
+    indexed = await reindex(collection=LIVE, replacement=REPLACEMENT, batch_size=2)
 
     assert indexed == 3
     store = harness.stores[0]
-    assert store.collection == "knowledge_v2"
+    assert store.collection == REPLACEMENT
     # Every write went to the replacement; the live collection is never a
     # write target, and nothing is destroyed to start the rebuild.
     assert [c[:2] for c in _calls(store) if c[0] == "upsert"] == [
-        ("upsert", "knowledge_v2"),
-        ("upsert", "knowledge_v2"),
+        ("upsert", REPLACEMENT),
+        ("upsert", REPLACEMENT),
     ]
     assert [c[:3] for c in _calls(store) if c[0] == "ensure_collection"] == [
-        ("ensure_collection", "knowledge_v2", _DIM)
+        ("ensure_collection", REPLACEMENT, _DIM)
     ]
     assert all(c[3] is False for c in _calls(store) if c[0] == "ensure_collection")
 
@@ -299,7 +325,7 @@ async def test_real_run_builds_into_the_replacement_then_promotes_it(
     last_upsert = max(i for i, name in enumerate(names) if name == "upsert")
     assert names.index("promote_replacement") > last_upsert
     promote = next(c for c in _calls(store) if c[0] == "promote_replacement")
-    assert promote[1:] == ("knowledge", "knowledge_v2", 3)
+    assert promote[1:] == (serving_alias_name(LIVE), REPLACEMENT, 3)
     assert store.calls[-1] == ("close",)
 
     # No zero path reintroduced: every written vector is non-zero at the
@@ -310,7 +336,14 @@ async def test_real_run_builds_into_the_replacement_then_promotes_it(
     assert all(r.metadata["embedding_model"] == "BAAI/bge-m3" for r in written)
     # The FTS side reindexes the same validated records.
     assert sum(len(batch) for batch in harness.lexical[0].batches) == 3
-    assert "switch complete: 'knowledge' now serves 'knowledge_v2'" in caplog.text
+    # T-R05: the switch targets the stable serving alias, and the superseded
+    # collection is retained with a logged recovery command.
+    assert (
+        f"switch complete: {serving_alias_name(LIVE)!r} now serves {REPLACEMENT!r}"
+        in caplog.text
+    )
+    assert "retained for rollback" in caplog.text
+    assert "serving alias" in caplog.text
 
 
 async def test_run_without_a_replacement_never_switches(
@@ -332,7 +365,9 @@ async def test_run_without_a_replacement_never_switches(
 
 
 async def test_verified_replacement_is_kept_and_still_switched(
-    harness: SimpleNamespace, caplog: pytest.LogCaptureFixture
+    harness: SimpleNamespace,
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Re-run after an interrupted switch: a verified replacement is kept."""
     caplog.set_level(logging.INFO, logger="reindex")
@@ -346,7 +381,8 @@ async def test_verified_replacement_is_kept_and_still_switched(
         recorded_dims=[str(_DIM)],
     )
 
-    indexed = await reindex(collection="knowledge", replacement="knowledge_v2", batch_size=2)
+    monkeypatch.setenv("VECTOR_COLLECTION", LIVE)
+    indexed = await reindex(collection=LIVE, replacement=REPLACEMENT, batch_size=2)
 
     assert indexed == 3
     assert "plan: action=keep" in caplog.text
@@ -354,20 +390,22 @@ async def test_verified_replacement_is_kept_and_still_switched(
     # The already-verified replacement is neither refused nor rebuilt from
     # scratch — it is upserted into (idempotent) and promoted like any build.
     promote = next(c for c in _calls(store) if c[0] == "promote_replacement")
-    assert promote[1:] == ("knowledge", "knowledge_v2", 3)
+    assert promote[1:] == (serving_alias_name(LIVE), REPLACEMENT, 3)
 
 
 async def test_promote_failure_propagates_and_no_other_switch_runs(
     harness: SimpleNamespace,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The switch is only ever the store's verified one — and it can abort."""
+    monkeypatch.setenv("VECTOR_COLLECTION", LIVE)
     harness.promote_error = VectorStoreError(
-        "replacement 'knowledge_v2' is incomplete: 2 of 3 expected points — nothing "
-        "promoted; 'knowledge' is untouched"
+        f"replacement {REPLACEMENT!r} is incomplete: 2 of 3 expected points — nothing "
+        f"promoted; {LIVE!r} is untouched"
     )
 
     with pytest.raises(VectorStoreError, match="nothing promoted"):
-        await reindex(collection="knowledge", replacement="knowledge_v2", batch_size=2)
+        await reindex(collection=LIVE, replacement=REPLACEMENT, batch_size=2)
 
     store = harness.stores[0]
     names = [c[0] for c in _calls(store)]

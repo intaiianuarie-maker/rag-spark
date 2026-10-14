@@ -30,6 +30,17 @@ T-V1-014 — reindex through the REAL validated embedding provider (never zeros)
   collection before the replacement is proven. This script has no other
   destructive route: without ``--replacement`` it does not switch at all.
 
+   **T-R05 — stable serving alias, no delete-to-promote.** Before the switch the
+   script (a) refuses to proceed when ``VECTOR_COLLECTION`` is unset or is the
+   ambient ``knowledge`` default, because neither the api nor the worker pins it
+   today, and (b) *adopts* a stable serving alias over the retained old
+   collection additively (``ensure_serving_alias`` — creates an alias, deletes
+   nothing). Promotion is then ONE atomic alias repoint, the superseded physical
+   collection is retained as the rollback target, and the recovery command is
+   logged. The old shape — delete the serving collection, then re-issue the name
+   as an alias — is gone: if the switch fails the old index is still serving and
+   the replacement is intact.
+
 Failed-rebuild recovery (T-V1-014, mechanised by T-V1-045)
 ----------------------------------------------------------
 1. **Refused in-place run** (unknown or mismatched identity): nothing was
@@ -79,6 +90,7 @@ from retrieval.adapters.infinity_embed import (
 from retrieval.adapters.pg_fts import PostgresLexicalStore
 from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreError
 from retrieval.interfaces import VectorRecord
+from retrieval.serving import assert_explicit_collection, serving_alias_name
 from sqlalchemy import text
 
 logging.basicConfig(level=logging.INFO)
@@ -544,10 +556,35 @@ async def reindex(
                     "(no chunks to count) before switching %r",
                     collection,
                 )
-            await qdrant.promote_replacement(
-                live=collection, replacement=replacement, expected_points=total_indexed
+            # T-R05: refuse an ambient serving name BEFORE anything switches.
+            # Neither the api nor the worker pins VECTOR_COLLECTION today, so
+            # this guard is what stops a promotion against a name nobody chose
+            # (a build into an explicitly named scratch collection is unaffected
+            # — only the switch path needs the guard). The one-line compose fix
+            # is named in the message.
+            assert_explicit_collection(dict(os.environ))
+            # T-R05: the serving name is adopted as a stable alias FIRST
+            # (additive — nothing is deleted, so the old index keeps serving
+            # through the whole switch), then promotion is one atomic repoint
+            # that retains the superseded collection as the rollback target.
+            alias = serving_alias_name(collection)
+            adopted = await qdrant.ensure_serving_alias(physical=collection, alias=alias)
+            logger.info(
+                "serving alias %r adopted -> %r (no deletion; %r still serves)",
+                adopted.alias,
+                adopted.target,
+                collection,
             )
-            logger.info("switch complete: %r now serves %r", collection, replacement)
+            result = await qdrant.promote_replacement(
+                live=alias, replacement=replacement, expected_points=total_indexed
+            )
+            logger.info(
+                "switch complete: %r now serves %r (previous %r retained for rollback: %s)",
+                alias,
+                result.new_target,
+                result.previous_target,
+                result.recovery_command,
+            )
     finally:
         if qdrant is not None:
             await qdrant.close()
