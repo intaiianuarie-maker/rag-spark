@@ -878,3 +878,10 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 ## 2026-10-14 — F1 DONE code-only (d53d087); both standby, restart release pending user
 - T-F1-READY (dev1): empty-URL healthy-by-absence; 4/4 + 38 adjacent; ruff+mypy clean. Live /ready still red until secret-rotation restart (R01 trap, deferred honestly).
 - Next: user secret + go -> restart release (traffic migration + F1 live) -> re-recon -> R13b on STABLE.
+
+## 2026-10-14 — RESTART RELEASE DONE (user secret+go); RECON2 dispatched
+- Compose: INFINITY_URL default cleared (F1 live requires it; dead-host default would keep /ready red). AUTH_JWT_SECRET + VECTOR_COLLECTION=knowledge__serving exported inline only, never written.
+- Sequence: build api (F1 in) -> recreate api+worker (Qdrant/PG/redis untouched). /ready TRUE 7/7 (infinity healthy-by-absence), worker heartbeat fresh, alias knowledge__serving->rebuild@2204, old knowledge@2041 retained.
+- R01 rotation executed in-container: 8594 sessions + 8707 refresh tokens revoked, secret swapped. Auth lifecycle live-proved: register 201 + login 200 + refresh 200 (test user relsmoke_test@example.com left in PG, disclosed).
+- Traffic proof: both containers carry the alias (per-call accessor per R05); live search skipped (needs workspace+ingest, metered spend, no new signal over R07/R08 alias proofs — stated). /version git_sha still unknown (known wiring gap, not this release).
+- RECON2 to dev1 @w5:pG (post-restart, box quiet load ~3.9). R13b full run gated on STABLE verdict.

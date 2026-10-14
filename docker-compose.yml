@@ -100,7 +100,7 @@ x-backend-env: &backend-env
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
   LITELLM_URL: ${LITELLM_URL:-https://openrouter.ai/api/v1}
   ANSWER_MODEL: ${ANSWER_MODEL:-nvidia/nemotron-3.5-lightning:free}
-  INFINITY_URL: ${INFINITY_URL:-http://infinity-rerank:7997}
+  INFINITY_URL: ${INFINITY_URL:-}
   # T-R11: ONE shared persistent graph store. Previously graph_db_path() defaulted
   # to the RELATIVE "./.graph/graph.db", so every service resolved it inside its
   # own container filesystem and api, worker and extraction each held a PRIVATE
