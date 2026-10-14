@@ -3185,3 +3185,29 @@ Table (snapshot):
 | Qdrant /readyz | 104 ms (ready) |
 | Postgres SELECT 1 | 111.6 ms (ready; 13 tables) |
 Next: IDLE — appended row + push mandatory (herdr w5:p4, no --wait). No commit, no deploy, no eval.
+
+## 2026-10-14 T-F1-READY — readiness absent-tolerant on deleted infinity (dev1)
+TASK: T-F1-READY (w5:pG). Bounded ~30m read-only-to-services edit. `INFINITY_URL` now defaults empty after T-ARCH-04; the infinity probe still treated empty as a red, stuck `/ready` (recon). Make absence tolerant: skip/healthy when unset, still probe when configured; real deps keep gating.
+CHANGE (allowed files only):
+- `apps/api/app/adapters/infinity_probe.py`: empty/blank `INFINITY_URL` now returns `reachable=True` (absent-tolerant), instead of the `T-ARCH-04 removed` red error. Configured URLs still probed with the sub-500 rule.
+- `tests/unit/test_infinity_absent_tolerant.py`: 4 unit cases (infinity-unset ready, infinity-set unreachable degraded, postgres-down not-ready, qdrant-down not-ready).
+- No edits to `/ready` probe set or pinned dependency contract; infinity still appears, but as healthy-by-absence when unconfigured.
+WHY: infinity container deleted per user order; readiness must not fail closed on a deliberately absent optional/removed service, while PG/Qdrant/redis remain hard gates. Live `/ready` will remain red on stale container until coordinator secret-rotation restart release; code fix is verified at unit level only (stated).
+REUSED: existing readiness aggregation + DependencyStatus; no new dependencies.
+BUILT: 4 unit tests (all green).
+VERIFY (exact):
+- `/root/ko-venv/bin/pytest -q tests/unit/test_infinity_absent_tolerant.py` -> 4 passed.
+- `/root/ko-venv/bin/ruff check apps/api/app/adapters/infinity_probe.py apps/api/app/adapters/readiness.py tests/unit/test_infinity_absent_tolerant.py` -> all checks passed.
+- `/root/ko-venv/bin/mypy apps/api/app/adapters/infinity_probe.py apps/api/app/adapters/readiness.py` -> Success: no issues found in 2 source files.
+- import check `PYTHONPATH=packages:apps/api:apps/worker:. python3 -c "import ..."` -> import-ok.
+- start `git status --short` captured; end `git status --short`: only `M apps/api/app/adapters/infinity_probe.py`, `?? tests/unit/test_infinity_absent_tolerant.py`, `?? handoffs/CODE1-HANDOFF.md` among our changes.
+Case table:
+| case | infinity URL | other deps | /ready-equivalent verdict |
+|---|---|---|---|
+| infinity-unset | empty | all healthy | ready (infinity ignored) |
+| infinity-set-unreachable | fake/unreachable | all healthy | degraded (infinity red) |
+| postgres-down | empty | PG down | not ready |
+| qdrant-down | empty | Qdrant down | not ready |
+Deferred live behavior: no API/container restart, no compose, no deploy, no restart performed (R01 AUTH_JWT_SECRET trap). Existing live api still reports infinity red until the coordinator's next secret-rotation restart release; this ticket's behavior is unit-proved only and makes no live /ready claim.
+RISKS: hidden consumers/tests that assert infinity must always be unreachable when unconfigured will need updating; pinned integration suite still sets INFINITY_URL to a closed port, so it remains red-tested there (expected and unchanged). No runtime restart means no live verification this round.
+Next: IDLE — pending T-R13b re-recon when coordinator permits; evals remain halted by user order.

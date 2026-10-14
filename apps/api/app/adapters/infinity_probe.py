@@ -21,11 +21,14 @@ from core.health import DependencyStatus
 async def probe(infinity_url: str, timeout_seconds: float) -> DependencyStatus:
     name = "infinity"
     if not infinity_url or not infinity_url.strip():
+        # Absent-tolerant (T-F1-READY / T-ARCH-04): infinity was deleted from
+        # the stack, so an unset INFINITY_URL is an expected, healthy state —
+        # not a failure. Only probe (and gate on) it when configured.
         return DependencyStatus(
             name=name,
-            reachable=False,
+            reachable=True,
             latency_ms=0.0,
-            error="infinity service unconfigured or removed per user order (T-ARCH-04)",
+            detail="infinity absent-tolerant (INFINITY_URL unset; T-ARCH-04 removed server)",
         )
     start = time.perf_counter()
     url = infinity_url.rstrip("/")
