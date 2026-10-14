@@ -2978,3 +2978,91 @@ RISKS:
 - Postgres manifest currently contains 2211 chunk rows (7 extra test debris chunks added post-switch); `subset_ok: true` passes rehearsal; any future full reindex should run against a freshly pruned manifest.
 - Dev2's lanes (`packages/agents/*`, `apps/api/app/agents/router.py`, `research_pipeline.py`) were untouched and disjoint.
 - Left uncommitted per rules: no commit, no deploy, no restart, no compose.
+
+## 2026-10-14 T-R17 — V3 Surface + Rollout (Phase 3 Closer)
+TASK: T-R17
+CHANGE:
+- `apps/web/src/app/agent-runs/page.tsx`:
+  - Added typed `ReadinessInfo` and async `checkReadiness` querying `GET /v1/workspaces/${workspace}/agent/readiness`.
+  - Added honest unavailable banner and disabled start form when LLM provider is unconfigured (`missing: llm_provider`).
+  - Added pure `mergeRunRecords` combining server runs from `GET /v1/workspaces/${workspace}/agent/runs` with local browser cache.
+  - Added real output preview directly from `run.output` on run cards (0 mock text).
+- `apps/web/src/app/agent-runs/[id]/page.tsx`:
+  - Added typed wire interfaces for `StepEvent`, `HistoryResponse`, `ApprovalResponse`.
+  - Updated run loader to query both `GET /v1/workspaces/${workspace}/agent/runs/${id}` and `GET /runs/${id}/history`.
+  - Added interactive human approval banner with "Approve" and "Reject" buttons wired directly to `POST /runs/${id}/approval`.
+  - Wired cancel action to `POST /runs/${id}/cancel` enforcing server-side monotonic terminal cancellation.
+  - Rendered REAL final output section directly from `snapshot.output` (0 mock data, 0 fake placeholders).
+  - Rendered REAL Budget & Usage metrics table displaying limits alongside actual consumption (`prompt_tokens`, `completion_tokens`, `tool_calls`, `cost_usd`).
+  - Rendered REAL Sources section displaying citations from `snapshot.sources` with direct deep links to `/knowledge/documents/${document_id}/${chunk_id}`.
+  - Rendered REAL Execution Steps timeline displaying chronological events from `StepStore`.
+- `apps/web/src/app/research/[id]/page.tsx`:
+  - Added honest unavailable banner when research report or pipeline is unconfigured (`missing: research_pipeline`), preventing fake ready-state presentations.
+- `apps/api/app/agents/lifecycle_routes.py` (extended from R15):
+  - Added `subrouter = APIRouter(tags=["agent-lifecycle"])` mounted onto `router.py`.
+  - Added `ReadinessResponse` and `GET /readiness` endpoint checking for configured LLM provider.
+  - Added real output, budget, usage, and sources aggregation to `_build_status_response` pulling from `DurableRunRecord`, `RunBudget`, `StepStore`, and `EvidenceStore`.
+  - Decorated endpoints (`/runs`, `/runs/{run_id}`, `/runs/{run_id}/status`, `/runs/{run_id}/history`, `/runs/{run_id}/cancel`, `/runs/{run_id}/approval`) to expose them under both routers.
+- `apps/api/app/agents/router.py`:
+  - Mounted `lifecycle_subrouter`.
+  - Extended `StatusResponse` wire model with `goal`, `output`, `budget`, `usage`, `sources`.
+  - Added fallback in `get_run_status` and `cancel_run` to check `get_run_store().get_run(run_id)`.
+- `packages/stores/agent_stores.py` (extended from R15):
+  - Added `final_output: str | None = None` to `DurableRunRecord`.
+- `apps/worker/jobs/agent_worker.py` (extended from R15):
+  - Stored worker output in `record.final_output` upon run completion.
+- `apps/web/src/app/agent-runs/v3-surface-rollout.test.ts` (NEW):
+  - Vitest suite asserting: start-limit fallbacks, run status tone mappings, `mergeRunRecords` deduplication and precedence, readiness state logic, and live output preview without mock fallbacks.
+- `tests/unit/test_v3_surface_wiring.py` (NEW):
+  - Pytest suite asserting: field tracing from backend stores to StatusResponse, monotonic cancellation, approval transitions, and readiness checking (ready vs honest unavailable).
+- `handoffs/CODE1-HANDOFF.md` (this row).
+
+WHY:
+- Close Phase 3 by connecting the V3 frontend surface to the real backend lifecycle and research pipelines (R14/R15/R16).
+- Target metrics achieved:
+  1. `surface fields rendering mocked/placeholder data as live: 0`:
+     - Every displayed field is traced directly to an authoritative backend store; when data is not yet available, honest status text is shown ("Run in progress — output will appear upon completion").
+  2. `cancel/approval actions bypassing backend transitions: 0`:
+     - Monotonic cancel wires to `POST /runs/{id}/cancel` and approval wires to `POST /runs/{id}/approval`. Monotonic terminal state verified.
+  3. `rollout states misrepresenting readiness: 0`:
+     - Unconfigured workspaces return `ready: false, missing: "llm_provider"` via `GET /readiness`; frontend displays an explicit warning banner, disables input fields, and renders submit as "Unavailable".
+- Field Trace Architecture:
+  | Surface Field | Backend Authority | Wire Field / Model | Verification |
+  |---|---|---|---|
+  | Goal | `DurableRunRecord.goal` | `StatusResponse.goal` | `test_surface_status_wiring_exposes_real_fields` |
+  | Output | `DurableRunRecord.final_output` / `_PERSISTED_RUNS` | `StatusResponse.output` | `test_surface_status_wiring_exposes_real_fields` |
+  | Steps | `StepStore.list(run_id)` | `HistoryResponse.steps` | `test_surface_status_wiring_exposes_real_fields` |
+  | Budget | `RunBudget` / `WorkspaceAgentPolicy` | `StatusResponse.budget` | `test_surface_status_wiring_exposes_real_fields` |
+  | Usage | `StepStore` usage summation | `StatusResponse.usage` | `test_surface_status_wiring_exposes_real_fields` |
+  | Sources | `EvidenceStore.list(run_id)` | `StatusResponse.sources` | `test_surface_status_wiring_exposes_real_fields` |
+  | Readiness | `load_workspace_config` / provider check | `ReadinessResponse` | `test_readiness_endpoint_honest_rollout_states` |
+
+REUSED:
+- `apps/api/app/agents/lifecycle_routes.py` (R15 lifecycle seam).
+- `packages/stores/agent_stores.py` (`DurableRunRecord`, `StepStore`, `EvidenceStore`).
+- `packages/agents/interfaces.py` (`RunBudget`, `StepEvent`, `Usage`, `RunStatus`).
+- `apps/web/src/lib/auth-client.ts` (`auth.authFetch`).
+- `apps/web/src/components/ui/` (`Button`, `Badge`, `Card`, `Input`, `Label`).
+
+BUILT:
+- Surface UI for real output display, step timeline, budget vs usage cards, and citation provenance deep links.
+- Interactive human-in-the-loop approval actions in `apps/web/src/app/agent-runs/[id]/page.tsx`.
+- Readiness endpoint and UI banner for honest rollout disclosure.
+- Vitest and pytest test suites validating the end-to-end surface-backend contract.
+
+VERIFY:
+- Web tests: `npm test --prefix apps/web` -> **22 test files passed, 221 tests passed** in 18.43s.
+- Web linter: `npm run lint --prefix apps/web` (`eslint`) -> **Passed with 0 errors**.
+- Web typecheck: `npm run typecheck --prefix apps/web` (`tsc --noEmit`) -> **Passed with 0 errors**.
+- Backend unit tests: `pytest tests/unit/test_v3_surface_wiring.py tests/unit/test_agent_lifecycle.py tests/unit/test_agent_runs_api.py tests/unit/test_v3_factories_policy_budget.py tests/unit/test_v3_research_pipeline.py -q` -> **50 passed** in 69.12s.
+- Python linter: `ruff check apps/api/app/agents/ apps/worker/jobs/agent_worker.py packages/stores/ tests/unit/test_v3_surface_wiring.py tests/unit/test_agent_lifecycle.py` -> **All checks passed!**
+- Python typecheck: `MYPYPATH=packages:apps/api:apps/worker mypy --explicit-package-bases apps/api/app/agents/lifecycle_routes.py apps/api/app/agents/router.py apps/worker/jobs/agent_worker.py packages/stores/agent_stores.py tests/unit/test_v3_surface_wiring.py` -> **Success: no issues found in 5 source files**.
+- Invariant metrics:
+  - `surface fields rendering mocked/placeholder data as live = 0`: Trace matrix verified, mock data eradicated.
+  - `cancel/approval actions bypassing backend transitions = 0`: Monotonic transitions asserted in unit and UI tests.
+  - `rollout states misrepresenting readiness = 0`: Explicit honest unavailable banner asserted when LLM unconfigured.
+
+RISKS:
+- In environments where neither Redis nor Postgres is configured, SQLite and in-memory stores serve lifecycle operations cleanly in accordance with fallback contracts.
+- Dev2's R14 and R16 pipeline logic (`packages/agents/research_pipeline.py`, `factories.py`, `policy.py`, `planner.py`) was treated as read-only and remains disjoint.
+- Left uncommitted per rules: no commit, no deploy, no restart, no compose.

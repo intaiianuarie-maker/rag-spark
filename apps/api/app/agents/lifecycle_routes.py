@@ -18,6 +18,8 @@ Provides HTTP endpoints enforcing server policy:
 
 from __future__ import annotations
 
+import json
+import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -40,6 +42,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from stores.agent_stores import (
     DurableRunRecord,
+    get_evidence_store,
     get_queue,
     get_run_store,
     get_step_store,
@@ -48,6 +51,7 @@ from stores.agent_stores import (
 from app.authz import Action, Resource, require
 from app.authz.principal import get_principal
 
+subrouter = APIRouter(tags=["agent-lifecycle"])
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/agent", tags=["agent-lifecycle"])
 
 
@@ -85,6 +89,19 @@ class StatusResponse(BaseModel):
     error_code: str | None = None
     created_at: str
     updated_at: str
+    goal: str | None = None
+    output: str | None = None
+    budget: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    sources: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ReadinessResponse(BaseModel):
+    workspace_id: str
+    ready: bool
+    status: str
+    missing: str | None = None
+    detail: str | None = None
 
 
 class HistoryResponse(BaseModel):
@@ -145,10 +162,116 @@ def _require_workspace(principal: Principal, workspace_id: uuid.UUID) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_status_response(rec: DurableRunRecord) -> StatusResponse:
+    output = rec.final_output
+    if output is None:
+        try:
+            from agents.runtime import _PERSISTED_RUNS
+
+            p_run = _PERSISTED_RUNS.get(rec.run_id)
+            if p_run is not None:
+                output = getattr(p_run, "final_output", None)
+        except Exception:
+            pass
+
+    budget_dict: dict[str, Any] | None = None
+    if rec.context is not None and rec.context.budget is not None:
+        b = rec.context.budget
+        budget_dict = {
+            "max_steps": b.max_steps,
+            "max_tokens": b.max_tokens,
+            "max_tool_calls": b.max_tool_calls,
+            "max_cost_usd": b.max_cost_usd,
+            "max_tool_cost_usd": b.max_tool_cost_usd,
+            "max_wall_clock_s": b.max_wall_clock_s,
+        }
+
+    usage_dict: dict[str, Any] | None = None
+    try:
+        step_store = get_step_store()
+        steps = step_store.list(rec.run_id)
+        if steps:
+            total_prompt = sum(getattr(s.usage, "prompt_tokens", 0) for s in steps)
+            total_completion = sum(getattr(s.usage, "completion_tokens", 0) for s in steps)
+            total_tools = sum(getattr(s.usage, "tool_calls", 0) for s in steps)
+            total_cost = sum(float(getattr(s.usage, "cost_usd", 0.0) or 0.0) for s in steps)
+            usage_dict = {
+                "prompt_tokens": total_prompt,
+                "completion_tokens": total_completion,
+                "tool_calls": total_tools,
+                "cost_usd": total_cost,
+            }
+    except Exception:
+        pass
+
+    sources: list[dict[str, Any]] = []
+    try:
+        ev_store = get_evidence_store()
+        ev_records: list[Any] = []
+        if hasattr(ev_store, "_store") and isinstance(ev_store._store, dict):
+            bucket = ev_store._store.get(rec.run_id, {})
+            ev_records = list(bucket.values())
+        elif hasattr(ev_store, "list"):
+            ev_records = ev_store.list(rec.run_id)
+        elif hasattr(ev_store, "path"):
+            from agents.evidence import EvidenceRecord
+
+            with sqlite3.connect(ev_store.path) as con:
+                rows = con.execute(
+                    "SELECT data FROM evidence WHERE run_id = ?", (rec.run_id,)
+                ).fetchall()
+                for row in rows:
+                    ev_records.append(EvidenceRecord.model_validate(json.loads(row[0])))
+
+        for ev in ev_records:
+            for cit in getattr(ev, "citations", []):
+                sources.append(
+                    {
+                        "document_id": getattr(cit, "document_id", None),
+                        "chunk_id": getattr(cit, "chunk_id", ""),
+                        "statement": getattr(ev, "statement", None) or getattr(ev, "claim", None),
+                        "verdict": getattr(ev, "verdict", None),
+                        "quote": getattr(cit, "quote", ""),
+                    }
+                )
+    except Exception:
+        pass
+
+    return StatusResponse(
+        run_id=rec.run_id,
+        workspace_id=rec.workspace_id,
+        status=rec.status.value,
+        error=rec.error,
+        error_code=rec.error_code.value if rec.error_code else None,
+        created_at=rec.created_at,
+        updated_at=rec.updated_at,
+        goal=rec.goal,
+        output=output,
+        budget=budget_dict,
+        usage=usage_dict,
+        sources=sources,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
 
+@subrouter.post(
+    "/runs/queued",
+    response_model=StartQueuedRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+@subrouter.post(
+    "/runs/async",
+    response_model=StartQueuedRunResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
 @router.post(
     "/runs/queued",
     response_model=StartQueuedRunResponse,
@@ -283,7 +406,46 @@ async def start_queued_run(
     )
 
 
+@subrouter.get("/readiness", response_model=ReadinessResponse)
+@router.get("/readiness", response_model=ReadinessResponse)
+async def get_agent_readiness(
+    workspace_id: uuid.UUID,
+    principal: Principal = Depends(get_principal),
+) -> ReadinessResponse:
+    """Check agent readiness for workspace (T-R02/T-R17).
+
+    Returns honest unavailable state if no LLM provider is configured,
+    never a fake ready-state.
+    """
+    _require_workspace(principal, workspace_id)
+    import os
+
+    base_url = os.environ.get("LITELLM_URL") or os.environ.get("OPENROUTER_API_KEY")
+    has_key = any(
+        os.environ.get(name)
+        for name in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
+    )
+    if bool(base_url and has_key):
+        return ReadinessResponse(
+            workspace_id=str(workspace_id),
+            ready=True,
+            status="ready",
+            missing=None,
+            detail="Agent runtime is ready",
+        )
+    return ReadinessResponse(
+        workspace_id=str(workspace_id),
+        ready=False,
+        status="unavailable",
+        missing="llm_provider",
+        detail="No LLM provider is configured (missing: llm_provider)",
+    )
+
+
+@subrouter.get("/runs/{run_id}/status", response_model=StatusResponse)
+@subrouter.get("/runs/{run_id}", response_model=StatusResponse)
 @router.get("/runs/{run_id}/status", response_model=StatusResponse)
+@router.get("/runs/{run_id}", response_model=StatusResponse)
 async def get_run_status(
     workspace_id: uuid.UUID,
     run_id: str,
@@ -306,17 +468,10 @@ async def get_run_status(
                 "message": "run belongs to a different workspace",
             },
         )
-    return StatusResponse(
-        run_id=rec.run_id,
-        workspace_id=rec.workspace_id,
-        status=rec.status.value,
-        error=rec.error,
-        error_code=rec.error_code.value if rec.error_code else None,
-        created_at=rec.created_at,
-        updated_at=rec.updated_at,
-    )
+    return _build_status_response(rec)
 
 
+@subrouter.get("/runs/{run_id}/history", response_model=HistoryResponse)
 @router.get("/runs/{run_id}/history", response_model=HistoryResponse)
 async def get_run_history(
     workspace_id: uuid.UUID,
@@ -350,6 +505,7 @@ async def get_run_history(
     )
 
 
+@subrouter.get("/runs", response_model=list[StatusResponse])
 @router.get("/runs", response_model=list[StatusResponse])
 async def list_workspace_runs(
     workspace_id: uuid.UUID,
@@ -359,20 +515,10 @@ async def list_workspace_runs(
     _require_workspace(principal, workspace_id)
     run_store = get_run_store()
     records = run_store.list_runs(str(workspace_id))
-    return [
-        StatusResponse(
-            run_id=r.run_id,
-            workspace_id=r.workspace_id,
-            status=r.status.value,
-            error=r.error,
-            error_code=r.error_code.value if r.error_code else None,
-            created_at=r.created_at,
-            updated_at=r.updated_at,
-        )
-        for r in records
-    ]
+    return [_build_status_response(r) for r in records]
 
 
+@subrouter.post("/runs/{run_id}/cancel", response_model=CancelResponse)
 @router.post("/runs/{run_id}/cancel", response_model=CancelResponse)
 async def cancel_run(
     workspace_id: uuid.UUID,
@@ -417,6 +563,8 @@ async def cancel_run(
     )
 
 
+@subrouter.post("/runs/{run_id}/approval", response_model=ApprovalResponse)
+@subrouter.post("/runs/{run_id}/approve", response_model=ApprovalResponse)
 @router.post("/runs/{run_id}/approval", response_model=ApprovalResponse)
 @router.post("/runs/{run_id}/approve", response_model=ApprovalResponse)
 async def approve_or_reject_run(

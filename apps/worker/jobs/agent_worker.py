@@ -171,7 +171,9 @@ class AgentLifecycleWorker:
                 agent_run.status == AgentRunStatus.COMPLETED
                 or current_status == RunStatus.COMPLETED
             ):
-                self.run_store.update_status(run_id, RunStatus.COMPLETED)
+                record.final_output = getattr(agent_run, "final_output", None)
+                record.update_status(RunStatus.COMPLETED)
+                self.run_store.update_run(record)
                 await self.queue.ack(claim)
                 return run_id
 

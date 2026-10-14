@@ -53,6 +53,7 @@ class DurableRunRecord(BaseModel):
     error_code: AgentErrorCode | None = None
     context: RunContext | None = None
     state: RunState = Field(default_factory=lambda: RunState(status=RunStatus.QUEUED))
+    final_output: str | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 

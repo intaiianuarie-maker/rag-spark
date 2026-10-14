@@ -39,6 +39,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from models.router_config import load_workspace_config, route
 from pydantic import BaseModel, Field
 
+from app.agents.lifecycle_routes import subrouter as lifecycle_subrouter
 from app.authz import Action, Resource, require
 from app.authz.principal import get_principal
 
@@ -136,6 +137,11 @@ class StatusResponse(BaseModel):
     status: str
     error: str | None = None
     error_code: str | None = None
+    goal: str | None = None
+    output: str | None = None
+    budget: dict[str, Any] | None = None
+    usage: dict[str, Any] | None = None
+    sources: list[dict[str, Any]] = Field(default_factory=list)
 
 
 def _http_error(exc):
@@ -318,17 +324,56 @@ async def get_run_status(
     _require_workspace(principal, workspace_id)
     rec = _RUNS.get(run_id)
     if rec is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "run not found"})  # noqa: E501
+        from stores.agent_stores import get_run_store
+
+        durable_rec = get_run_store().get_run(run_id)
+        if durable_rec is not None:
+            if durable_rec.workspace_id != str(workspace_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "workspace_mismatch",
+                        "message": "run belongs to a different workspace",
+                    },
+                )
+            from app.agents.lifecycle_routes import _build_status_response
+
+            d_resp = _build_status_response(durable_rec)
+            return StatusResponse(
+                run_id=d_resp.run_id,
+                workspace_id=d_resp.workspace_id,
+                status=d_resp.status,
+                error=d_resp.error,
+                error_code=d_resp.error_code,
+                goal=d_resp.goal,
+                output=d_resp.output,
+                budget=d_resp.budget,
+                usage=d_resp.usage,
+                sources=d_resp.sources,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "not_found", "message": "run not found"},
+        )
     # Scoped workspace — cross-workspace attempt BLOCKED
     if rec["workspace_id"] != str(workspace_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": "workspace_mismatch", "message": "run belongs to a different workspace"})  # noqa: E501
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "workspace_mismatch",
+                "message": "run belongs to a different workspace",
+            },
+        )
     # Also check principal still has access to the run's workspace (defense in depth)
     if rec["principal_id"] != principal.user_id:
-        # If principal is not the owner, still check workspace membership via require already done,
-        # but cross-user within same workspace is allowed to poll (read). Keep 200.
         pass
     return StatusResponse(
-        run_id=run_id, workspace_id=rec["workspace_id"], status=rec["status"], error=rec["error"], error_code=rec["error_code"]  # noqa: E501
+        run_id=run_id,
+        workspace_id=rec["workspace_id"],
+        status=rec["status"],
+        error=rec["error"],
+        error_code=rec["error_code"],
+        goal=rec.get("goal"),
     )
 
 
@@ -341,9 +386,46 @@ async def cancel_run(
     _require_workspace(principal, workspace_id)
     rec = _RUNS.get(run_id)
     if rec is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail={"error": "not_found", "message": "run not found"})  # noqa: E501
+        from stores.agent_stores import get_run_store
+
+        durable_rec = get_run_store().get_run(run_id)
+        if durable_rec is not None:
+            if durable_rec.workspace_id != str(workspace_id):
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail={
+                        "error": "workspace_mismatch",
+                        "message": "run belongs to a different workspace",
+                    },
+                )
+            cancelled = durable_rec.state.request_cancel()
+            if cancelled:
+                get_run_store().update_status(
+                    run_id,
+                    RunStatus.CANCELLED,
+                    error="run cancelled",
+                    error_code=AgentErrorCode.CANCELLED,
+                )
+            return StatusResponse(
+                run_id=durable_rec.run_id,
+                workspace_id=durable_rec.workspace_id,
+                status=durable_rec.state.status.value,
+                error=durable_rec.error,
+                error_code=durable_rec.error_code.value if durable_rec.error_code else None,
+                goal=durable_rec.goal,
+            )
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail={"error": "not_found", "message": "run not found"},
+        )
     if rec["workspace_id"] != str(workspace_id):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail={"error": "workspace_mismatch", "message": "run belongs to a different workspace"})  # noqa: E501
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={
+                "error": "workspace_mismatch",
+                "message": "run belongs to a different workspace",
+            },
+        )
     # Cancel via same RunState gate as in-process
     from agents.runtime import _PERSISTED_STATES
 
@@ -358,11 +440,24 @@ async def cancel_run(
             pass
     else:
         # If no persisted state (e.g., noop run already terminal), mark cancelled if still active
-        if rec["status"] in (RunStatus.QUEUED.value, RunStatus.RUNNING.value, RunStatus.WAITING_APPROVAL.value, RunStatus.WAITING_INPUT.value):  # noqa: E501
+        if rec["status"] in (
+            RunStatus.QUEUED.value,
+            RunStatus.RUNNING.value,
+            RunStatus.WAITING_APPROVAL.value,
+            RunStatus.WAITING_INPUT.value,
+        ):
             rec["status"] = RunStatus.CANCELLED.value
             rec["error_code"] = AgentErrorCode.CANCELLED.value
             rec["error"] = "run cancelled"
 
     return StatusResponse(
-        run_id=run_id, workspace_id=rec["workspace_id"], status=rec["status"], error=rec["error"], error_code=rec["error_code"]  # noqa: E501
+        run_id=run_id,
+        workspace_id=rec["workspace_id"],
+        status=rec["status"],
+        error=rec["error"],
+        error_code=rec["error_code"],
+        goal=rec.get("goal"),
     )
+
+
+router.include_router(lifecycle_subrouter)

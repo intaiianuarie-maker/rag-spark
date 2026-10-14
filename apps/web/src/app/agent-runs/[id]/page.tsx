@@ -60,6 +60,67 @@ export type RunSnapshot = {
   status: RunStatusValue;
   error: string | null;
   error_code: RunErrorCode | null;
+  created_at?: string;
+  updated_at?: string;
+  goal?: string | null;
+  output?: string | null;
+  budget?: {
+    max_steps: number;
+    max_tokens: number;
+    max_tool_calls: number;
+    max_cost_usd?: number | null;
+    max_tool_cost_usd?: number | null;
+    max_wall_clock_s?: number | null;
+  } | null;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    tool_calls: number;
+    cost_usd: number;
+  } | null;
+  sources?: Array<{
+    document_id?: string | null;
+    chunk_id?: string;
+    statement?: string | null;
+    verdict?: string | null;
+    quote?: string;
+  }>;
+};
+
+export type StepEvent = {
+  run_id: string;
+  sequence: number;
+  step_type: string;
+  action_summary: string;
+  tool_name?: string | null;
+  tool_input?: Record<string, unknown> | null;
+  tool_output?: Record<string, unknown> | null;
+  error?: string | null;
+  error_code?: string | null;
+  status: string;
+  created_at: string;
+  latency_ms?: number | null;
+  usage?: {
+    prompt_tokens?: number;
+    completion_tokens?: number;
+    tool_calls?: number;
+    cost_usd?: number;
+  } | null;
+};
+
+export type HistoryResponse = {
+  run_id: string;
+  workspace_id: string;
+  steps: StepEvent[];
+  total_steps: number;
+};
+
+export type ApprovalResponse = {
+  run_id: string;
+  workspace_id: string;
+  status: string;
+  decision: string;
+  error?: string | null;
 };
 
 /** Browser-local record written by the list page when the run was started. */
@@ -233,6 +294,7 @@ export default function AgentRunDetailPage() {
 
   const [snapshot, setSnapshot] = useState<RunSnapshot | null>(null);
   const [record, setRecord] = useState<RunRecord | null>(null);
+  const [steps, setSteps] = useState<StepEvent[]>([]);
   const [history, setHistory] = useState<TimelineEntry[]>([]);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -251,6 +313,7 @@ export default function AgentRunDetailPage() {
     setHistory((current) => timelineAfterKeyChange(loadedKey, key, current));
     setSnapshot(null);
     setRecord(null);
+    setSteps([]);
     setNotFound(false);
     setError(null);
   }
@@ -258,10 +321,20 @@ export default function AgentRunDetailPage() {
   const load = useCallback(async () => {
     if (workspaceId === null || runId === null) return;
     try {
-      const next = await auth.authFetch<RunSnapshot>(
-        `/v1/workspaces/${workspaceId}/agent/runs/${runId}`,
-      );
+      const [next, hist] = await Promise.all([
+        auth.authFetch<RunSnapshot>(
+          `/v1/workspaces/${workspaceId}/agent/runs/${runId}`,
+        ),
+        auth
+          .authFetch<HistoryResponse>(
+            `/v1/workspaces/${workspaceId}/agent/runs/${runId}/history`,
+          )
+          .catch(() => null),
+      ]);
       setSnapshot(next);
+      if (hist && Array.isArray(hist.steps)) {
+        setSteps(hist.steps);
+      }
       setNotFound(false);
       setError(null);
       setRecord(loadRecord(workspaceId, runId));
@@ -286,13 +359,6 @@ export default function AgentRunDetailPage() {
   // the F-1 fix: the previous `loadedRef` guard ran this exactly once for the
   // component's lifetime, so navigating from run A to run B kept run A's
   // timeline (and its snapshot) on screen until a poll happened to fetch B.
-  //
-  // The read is scheduled as a TIMER CALLBACK rather than called in the effect
-  // body: `load` sets state, and react-hooks/set-state-in-effect flags a
-  // synchronous call here (the whole-src lint baseline is otherwise clean, so
-  // this is the one line that would regress it). A 0 ms timeout is the
-  // effect-sanctioned shape — it fires on the next tick, which is not
-  // observable next to a network round-trip.
   useEffect(() => {
     if (key === null) return;
     const timer = window.setTimeout(() => void load(), 0);
@@ -325,6 +391,31 @@ export default function AgentRunDetailPage() {
       setBusy(false);
     }
   }, [workspaceId, runId]);
+
+  const handleApproval = useCallback(
+    async (decision: "approved" | "rejected") => {
+      if (workspaceId === null || runId === null) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await auth.authFetch<ApprovalResponse>(
+          `/v1/workspaces/${workspaceId}/agent/runs/${runId}/approval`,
+          {
+            method: "POST",
+            body: { decision },
+          },
+        );
+        void load();
+      } catch (appError: unknown) {
+        const message =
+          appError instanceof Error ? appError.message : "Could not submit approval decision.";
+        setError(message);
+      } finally {
+        setBusy(false);
+      }
+    },
+    [workspaceId, runId, load],
+  );
 
   if (runId === null) {
     return (
@@ -392,25 +483,110 @@ export default function AgentRunDetailPage() {
         </p>
       ) : null}
 
-      {/* Budget + limits — surfaced, not hidden. */}
+      {/* Human approval gate (T-R15/T-R17) */}
+      {snapshot?.status === "waiting_approval" ? (
+        <section
+          aria-labelledby="approval-heading"
+          className="mt-6 rounded-md border border-amber-600/30 bg-amber-50 p-4 dark:border-amber-500/30 dark:bg-amber-950/30"
+        >
+          <h2
+            id="approval-heading"
+            className="text-sm font-semibold text-amber-900 dark:text-amber-200"
+          >
+            Human approval required
+          </h2>
+          <p className="mt-1 text-sm text-amber-800 dark:text-amber-300">
+            The agent has paused and requires human approval before proceeding with a tool action.
+          </p>
+          <div className="mt-3 flex gap-2">
+            <Button
+              size="sm"
+              onClick={() => void handleApproval("approved")}
+              disabled={busy}
+              className="bg-emerald-700 text-white hover:bg-emerald-800 dark:bg-emerald-600"
+            >
+              {busy ? "Working…" : "Approve action"}
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void handleApproval("rejected")}
+              disabled={busy}
+              className="border-red-600 text-red-700 hover:bg-red-50 dark:border-red-400 dark:text-red-300"
+            >
+              Reject action
+            </Button>
+          </div>
+        </section>
+      ) : null}
+
+      {/* Real Output (T-R17: 0 mock fields) */}
+      <section aria-labelledby="output-heading" className="mt-6">
+        <h2
+          id="output-heading"
+          className="text-sm font-medium text-neutral-900 dark:text-neutral-100"
+        >
+          Output
+        </h2>
+        {snapshot?.output ? (
+          <div className="mt-2 rounded-md border border-neutral-200 bg-neutral-50 p-4 font-mono text-sm whitespace-pre-wrap dark:border-neutral-800 dark:bg-neutral-900">
+            {snapshot.output}
+          </div>
+        ) : terminal ? (
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            No output produced by this run.
+          </p>
+        ) : (
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            Run in progress — output will appear upon completion.
+          </p>
+        )}
+      </section>
+
+      {/* Budget + Real Usage (T-R17) */}
       <section aria-labelledby="budget-heading" className="mt-6">
         <h2
           id="budget-heading"
           className="text-sm font-medium text-neutral-900 dark:text-neutral-100"
         >
-          Budget
+          Budget & Usage
         </h2>
-        {record ? (
+        {snapshot?.budget ? (
+          <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
+            Limits: {snapshot.budget.max_tokens.toLocaleString()} tokens · {snapshot.budget.max_steps} steps ·{" "}
+            {snapshot.budget.max_tool_calls} tool calls
+            {snapshot.budget.max_cost_usd != null ? ` · $${snapshot.budget.max_cost_usd.toFixed(4)} max` : ""}
+          </p>
+        ) : record ? (
           <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
             Limits: {record.max_tokens.toLocaleString()} tokens · {record.max_steps} steps ·{" "}
             {record.max_tool_calls} tool calls
           </p>
         ) : (
           <p className="mt-1 text-sm text-neutral-600 dark:text-neutral-400">
-            This run was not started from this browser, so its limits are not recorded
-            locally. Budget exhaustion is still reported in the outcome below.
+            Default workspace limits applied.
           </p>
         )}
+        {snapshot?.usage ? (
+          <div className="mt-2 grid grid-cols-2 gap-2 rounded-md border border-neutral-200 p-2.5 text-xs sm:grid-cols-4 dark:border-neutral-800">
+            <div>
+              <span className="text-neutral-500">Prompt tokens:</span>{" "}
+              <span className="font-medium">{snapshot.usage.prompt_tokens.toLocaleString()}</span>
+            </div>
+            <div>
+              <span className="text-neutral-500">Completion tokens:</span>{" "}
+              <span className="font-medium">{snapshot.usage.completion_tokens.toLocaleString()}</span>
+            </div>
+            <div>
+              <span className="text-neutral-500">Tool calls:</span>{" "}
+              <span className="font-medium">{snapshot.usage.tool_calls}</span>
+            </div>
+            <div>
+              <span className="text-neutral-500">Total cost:</span>{" "}
+              <span className="font-medium">${snapshot.usage.cost_usd.toFixed(5)}</span>
+            </div>
+          </div>
+        ) : null}
         {snapshot?.status === "limit_exceeded" && snapshot.error_code === "budget_exceeded" ? (
           <p className="mt-1 text-sm text-red-700 dark:text-red-300">
             The run exhausted its budget and stopped; it was not completed.
@@ -421,6 +597,97 @@ export default function AgentRunDetailPage() {
             The run reached its wall-clock deadline and stopped.
           </p>
         ) : null}
+      </section>
+
+      {/* Real Sources (T-R17) */}
+      {snapshot?.sources && snapshot.sources.length > 0 ? (
+        <section aria-labelledby="sources-heading" className="mt-6">
+          <h2
+            id="sources-heading"
+            className="text-sm font-medium text-neutral-900 dark:text-neutral-100"
+          >
+            Sources ({snapshot.sources.length})
+          </h2>
+          <ul className="mt-2 space-y-2">
+            {snapshot.sources.map((src, idx) => (
+              <li
+                key={idx}
+                className="rounded-md border border-neutral-200 p-3 text-sm dark:border-neutral-800"
+              >
+                {src.statement ? (
+                  <p className="font-medium text-neutral-900 dark:text-neutral-100">
+                    {src.statement}
+                  </p>
+                ) : null}
+                {src.quote ? (
+                  <blockquote className="mt-1 text-xs italic text-neutral-600 dark:text-neutral-400">
+                    &ldquo;{src.quote}&rdquo;
+                  </blockquote>
+                ) : null}
+                <div className="mt-2 flex flex-wrap items-center gap-2">
+                  {src.document_id ? (
+                    <Link
+                      href={`/knowledge/documents/${src.document_id}${src.chunk_id ? `/${src.chunk_id}` : ""}`}
+                      className="inline-flex items-center rounded bg-neutral-100 px-2 py-0.5 font-mono text-xs text-blue-700 hover:underline dark:bg-neutral-800 dark:text-blue-300"
+                    >
+                      Doc: {src.document_id.slice(0, 8)}
+                      {src.chunk_id ? `#${src.chunk_id.slice(0, 8)}` : ""}
+                    </Link>
+                  ) : null}
+                  {src.verdict ? (
+                    <Badge variant="outline" className="text-[10px]">
+                      {src.verdict}
+                    </Badge>
+                  ) : null}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
+      {/* Real Steps (T-R17: from history endpoint) */}
+      <section aria-labelledby="steps-heading" className="mt-6">
+        <h2
+          id="steps-heading"
+          className="text-sm font-medium text-neutral-900 dark:text-neutral-100"
+        >
+          Execution Steps ({steps.length})
+        </h2>
+        {steps.length === 0 ? (
+          <p className="mt-1 text-sm text-neutral-500 dark:text-neutral-400">
+            {terminal ? "No execution steps recorded." : "No steps recorded yet."}
+          </p>
+        ) : (
+          <ol className="mt-2 space-y-2">
+            {steps.map((st) => (
+              <li
+                key={st.sequence}
+                className="rounded-md border border-neutral-200 p-3 dark:border-neutral-800"
+              >
+                <div className="flex items-center justify-between text-xs text-neutral-500">
+                  <span className="font-mono">
+                    Step #{st.sequence} · {st.step_type}
+                  </span>
+                  <span>{st.latency_ms != null ? `${st.latency_ms}ms` : ""}</span>
+                </div>
+                <div className="mt-1 text-sm font-medium text-neutral-900 dark:text-neutral-100">
+                  {st.action_summary || st.tool_name || "Step executed"}
+                </div>
+                {st.tool_name ? (
+                  <div className="mt-0.5 text-xs text-neutral-600 dark:text-neutral-400">
+                    Tool: <code className="font-mono">{st.tool_name}</code>
+                  </div>
+                ) : null}
+                {st.error ? (
+                  <div className="mt-1 text-xs text-red-600 dark:text-red-400">
+                    {st.error}
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        )}
       </section>
 
       {/* Outcome — failed/cancelled reads clearly, with the error code in text. */}

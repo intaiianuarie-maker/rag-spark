@@ -67,6 +67,39 @@ export type RunSnapshot = {
   status: RunStatusValue;
   error: string | null;
   error_code: RunErrorCode | null;
+  created_at?: string;
+  updated_at?: string;
+  goal?: string | null;
+  output?: string | null;
+  budget?: {
+    max_steps: number;
+    max_tokens: number;
+    max_tool_calls: number;
+    max_cost_usd?: number | null;
+    max_tool_cost_usd?: number | null;
+    max_wall_clock_s?: number | null;
+  } | null;
+  usage?: {
+    prompt_tokens: number;
+    completion_tokens: number;
+    tool_calls: number;
+    cost_usd: number;
+  } | null;
+  sources?: Array<{
+    document_id?: string | null;
+    chunk_id?: string;
+    statement?: string | null;
+    verdict?: string | null;
+    quote?: string;
+  }>;
+};
+
+export type ReadinessInfo = {
+  workspace_id: string;
+  ready: boolean;
+  status: string;
+  missing: string | null;
+  detail: string | null;
 };
 
 /** POST /agent/runs request body. */
@@ -85,6 +118,54 @@ export type RunRecord = RunSnapshot & {
   max_tool_calls: number;
   created_at: string;
 };
+
+/**
+ * Merges server-authoritative runs with local browser records.
+ * Server records provide authoritative status, output, budget, usage, and sources.
+ * Local records supply local start timestamps or fallback limit values if absent on server.
+ */
+export function mergeRunRecords(
+  serverRuns: RunSnapshot[],
+  localRuns: RunRecord[],
+): RunRecord[] {
+  const localMap = new Map<string, RunRecord>();
+  for (const local of localRuns) {
+    localMap.set(local.run_id, local);
+  }
+
+  const merged: RunRecord[] = [];
+  const seenIds = new Set<string>();
+
+  for (const s of serverRuns) {
+    seenIds.add(s.run_id);
+    const local = localMap.get(s.run_id);
+    merged.push({
+      run_id: s.run_id,
+      workspace_id: s.workspace_id,
+      status: s.status,
+      error: s.error,
+      error_code: s.error_code,
+      goal: s.goal || local?.goal || "Agent run",
+      max_steps: s.budget?.max_steps ?? local?.max_steps ?? DEFAULT_LIMITS.max_steps,
+      max_tokens: s.budget?.max_tokens ?? local?.max_tokens ?? DEFAULT_LIMITS.max_tokens,
+      max_tool_calls:
+        s.budget?.max_tool_calls ?? local?.max_tool_calls ?? DEFAULT_LIMITS.max_tool_calls,
+      created_at: s.created_at || local?.created_at || new Date().toISOString(),
+      output: s.output ?? null,
+      budget: s.budget ?? null,
+      usage: s.usage ?? null,
+      sources: s.sources ?? [],
+    });
+  }
+
+  for (const local of localRuns) {
+    if (!seenIds.has(local.run_id)) {
+      merged.push(local);
+    }
+  }
+
+  return merged;
+}
 
 /** Error-code copy: the taxonomy surfaced as plain text, never just colour. */
 const ERROR_CODE_LABELS: Record<RunErrorCode, string> = {
@@ -224,6 +305,7 @@ export default function AgentRunsPage() {
   const [maxToolCalls, setMaxToolCalls] = useState(String(DEFAULT_LIMITS.max_tool_calls));
   const [starting, setStarting] = useState(false);
   const [startError, setStartError] = useState<string | null>(null);
+  const [readiness, setReadiness] = useState<ReadinessInfo | null>(null);
 
   // The browser registry is derived during render on workspace change (the
   // React "adjust state when a prop changes" pattern) so no setState fires
@@ -234,52 +316,81 @@ export default function AgentRunsPage() {
     setRecords(workspaceId === null ? [] : loadRecords(workspaceId));
   }
 
+  const checkReadiness = useCallback(async (workspace: string) => {
+    try {
+      const info = await auth.authFetch<ReadinessInfo>(
+        `/v1/workspaces/${workspace}/agent/readiness`,
+      );
+      setReadiness(info);
+    } catch {
+      setReadiness(null);
+    }
+  }, []);
+
   /**
-   * One refresh pass: fetch live status for every tracked run. The polling
-   * effect wires it as a timer callback (setState inside a callback is the
-   * effect-sanctioned shape), and the Refresh button calls it directly.
+   * One refresh pass: fetch live server runs and merge with local records.
+   * If server listing fails, fall back to polling per known local record.
    */
   const runRefreshPass = useCallback((workspace: string) => {
-    const current = loadRecords(workspace);
-    if (current.length === 0) return;
     void (async () => {
-      const live = await Promise.all(
-        current.map(async (record) => {
-          try {
-            const snapshot = await auth.authFetch<RunSnapshot>(
-              `/v1/workspaces/${workspace}/agent/runs/${record.run_id}`,
-            );
-            return { ...record, ...snapshot };
-          } catch {
-            return record; // keep last known state; the row shows it below
-          }
-        }),
-      );
-      setRecords(live);
+      try {
+        const serverRuns = await auth.authFetch<RunSnapshot[]>(
+          `/v1/workspaces/${workspace}/agent/runs`,
+        );
+        const locals = loadRecords(workspace);
+        const merged = mergeRunRecords(serverRuns, locals);
+        setRecords(merged);
+        saveRecords(workspace, merged);
+      } catch {
+        const current = loadRecords(workspace);
+        if (current.length === 0) return;
+        const live = await Promise.all(
+          current.map(async (record) => {
+            try {
+              const snapshot = await auth.authFetch<RunSnapshot>(
+                `/v1/workspaces/${workspace}/agent/runs/${record.run_id}`,
+              );
+              return { ...record, ...snapshot, goal: snapshot.goal || record.goal };
+            } catch {
+              return record;
+            }
+          }),
+        );
+        setRecords(live);
+      }
     })();
   }, []);
 
   const refresh = useCallback(() => {
-    if (workspaceId !== null) runRefreshPass(workspaceId);
-  }, [workspaceId, runRefreshPass]);
+    if (workspaceId !== null) {
+      void checkReadiness(workspaceId);
+      runRefreshPass(workspaceId);
+    }
+  }, [workspaceId, checkReadiness, runRefreshPass]);
 
   useEffect(() => {
     if (workspaceId === null) return;
+    const initialTimer = window.setTimeout(() => {
+      void checkReadiness(workspaceId);
+      runRefreshPass(workspaceId);
+    }, 0);
     const timer = window.setInterval(() => runRefreshPass(workspaceId), 4000);
-    return () => window.clearInterval(timer);
-  }, [workspaceId, runRefreshPass]);
+    return () => {
+      window.clearTimeout(initialTimer);
+      window.clearInterval(timer);
+    };
+  }, [workspaceId, checkReadiness, runRefreshPass]);
 
   const handleStart = useCallback(
     async (event: React.FormEvent) => {
       event.preventDefault();
       if (workspaceId === null || goal.trim().length === 0) return;
+      if (readiness !== null && !readiness.ready) return;
       setStarting(true);
       setStartError(null);
       try {
         const body: StartRunBody = {
           goal: goal.trim(),
-          // F-3 (T-V3-032): all three limit fields fall back the same way — a
-          // cleared field uses the default for THAT field, never 0.
           max_steps: startRunLimit(maxSteps, DEFAULT_LIMITS.max_steps),
           max_tokens: startRunLimit(maxTokens, DEFAULT_LIMITS.max_tokens),
           max_tool_calls: startRunLimit(maxToolCalls, DEFAULT_LIMITS.max_tool_calls),
@@ -307,7 +418,7 @@ export default function AgentRunsPage() {
         setStarting(false);
       }
     },
-    [workspaceId, goal, maxSteps, maxTokens, maxToolCalls],
+    [workspaceId, goal, maxSteps, maxTokens, maxToolCalls, readiness],
   );
 
   if (workspaceId === null) {
@@ -323,11 +434,28 @@ export default function AgentRunsPage() {
     );
   }
 
+  const isUnavailable = readiness !== null && !readiness.ready;
+
   return (
     <main className="px-6 py-8 md:px-8">
       <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">
         Agent runs
       </h1>
+
+      {/* Honest unavailable banner (T-R02/T-R17) */}
+      {isUnavailable ? (
+        <section
+          role="alert"
+          aria-label="Agent runtime unavailable"
+          className="mt-4 rounded-md border border-amber-600/30 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-200"
+        >
+          <div className="font-semibold">Agent execution unavailable</div>
+          <p className="mt-1 text-xs">
+            {readiness?.detail ||
+              `Agent runs are unavailable in this workspace. No LLM provider is configured (missing: ${readiness?.missing || "llm_provider"}).`}
+          </p>
+        </section>
+      ) : null}
 
       {/* Start a run — the limits are set here and rendered on every row. */}
       <section aria-labelledby="start-run-heading" className="mt-4 max-w-2xl">
@@ -346,6 +474,7 @@ export default function AgentRunsPage() {
               onChange={(event) => setGoal(event.target.value)}
               placeholder="Summarise the Q3 incident findings"
               maxLength={4096}
+              disabled={isUnavailable}
             />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
@@ -358,6 +487,7 @@ export default function AgentRunsPage() {
                 max={20}
                 value={maxSteps}
                 onChange={(event) => setMaxSteps(event.target.value)}
+                disabled={isUnavailable}
               />
             </div>
             <div>
@@ -368,6 +498,7 @@ export default function AgentRunsPage() {
                 min={1}
                 value={maxTokens}
                 onChange={(event) => setMaxTokens(event.target.value)}
+                disabled={isUnavailable}
               />
             </div>
             <div>
@@ -378,11 +509,15 @@ export default function AgentRunsPage() {
                 min={0}
                 value={maxToolCalls}
                 onChange={(event) => setMaxToolCalls(event.target.value)}
+                disabled={isUnavailable}
               />
             </div>
           </div>
-          <Button type="submit" disabled={starting || goal.trim().length === 0}>
-            {starting ? "Starting…" : "Start run"}
+          <Button
+            type="submit"
+            disabled={starting || goal.trim().length === 0 || isUnavailable}
+          >
+            {starting ? "Starting…" : isUnavailable ? "Unavailable" : "Start run"}
           </Button>
         </form>
         {startError ? (
@@ -449,6 +584,11 @@ export default function AgentRunsPage() {
                     Limits: {record.max_tokens.toLocaleString()} tokens ·{" "}
                     {record.max_steps} steps · {record.max_tool_calls} tool calls
                   </p>
+                  {record.output ? (
+                    <p className="mt-1 line-clamp-2 text-xs text-neutral-700 dark:text-neutral-300 font-mono">
+                      Output: {record.output}
+                    </p>
+                  ) : null}
                   {label ? (
                     <p className="mt-1 text-xs text-red-700 dark:text-red-300">{label}</p>
                   ) : null}

@@ -72,6 +72,8 @@ export type ResearchReport = {
   abstention_reason: string;
   searched: string[];
   limitations: string[];
+  error_code?: string;
+  missing?: string;
 };
 
 export type ResearchStatus = "loading" | "ready" | "unavailable" | "error";
@@ -143,6 +145,26 @@ export default function ResearchReportPage({ params }: { params: Promise<{ id: s
           <AlertCircle className="size-4" aria-hidden="true" />
           Could not load the research report. Refresh to retry.
         </div>
+      </div>
+    );
+  }
+
+  if (report.error_code === "unavailable" || report.status === "unavailable") {
+    return (
+      <div
+        role="alert"
+        aria-label="Research pipeline unavailable"
+        className="rounded-xl border border-amber-600/30 bg-amber-50 p-4 text-sm text-amber-900 dark:border-amber-400/30 dark:bg-amber-950/40 dark:text-amber-200"
+      >
+        <div className="flex items-center gap-2 font-semibold">
+          <AlertCircle className="size-4" aria-hidden="true" />
+          Research pipeline unavailable
+        </div>
+        <p className="mt-1 text-xs">
+          Research is unavailable in this workspace. No research pipeline is configured
+          (missing: {report.missing || "research_pipeline"}). Nothing was searched,
+          retrieved, generated, or cited.
+        </p>
       </div>
     );
   }
