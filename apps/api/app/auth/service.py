@@ -22,7 +22,12 @@ from app.auth.config import get_auth_settings
 from app.auth.models import User
 from app.auth.passwords import hash_password, verify_password
 from app.auth.schemas import TokenPair
-from app.auth.sessions import create_session, revoke_session, session_is_active
+from app.auth.sessions import (
+    create_session,
+    revoke_session,
+    session_is_active,
+    session_owner,
+)
 from app.auth.tokens import (
     REFRESH_TOKEN_TYPE,
     AuthTokenError,
@@ -140,9 +145,12 @@ class AuthService:
 
         try:
             session_active = await session_is_active(family_id)
+            # T-R01 (P0): bind the refresh to the session's owner as well. A
+            # live session belonging to somebody else must not mint a token.
+            owner = await session_owner(family_id) if session_active else None
         except store.AuthStoreUnavailable as exc:
             raise self._unavailable() from exc
-        if not session_active:
+        if not session_active or owner != user_id:
             await self._best_effort_revoke(family_id)
             raise self._token_error(AuthTokenError("invalid_token"))
 

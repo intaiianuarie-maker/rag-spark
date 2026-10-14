@@ -2,7 +2,9 @@
 
 Supports two credentials, both presented as a bearer token:
 
-- a session-bound access JWT (``sid`` claim checked against the Redis session);
+- a session-bound access JWT (``sid`` claim checked against the Redis session,
+  and the session's **owner** must equal the token's ``sub`` — T-R01: existence
+  is not ownership);
 - a workspace API key (``kio_…``), verified by prefix + argon2 hash.
 
 A revoked/expired session or key yields 401. The principal carries the caller's
@@ -23,7 +25,7 @@ from app.auth.adapters.redis_store import AuthStoreUnavailable
 from app.auth.db import get_session
 from app.auth.keys import get_active_key, looks_like_api_key
 from app.auth.models import User
-from app.auth.sessions import session_is_active
+from app.auth.sessions import session_is_active, session_owner
 from app.auth.tokens import GENERIC_TOKEN_MESSAGE, AuthTokenError, decode_token
 
 
@@ -79,6 +81,15 @@ async def _principal_from_token(session: AsyncSession, token: str) -> Principal 
     try:
         user_id = uuid.UUID(str(payload["sub"]))
     except (KeyError, ValueError):
+        return None
+
+    # T-R01 (P0) — OWNERSHIP BINDING. A live session is not enough: the token's
+    # subject must BE the session's owner. Without this, an access token whose
+    # ``sub`` names someone else authenticates as long as the session exists,
+    # so any leak that pairs a valid ``sid`` with a foreign ``sub`` is a
+    # cross-session forgery. Existence is not ownership.
+    owner = await session_owner(session_id)
+    if owner is None or owner != str(user_id):
         return None
 
     user = await session.get(User, user_id)

@@ -121,6 +121,35 @@ async def rotate_refresh_token(
         raise AuthStoreUnavailable("refresh store unavailable") from exc
 
 
+async def count_matching_keys(prefix: str, batch: int = 500) -> int:
+    """How many auth keys start with ``prefix`` (rotation planning; T-R01)."""
+    client = get_redis()
+    total = 0
+    try:
+        async for _ in client.scan_iter(match=prefix + "*", count=batch):
+            total += 1
+    except RedisError as exc:
+        raise AuthStoreUnavailable("refresh store unavailable") from exc
+    return total
+
+
+async def delete_matching_keys(prefix: str, batch: int = 500) -> int:
+    """Delete every auth key starting with ``prefix``; returns the count.
+
+    Used by the signing-secret rotation: once the secret changes, every
+    refresh token minted under the old one is useless, and every refresh family
+    record must go so a stale ``fid`` cannot be replayed.
+    """
+    client = get_redis()
+    removed = 0
+    try:
+        async for key in client.scan_iter(match=prefix + "*", count=batch):
+            removed += int(await client.delete(key))
+    except RedisError as exc:
+        raise AuthStoreUnavailable("refresh store unavailable") from exc
+    return removed
+
+
 async def revoke_family(family_id: str) -> None:
     """Invalidate every refresh token jti belonging to a token family."""
     client = get_redis()

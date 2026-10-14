@@ -17,9 +17,12 @@ from app.auth.config import get_auth_settings
 __all__ = [
     "SESSION_TTL_SECONDS",
     "create_session",
+    "iter_session_ids",
     "new_session_id",
+    "revoke_all_sessions",
     "revoke_session",
     "session_is_active",
+    "session_owner",
 ]
 
 
@@ -49,6 +52,28 @@ async def session_is_active(session_id: str) -> bool:
     if not session_id:
         return False
     return await _store.session_is_active(session_id)
+
+
+async def session_owner(session_id: str) -> str | None:
+    """The user id that owns ``session_id`` (``None`` if there is no session).
+
+    T-R01 (P0): the auth path must bind a token's subject to the session's
+    stored owner. ``session_is_active`` only proves a session *exists* — which
+    is exactly the gap that let a victim-subject token ride another session.
+    """
+    if not session_id:
+        return None
+    return await _store.session_owner(session_id)
+
+
+async def iter_session_ids() -> list[str]:
+    """Every live session id (rotation procedure; T-R01)."""
+    return await _store.iter_session_ids()
+
+
+async def revoke_all_sessions() -> int:
+    """Invalidate every session at once; returns how many were removed."""
+    return await _store.delete_sessions(await _store.iter_session_ids())
 
 
 async def revoke_session(session_id: str) -> None:

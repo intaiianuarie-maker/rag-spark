@@ -102,7 +102,13 @@ x-backend-env: &backend-env
   ANSWER_MODEL: ${ANSWER_MODEL:-nvidia/nemotron-3.5-lightning:free}
   INFINITY_URL: ${INFINITY_URL:-http://infinity-rerank:7997}
   READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
-  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:-dev-only-insecure-jwt-secret-change-me-0123456789}
+  # T-R01 (P0): no shipped default. The previous literal (the
+  # dev-only-insecure-jwt-secret-change-me-<digits> one) was accepted by the
+  # production boot path because the validator only knew the *code* default, and
+  # it is refused in every environment now. Compose fails closed with the `:?`
+  # form: export a fresh AUTH_JWT_SECRET (>=32 chars) or compose refuses to start
+  # rather than booting with a known secret.
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set explicitly (>=32 chars, no shipped default) - see handoffs/CODE1-HANDOFF.md T-R01}
   # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
   CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
 
