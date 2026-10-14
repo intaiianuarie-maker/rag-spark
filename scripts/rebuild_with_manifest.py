@@ -68,6 +68,22 @@ REBUILD_TARGET = "knowledge__rebuild_"
 DEFAULT_BATCH_SIZE = 32
 
 
+#: Minimum available memory required before each batch write (1 GiB).
+MIN_AVAILABLE_MEMORY_BYTES = 1024 * 1024 * 1024
+
+
+def available_memory_bytes() -> int:
+    """Read MemAvailable from /proc/meminfo in bytes (safe fallback if unavailable)."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except Exception:
+        pass
+    return 2 * 1024 * 1024 * 1024
+
+
 class RebuildRefused(RuntimeError):
     """Safety guard fired before any write."""
 
@@ -264,6 +280,12 @@ async def build(
         n_batches = math.ceil(len(rows) / batch_size)
         written = 0
         for i in range(0, len(rows), batch_size):
+            avail = available_memory_bytes()
+            if avail < MIN_AVAILABLE_MEMORY_BYTES:
+                raise RebuildRefused(
+                    f"available memory ({avail / (1024**3):.2f}GiB) dropped below 1GiB threshold — "
+                    "aborting to BLOCKED per infra rules"
+                )
             batch = rows[i : i + batch_size]
             texts = [r[5] for r in batch]  # manifest SELECT column 5 = text
             embeds = await _reindex.embed_batch_with_retry(provider, texts)

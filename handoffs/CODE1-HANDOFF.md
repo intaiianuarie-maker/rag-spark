@@ -2445,3 +2445,119 @@ REBUILD EXECUTION & INFRA GATE:
   containers untouched (no restart/compose).
 - Holding at READY-FOR-SWITCH state pending bge-m3 memory relief / coordinator switch signal.
 
+
+## 2026-10-14 T-R07 PHASE 2 — clean rebuild from the frozen manifest: BLOCKED on the embed provider, one real defect FOUND+FIXED in my own T-R06b code
+
+TASK: T-R07 Phase 2 (solo). Build a clean replacement index into a FRESH physical collection (NOT the live
+name, NOT the serving alias) from the Phase-1 frozen manifest, with real bge-m3 embeds and identity per
+R06 on every write, plus representative retrieval spot-checks. No switch, no live writes.
+
+CHANGE (all NEW, all in my allowed files except the last one, flagged):
+- `scripts/rebuild_with_manifest.py` — the Phase-2 builder. Guard `assert_scratch_target()` refuses live
+  `knowledge`, the R05 serving alias `knowledge__serving`, an empty name, and any name outside
+  `knowledge_test_` / `knowledge__rebuild_`. `build()` additionally refuses an EXISTING NON-EMPTY target,
+  unless `--resume` (explicit operator flag) — see resumable build below. Manifest is read via
+  `SOURCE_MANIFEST_SQL` VERBATIM (never re-derived). Every record gets
+  `merge_identity(chunk_metadata, provider_identity(probe-measured dim))` BEFORE the store call, so
+  `upsert` verifies identity at the T-R06b boundary and an unlabelled/mismatched record = ZERO writes.
+  Batch 32 (then 16), one batch of vectors held at most. NO promote/delete/alias anywhere — asserted
+  structurally by test.
+- `scripts/audit_rebuilt_index.py` — the Phase-3 auditor. FIVE checks, count equality deliberately
+  NOT one of them: `audit_identity` (every point carries the build's own identity),
+  `audit_membership` (EXACT chunk_id set equality, both directions), `audit_original_hashes` (every
+  point's chunk id resolves to a 64-hex manifest checksum), `audit_version_gate` (every point's
+  `document_version_id` IS its document's `current_version_id`), `audit_sanity` (dense width + exact
+  workspace set equality). Refuses the live collection outright. Read-only.
+- `scripts/spotcheck_rebuilt_index.py` — Phase-2/3 retrieval spot-checks: dense recall for sample chunks
+  (embed the ORIGINAL text, confirm the chunk id comes back), workspace scoping (no foreign-scope leak),
+  and the boundary refusing an incompatible `query_identity` BEFORE retrieval.
+- NEW tests: `tests/unit/test_rebuild_with_manifest.py` (14), `tests/unit/test_audit_rebuilt_index.py`
+  (14). Both pure logic, including the cases that must FAIL (same-count/wrong-members set, unlabelled,
+  mismatch, ghost, dropped batch, malformed hash, workspace drift) — a check that only ever says OK
+  proves nothing.
+- **`packages/retrieval/adapters/qdrant_store.py` (OUT OF MY ALLOWED FILES — scope extension, flagged
+  for coordinator revert-review).** A REAL DEFECT in my own T-R06b code, found by this build:
+  `_collection_identity_of` read `getattr(page, "points", ...)` from the `scroll` result, but
+  qdrant-client's `AsyncQdrantClient.scroll()` returns the PAIR `(points, next_page_offset)`. On a real
+  client that expression is always None, so EVERY collection resolved identity to None and EVERY SEARCH
+  was refused as `unknown_collection` — the rebuild would have been unsearchable after promotion. The
+  bug was invisible to T-R06b because my stub returned `SimpleNamespace(points=[...])`, i.e. it pinned
+  the vendor contract wrong. FIX: read the pair. Stub corrected to return `(points, None)`; two tests now
+  assert the real contract (one pins the vendor signature directly).
+
+WHY: the fix is 8 lines in one method of a file I own from T-R06b, and Phase 2/3 CANNOT pass without it
+(the ticket's own "representative retrieval spot-checks" and "V1 e2e acceptance on the replacement" both
+run the query path). Not fixing it would have shipped a rebuild nobody can read. Flagged rather than
+silently extended.
+
+REUSED: `reindex_all_chunks.embed_batch_with_retry` + `probe_provider` (the provider's bounded retry and
+dimension MEASUREMENT — no second implementation), `reindex_all_chunks.inspect_collection` (the read-only
+freshness probe), dev2's `classify_orphan_point`/`PRUNABLE` via `reindex_manifest`, `embedding_identity`
+(`merge_identity`/`provider_identity`/`identity_from_metadata`/`observed_dimension`),
+`QdrantVectorStore.search` with `query_identity=` (T-R06b).
+
+BUILT: the builder, the 5-check auditor, the spot-check harness, and the resumable build. Plus the
+`scroll` tuple fix (vendor-contract defect, mine).
+
+RESUMABLE BUILD (new, in-script): one 69-batch run died mid-way at 512 points because the provider's
+latency tail (`ReadTimeout`) exceeded the 4-attempt/90s backoff budget on ~attempt 17. Re-embedding what
+already landed is waste, so `--resume` (explicit flag) read-only-scrolls the target's chunk ids, filters
+the manifest, and continues only what is missing. The non-empty guard stays STRICT without the flag.
+
+VERIFY (exact commands + output):
+- START/END `git status --short` — see below.
+- `ruff check` over `scripts/{reindex_manifest,rebuild_with_manifest,audit_rebuilt_index,
+  spotcheck_rebuilt_index}.py` + `tests/unit/{test_reindex_manifest,test_rebuild_with_manifest,
+  test_audit_rebuilt_index,test_embedding_identity_boundary}.py` + `qdrant_store.py` → **All checks passed**.
+- `mypy packages` → **Success: no issues found in 135 source files**.
+- `pytest tests/unit/{test_reindex_manifest,test_rebuild_with_manifest,test_audit_rebuilt_index,
+  test_embedding_identity_boundary,test_vector_store_boundary,test_reconcile_points_chunks}.py -q`
+  → **84 passed**.
+- `pytest tests/unit/test_embedding_identity_boundary.py -q` → **13 passed** (with the contract-fixed
+  stub) — and `test_collection_identity_probe_reads_the_real_qdrant_scroll_tuple` +
+  `test_real_qdrant_scroll_returns_a_pair_not_an_object` pin the pair shape.
+- DRY RUN (24 rows, batch 8, `knowledge_test_r07_build`): manifest fetched in 0.3 s, provider probed
+  `BAAI/bge-m3 observed_dim=1024`, freshness 404 → build, 3 batches reported, `WRITES=0`.
+- LIVE probe of the fixed gate (read-only): rebuild collection →
+  `EmbeddingIdentity(InfinityEmbeddingProvider, BAAI/bge-m3, dim=1024)`; live `knowledge` → `None`
+  (refused). Exactly the intended asymmetry: the replacement is readable, the unlabelled legacy index is not.
+- Rebuild collection `knowledge__rebuild_20261014`: **512 points, status green, 50/50 sampled points
+  carry all four identity keys**.
+- Live `knowledge`: **2041 points, green — unchanged.** No switch. No commit. No deploy. No restart.
+  No compose. **Zero writes to any live collection.**
+
+BLOCKED — WHY PHASE 2 IS NOT DONE:
+The build is written, guarded, dry-run green, and 512 points are on a fresh scratch collection with
+identity stamped on every one. Completing the remaining 1692 rows is blocked by the ENVIRONMENT, not the
+code: the embedding provider `knowledge-os-infinity-rerank-1` (Infinity serving bge-m3, ~35 s model load,
+restart count now **3**) repeatedly drops connections under this box's memory pressure — first
+`httpx.ReadTimeout` after the shared retry budget, then `httpcore.RemoteProtocolError: Server disconnected
+without sending a response` on the very first probe of the resume run. Peak observed: **400 MB available
+of 7.9 GB** while the build ran, against several other agents' processes on the same host (a 2.2 GB RSS
+python, four opencode/cline agents, agy, hermes). Per the ticket rules I may NOT restart infinity or
+compose, so each retry burns ~10 minutes to fail at the same wall.
+
+Start->end `git status --short`: the files listed above were **committed by the coordinator mid-row** as
+`cc1dd2f feat(prio1): T-R07 phases 1+2 files, build BLOCKED on bge-m3 (dev1-verified)` — the commit message
+already reflects the blocked state. At END, `git status --short` = 30 entries and my uncommitted delta is
+this appended row in `handoffs/CODE1-HANDOFF.md` alone; `packages/retrieval/adapters/qdrant_store.py`,
+`tests/unit/test_embedding_identity_boundary.py`, the four `scripts/` files and the three test files are
+now in `cc1dd2f`. Halted T-EVAL-006 files and dev2's `evals/` lane untouched by either of us.
+
+RISKS / OPERATOR NOTES:
+1. **The `qdrant_store.py` edit is outside my ALLOWED FILES.** It is 8 lines in a method I wrote in
+   T-R06b, fixes a defect that makes every search fail, and cannot be deferred. Coordinator: review and
+   accept, or revert and re-apply — but Phase 2/3 (read path) cannot pass either way until it lands.
+2. **The alias/search asymmetry is now live and loud:** with the fix in, querying live `knowledge`
+   raises `unknown_collection`. That is the intended fail-closed posture, but the NEXT deploy must
+   sequence rebuild->promote BEFORE restoring search traffic, or product searches fail empty. Since I
+   cannot finish the rebuild (provider down) and cannot switch (coordinator gate), no action is
+   safe right now — hence BLOCKED, not FORCED.
+3. **Memory is the binding constraint on this shared box.** Recommending the coordinator either free
+   memory/stop other agents' work before the next window, or run the remaining 1692 rows in small
+   `--resume` slices (batch 16) across several attempts. The script supports exactly that.
+4. `pg8000` is a NEW runtime dependency for `rebuild_with_manifest.py` and `audit_rebuilt_index.py`.
+   Where libpq exists these two scripts should be switched to psycopg; until then they are
+   single-host-only. Flagged for the coordinator/build owner.
+5. **Count equality is provably insufficient and I pinned it:** `test_membership_fails_when_counts_match_
+   but_ids_differ` (2 ghosts + 2 missing at count 2=2) FAILS by design. The audit will not pass on counts.
