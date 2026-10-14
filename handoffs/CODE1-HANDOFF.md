@@ -3066,3 +3066,92 @@ RISKS:
 - In environments where neither Redis nor Postgres is configured, SQLite and in-memory stores serve lifecycle operations cleanly in accordance with fallback contracts.
 - Dev2's R14 and R16 pipeline logic (`packages/agents/research_pipeline.py`, `factories.py`, `policy.py`, `planner.py`) was treated as read-only and remains disjoint.
 - Left uncommitted per rules: no commit, no deploy, no restart, no compose.
+
+## 2026-10-14 T-R18 — V4 durable revisions: append-only enforcement (Phase 4 opens)
+TASK: T-R18 — V4 durable revisions: append-only enforcement (F13 fix: the 018 PK append-only claim was FALSE, museR-proved mutable; this ticket makes it TRUE). Solo, no subagents. Repo is at `/root/code/Super Rag/knowledge-os`.
+
+CHANGE:
+- `packages/workflow_engine/migrations/0001_workflow_draft_revisions.up.sql`:
+  - Added immutable triggers:
+    - `trg_wdr_no_update`: Blocks any `UPDATE` on `workflow_draft_revisions` with `RAISE(ABORT, 'workflow_draft_revisions is append-only: UPDATE prohibited')`.
+    - `trg_wdr_no_delete`: Blocks any `DELETE` on `workflow_draft_revisions` with `RAISE(ABORT, 'workflow_draft_revisions is append-only: DELETE prohibited')`.
+    - `trg_wdr_monotonic_insert`: Enforces strict sequential revision allocation; initial revision must be 1 (parent NULL), and subsequent revisions must be exactly `MAX(revision) + 1` with matching `parent_revision` and `parent_hash`, aborting any backwards or out-of-order insertion.
+  - Added authoritative audit table `workflow_approval_bindings` with composite primary key `(workspace_id, workflow_id, revision, policy_revision)`, CHECK constraints on format/length, and immutable triggers `trg_wab_no_update` and `trg_wab_no_delete`.
+  - Corrected design comments: Clarified that triggers (not PK) enforce append-only immutability, while composite PK prevents duplicate key collisions; workspace isolation requires application query scoping (`WHERE workspace_id = ?`).
+- `packages/workflow_engine/migrations/0001_workflow_draft_revisions.down.sql`:
+  - Cleanly drops `trg_wab_no_update`, `trg_wab_no_delete`, `trg_wdr_no_update`, `trg_wdr_no_delete`, `trg_wdr_monotonic_insert`, `idx_wab_lookup`, `workflow_approval_bindings`, `idx_wdr_latest`, `idx_wdr_history`, and `workflow_draft_revisions`.
+- `packages/workflow_engine/migrations/README.md`:
+  - Corrected false claim that PK provides append-only and query-isolation guarantees; documented immutable triggers, transactional monotonic allocation, and `workflow_approval_bindings`.
+- `packages/stores/workflow_draft_store.py` (NEW):
+  - Defined typed errors: `DraftMutationError`, `DraftTamperError`, `ApprovalBindingError`.
+  - Implemented `SqliteDraftStore(DraftStore)`:
+    - Applies authoritative DDL from migration.
+    - Explicitly blocks all mutating methods (`update`, `delete`, `remove`, `overwrite`, `purge`) with `DraftMutationError`.
+    - Implements transactional monotonic revision allocation (`revise`) preserving parent revision and hash pointers.
+    - Enforces verify-on-read across `get()`, `latest()`, and `history()`, re-computing SHA256 of the canonical JSON specification against stored `content_hash` and immediately raising `DraftTamperError` if tampered.
+  - Implemented `WorkflowApprovalBinding` Pydantic model with strict validations: 64-char hex SHA256 hash, non-empty workspace and policy revision, `revision >= 1`.
+  - Implemented `WorkflowApprovalStore(ABC)`, `SqliteWorkflowApprovalStore`, and `InMemoryWorkflowApprovalStore` strictly binding `(workspace_id, content_hash, policy_revision)` with immutable audit history.
+  - Added global accessor functions: `get_draft_store()`, `get_approval_store()`, `reset_workflow_stores()`.
+- `packages/stores/agent_stores.py`:
+  - Hooked `reset_workflow_stores()` into `reset_all_stores()`.
+- `packages/stores/__init__.py`:
+  - Re-exported new workflow draft and approval store classes, errors, and factory accessors.
+- `tests/unit/test_workflow_draft_migration.py`:
+  - Upgraded `_statements` parser to track nested `BEGIN` / `CASE` / `END;` block depth, preventing premature statement splitting on semicolons inside triggers.
+  - Updated down migration tests to verify clean drop of triggers and approval bindings table.
+- `tests/unit/test_append_only_enforcement.py` (NEW):
+  - 12 comprehensive unit tests asserting all 3 target metrics, F13 refusal trio, verify-on-read tamper detection, approval bindings integrity, and workspace isolation.
+- `handoffs/CODE1-HANDOFF.md` (this row).
+
+WHY:
+- In F13, museR proved that the claim "018 composite primary key provides append-only immutability" was FALSE: SQLite composite primary keys only reject duplicate keys; raw SQL could still execute `UPDATE`, `DELETE`, and backwards/out-of-order `INSERT`.
+- This ticket makes append-only immutability physically true at the database engine level via SQLite triggers, while also enforcing it at the Python store interface and providing verify-on-read tamper detection and strict policy approval bindings.
+- Target metrics achieved:
+  1. `mutating paths still succeeding: 0`
+  2. `reads without hash verification: 0`
+  3. `approval bindings missing hash/policy: 0`
+
+F13 REFUSAL & TAMPER PROOF TABLE:
+| Mutating / Tampered Path | Layer Blocked | Error Raised / Outcome | Proved By |
+|---|---|---|---|
+| Raw SQL `UPDATE` | SQLite Trigger `trg_wdr_no_update` | `sqlite3.IntegrityError` / `OperationalError` ("workflow_draft_revisions is append-only: UPDATE prohibited") | `test_f13_raw_sql_update_is_refused_by_trigger` |
+| Raw SQL `DELETE` | SQLite Trigger `trg_wdr_no_delete` | `sqlite3.IntegrityError` / `OperationalError` ("workflow_draft_revisions is append-only: DELETE prohibited") | `test_f13_raw_sql_delete_is_refused_by_trigger` |
+| Raw SQL Backwards/Out-of-order `INSERT` | SQLite Trigger `trg_wdr_monotonic_insert` | `sqlite3.IntegrityError` / `OperationalError` ("out-of-order or backwards revision insertion prohibited") | `test_f13_raw_sql_backwards_and_out_of_order_insert_refused_by_trigger` |
+| Store API `update()` | `SqliteDraftStore` interface | `DraftMutationError` ("append-only: update is prohibited") | `test_store_interface_blocks_mutating_methods` |
+| Store API `delete()` | `SqliteDraftStore` interface | `DraftMutationError` ("append-only: delete is prohibited") | `test_store_interface_blocks_mutating_methods` |
+| Store API `remove()` | `SqliteDraftStore` interface | `DraftMutationError` ("append-only: remove is prohibited") | `test_store_interface_blocks_mutating_methods` |
+| Store API `overwrite()` | `SqliteDraftStore` interface | `DraftMutationError` ("append-only: overwrite is prohibited") | `test_store_interface_blocks_mutating_methods` |
+| Store API `purge()` | `SqliteDraftStore` interface | `DraftMutationError` ("append-only: purge is prohibited") | `test_store_interface_blocks_mutating_methods` |
+| Tampered revision on `get()` | `SqliteDraftStore.get()` | `DraftTamperError` ("Revision content hash mismatch: expected ... calculated ... (tamper detected)") | `test_verify_on_read_detects_tamper_in_get` |
+| Tampered revision on `latest()` | `SqliteDraftStore.latest()` | `DraftTamperError` ("Revision content hash mismatch: expected ... calculated ... (tamper detected)") | `test_verify_on_read_detects_tamper_in_latest` |
+| Tampered revision on `history()` | `SqliteDraftStore.history()` | `DraftTamperError` ("Revision content hash mismatch: expected ... calculated ... (tamper detected)") | `test_verify_on_read_detects_tamper_in_history` |
+| Incomplete approval binding (missing fields) | `WorkflowApprovalBinding` Pydantic / Store | `ApprovalBindingError` / `pydantic.ValidationError` | `test_approval_binding_model_enforces_mandatory_fields` |
+| Approval verification mismatch | `SqliteWorkflowApprovalStore.is_approved()` | Returns `False` / refuses approval | `test_approval_store_binds_workspace_hash_policy_exact` |
+| Raw SQL `UPDATE` on approval bindings | SQLite Trigger `trg_wab_no_update` | `sqlite3.IntegrityError` / `OperationalError` ("workflow_approval_bindings is append-only: UPDATE prohibited") | `test_approval_bindings_persistence_is_immutable` |
+| Raw SQL `DELETE` on approval bindings | SQLite Trigger `trg_wab_no_delete` | `sqlite3.IntegrityError` / `OperationalError` ("workflow_approval_bindings is append-only: DELETE prohibited") | `test_approval_bindings_persistence_is_immutable` |
+
+REUSED:
+- Authoritative SQL migration files: `packages/workflow_engine/migrations/0001_workflow_draft_revisions.*.sql`.
+- Canonical hash calculation and spec serialization: `WorkflowRevision._compute_content_hash`, `WorkflowRevision._canonical_spec_json`.
+- `DraftStore` abstract base class from `packages/workflow_engine/interfaces.py`.
+- Shared store registry pattern in `packages/stores/`.
+
+BUILT:
+- SQLite triggers for physical append-only immutability and sequential revision enforcement.
+- `SqliteDraftStore` with transactional revision allocation, prohibited mutation methods, and verify-on-read hash validation.
+- `workflow_approval_bindings` migration and `SqliteWorkflowApprovalStore` binding `(workspace_id, content_hash, policy_revision)`.
+- Full unit test coverage in `tests/unit/test_append_only_enforcement.py` and `tests/unit/test_workflow_draft_migration.py`.
+
+VERIFY:
+- Pytest unit suites: `pytest tests/unit/test_append_only_enforcement.py tests/unit/test_workflow_draft_migration.py tests/unit/test_workflow_draft_store.py tests/unit/test_agent_lifecycle.py tests/unit/test_v3_surface_wiring.py -v` -> **81 passed** in 11.29s.
+- Linter: `ruff check packages/stores tests/unit/test_append_only_enforcement.py tests/unit/test_workflow_draft_migration.py` -> **All checks passed!**
+- Typechecker: `MYPYPATH=packages:apps/api:apps/worker mypy --explicit-package-bases packages/stores tests/unit/test_append_only_enforcement.py tests/unit/test_workflow_draft_migration.py` -> **Success: no issues found in 5 source files**.
+- Target metrics:
+  - `mutating paths still succeeding: 0`: Refused at both SQLite trigger and Python store layer.
+  - `reads without hash verification: 0`: Verified across all read methods (`get`, `latest`, `history`).
+  - `approval bindings missing hash/policy: 0`: Validated at schema and store level.
+
+RISKS:
+- Applications that bypassed `DraftStore` or attempted direct in-place SQLite `UPDATE`/`DELETE` will now fail hard with `IntegrityError` at the trigger boundary (the desired security guarantee).
+- Dev2's R19 lane (`apps/api/app/v4/`, `apps/web/`) remains completely untouched and disjoint.
+- Standing rules honored: no commit, no deploy, no restart, no compose; scratch/test DBs only, never live collections.

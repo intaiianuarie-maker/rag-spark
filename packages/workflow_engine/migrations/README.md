@@ -71,16 +71,14 @@ CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
 
 **Constraints**
 
-- `PRIMARY KEY (workspace_id, workflow_id, revision)` **hardened in T-V4-020** —
-  this is the append-only guarantee at
-  the storage layer *and* the workspace-isolation guarantee: an existing
-  revision cannot be UPDATEd or re-INSERTed without a constraint violation, so
-  history cannot be rewritten or dropped by an application bug. It also
-  subsumes the monotonic-number invariant: a duplicate or backwards revision
-  number is refused by the database rather than trusted to the caller. Because
-  `workspace_id` is part of the key, two workspaces that use the same workflow
-  id cannot collide, and a cross-workspace row is unreachable by construction —
-  scope is not a query someone may forget to write.
+- `PRIMARY KEY (workspace_id, workflow_id, revision)` & **Append-Only Triggers (remedying F13)** —
+  Composite primary key prevents duplicate revision key collisions across workflows and workspaces.
+  Append-only mutability protection is enforced by database triggers (`trg_wdr_no_update`,
+  `trg_wdr_no_delete`, `trg_wdr_monotonic_insert`): any UPDATE, DELETE, or out-of-order/backwards
+  INSERT is rejected with an explicit database error.
+  Workspace isolation: Including `workspace_id` in the primary key prevents cross-workspace key collisions,
+  but does NOT automatically enforce query authorization at the SQL level. Scoped isolation is
+  enforced by store-level authorization filters (`WHERE workspace_id = ?`) in the application layer.
 - `CHECK (revision >= 1)` — no zero/negative revision numbers.
 - `CHECK (length(content_hash) = 64)` — a full SHA-256 digest, not a prefix.
 - `CHECK (json_valid(spec))` — `spec` is parseable JSON at write time. **The
@@ -109,8 +107,10 @@ CREATE TABLE IF NOT EXISTS workflow_draft_revisions (
   plain column) and keeps this table deployable into a workflow-local database
   as well as the shared one. Scope enforcement stays in the store layer, where
   R-004 puts it.
-- **No trigger.** History protection is a constraint, not a trigger: triggers
-  are harder to reason about, harder to downgrade, and add a write path.
+- **Immutable Triggers (T-R18 / F13).** Append-only guarantees and monotonic ordering are enforced
+  at the database layer via triggers (`trg_wdr_no_update`, `trg_wdr_no_delete`, `trg_wdr_monotonic_insert`,
+  `trg_wab_no_update`, `trg_wab_no_delete`). Triggers prevent direct SQL tampering and ensure database-level
+  integrity even if application-level safeguards are bypassed.
 
 ## 3. Up / down
 
@@ -120,12 +120,20 @@ migration is idempotent and a partially failed apply can be retried.
 **Down** — in dependency order, because an index lives on its table:
 
 ```sql
+DROP TRIGGER IF EXISTS trg_wab_no_delete;
+DROP TRIGGER IF EXISTS trg_wab_no_update;
+DROP INDEX IF EXISTS idx_wab_lookup;
+DROP TABLE IF EXISTS workflow_approval_bindings;
+
+DROP TRIGGER IF EXISTS trg_wdr_monotonic_insert;
+DROP TRIGGER IF EXISTS trg_wdr_no_delete;
+DROP TRIGGER IF EXISTS trg_wdr_no_update;
 DROP INDEX IF EXISTS idx_wdr_identity;
 DROP INDEX IF EXISTS idx_wdr_workspace;
 DROP TABLE IF EXISTS workflow_draft_revisions;
 ```
 
-Returns the database to its pre-0001 state: the new table and its two indexes
+Returns the database to its pre-0001 state: the new tables, indexes, and triggers
 are gone and every other object is untouched. Both directions are executed in
 the covering tests against a scratch DB, and the test asserts the *full*
 `sqlite_master` snapshot after down equals the snapshot before up — not merely
@@ -145,7 +153,7 @@ that the table is absent.
 4. This is also why the migration carries no `INSERT`/`UPDATE`/`DELETE`
    statements at all: the only way a draft revision enters this table is by
    being created through the store. A reviewer can verify the claim by reading
-   the SQL — the up file contains three `CREATE` statements and nothing else.
+   the SQL — the up file contains `CREATE` statements and nothing else.
 
 If a rollback is ever needed **after** a backend has written rows, that is a
 different story and the down migration says so in its own header: export first
@@ -156,15 +164,15 @@ today precisely because it has never been applied.
 
 1. **Before applying:** the down file is the rollback. Nothing has been written,
    so rollback is a no-op that costs nothing.
-2. **After applying, before any rows:** run the down file. Table and indexes
+2. **After applying, before any rows:** run the down file. Tables, triggers, and indexes
    disappear; the pre-up state is restored exactly (proven in the covering
    tests against scratch SQLite).
 3. **After applying, with rows:** export the table first (the `SELECT` at the
    bottom of the down file), then run the down file. The draft content then
    survives outside the database as JSON and can be re-imported if the durable
    backend is ever reinstated.
-4. **Never** roll back by hand-editing rows: the primary key makes history
-   append-only, and hand edits would leave `parent_hash` chains pointing at
+4. **Never** roll back by hand-editing rows: immutable triggers prohibit UPDATE
+   and DELETE, and hand edits would leave `parent_hash` chains pointing at
    revisions that no longer verify.
 
 ## 6. The one hazard the follow-up backend must handle

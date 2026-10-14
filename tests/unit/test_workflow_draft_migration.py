@@ -54,8 +54,8 @@ def _statements(path: Path) -> list[str]:
     """Split a migration file into executable statements.
 
     Strips ``--`` line comments (a whole-line comment or a trailing one) and
-    blank statements. The migration files deliberately contain no strings with
-    embedded semicolons and no trigger bodies, so splitting on ``;`` is exact.
+    blank statements. Supports trigger bodies (BEGIN ... END;) without
+    splitting on internal semicolons.
     """
     lines = []
     for raw in path.read_text(encoding="utf-8").splitlines():
@@ -63,8 +63,39 @@ def _statements(path: Path) -> list[str]:
         if not stripped or stripped.startswith("--"):
             continue
         lines.append(raw.split("--")[0].rstrip() if "--" in raw else raw)
-    joined = "\n".join(lines)
-    return [s.strip() for s in joined.split(";") if s.strip()]
+    text = "\n".join(lines)
+
+    statements: list[str] = []
+    current: list[str] = []
+    in_trigger = False
+    block_depth = 0
+    for line in text.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        words = [w.strip(";(),") for w in stripped.upper().split()]
+        if "CREATE" in words and "TRIGGER" in words:
+            in_trigger = True
+            block_depth = 0
+        current.append(line)
+        if in_trigger:
+            if "BEGIN" in words:
+                block_depth += 1
+            if "CASE" in words:
+                block_depth += 1
+            if "END" in words:
+                block_depth -= 1
+                if block_depth == 0 and stripped.endswith(";"):
+                    statements.append("\n".join(current).strip())
+                    current = []
+                    in_trigger = False
+        else:
+            if stripped.endswith(";"):
+                statements.append("\n".join(current).strip())
+                current = []
+    if current:
+        statements.append("\n".join(current).strip())
+    return [s for s in statements if s]
 
 
 def _snapshot(con: sqlite3.Connection) -> list[tuple]:
@@ -213,12 +244,10 @@ def test_up_migration_produces_documented_schema(scratch_db) -> None:
 
 @pytest.mark.unit
 def test_primary_key_blocks_rewrite_of_an_existing_revision(scratch_db) -> None:
-    """Append-only in the storage layer: PK makes a rewrite a constraint error.
+    """Append-only in the storage layer: PK and triggers block rewrite.
 
-    Note that SQL itself still permits ``UPDATE`` on a table; the guarantee
-    is the store never issues one, plus the PK that refuses a duplicate
-    insert and the CHECK chain that refuses a backwards revision. The store,
-    not SQLite, is the boundary that keeps history append-only.
+    Triggers trg_wdr_no_update, trg_wdr_no_delete, and trg_wdr_monotonic_insert
+    prevent UPDATE, DELETE, and backwards/out-of-order revision insertion (F13 fix).
     """
     _, con = scratch_db
     _apply(UP_SQL, con)
@@ -234,22 +263,28 @@ def test_primary_key_blocks_rewrite_of_an_existing_revision(scratch_db) -> None:
     )
     con.commit()
 
-    # Re-inserting an existing revision is refused by the primary key.
-    with pytest.raises(sqlite3.IntegrityError):
+    # Re-inserting an existing revision is refused by the primary key / trigger.
+    with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
         con.execute(
             "INSERT INTO workflow_draft_revisions (workspace_id, workflow_id, revision,"
             " content_hash, spec, summary, parent_revision, parent_hash, created_at)"
             " VALUES (?,?,?,?,?,?,?,?,?)",
             row,
         )
-    # A backwards revision number is refused by the CHECK chain.
-    with pytest.raises(sqlite3.IntegrityError):
+    # A backwards revision number is refused by the CHECK chain / trigger.
+    with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
         con.execute(
             "INSERT INTO workflow_draft_revisions (workspace_id, workflow_id, revision,"
             " content_hash, spec, summary, parent_revision, parent_hash, created_at)"
             " VALUES ('ws-1', 'wf-1', 1, ?, '{}', '', 2, NULL, '2026-10-14T00:00:00+00:00')",
             ("b" * 64,),
         )
+    # UPDATE is refused by trigger trg_wdr_no_update (F13)
+    with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
+        con.execute("UPDATE workflow_draft_revisions SET summary='tamper' WHERE workflow_id='wf-1'")
+    # DELETE is refused by trigger trg_wdr_no_delete (F13)
+    with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
+        con.execute("DELETE FROM workflow_draft_revisions WHERE workflow_id='wf-1'")
     con.rollback()
     assert con.execute("SELECT COUNT(*) FROM workflow_draft_revisions").fetchone()[0] == 1
 
@@ -293,7 +328,7 @@ def test_checks_reject_bad_rows(scratch_db) -> None:
         ),
     }
     for row in bad_cases.values():
-        with pytest.raises(sqlite3.IntegrityError):
+        with pytest.raises((sqlite3.IntegrityError, sqlite3.OperationalError)):
             con.execute(
                 "INSERT INTO workflow_draft_revisions (workflow_id, revision,"
                 " workspace_id, content_hash, spec, summary, parent_revision,"
@@ -345,6 +380,14 @@ def test_down_migration_returns_scratch_db_to_exact_prior_state(scratch_db) -> N
         "sqlite_autoindex_workflow_draft_revisions_1",
         "idx_wdr_workspace",
         "idx_wdr_identity",
+        "trg_wdr_no_update",
+        "trg_wdr_no_delete",
+        "trg_wdr_monotonic_insert",
+        "workflow_approval_bindings",
+        "sqlite_autoindex_workflow_approval_bindings_1",
+        "idx_wab_lookup",
+        "trg_wab_no_update",
+        "trg_wab_no_delete",
     }
 
     _apply(DOWN_SQL, con)
@@ -389,12 +432,30 @@ def test_round_trip_up_down_up_reproduces_the_same_schema(scratch_db) -> None:
 
 @pytest.mark.unit
 def test_down_drops_indexes_before_table(scratch_db) -> None:
-    """Order is observable: an index dropped after its table would be a no-op."""
+    """Order is observable: triggers dropped before indexes, indexes before tables."""
     statements = _statements(DOWN_SQL)
     kinds = [" ".join(s.split()[:2]) for s in statements]
     targets = [s.split()[-1].strip(";") for s in statements]
-    assert kinds == ["DROP INDEX", "DROP INDEX", "DROP TABLE"]
+    assert kinds == [
+        "DROP TRIGGER",
+        "DROP TRIGGER",
+        "DROP INDEX",
+        "DROP TABLE",
+        "DROP TRIGGER",
+        "DROP TRIGGER",
+        "DROP TRIGGER",
+        "DROP INDEX",
+        "DROP INDEX",
+        "DROP TABLE",
+    ]
     assert targets == [
+        "trg_wab_no_delete",
+        "trg_wab_no_update",
+        "idx_wab_lookup",
+        "workflow_approval_bindings",
+        "trg_wdr_monotonic_insert",
+        "trg_wdr_no_delete",
+        "trg_wdr_no_update",
         "idx_wdr_identity",
         "idx_wdr_workspace",
         "workflow_draft_revisions",

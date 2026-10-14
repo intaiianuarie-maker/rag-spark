@@ -476,3 +476,10 @@ def reset_all_stores() -> None:
     from agents.queue import InMemoryAgentRunQueue
 
     _GLOBAL_QUEUE = InMemoryAgentRunQueue()
+
+    try:
+        from .workflow_draft_store import reset_workflow_stores
+
+        reset_workflow_stores()
+    except Exception:
+        pass
