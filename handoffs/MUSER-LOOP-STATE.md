@@ -1043,3 +1043,25 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 ## 2026-10-14 — K06b-flip REJECTED as vacuous; fail-closed affirmed (coordinator adjudication)
 - Flip called migration_applied(None), which is False by construction — dead code changing nothing observable. Reverted.
 - Deeper: flip premise conflicts with stack discipline. AUTH_JWT_SECRET, checkpoint DB, runs DB are ALL fail-closed on unset; a magic default draft path would be the sole exception, invented without volume/backup mapping. Affirmed: env-required fail-closed stands; mode() stays truthful; /ready discloses. K06 family closed (design+probe+disclosure landed).
+
+## 2026-10-14 — A15 DONE (2222c86, proofs held then landed); A12 out
+- Manifest drift closed with parity proofs. Dev2 A12 (executor factory); dev1 K02.
+
+## 2026-10-14 — K02 DONE (e9b4f82, 1 pre-existing signed); A12 DONE (660a4b1); A13+A14 out
+- K failure stash-proven pre-existing. K TOP10 arrived (relayed separately); A12 flag-on proof landed.
+
+## 2026-10-14 — A13 DONE (7803d3f, proofs held then landed); F10 out
+- Outcome proofs confirmed green by re-run (46->49). Dev2 F10 (CI pins); dev1 A14.
+
+## 2026-10-14 — F10 DONE (6238ab1, one-command pins); A22-rerank probe out
+- K10 closed. Rerank gate step 1 live: settle callable ID (nemotron absent from list; cohere documented) before wiring.
+
+## 2026-10-15 — Rerank model settled by coordinator live probe; T-A22-wire out
+- cohere/rerank-v3.5 callable (0.001/search-unit, metered; no free tier for rerank). Nemotron-pinned ID absent from OR models list. Wire behind RERANK_ENABLED=false default with sensitive-egress refusal, per RS-08. Date rollover logged.
+
+## 2026-10-15 — DUAL PROVIDER OUTAGE (judge-reported >1h); all work HOLD
+- Dev1 (w5:pG, LongCat 2.5 Preview Free): blocked since ~22:05Z. DOING: T-A14 (V3-03 approval binding) — dispatched, never started. Last commit: e9b4f82 (T-K02).
+- Dev2 (w5:p6, Cat Jam Free): blocked since ~22:12Z. DOING: T-A22-adapt (rerank adapter slice) — dispatched, never started. Last commit: dbd730c (T-A22-wire design).
+- Tree verified clean: no partial code from either dev. Nothing to salvage, no rows pending.
+- Board actual: 258 tickets (judge dial read 225 — stale snapshot, flagged for their side).
+- NO re-dispatch (would stack prompts on frozen turns). Resume point: this row + assignments file. A-wave resumes when either endpoint recovers or models are switched (operator decision).
