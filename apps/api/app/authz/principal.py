@@ -109,6 +109,13 @@ async def _principal_from_key(session: AsyncSession, token: str) -> Principal | 
     key = await get_active_key(session, token)
     if key is None:
         return None
+
+    from app.auth.models import User
+
+    user = await session.get(User, key.created_by)
+    if user is None or not user.is_active:
+        return None
+
     return Principal(
         user_id=str(key.created_by),
         is_authenticated=True,

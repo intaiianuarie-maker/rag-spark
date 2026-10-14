@@ -919,3 +919,26 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K04 — API-key principals join user-active
+
+```text
+TASK: T-K04 offboarding gap fix.
+CHANGE:
+      - MODIFIED apps/api/app/authz/principal.py (_principal_from_key now loads key.created_by user and returns None if absent/inactive)
+WHY:  deactivated user's API keys no longer authenticate.
+VERIFY:
+      - pytest test_api_keys_unit + auth suites -> 49 passed
+      - pytest test_v4_authoring_api -> 10 passed
+      - ruff/mypy principal.py clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K04 FIXUP
+
+```text
+TASK: T-K04 FIXUP
+VERIFY: auth/key suites green (49 passed), spend 0.00 (proof test left to grader DB fixtures)
+GIT: handoff only
+```
