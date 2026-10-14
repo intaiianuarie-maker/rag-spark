@@ -1,0 +1,658 @@
+{
+  "summary": {
+    "n_questions": 4,
+    "K": 20,
+    "corpus_chunks": 40,
+    "entities_built": 244,
+    "graph_fallback_errors": [],
+    "metrics": {
+      "recall_at_k_all_support": {
+        "off": 1.0,
+        "on": 1.0,
+        "n": 4
+      },
+      "correct_cited": {
+        "off": 0.75,
+        "on": 0.75,
+        "n": 4
+      },
+      "refused": {
+        "off": 0.0,
+        "on": 0.0,
+        "n": 4
+      },
+      "failure": {
+        "off": 0.25,
+        "on": 0.25,
+        "n": 4
+      }
+    },
+    "paired_diff_and_ci95": {
+      "recall_at_k": {
+        "point": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      },
+      "correct_cited": {
+        "point": 0.0,
+        "ci95": [
+          0.0,
+          0.0
+        ]
+      }
+    },
+    "denominators": {
+      "refusals_are_failures": true,
+      "citations_required_for_correct": true
+    },
+    "embedding_backend_used": "openai/text-embedding-3-small (openrouter fallback)",
+    "usage": {
+      "calls": 8,
+      "free": 1,
+      "paid": 7,
+      "free_exhaust": 7,
+      "tokens": 16984,
+      "spend": 0.0007703660000000001,
+      "errors": [
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        },
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        },
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        },
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        },
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        },
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        },
+        {
+          "model": "gemma-4-26b-a4b-it:free",
+          "detail": "connection failed after retries"
+        }
+      ]
+    },
+    "api_key_prefix": "sk-or-..."
+  },
+  "records": [
+    {
+      "qid": "5a8b57f25542995d1e6f1371",
+      "off": {
+        "mode": "off",
+        "qid": "5a8b57f25542995d1e6f1371",
+        "evidence_ids": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p0",
+          "5a8b57f25542995d1e6f1371__p7",
+          "5a8b57f25542995d1e6f1371__p4",
+          "5a8b57f25542995d1e6f1371__p5",
+          "5a8b57f25542995d1e6f1371__p6",
+          "5a8b57f25542995d1e6f1371__p8",
+          "5a8b57f25542995d1e6f1371__p3",
+          "5a8b57f25542995d1e6f1371__p9",
+          "5a8c7595554299585d9e36b6__p9",
+          "5a8b57f25542995d1e6f1371__p2",
+          "5a85ea095542994775f606a8__p6",
+          "5a85ea095542994775f606a8__p7",
+          "5a85ea095542994775f606a8__p2",
+          "5a85ea095542994775f606a8__p0",
+          "5a8c7595554299585d9e36b6__p5",
+          "5a8c7595554299585d9e36b6__p6",
+          "5a85ea095542994775f606a8__p3",
+          "5a85ea095542994775f606a8__p1",
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "answer": "Yes, both Scott Derrickson and Ed Wood were American.",
+        "status": "yes",
+        "citations": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p4"
+        ],
+        "citations_valid": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p4"
+        ],
+        "supports_cited": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p4"
+        ],
+        "refused": false,
+        "correct_cited": true,
+        "failure": false,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2125,
+        "cost": 0.000107406,
+        "error": ""
+      },
+      "on": {
+        "mode": "on",
+        "qid": "5a8b57f25542995d1e6f1371",
+        "evidence_ids": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p0",
+          "5a8b57f25542995d1e6f1371__p7",
+          "5a8b57f25542995d1e6f1371__p5",
+          "5a8b57f25542995d1e6f1371__p6",
+          "5a8b57f25542995d1e6f1371__p4",
+          "5a8b57f25542995d1e6f1371__p8",
+          "5a8b57f25542995d1e6f1371__p3",
+          "5a8b57f25542995d1e6f1371__p9",
+          "5a8c7595554299585d9e36b6__p9",
+          "5a8b57f25542995d1e6f1371__p2",
+          "5a85ea095542994775f606a8__p7",
+          "5a85ea095542994775f606a8__p0",
+          "5a85ea095542994775f606a8__p6",
+          "5a85ea095542994775f606a8__p1",
+          "5a8c7595554299585d9e36b6__p1",
+          "5a8c7595554299585d9e36b6__p2",
+          "5a85ea095542994775f606a8__p2",
+          "5a85ea095542994775f606a8__p4",
+          "5a8c7595554299585d9e36b6__p5"
+        ],
+        "answer": "Yes, both Scott Derrickson and Ed Wood were American.",
+        "status": "yes",
+        "citations": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p0"
+        ],
+        "citations_valid": [
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p0"
+        ],
+        "supports_cited": [
+          "5a8b57f25542995d1e6f1371__p1"
+        ],
+        "refused": false,
+        "correct_cited": true,
+        "failure": false,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2175,
+        "cost": 0.000110218,
+        "error": ""
+      },
+      "dense_top": [
+        "5a8b57f25542995d1e6f1371__p1",
+        "5a8b57f25542995d1e6f1371__p0",
+        "5a8b57f25542995d1e6f1371__p7",
+        "5a8b57f25542995d1e6f1371__p4",
+        "5a8b57f25542995d1e6f1371__p5",
+        "5a8b57f25542995d1e6f1371__p6",
+        "5a8b57f25542995d1e6f1371__p8",
+        "5a8b57f25542995d1e6f1371__p3",
+        "5a8b57f25542995d1e6f1371__p9",
+        "5a8c7595554299585d9e36b6__p9",
+        "5a8b57f25542995d1e6f1371__p2",
+        "5a85ea095542994775f606a8__p6",
+        "5a85ea095542994775f606a8__p7",
+        "5a85ea095542994775f606a8__p2",
+        "5a85ea095542994775f606a8__p0",
+        "5a8c7595554299585d9e36b6__p5",
+        "5a8c7595554299585d9e36b6__p6",
+        "5a85ea095542994775f606a8__p3",
+        "5a85ea095542994775f606a8__p1",
+        "5a85ea095542994775f606a8__p8"
+      ],
+      "graph_top": [
+        "5a8b57f25542995d1e6f1371__p1",
+        "5a8b57f25542995d1e6f1371__p0",
+        "5a8b57f25542995d1e6f1371__p7",
+        "5a8b57f25542995d1e6f1371__p5",
+        "5a8b57f25542995d1e6f1371__p6",
+        "5a8b57f25542995d1e6f1371__p4",
+        "5a8b57f25542995d1e6f1371__p8",
+        "5a8b57f25542995d1e6f1371__p3",
+        "5a8b57f25542995d1e6f1371__p9",
+        "5a8c7595554299585d9e36b6__p9",
+        "5a8b57f25542995d1e6f1371__p2",
+        "5a85ea095542994775f606a8__p7",
+        "5a85ea095542994775f606a8__p0",
+        "5a85ea095542994775f606a8__p6",
+        "5a85ea095542994775f606a8__p1",
+        "5a8c7595554299585d9e36b6__p1",
+        "5a8c7595554299585d9e36b6__p2",
+        "5a85ea095542994775f606a8__p2",
+        "5a85ea095542994775f606a8__p4",
+        "5a8c7595554299585d9e36b6__p5"
+      ]
+    },
+    {
+      "qid": "5a8c7595554299585d9e36b6",
+      "off": {
+        "mode": "off",
+        "qid": "5a8c7595554299585d9e36b6",
+        "evidence_ids": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p5",
+          "5a8c7595554299585d9e36b6__p3",
+          "5a8c7595554299585d9e36b6__p0",
+          "5a8c7595554299585d9e36b6__p2",
+          "5a8b57f25542995d1e6f1371__p6",
+          "5a8c7595554299585d9e36b6__p9",
+          "5a8c7595554299585d9e36b6__p1",
+          "5a85ea095542994775f606a8__p9",
+          "5a8c7595554299585d9e36b6__p7",
+          "5a8b57f25542995d1e6f1371__p8",
+          "5a8b57f25542995d1e6f1371__p0",
+          "5a8c7595554299585d9e36b6__p4",
+          "5a8b57f25542995d1e6f1371__p3",
+          "5a8b57f25542995d1e6f1371__p4",
+          "5a85ea095542994775f606a8__p7",
+          "5adbf0a255429947ff17385a__p8",
+          "5a85ea095542994775f606a8__p6",
+          "5a85ea095542994775f606a8__p8",
+          "5a8b57f25542995d1e6f1371__p1"
+        ],
+        "answer": "The woman who starred as Corliss Archer in the film Kiss and Tell was Shirley Temple Black, who served as the United States ambassador to Ghana and to another location (the evidence does not specify the second location).",
+        "status": "yes",
+        "citations": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p1"
+        ],
+        "citations_valid": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p1"
+        ],
+        "supports_cited": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p1"
+        ],
+        "refused": false,
+        "correct_cited": false,
+        "failure": true,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2211,
+        "cost": 0.000116536,
+        "error": ""
+      },
+      "on": {
+        "mode": "on",
+        "qid": "5a8c7595554299585d9e36b6",
+        "evidence_ids": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p5",
+          "5a8c7595554299585d9e36b6__p3",
+          "5a8c7595554299585d9e36b6__p0",
+          "5a8c7595554299585d9e36b6__p2",
+          "5a8c7595554299585d9e36b6__p1",
+          "5a8b57f25542995d1e6f1371__p6",
+          "5a8c7595554299585d9e36b6__p9",
+          "5a85ea095542994775f606a8__p9",
+          "5a8c7595554299585d9e36b6__p7",
+          "5a8b57f25542995d1e6f1371__p8",
+          "5a8b57f25542995d1e6f1371__p0",
+          "5a8c7595554299585d9e36b6__p4",
+          "5a8b57f25542995d1e6f1371__p3",
+          "5a8b57f25542995d1e6f1371__p4",
+          "5a85ea095542994775f606a8__p7",
+          "5adbf0a255429947ff17385a__p8",
+          "5a85ea095542994775f606a8__p6",
+          "5a85ea095542994775f606a8__p8",
+          "5a8b57f25542995d1e6f1371__p1"
+        ],
+        "answer": "The woman who portrayed Corliss Archer in the film Kiss and Tell was Shirley Temple Black, who was named United States ambassador to Ghana and to another position (the text cuts off).",
+        "status": "yes",
+        "citations": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p1"
+        ],
+        "citations_valid": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p1"
+        ],
+        "supports_cited": [
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p1"
+        ],
+        "refused": false,
+        "correct_cited": false,
+        "failure": true,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2205,
+        "cost": 0.000115216,
+        "error": ""
+      },
+      "dense_top": [
+        "5a8c7595554299585d9e36b6__p6",
+        "5a8c7595554299585d9e36b6__p5",
+        "5a8c7595554299585d9e36b6__p3",
+        "5a8c7595554299585d9e36b6__p0",
+        "5a8c7595554299585d9e36b6__p2",
+        "5a8b57f25542995d1e6f1371__p6",
+        "5a8c7595554299585d9e36b6__p9",
+        "5a8c7595554299585d9e36b6__p1",
+        "5a85ea095542994775f606a8__p9",
+        "5a8c7595554299585d9e36b6__p7",
+        "5a8b57f25542995d1e6f1371__p8",
+        "5a8b57f25542995d1e6f1371__p0",
+        "5a8c7595554299585d9e36b6__p4",
+        "5a8b57f25542995d1e6f1371__p3",
+        "5a8b57f25542995d1e6f1371__p4",
+        "5a85ea095542994775f606a8__p7",
+        "5adbf0a255429947ff17385a__p8",
+        "5a85ea095542994775f606a8__p6",
+        "5a85ea095542994775f606a8__p8",
+        "5a8b57f25542995d1e6f1371__p1"
+      ],
+      "graph_top": [
+        "5a8c7595554299585d9e36b6__p6",
+        "5a8c7595554299585d9e36b6__p5",
+        "5a8c7595554299585d9e36b6__p3",
+        "5a8c7595554299585d9e36b6__p0",
+        "5a8c7595554299585d9e36b6__p2",
+        "5a8c7595554299585d9e36b6__p1",
+        "5a8b57f25542995d1e6f1371__p6",
+        "5a8c7595554299585d9e36b6__p9",
+        "5a85ea095542994775f606a8__p9",
+        "5a8c7595554299585d9e36b6__p7",
+        "5a8b57f25542995d1e6f1371__p8",
+        "5a8b57f25542995d1e6f1371__p0",
+        "5a8c7595554299585d9e36b6__p4",
+        "5a8b57f25542995d1e6f1371__p3",
+        "5a8b57f25542995d1e6f1371__p4",
+        "5a85ea095542994775f606a8__p7",
+        "5adbf0a255429947ff17385a__p8",
+        "5a85ea095542994775f606a8__p6",
+        "5a85ea095542994775f606a8__p8",
+        "5a8b57f25542995d1e6f1371__p1"
+      ]
+    },
+    {
+      "qid": "5a85ea095542994775f606a8",
+      "off": {
+        "mode": "off",
+        "qid": "5a85ea095542994775f606a8",
+        "evidence_ids": [
+          "5a85ea095542994775f606a8__p8",
+          "5a85ea095542994775f606a8__p2",
+          "5a85ea095542994775f606a8__p6",
+          "5a85ea095542994775f606a8__p1",
+          "5a85ea095542994775f606a8__p9",
+          "5a85ea095542994775f606a8__p7",
+          "5a85ea095542994775f606a8__p0",
+          "5a85ea095542994775f606a8__p3",
+          "5a85ea095542994775f606a8__p5",
+          "5a85ea095542994775f606a8__p4",
+          "5a8b57f25542995d1e6f1371__p7",
+          "5a8c7595554299585d9e36b6__p3",
+          "5a8b57f25542995d1e6f1371__p5",
+          "5a8b57f25542995d1e6f1371__p9",
+          "5a8b57f25542995d1e6f1371__p6",
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8b57f25542995d1e6f1371__p3",
+          "5a8c7595554299585d9e36b6__p0",
+          "5adbf0a255429947ff17385a__p7"
+        ],
+        "answer": "Animorphs is a science fantasy series of young adult books written by Katherine Applegate and Michael Grant (writing as K. A. Applegate) that is told in first person, with all six main characters taking turns narrating.",
+        "status": "yes",
+        "citations": [
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "citations_valid": [
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "supports_cited": [
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "refused": false,
+        "correct_cited": true,
+        "failure": false,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2086,
+        "cost": 0.000106302,
+        "error": ""
+      },
+      "on": {
+        "mode": "on",
+        "qid": "5a85ea095542994775f606a8",
+        "evidence_ids": [
+          "5a85ea095542994775f606a8__p8",
+          "5a85ea095542994775f606a8__p6",
+          "5a85ea095542994775f606a8__p2",
+          "5a85ea095542994775f606a8__p7",
+          "5a85ea095542994775f606a8__p1",
+          "5a85ea095542994775f606a8__p9",
+          "5a85ea095542994775f606a8__p0",
+          "5a85ea095542994775f606a8__p3",
+          "5a85ea095542994775f606a8__p5",
+          "5a85ea095542994775f606a8__p4",
+          "5a8b57f25542995d1e6f1371__p7",
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a8c7595554299585d9e36b6__p3",
+          "5a8b57f25542995d1e6f1371__p5",
+          "5a8b57f25542995d1e6f1371__p9",
+          "5a8b57f25542995d1e6f1371__p6",
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p9",
+          "5a8b57f25542995d1e6f1371__p3",
+          "5a8c7595554299585d9e36b6__p0"
+        ],
+        "answer": "Animorphs is a science fantasy series of young adult books written by Katherine Applegate and Michael Grant (writing as K. A. Applegate) that is told in first person, with all six main characters taking turns narrating.",
+        "status": "yes",
+        "citations": [
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "citations_valid": [
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "supports_cited": [
+          "5a85ea095542994775f606a8__p8"
+        ],
+        "refused": false,
+        "correct_cited": true,
+        "failure": false,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2155,
+        "cost": 0.0001092,
+        "error": ""
+      },
+      "dense_top": [
+        "5a85ea095542994775f606a8__p8",
+        "5a85ea095542994775f606a8__p2",
+        "5a85ea095542994775f606a8__p6",
+        "5a85ea095542994775f606a8__p1",
+        "5a85ea095542994775f606a8__p9",
+        "5a85ea095542994775f606a8__p7",
+        "5a85ea095542994775f606a8__p0",
+        "5a85ea095542994775f606a8__p3",
+        "5a85ea095542994775f606a8__p5",
+        "5a85ea095542994775f606a8__p4",
+        "5a8b57f25542995d1e6f1371__p7",
+        "5a8c7595554299585d9e36b6__p3",
+        "5a8b57f25542995d1e6f1371__p5",
+        "5a8b57f25542995d1e6f1371__p9",
+        "5a8b57f25542995d1e6f1371__p6",
+        "5a8c7595554299585d9e36b6__p6",
+        "5a8b57f25542995d1e6f1371__p1",
+        "5a8b57f25542995d1e6f1371__p3",
+        "5a8c7595554299585d9e36b6__p0",
+        "5adbf0a255429947ff17385a__p7"
+      ],
+      "graph_top": [
+        "5a85ea095542994775f606a8__p8",
+        "5a85ea095542994775f606a8__p6",
+        "5a85ea095542994775f606a8__p2",
+        "5a85ea095542994775f606a8__p7",
+        "5a85ea095542994775f606a8__p1",
+        "5a85ea095542994775f606a8__p9",
+        "5a85ea095542994775f606a8__p0",
+        "5a85ea095542994775f606a8__p3",
+        "5a85ea095542994775f606a8__p5",
+        "5a85ea095542994775f606a8__p4",
+        "5a8b57f25542995d1e6f1371__p7",
+        "5a8b57f25542995d1e6f1371__p1",
+        "5a8c7595554299585d9e36b6__p3",
+        "5a8b57f25542995d1e6f1371__p5",
+        "5a8b57f25542995d1e6f1371__p9",
+        "5a8b57f25542995d1e6f1371__p6",
+        "5a8c7595554299585d9e36b6__p6",
+        "5a8c7595554299585d9e36b6__p9",
+        "5a8b57f25542995d1e6f1371__p3",
+        "5a8c7595554299585d9e36b6__p0"
+      ]
+    },
+    {
+      "qid": "5adbf0a255429947ff17385a",
+      "off": {
+        "mode": "off",
+        "qid": "5adbf0a255429947ff17385a",
+        "evidence_ids": [
+          "5adbf0a255429947ff17385a__p6",
+          "5adbf0a255429947ff17385a__p5",
+          "5adbf0a255429947ff17385a__p4",
+          "5adbf0a255429947ff17385a__p7",
+          "5adbf0a255429947ff17385a__p9",
+          "5adbf0a255429947ff17385a__p3",
+          "5adbf0a255429947ff17385a__p0",
+          "5adbf0a255429947ff17385a__p1",
+          "5adbf0a255429947ff17385a__p2",
+          "5adbf0a255429947ff17385a__p8",
+          "5a85ea095542994775f606a8__p9",
+          "5a8b57f25542995d1e6f1371__p2",
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a85ea095542994775f606a8__p1",
+          "5a85ea095542994775f606a8__p5",
+          "5a8c7595554299585d9e36b6__p7",
+          "5a8b57f25542995d1e6f1371__p7",
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p5",
+          "5a8c7595554299585d9e36b6__p4"
+        ],
+        "answer": "No, the Laleli Mosque is located in Laleli, Fatih, while the Esma Sultan Mansion is located in the Ortak\u00f6y neighborhood of Istanbul.",
+        "status": "yes",
+        "citations": [
+          "5adbf0a255429947ff17385a__p5",
+          "5adbf0a255429947ff17385a__p6"
+        ],
+        "citations_valid": [
+          "5adbf0a255429947ff17385a__p5",
+          "5adbf0a255429947ff17385a__p6"
+        ],
+        "supports_cited": [
+          "5adbf0a255429947ff17385a__p5",
+          "5adbf0a255429947ff17385a__p6"
+        ],
+        "refused": false,
+        "correct_cited": true,
+        "failure": false,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it",
+        "tokens": 2020,
+        "cost": 0.000105488,
+        "error": ""
+      },
+      "on": {
+        "mode": "on",
+        "qid": "5adbf0a255429947ff17385a",
+        "evidence_ids": [
+          "5adbf0a255429947ff17385a__p6",
+          "5adbf0a255429947ff17385a__p5",
+          "5adbf0a255429947ff17385a__p4",
+          "5adbf0a255429947ff17385a__p7",
+          "5adbf0a255429947ff17385a__p9",
+          "5adbf0a255429947ff17385a__p3",
+          "5adbf0a255429947ff17385a__p0",
+          "5adbf0a255429947ff17385a__p2",
+          "5adbf0a255429947ff17385a__p8",
+          "5adbf0a255429947ff17385a__p1",
+          "5a85ea095542994775f606a8__p9",
+          "5a8b57f25542995d1e6f1371__p2",
+          "5a8b57f25542995d1e6f1371__p1",
+          "5a85ea095542994775f606a8__p1",
+          "5a85ea095542994775f606a8__p5",
+          "5a8c7595554299585d9e36b6__p7",
+          "5a8b57f25542995d1e6f1371__p7",
+          "5a8c7595554299585d9e36b6__p6",
+          "5a8c7595554299585d9e36b6__p5",
+          "5a8c7595554299585d9e36b6__p4"
+        ],
+        "answer": "No, the Laleli Mosque is located in Laleli, Fatih, while the Esma Sultan Mansion is located in the Ortak\u00f6y neighborhood of Istanbul.",
+        "status": "yes",
+        "citations": [
+          "5adbf0a255429947ff17385a__p6",
+          "5adbf0a255429947ff17385a__p5"
+        ],
+        "citations_valid": [
+          "5adbf0a255429947ff17385a__p6",
+          "5adbf0a255429947ff17385a__p5"
+        ],
+        "supports_cited": [
+          "5adbf0a255429947ff17385a__p6",
+          "5adbf0a255429947ff17385a__p5"
+        ],
+        "refused": false,
+        "correct_cited": true,
+        "failure": false,
+        "recall_at_k": true,
+        "model_used": "google/gemma-4-26b-a4b-it:free",
+        "tokens": 2007,
+        "cost": 0.0,
+        "error": ""
+      },
+      "dense_top": [
+        "5adbf0a255429947ff17385a__p6",
+        "5adbf0a255429947ff17385a__p5",
+        "5adbf0a255429947ff17385a__p4",
+        "5adbf0a255429947ff17385a__p7",
+        "5adbf0a255429947ff17385a__p9",
+        "5adbf0a255429947ff17385a__p3",
+        "5adbf0a255429947ff17385a__p0",
+        "5adbf0a255429947ff17385a__p1",
+        "5adbf0a255429947ff17385a__p2",
+        "5adbf0a255429947ff17385a__p8",
+        "5a85ea095542994775f606a8__p9",
+        "5a8b57f25542995d1e6f1371__p2",
+        "5a8b57f25542995d1e6f1371__p1",
+        "5a85ea095542994775f606a8__p1",
+        "5a85ea095542994775f606a8__p5",
+        "5a8c7595554299585d9e36b6__p7",
+        "5a8b57f25542995d1e6f1371__p7",
+        "5a8c7595554299585d9e36b6__p6",
+        "5a8c7595554299585d9e36b6__p5",
+        "5a8c7595554299585d9e36b6__p4"
+      ],
+      "graph_top": [
+        "5adbf0a255429947ff17385a__p6",
+        "5adbf0a255429947ff17385a__p5",
+        "5adbf0a255429947ff17385a__p4",
+        "5adbf0a255429947ff17385a__p7",
+        "5adbf0a255429947ff17385a__p9",
+        "5adbf0a255429947ff17385a__p3",
+        "5adbf0a255429947ff17385a__p0",
+        "5adbf0a255429947ff17385a__p2",
+        "5adbf0a255429947ff17385a__p8",
+        "5adbf0a255429947ff17385a__p1",
+        "5a85ea095542994775f606a8__p9",
+        "5a8b57f25542995d1e6f1371__p2",
+        "5a8b57f25542995d1e6f1371__p1",
+        "5a85ea095542994775f606a8__p1",
+        "5a85ea095542994775f606a8__p5",
+        "5a8c7595554299585d9e36b6__p7",
+        "5a8b57f25542995d1e6f1371__p7",
+        "5a8c7595554299585d9e36b6__p6",
+        "5a8c7595554299585d9e36b6__p5",
+        "5a8c7595554299585d9e36b6__p4"
+      ]
+    }
+  ]
+}
