@@ -1253,3 +1253,42 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A15 — single manifest
+
+```
+TASK: T-A15
+CHANGE:
+      - apps/api/app/workflows/router.py now uses PRODUCTION_CAPABILITY_MANIFEST for validate and approve paths
+METRICS:
+      - test_v4_authoring_api -> 11 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A15 FIXUP
+
+```
+TASK: T-A15 FIXUP
+VERIFY:
+      - tests/unit/test_v4_authoring_api -> 14 passed (3 A15 parity tests)
+      - A15 supported node parity + unsupported approval refusal now green
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A15 FIXUP-2
+
+```
+TASK: T-A15 FIXUP-2
+VERIFY:
+      - tests/unit/test_v4_authoring_api -> 14 passed
+      - ruff clean, 0 E501
+SPEND: 0.00
+GIT: handoff only
+```

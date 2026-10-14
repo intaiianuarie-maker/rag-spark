@@ -35,12 +35,11 @@ from workflow_engine.draft_store import (
 )
 from workflow_engine.executor import WorkflowExecutor
 from workflow_engine.interfaces import (
-    CapabilityManifest,
-    NodeType,
     WorkflowDefinition,
     WorkflowRun,
     WorkflowRunStatus,
 )
+from workflow_engine.manifest import PRODUCTION_CAPABILITY_MANIFEST
 from workflow_engine.production_executor import ProductionNodeExecutor
 from workflow_engine.routes.schemas import (
     DraftErrorCode,
@@ -467,10 +466,7 @@ async def validate_workflow(
             },
         )
 
-    manifest = CapabilityManifest(
-        supported_node_types=set(NodeType),
-        enabled_capabilities={"knowledge_search", "document_read", "llm_generate"},
-    )
+    manifest = PRODUCTION_CAPABILITY_MANIFEST
     result = WorkflowValidator.validate(definition, manifest)
     annotations = build_annotations(result)
 
@@ -579,10 +575,7 @@ async def approve_workflow(
         raise _handle_store_error(exc) from exc
 
     # Validate definition before approval
-    manifest = CapabilityManifest(
-        supported_node_types=set(NodeType),
-        enabled_capabilities={"knowledge_search", "document_read", "llm_generate"},
-    )
+    manifest = PRODUCTION_CAPABILITY_MANIFEST
     val_result = WorkflowValidator.validate(draft.spec, manifest)
     if not val_result.valid:
         raise HTTPException(
