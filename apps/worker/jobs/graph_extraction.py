@@ -48,6 +48,12 @@ _DEFAULT_MAX_ATTEMPTS = 3
 _GRAPH_ERROR_CODE = "GRAPH_EXTRACTION_FAILED"
 
 
+class GraphJobDisposition(str):
+    SUCCESS = "success"
+    RETRY = "retry"
+    PARKED = "parked"
+
+
 def _is_graph_enabled() -> bool:
     return graph_mode() in ("rule", "llm")
 
@@ -306,12 +312,11 @@ async def _set_job_failed(job_id: str, error_code: str, message: str) -> None:
         pass
 
 
-async def handle_graph_job(job_id: str) -> None:
-    """Process one graph job with retry/park logic (T-V1-020 style)."""
+async def handle_graph_job(job_id: str) -> str:
+    """Process one graph job and return a typed durable disposition."""
     attempts = await _inc_attempts(job_id)
     try:
         await process_graph_job(job_id)
-        # Success: clean up payload and state
         await delete_payload(job_id)
         from graph.queue import _prefix, get_client
 
@@ -325,8 +330,12 @@ async def handle_graph_job(job_id: str) -> None:
             )
         except Exception:
             pass
+        logger.info(
+            "graph_job_success",
+            extra={"event": "graph_job_success", "job_id": job_id, "attempts": attempts},
+        )
+        return GraphJobDisposition.SUCCESS
     except Exception as exc:
-        # Retryable if attempts < max_attempts, else park as failed loud
         max_attempts = int(
             os.environ.get("GRAPH_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS))
         )
@@ -349,32 +358,24 @@ async def handle_graph_job(job_id: str) -> None:
             except GraphQueueUnavailable:
                 logger.warning(
                     "graph_requeue_failed",
-                    extra={
-                        "event": "graph_requeue_failed",
-                        "job_id": job_id,
-                    },
+                    extra={"event": "graph_requeue_failed", "job_id": job_id},
                 )
                 raise
-        else:
-            await _set_job_failed(job_id, error_code, message)
-            logger.warning(
-                "graph_job_failed",
-                extra={
-                    "event": "graph_job_failed",
-                    "job_id": job_id,
-                    "attempts": attempts,
-                    "error": error_code,
-                },
-            )
-            # Do not re-queue; job will be acked and left as failed
-            # The failure is LOUD: status failed, error_code visible,
-            # not silent READY
-            raise RuntimeError(
-                f"graph job {job_id} parked as failed after "
-                f"{attempts} attempts: {message}"
-            ) from exc
-        raise
-
+            return GraphJobDisposition.RETRY
+        await _set_job_failed(job_id, error_code, message)
+        logger.warning(
+            "graph_job_failed",
+            extra={
+                "event": "graph_job_failed",
+                "job_id": job_id,
+                "attempts": attempts,
+                "error": error_code,
+            },
+        )
+        raise RuntimeError(
+            f"graph job {job_id} parked as failed after "
+            f"{attempts} attempts: {message}"
+        ) from exc
 
 async def _keep_alive(claimed: Claim) -> None:
     interval = max(2.0, 5.0)  # simple fixed interval, lease is 120s default
@@ -435,15 +436,10 @@ async def run_graph_worker(stop_event: asyncio.Event) -> None:
         heartbeat = asyncio.create_task(_keep_alive(claimed))
         try:
             job_id = str(claimed)
+            disposition = None
             try:
-                await handle_graph_job(job_id)
+                disposition = await handle_graph_job(job_id)
             except Exception as exc:
-                # If handle_graph_job parked as failed, it raised; we still need to
-                # decide whether to ack or requeue. It already scheduled retry if
-                # attempts < max, else it set failed state. In both cases we ack
-                # the claim after durable outcome (retry queued or failed parked).
-                # For retry case, the job is already in delayed zset, so ack is correct.
-                # For park case, ack removes claim and leaves failed state.
                 logger.error(
                     "graph_worker_error",
                     extra={
@@ -452,32 +448,30 @@ async def run_graph_worker(stop_event: asyncio.Event) -> None:
                         "error": f"{type(exc).__name__}: {exc}",
                     },
                 )
-                # If it was a retry, handle_graph_job already scheduled retry
-                # If it was a park, we still ack to remove claim
-                # Check if retry was scheduled: if attempts < max, job is in delayed
-                # For now always ack after handle (retry already queued or parked)
-                pass
-            # Ack after durable outcome
-            try:
-                from graph.queue import ack as graph_ack
+                disposition = None
+            # Ack only on confirmed durable dispositions. A failed retry / park
+            # write leaves the lease unreleased for expired-claim recovery.
+            if disposition in (
+                GraphJobDisposition.SUCCESS,
+                GraphJobDisposition.RETRY,
+                GraphJobDisposition.PARKED,
+            ):
+                try:
+                    from graph.queue import ack as graph_ack
 
-                await graph_ack(claimed)
-                # Clean up payload if not already (success case already deleted)
-                # For retry case, payload should remain for redelivery; but our
-                # handle_graph_job for retry leaves payload intact and adds to delayed.
-                # Ack will remove claim but payload stays; promote_due will requeue.
-                # For success, payload already deleted.
-                # For park, payload should be deleted? Currently not deleted on park,
-                # but we should delete to avoid leaking.
-                max_attempts = int(
-                    os.environ.get(
-                        "GRAPH_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS)
+                    await graph_ack(claimed)
+                    if (
+                        disposition is GraphJobDisposition.PARKED
+                        or await _get_attempts(job_id) >= int(
+                            os.environ.get("GRAPH_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS))
+                        )
+                    ):
+                        await delete_payload(job_id)
+                except GraphQueueUnavailable:
+                    logger.warning(
+                        "graph_ack_failed",
+                        extra={"event": "graph_ack_failed", "job_id": job_id},
                     )
-                )
-                if await _get_attempts(job_id) >= max_attempts:
-                    await delete_payload(job_id)
-            except GraphQueueUnavailable:
-                pass
         finally:
             heartbeat.cancel()
             try:

@@ -3401,3 +3401,26 @@ RISKS:
 - mixed partial upsert can leave empty/partial entity sets; caller/result discloses `failed_chunks` and retry behavior accordingly.
 - total failure raises after all chunks attempted, so latency includes all operations.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A10 — V2-06 typed durable disposition, ACK only on confirmed outcome (dev1)
+TASK: T-A10 (w5:pG). Astra narrowed: `handle_graph_job` acknowledged unconditionally after exceptions, and failed durable writes did not reliably retain the lease.
+CHANGE (allowed files):
+- `apps/worker/jobs/graph_extraction.py`: `handle_graph_job` returns `GraphJobDisposition` (`success`/`retry`/`parked`) and raises only when the durable retry/park write fails.
+- `run_graph_worker` now acks only after a confirmed disposition; failed retry/park propagates and leaves the lease for recovery.
+- `packages/graph/queue.py`: exported matching `GraphJobDisposition`.
+WHY: ACK is durable confirmation only; at-least-once semantics survive a retry-write failure.
+REUSED: queue ack/park/retry APIs and deterministic park path.
+BUILT: typed job dispositions and constrained ACK path.
+VERIFY:
+- `pytest tests/unit -k 'graph'` -> 196 passed.
+- ruff + mypy on touched files clean.
+- Disposition table:
+  | outcome | durable update | disposition | ACK |
+  | success | payload deleted | success | yes |
+  | retry scheduled | delayed requeue durable | retry | yes after confirmed write |
+  | permanent park | failed status recorded | raised + lease retained | no |
+  | retry write failure | GraphQueueUnavailable propagates | none | no, lease retained |
+RISKS:
+- retry write failure delays ACK until lease expiry; recovery then redelivers or promotes the delayed retry if it succeeded.
+- permanent park leaves payload deletion best effort after the failed-state write.
+Next: IDLE — push mandatory.
