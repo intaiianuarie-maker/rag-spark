@@ -901,3 +901,18 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 ## 2026-10-14 — Astra triage DONE: 22/22 CONFIRMED, repair wave T-A01..T-A21 QUEUED
 - All 4 REJECTs sustained (each has >=1 confirmed High). 3 narrowed (V1-03 logged, V2-06 needs silent retry-write fail, V2-04 causal link explanatory-only). Record: reviews/ASTRA-TRIAGE-2026-10-14.md.
 - Wave waits behind R13b + K dedup. Deps: T-A07 needs T-A02; T-A13 latent until T-A12.
+
+## 2026-10-14 — A-wave dispatch starts (user: use dev1+dev2)
+- Dev1 T-A01 now (V1-01 egress; answer/retrieval/models lane). Dev2 finishes smoke->R13b first (STABLE window), then T-A02 (worker entrypoint lane, no file overlap with A01). Rest QUEUED, one slice per dev.
+
+## 2026-10-14 — R13b dispatched late (repo detour gap owned)
+- Smoke 8/8 (9c2a1b6) sat without follow-on while repo public/push + triage consumed cycles. R13b now on dev2 @w5:p6; T-A02 queued behind on same pane.
+
+## 2026-10-14 — R13b rescoped to gemini path (bge-m3 pin was pre-pivot legacy)
+- Honest NOT-RUN committed dc801a2. Resurrecting infinity contradicts user order; eval follows R08 gemini protocol at full n. Dev2 redispatched; T-A02 behind it.
+
+## 2026-10-14 — R13b SUPERSEDED by ingest-eval; A02 dispatched
+- Two honest NOT-RUNs (bge-m3 gone; harness unbuilt) folded: T-EVAL-INGEST now carries harness+ingest+full-n+R08-compare. PRIO1 closes 21/22 + 2 cancelled (R04 testing-only, R13b superseded). Dev2 T-A02; dev1 T-A01.
+
+## 2026-10-14 — A01+A02 DONE (c2cd611, 401dedd); A01b+A03 dispatched
+- A01: 242/242 re-verified (row 262 delta signed as count boundary). A02: 47/47, admission guard pre-exists at route. A-wave 2 DONE / 2 in flight / 18 queued. Board script print glitch (missing import) — states verified applied.
