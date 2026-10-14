@@ -5127,3 +5127,168 @@ GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4026_{start,end}
   `?? tests/unit/test_w7_parity_off_rollback.py`.
 - 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty. NO product file touched.
+---
+
+## T-V3-029 — V3 UI re-review: T-V3-023 lane-break diff (REVIEW ONLY — verdict: FINDINGS)
+
+```text
+TASK: T-V3-029 — frontend re-review of commit 4bcb76a "feat(v3): T-V3-023 agent run
+       UI list/detail/timeline (dev1-verified, lane-break)". Review the whole diff
+       on principle as a frontend reviewer: component structure, hooks correctness,
+       reasoning-leak discipline, accessibility basics, and whether tsc/eslint still
+       pass on the touched surface. Exactly one verdict, delivered below.
+CHANGE: none (read-only review; no product file was modified by this ticket)
+WHY:    V4-DISPATCH-PLAN step 6 + the CODE1-HANDOFF:1677 flag: frontend work was
+       written in dev2's lane while dev2 was blocked, so it needs a frontend
+       reviewer's eyes, not only the backend-facing checks the author ran.
+REUSED: Review only. For context: the pages reuse the repo's existing client
+       pattern (auth.authFetch typed client, useWorkspaces scope, Badge/Button/
+       Input/Label primitives) and mirror the T-V3-021 API wire shapes locally —
+       appropriate reuse given the ticket's allowlist was these two pages.
+BUILT:  none.
+
+VERDICT: FINDINGS (3 findings: 1 medium, 2 low; no blockers, no silent defects).
+
+CHECKS RE-RUN (all read-only, on the touched surface):
+  tsc --noEmit                 → exit 0, no output            CLEAN
+  eslint src/app/agent-runs/** → exit 0, no output            CLEAN
+  vitest run                   → 18 files / 193 tests passed  CLEAN
+  reasoning-leak grep          → chain_of_thought 0, reasoning 0, cot 0,
+                                 raw_reasoning 0, action_summary-raw 0     CLEAN
+  StepEvent-internals grep     → 0 matches (no step.tool_input /
+                                 tool_output / step_number / latency_ms)   CLEAN
+  wire-shape cross-check       → both pages' RunStatusValue / RunErrorCode /
+                                 RunSnapshot unions match StatusResponse +
+                                 StartRunResponse field-for-field       AGREES
+  smoke: the rendered fields   → status, error, error_code, limits set at start,
+                                 goal (browser-local) — no free-form model output
+
+PER-HUNK NOTES (every hunk in the stat addressed):
+
+  apps/web/src/app/agent-runs/page.tsx (new, 423 lines)
+   L1-136  wires/constants — types mirror StatusResponse/StartRunResponse exactly;
+            ERROR_CODE_LABELS is total over RunErrorCode (a Record, so a missing
+            key is a compile error, not a runtime fallback); STATUS_TONES likewise
+            total. localStorage helpers are defensive (try/catch, unknown-shape
+            filter, no throw on private-mode). APPROVE.
+   L187-194 the "adjust state during render" pattern for the workspace switch —
+            the React-sanctioned shape, NOT setState-in-effect (the class the
+            commit message claims to have fixed). Verified: setRecords and
+            setLoadedWorkspace are called during render only when
+            workspaceId !== loadedWorkspace, which is exactly the documented
+            pattern. APPROVE.
+   L196-229 refresh pass + polling — setState happens inside an async callback
+            and inside a timer callback, both effect-sanctioned; the interval is
+            cleaned up; the dependency arrays are correct ([workspaceId,
+            runRefreshPass]). No setState-in-effect. APPROVE.
+   L231-268 handleStart — parseInt with a DEFAULT_LIMITS fallback per field
+            (see F-3), optimistic prepend after the POST resolves, error state set
+            in the catch, busy flag in finally. APPROVE bar F-3.
+   L270-353 start form — Labels are associated (htmlFor ↔ id), aria-labelledby on
+            the section, min/max on number inputs, goal has maxLength 4096,
+            submit disabled while busy or empty, startError has role="alert".
+            APPROVE.
+   L355-420 list — status word always rendered (never colour-only), limits shown
+            per row, error code as text with the label taking precedence over the
+            raw error, run_id truncated with a title attribute for the full id,
+            Open detail link per row, empty state explains itself ("empty means
+            nothing has been started, not that the service is down").
+            APPROVE — with F-2 noted on the render-time pattern above.
+
+  apps/web/src/app/agent-runs/[id]/page.tsx (new, 443 lines)
+   L1-106  wires/constants — identical discipline to the list page; the timeline
+            is explicitly documented as "observed in THIS browser session", which
+            is the honest framing given the API exposes current status only.
+            APPROVE.
+   L159-183 appendTransition — appends only on a real status/error_code change, so
+            no synthetic transitions are invented. APPROVE (but see F-1).
+   L199-237 load + polling — same effect discipline as the list page; 404/403 →
+            notFound state, other errors → error state; polling stops at terminal
+            statuses via the cleanup. APPROVE.
+   L239-257 handleCancel — busy flag, error state, refreshes the snapshot from the
+            cancel response. APPROVE.
+   L259-280 guards — runId null → role="alert"; no workspace → role="status".
+            Both are real rendered states, not blanks. APPROVE.
+   L282-440 render — budget section with aria-labelledby and an honest fallback
+            when the run was not started in this browser; budget/deadline
+            exhaustion explained in text; outcome section with the error code
+            label and the raw error only when it differs from the label (so no
+            double-rendering the same sentence); the observed timeline as an <ol>
+            with keys `${entry.at}-${index}`; cancel disabled once terminal with a
+            sentence explaining why. APPROVE bar F-1.
+
+FINDINGS (each becomes a fix ticket; no drive-by fixes were made):
+
+  F-1 (MEDIUM) — the timeline is not reset when the run or workspace changes.
+    file/line: apps/web/src/app/agent-runs/[id]/page.tsx:193 (history state) and
+      :226-230 (the load effect). The load effect is guarded by loadedRef, so it
+      runs once and `history` retains the previous run's observed states; there is
+      no setHistory([]) when runId or workspaceId changes. Navigating from run A to
+      run B (or switching workspace with a different run id in the URL) shows run
+      A's states above run B's, so the timeline reads as one continuous history.
+    symptom: stale/mixed timeline for a different run; a user could conclude run B
+      passed through states it never had.
+    severity: medium — it misrepresents state, though only within one browser
+      session and only for browser-local data (no cross-run data leak: each
+      append is from that run's own fetch).
+    suggested fix: key the load effect on [workspaceId, runId] and clear history
+      when either changes (e.g. `useEffect(() => { setHistory([]); loadedRef.current
+      = false; }, [workspaceId, runId])` or fold the reset into `load`), i.e. the
+      same "adjust state when a prop changes" pattern the list page already uses
+      correctly. Fix ticket, not this ticket.
+
+  F-2 (LOW) — `partial` renders with the "pending" tone while being terminal.
+    file/line: apps/web/src/app/agent-runs/page.tsx:146 and
+      [id]/page.tsx:136 — `partial: "pending"` in STATUS_TONES, while
+      `partial` IS in TERMINAL_STATUSES (list:95-101, detail:95-101).
+    symptom: a finished-but-partial run is coloured like an in-progress one; the
+      word "partial" and the "This run is …" progress line still read correctly, so
+      the information is not lost — but the amber tone pulls the eye the wrong way,
+      and on the detail page the cancel button is correctly disabled while the chip
+      looks active.
+    severity: low (tone/semantics mismatch, not an information loss).
+    suggested fix: give `partial` its own tone (e.g. an amber-outline "partial"
+      treatment distinct from the pulsing "pending", or reuse neutral/success with
+      explicit copy "finished with partial results"). Fix ticket.
+
+  F-3 (LOW) — `max_tool_calls` falls back to 0 rather than DEFAULT_LIMITS.
+    file/line: apps/web/src/app/agent-runs/page.tsx:240-242 — max_steps and
+      max_tokens use `|| DEFAULT_LIMITS.…` fallbacks, max_tool_calls does not, so a
+      blank/non-numeric field sends 0 and the run cannot call any tool.
+    symptom: a user who clears the tool-calls field starts a tool-less run with no
+      warning (the API accepts 0 as a legal value, so nothing refuses it).
+    severity: low (user-visible surprise, not a defect), but it is the one place
+      the form's own fallback discipline is inconsistent with itself.
+    suggested fix: `Number.parseInt(maxToolCalls, 10) || DEFAULT_LIMITS.max_tool_calls`
+      (matching the other two fields), or validate and surface a message. Fix
+      ticket.
+
+WHAT I DID NOT FIND (recorded so a later reviewer does not re-litigate it):
+  - No reasoning leak: nothing renders StepEvent internals; the API's
+    StatusResponse has no reasoning-shaped field at all, so the pages have no
+    surface to leak through. The typed-field-only discipline is genuinely held.
+  - No set-state-in-effect class: both pages use the render-time adjust pattern
+    (list) and guarded-effect + callback setState (detail). The commit's claim to
+    have fixed one in-ticket is verified as true on the current tree.
+  - No unguarded window/localStorage access: all reads are inside effects or
+    callbacks, so there is no hydration mismatch; the try/catch also covers
+    storage being unavailable.
+  - Accessibility basics hold: labelled sections, associated form labels, the
+    status word always rendered, alerts/statuses with real roles, disabled reasons
+    in text. Minor improvements possible (see RISKS) but nothing missing outright.
+
+RISKS:
+  1. F-1 is the finding to fix first: a timeline that mixes runs is state
+     misrepresentation, and it is the only finding a user could act on wrongly.
+     The fix is small and entirely inside the detail page.
+  2. F-2/F-3 are polish; neither loses information. They are recorded because the
+     review's bar is the whole diff, not only the parts that could break.
+  3. The timeline is browser-session-local by design (the API exposes no step
+     history and no server-side list). That is an honest limitation, documented in
+     the page's own header comment, but it means the feature degrades on reload —
+     acceptable for now, worth a product decision later rather than a fix.
+  4. `partial` also appears in RunStatusValue on both pages and in the API's
+     status union, so the tone fix must touch both pages to stay consistent.
+  5. This ticket changed nothing; if any finding is disputed, the diff to re-read
+     is `git show 4bcb76a` (3 files, 899 insertions, all of which are addressed
+     above).
