@@ -3275,3 +3275,24 @@ RISKS:
 - agents/tools and eval router remain unchanged (forbidden by this ticket); if sensitive semantic retrieval is expected there, separate ticket needed. Search tests updated for new keyword.
 - workspace policy default unresolvable resolves to non-sensitive (matching prior behavior); a malformed store entry could thus under-protect a sensitive workspace if policy config absent, but config presence is authoritative in current architecture.
 Next: IDLE — push mandatory (no local-only change lost), evals remain halted by user order.
+
+## 2026-10-14 T-A05 — V1-02 thread query identity through production dense search (dev1)
+TASK: T-A05 (w5:pG). Astra CONFIRMED Med: query identity was optional at the qdrant boundary and never threaded by the orchestrator, allowing a same-width foreign model collection to return plausible junk.
+CHANGE (allowed files):
+- `packages/retrieval/orchestrator.py`: `_dense_leg` now derives `query_identity = provider_identity(self.embedding, len(vector))` and passes it into `dense.search(...)`.
+- `packages/retrieval/adapters/qdrant_store.py`: query identity is required at the dense boundary (`missing_query_identity` when absent) before `verify_query_identity`; incompatible collection refuses before `query_points`.
+- `packages/retrieval/interfaces.py`: VectorStore.search threads `query_identity`.
+- Updated Fake dense stores in `tests/fixtures/harness_fakes.py`, `tests/unit/test_orchestrator.py`, `tests/unit/test_leg_failure_statuses.py` signatures.
+WHY: production dense retrieval now proves physical comparability using the provider plus observed query dimension; dimension-only names cannot pass.
+REUSED: `embedding_identity.provider_identity`, `verify_query_identity`, exception conversion.
+BUILT: identity threading in orchestrator dense leg + required boundary.
+VERIFY:
+- `/root/ko-venv/bin/pytest -q tests/unit -k 'orchestrator or retrieval or embedding or dense or leg_failure'` -> 120 passed.
+- `/root/ko-venv/bin/ruff check packages/retrieval` -> all checks passed.
+- `/root/ko-venv/bin/mypy packages/retrieval/orchestrator.py packages/retrieval/adapters/qdrant_store.py` -> Success: no issues found in 2 source files.
+- Mismatched identity path returns unavailable before Qdrant `query_points`; compatible path passes.
+- Same-width different model remains refused because provider/model/revision all participate.
+RISKS:
+- in-memory dense fakes must now accept `query_identity` (updated); hidden tests with bespoke fakes lacking the kw may need update, but the real store is strict.
+- unknown/no-identity interaction preserves unknown-collection reason when collection has no recorded identity;_missing identity reason is returned only when a known collection identity exists.
+Next: IDLE — push mandatory; T-A01c remains queued, no factory/route changes made.

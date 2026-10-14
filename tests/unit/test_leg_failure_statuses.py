@@ -92,7 +92,7 @@ class _DownVectorStore(VectorStore):
     async def upsert(self, *, collection, records):
         raise AssertionError("this store is read-only in the fixture")
 
-    async def search(self, *, collection, vector, top_k, query_filter):
+    async def search(self, *, collection, vector, top_k, query_filter, query_identity=None):
         raise TimeoutError("qdrant search timed out")
 
     async def delete(self, *, collection, ids=None, query_filter=None):

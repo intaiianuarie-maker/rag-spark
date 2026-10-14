@@ -201,6 +201,7 @@ class FakeVectorStore(VectorStore):
         vector: list[float],
         top_k: int,
         query_filter: SearchFilter,
+        query_identity=None,
     ) -> list[RetrievedItem]:
         self.search_calls.append(query_filter)
         if top_k <= 0:

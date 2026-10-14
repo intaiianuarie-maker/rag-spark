@@ -1031,15 +1031,22 @@ class QdrantVectorStore(VectorStore):
                 reason="unknown_collection",
                 collection=coll,
             )
-        if query_identity is not None:
-            try:
-                verify_query_identity(stored_identity, query_identity, collection=coll)
-            except EmbeddingIdentityError as exc:
-                raise VectorStoreIdentityError(
-                    str(exc),
-                    reason="incompatible_query",
-                    collection=coll,
-                ) from exc
+        # T-A05: query identity is required at this boundary. An implicit
+        # compatible guess (or omitted identity) is no longer accepted.
+        if query_identity is None:
+            raise VectorStoreIdentityError(
+                f"collection {coll!r}: query identity is required at the dense search boundary",
+                reason="missing_query_identity",
+                collection=coll,
+            )
+        try:
+            verify_query_identity(stored_identity, query_identity, collection=coll)
+        except EmbeddingIdentityError as exc:
+            raise VectorStoreIdentityError(
+                str(exc),
+                reason="incompatible_query",
+                collection=coll,
+            ) from exc
         try:
             qfilter = _filter_from_search_filter(query_filter)
             # T-V1-018: widen the candidate window (CANDIDATE_OVERFETCH) so the

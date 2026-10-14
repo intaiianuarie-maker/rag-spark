@@ -54,6 +54,8 @@ from core.auth import ACLScope
 from core.errors import ReasonCode, spec_for
 from core.logging import new_request_id, request_id_ctx
 
+from retrieval.embedding_identity import provider_identity
+
 from .interfaces import (
     DEFAULT_CONTEXT_TOP_K,
     DEFAULT_DENSE_TOP_K,
@@ -340,12 +342,17 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 raise
             report.record("embedding", exc, LEG_REASON_CODES["embedding"])
             return []
+        # T-A05: production dense search derives identity from the provider
+        # plus the observed vector dimension and threads it through the store
+        # boundary. observed dimension means we catch provider/dimension lies.
+        query_identity = provider_identity(self.embedding, len(vector))
         try:
             return await self.dense.search(
                 collection=self.collection,
                 vector=vector,
                 top_k=top_k,
                 query_filter=query_filter,
+                query_identity=query_identity,
             )
         except Exception as exc:
             if report is None:
