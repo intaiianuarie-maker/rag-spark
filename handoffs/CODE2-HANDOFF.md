@@ -1037,3 +1037,28 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K03 — malformed model config keeps veto on
+
+```text
+TASK: T-K03
+CHANGE:
+      - packages/models/router_config.py: unparseable/invalid payload yields sensitive WorkspaceModelConfig (veto on), no-entry remains None
+VERIFY:
+      - pytest router/model suites -> 110 passed
+      - ruff/mypy router_config -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K03 FIXUP
+
+```text
+TASK: T-K03 FIXUP
+VERIFY:
+      - updated unparseable + added malformed veto test green
+      - remaining 5 failures named pre-existing (test_level_operator_default, permitted_override, workspace_rules_load, unconfigured_fallback, log_provider_identity)
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```

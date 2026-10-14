@@ -345,12 +345,14 @@ def load_workspace_config(workspace_id: str) -> WorkspaceModelConfig | None:
         data = json.loads(raw)
     except ValueError:
         logger.warning("workspace_model_config_unparseable", extra={"workspace_id": workspace_id})
-        return None
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
     if not isinstance(data, dict):
-        return None
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
     entry = data.get(workspace_id)
-    if not isinstance(entry, dict):
+    if entry is None:
         return None
+    if not isinstance(entry, dict):
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
     rules: list[RoutingRule] = []
     for raw_rule in entry.get("routing_rules", []) or []:
         if not isinstance(raw_rule, dict):
