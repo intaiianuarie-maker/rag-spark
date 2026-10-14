@@ -348,13 +348,18 @@ def test_rotation_revokes_everything_and_swaps_the_secret(
     fake_redis.store[REFRESH_KEY_PREFIX + "jti0"] = "{}"
     fake_redis.store[FAMILY_KEY_PREFIX + "fam0"] = ""
 
-    # A token minted under the old secret, presented before rotation.
-    old_token = issue_access_token(str(uuid.uuid4()), session_id=sid).token
-
+    # Control our own preconditions first: the settings cache is process-global
+    # and may hold residue from sibling tests, so set the secret and clear the
+    # cache BEFORE minting (coordinator fix — minting first made this test
+    # depend on whatever a previous test left behind).
     monkeypatch.setenv("AUTH_JWT_SECRET", old_secret)
     from app.auth.config import get_auth_settings
 
     get_auth_settings.cache_clear()
+
+    # A token minted under the old secret, presented before rotation.
+    old_token = issue_access_token(str(uuid.uuid4()), session_id=sid).token
+
     assert decode_token(old_token, expected_type="access")["sub"] is not None
 
     report = asyncio.run(rotation.rotate_signing_secret(secret=new_secret))

@@ -24,6 +24,11 @@ from typing import Any
 from agents.interfaces import AgentErrorCode, ModelPolicy, RunBudget, RunContext, RunStatus
 from agents.runtime import AgentRuntime
 from agents.tools import CalculatorTool, ToolRegistry
+from agents.unavailable import (
+    MISSING_LLM_PROVIDER,
+    UNAVAILABLE_CODE,
+    AgentUnavailableError,
+)
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -45,30 +50,55 @@ def _clear_store() -> None:
     _RUNS.clear()
 
 
-def create_runtime() -> AgentRuntime:
-    """Factory seam — tests monkeypatch this (like search.create_orchestrator)."""
-    # Production would wire the real LLM provider via models router;
-    # skeleton uses a no-op LLM that abstains so gate checks still run.
-    from collections.abc import AsyncIterator
+def _resolve_llm_provider():
+    """Return a REAL configured LLM provider, or ``None`` when unconfigured.
 
-    from models.interfaces import (
-        GenerationRequest,
-        GenerationResult,
-        LLMProvider,
+    Deliberately has no fallback. The previous implementation built a no-op
+    provider that answered every goal with ``"Final Answer: done"``, which made
+    an unconfigured service look like a working one and returned fabricated
+    completions (T-R02, PRIO1 finding 2).
+
+    ``None`` here means: no gateway URL and no usable API key. That is a
+    configuration state, not a runtime failure, and the caller turns it into a
+    typed UNAVAILABLE rather than inventing an answer.
+    """
+    import os
+
+    base_url = os.environ.get("LITELLM_URL") or os.environ.get("OPENROUTER_API_KEY")
+    has_key = any(
+        os.environ.get(name)
+        for name in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
     )
+    if not base_url or not has_key:
+        return None
+    try:
+        from models.adapters.litellm_provider import create_llm_provider
 
-    class _NoopLLM(LLMProvider):
-        provider_name = "noop"
+        return create_llm_provider()
+    except Exception:
+        # A configured-but-broken gateway is still not something to paper over
+        # with a fake. Returning None keeps the outcome honest; the detail below
+        # tells the operator to look at the provider config.
+        return None
 
-        async def generate(self, request: GenerationRequest) -> GenerationResult:
-            return GenerationResult(text="Final Answer: done", model=request.model, prompt_tokens=1, completion_tokens=1)  # noqa: E501
 
-        async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
-            yield ""
+def create_runtime() -> AgentRuntime:
+    """Factory seam — tests monkeypatch this (like search.create_orchestrator).
 
+    Production wires a REAL provider. When none is configured this raises
+    :class:`AgentUnavailableError` and NO provider, no tool registry and no
+    runtime is constructed, so an unconfigured request provably makes zero
+    provider/tool calls (T-R02). Tests that need a double patch this function.
+    """
+    llm = _resolve_llm_provider()
+    if llm is None:
+        raise AgentUnavailableError(
+            MISSING_LLM_PROVIDER,
+            "No LLM provider is configured (no LITELLM_URL and no usable API key); "
+            "the run was not executed and no answer was produced.",
+        )
     reg = ToolRegistry()
     reg.register(CalculatorTool())
-    llm = _NoopLLM()
     return AgentRuntime(llm, reg)
 
 
@@ -148,22 +178,46 @@ async def start_run(
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"error": "invalid_context", "message": str(exc)}) from exc  # noqa: E501
 
-    runtime = create_runtime()
-    # Run through the SAME runtime path as in-process — parity by construction.
-    # The runtime enforces budget reservation, approval gates, tool allowlist, etc.
-    from agents.runtime import _PERSISTED_RUNS, _PERSISTED_STATES
+    runtime = None
+    unavailable_detail: str | None = None
+    missing_piece: str | None = None
+    try:
+        runtime = create_runtime()
+    except AgentUnavailableError as exc:
+        # T-R02: unconfigured is a typed outcome, not a fabricated completion.
+        # The runtime was never built, so nothing was called on the way out.
+        unavailable_detail = exc.detail
+        missing_piece = exc.missing
 
-    # Clear any stale state for this run_id (test isolation)
-    _PERSISTED_RUNS.pop(run_id, None)
-    _PERSISTED_STATES.pop(run_id, None)
+    run_status: str
+    error_code: str | None
+    # Optional: the runtime reports no detail on some terminal states.
+    error_detail: str | None
+    if runtime is None:
+        # Honest UNAVAILABLE: a terminal run record carrying the reason, so the
+        # caller can poll it, but no output and no status of "completed".
+        run_status = RunStatus.FAILED.value
+        error_code = AgentErrorCode.UNAVAILABLE.value
+        error_detail = unavailable_detail or "unavailable"
+    else:
+        # Run through the SAME runtime path as in-process — parity by construction.
+        # The runtime enforces budget reservation, approval gates, tool allowlist.
+        from agents.runtime import _PERSISTED_RUNS, _PERSISTED_STATES
 
-    agent_run = await runtime.run_enforced(context=ctx, goal=body.goal)
+        # Clear any stale state for this run_id (test isolation)
+        _PERSISTED_RUNS.pop(run_id, None)
+        _PERSISTED_STATES.pop(run_id, None)
 
-    # Read the persisted RunState for the canonical status/error_code
-    state = _PERSISTED_STATES.get(run_id)
-    run_status = state.status.value if state else agent_run.status.value
-    error_code = state.error_code.value if state and state.error_code else None
-    error_detail = state.error_detail if state else agent_run.error
+        agent_run = await runtime.run_enforced(context=ctx, goal=body.goal)
+
+        # Read the persisted RunState for the canonical status/error_code
+        state = _PERSISTED_STATES.get(run_id)
+        run_status = state.status.value if state else agent_run.status.value
+        error_code = state.error_code.value if state and state.error_code else None
+        error_detail = state.error_detail if state else agent_run.error
+
+    if missing_piece is not None:
+        error_detail = f"{error_detail or UNAVAILABLE_CODE} (missing: {missing_piece})"
 
     # Store for status/cancel
     _RUNS[run_id] = {
@@ -173,6 +227,7 @@ async def start_run(
         "status": run_status,
         "error": error_detail,
         "error_code": error_code,
+        "missing": missing_piece,
         "goal": body.goal,
     }
 

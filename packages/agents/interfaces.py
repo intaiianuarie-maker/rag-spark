@@ -110,6 +110,10 @@ class AgentErrorCode(StrEnum):
     WORKSPACE_MISMATCH = "workspace_mismatch"
     SOURCE_REVOKED = "source_revoked"
     UNKNOWN_REQUIRED = "unknown_required"
+    #: T-R02: execution was requested but a required piece of production wiring
+    #: is absent, so nothing could be run. Terminal and never a completion — the
+    #: API must not answer with a fabricated result when this is the truth.
+    UNAVAILABLE = "unavailable"
 
 
 class RunStatus(StrEnum):

@@ -121,6 +121,8 @@ class V3ErrorCode(StrEnum):
     BUDGET_EXCEEDED = "budget_exceeded"
     DEADLINE_EXCEEDED = "deadline_exceeded"
     CANCELLED = "cancelled"
+    # T-R02: unconfigured execution (coordinator addendum, owner-prescribed).
+    UNAVAILABLE = "unavailable"
     PROVIDER_ERROR = "provider_error"
     SCHEMA_INVALID = "schema_invalid"
     WORKSPACE_MISMATCH = "workspace_mismatch"
@@ -375,6 +377,9 @@ _ERROR_OUTCOMES: dict[V3ErrorCode, WorkflowOutcome] = {
     # :func:`propagate_cancellation`.
     V3ErrorCode.DEADLINE_EXCEEDED: "cancelled",
     V3ErrorCode.CANCELLED: "cancelled",
+    # T-R02: unconfigured execution fails the node (never success, never a new
+    # outcome) — consistent with the FAILED-not-new-status decision.
+    V3ErrorCode.UNAVAILABLE: "failed",
     V3ErrorCode.PROVIDER_ERROR: "failed",
     V3ErrorCode.SCHEMA_INVALID: "failed",
     V3ErrorCode.WORKSPACE_MISMATCH: "failed",

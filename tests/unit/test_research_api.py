@@ -99,10 +99,42 @@ def test_research_unauthenticated_refused(monkeypatch) -> None:
 
 
 def test_research_report_passthrough_unknowns_contradictions_citations(monkeypatch) -> None:
-    """Report content lost vs in-process: 0 — unknowns/conflicts/citations passthrough."""
-    client = _client(monkeypatch)
-    # Topic with "unknown" and "conflict" stages unknowns and contradictions in skeleton
+    """Report content lost vs in-process: 0 - unknowns/conflicts/citations passthrough.
+
+    T-R02: this test used to rely on the PRODUCTION skeleton manufacturing
+    unknowns/contradictions whenever the topic contained the words "unknown" or
+    "conflict", which is exactly the fabrication that ticket removed. The
+    passthrough property is still worth proving, so it is now staged through an
+    EXPLICIT test-only pipeline - the honest way to feed a report in.
+    """
     topic = "test unknown and conflict topic"
+    staged_unknowns = [
+        {"question": topic, "searched": ["chk-x"], "reason": "NO_EVIDENCE",
+         "tried_chunk_ids": []}
+    ]
+    staged_contradictions = [
+        {"question": topic, "claim_a": "A", "claim_b": "B", "evidence_a_id": "a",
+         "evidence_b_id": "b", "chunk_ids_a": ["chk-a"], "chunk_ids_b": ["chk-b"]}
+    ]
+    staged_outline = [f"Contradiction on '{topic}': 'A' [chk-a] vs 'B' [chk-b]"]
+
+    async def _pipeline(_topic, _workspace_id, _principal_id):
+        return {
+            "grounded_sentences": [],
+            "unknowns": staged_unknowns,
+            "contradictions": staged_contradictions,
+            "contradiction_outline": staged_outline,
+            "citations": ["chk-a"],
+            "abstained": True,
+            "abstention_reason": "partial: no groundable content",
+            "searched": ["chk-x"],
+            "limitations": [],
+        }
+
+    monkeypatch.setattr(
+        "app.agents.research.create_research_pipeline", lambda: _pipeline
+    )
+    client = _client(monkeypatch)
     resp = client.post(f"/v1/workspaces/{WS_ID}/agent/research", json={"topic": topic})
     assert resp.status_code == 201, resp.text
     rid = resp.json()["research_id"]
@@ -112,7 +144,7 @@ def test_research_report_passthrough_unknowns_contradictions_citations(monkeypat
     assert st.status_code == 200
     assert st.json()["topic"] == topic
 
-    # Report — must carry unknowns + contradictions + citations verbatim
+    # Report - must carry unknowns + contradictions + citations verbatim
     rpt = client.get(f"/v1/workspaces/{WS_ID}/agent/research/{rid}/report")
     assert rpt.status_code == 200, rpt.text
     body = rpt.json()
@@ -123,9 +155,8 @@ def test_research_report_passthrough_unknowns_contradictions_citations(monkeypat
     assert len(body["contradictions"]) >= 1
     assert len(body["contradiction_outline"]) >= 1
     assert "chk-a" in body["contradiction_outline"][0] and "chk-b" in body["contradiction_outline"][0]  # noqa: E501
-    # Grounded sentences + citations passthrough (unless abstained, but this topic has grounded because not pure unknown)  # noqa: E501
-    # For mixed unknown+conflict topic, grounded may be empty due to unknown keyword branch; check either grounded or abstained with searched  # noqa: E501
-    # But our skeleton for unknown+conflict still has no grounded? Actually unknown keyword branch skips grounded; check  # noqa: E501
+    # A staged pipeline is a configured path, so it is NOT reported unavailable
+    assert body["error_code"] is None
     # Ensure at least unknowns or grounded present, not lost
     assert body["unknowns"] or body["grounded_sentences"] or body["abstained"]
 

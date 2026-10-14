@@ -5784,3 +5784,388 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/eval001_{start,en
   third-party data never enters git.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-EVAL-008 — Embedder separation: gemini-embedding-2 FIRST, bge-m3 comparison leg
+
+```text
+TASK: T-EVAL-008 — prove google/gemini-embedding-2 (3072-d) separates related
+       from unrelated text in ENGLISH and ROMANIAN, with local bge-m3 run on the
+       IDENTICAL protocol as the comparison leg; add a small retrieval probe and
+       a metered cost table.
+AUTHORIZATION: paid gemini-embedding use is USER-AUTHORIZED for this eval wave
+       per the 2026-10-14 direct order. The T-028 generator lock is otherwise
+       unchanged. CONSTRAINTS HONOURED: the cloud leg received eval and
+       synthetic text ONLY — never live knowledge; no corpus or live collection
+       was embedded, and bge-m3 remains the PRODUCTION embedder (nothing in this
+       ticket touches live collections).
+CHANGE: 3 new files, all in evals/ (my allowlist), nothing else touched:
+       NEW evals/embedder_clients.py — GeminiEmbedding2 (cloud, metered) and
+         BgeM3Local (the production infinity service) behind one Embedder ABC,
+         with the bounded-retry wrapper and per-endpoint accounting.
+       NEW evals/embedder_separation.py — the protocol: 20 bilingual concepts,
+         the shared cosine / evidence-recall / batching primitives, the two
+         retrieval probes, the number tables and the CLI.
+       NEW evals/test_embedder_separation.py (36 tests, no network).
+WHY:    EVALS restarted on user order with gemini-embedding-2 as the eval
+       embedder; this is its acceptance proof, with the incumbent embedder as
+       the control so a swap is never accepted on one model's opinion alone.
+REUSED: The PRODUCTION bge-m3 path — packages/retrieval/adapters/infinity_embed.py
+       (service on 127.0.0.1:7997, BAAI/bge-m3, 1024-d), which is the real
+       production embedder rather than a reimplementation. The T-EVAL-001ACQUIRE
+       loader (evals/hotpot_full.py) for the gold HotpotQA cases, and the
+       distractor/validation split specifically, because that is the split where
+       gold titles actually resolve (fullwiki validation has none resolvable for
+       5,316 of 7,405 records, so scoring retrieval there would measure a data
+       artifact). httpx for both transports, so the two legs share a client.
+BUILT: The protocol, the bilingual concept set, the probes, the cost accounting
+       and the 36-test suite.
+
+METRIC 1 — related-minus-unrelated margin POSITIVE on both languages on gemini:
+MET. Measured fresh this run, identical texts and identical metric code:
+
+  pair set                     n    mean cosine   stdev     min      max
+  related_en_ro (EN<->RO)      40      0.8825     0.0276   0.8436   0.9363
+  unrelated_en_ro (EN<->RO)    40      0.5331     0.0323   0.4706   0.6307
+  related_monolingual_en       20      0.9557     0.0239   0.8985   0.9865
+  unrelated_monolingual_en     20      0.5737     0.0303   0.5213   0.6354
+
+  MARGINS: cross-lingual (EN+RO) +0.3494;  monolingual EN control +0.3820.
+  Both languages are inside the cross-lingual figure by construction: the
+  related set is EN->RO plus RO->EN, so it is a genuine bidirectional EN+RO
+  measurement, not an English result with a Romanian label on it.
+  The monolingual control is there to rule out a language artifact: if the
+  embedder were merely separating "same language" from "different language",
+  the monolingual margin would collapse. It does not (+0.382 vs +0.349), and
+  the cross-lingual unrelated mean (0.5331) sits in the same band as the
+  monolingual unrelated mean (0.5737), i.e. cross-lingual pairs are not being
+  scored up or down by language alone.
+  Related/unrelated overlap: related min 0.8436 > unrelated max 0.6452, so on
+  this set the two populations do not overlap at all.
+
+METRIC 2 — NO CONFOUNDING (identical texts / identical k / identical metric code,
+only the embedder varies): PROVEN BY CONSTRUCTION, not asserted. There is exactly
+one embed call site (embed_all), one similarity function (cosine) and one
+retrieval metric (evidence_recall_at_k), none of which take an embedder-specific
+branch. cosine normalises BOTH vectors itself, so no provider's own normalisation
+convention can leak in and advantage one leg. Tests assert the invariants
+directly: related and unrelated sets share identical left-hand texts and differ
+only in the right-hand concept; the embedder is not an input to the text list;
+the flat candidate slicing is rebuilt per case rather than offset across k.
+
+RETRIEVAL PROBE (same metric code, same k for every leg):
+  probe                            embedder                 k   n    EvidenceRecall
+  hotpotqa_distractor_validation    gemini-embedding-2       1   40        0.5000
+  hotpotqa_distractor_validation    gemini-embedding-2       3   40        0.9750
+  hotpotqa_distractor_validation    gemini-embedding-2       5   40        0.9875
+  synthetic_ro (10 RO queries)      gemini-embedding-2       1   10        1.0000
+  synthetic_ro                     gemini-embedding-2       3   10        1.0000
+  synthetic_ro                     gemini-embedding-2       5   10        1.0000
+  40 HotpotQA records, 10 candidates each, gold = the 2 supporting paragraphs.
+  The RO probe is SYNTHETIC and deliberately tiny (10 queries over a 20-paragraph
+  pool); it is a sanity probe on Romanian query behaviour, NOT a benchmark, and is
+  reported separately so the two can never be added together. A perfect 1.0 on 10
+  self-written queries is a weak result and is not evidence of benchmark-level
+  Romanian retrieval.
+
+METRIC 3 — SPEND REPORTED (exact tokens + dollars, metered):
+  FINAL RUN, gemini cloud leg:  25 calls, 702 vectors, 58,438 prompt tokens,
+  cost $0.0116876 (metered per-call by the provider, not estimated).
+  Implied rate $0.20 per 1M prompt tokens.
+  bge-m3 local leg: $0.00, unmetered (no billing exists for a local service) and
+  reported with cost_is_metered=False so "free" is distinguishable from
+  "measured and free". It did not run this cycle — see BLOCKER.
+  CUMULATIVE FOR THIS TICKET: ~$0.047 across 4 measurement passes plus 4 probe
+  calls, derived from the metered per-call costs of each pass, NOT from a billing
+  delta — I did not snapshot the key's usage counter at ticket start, which was a
+  process miss on my part. The OpenRouter key's lifetime usage reads 50.0287
+  credits, but that is not attributable to this ticket.
+
+BLOCKER — THE bge-m3 COMPARISON LEG DID NOT RUN. THIS NEEDS YOUR ATTENTION.
+  The local infinity container knowledge-os-infinity-rerank-1 is CRASH-LOOPING and
+  is DOWN for everything that depends on it, not just for this eval:
+    dmesg: "Out of memory: Killed process (infinity_emb) total-vm:11862240kB
+    anon-rss:1958200kB" — the host OOM killer is killing the service.
+    Host during the ticket: 7.7Gi total, at worst 206Mi available, swap
+    2.9/4.0Gi used. The container loads BAAI/bge-m3 AND
+    cross-encoder/ms-marco-MiniLM-L6-v2 and needs ~2GB it no longer has, so it
+    dies during model load and restarts, forever.
+  Consequence for this ticket: the required comparison leg is BLOCKED, not
+  skipped. I did not silently drop it — the run records bge_m3 under
+  legs_not_run WITH ITS REASON, and that section is printed, so a partial run
+  cannot be mistaken for a full one.
+  WHAT I DELIBERATELY DID NOT DO, and why:
+    * I did not restart the container or touch compose (card rule), so the shared
+      production embed/rerank service is still down and that is yours to call.
+    * I did not install torch + sentence-transformers to run bge-m3 in-process.
+      That is ~3GB of disk and ~2GB of resident memory on a host that is ALREADY
+      OOM-killing a shared service; doing it would have made an incident worse,
+      and it would also mean the "production embedder" leg was a different
+      runtime from the one production uses.
+  The retry wrapper did its job: 3 attempts with backoff, then it raised loudly
+  rather than continuing with half a comparison. That is the intended behaviour.
+  To unblock: free host memory (or restart the container) and re-run with
+  legs=("gemini","bge_m3"). Nothing in the protocol needs to change.
+
+FLAKINESS / FAILURE RATES (reported per endpoint, never a silent skip):
+  gemini-embedding-2:  25 calls, 0 failed, 0 retries, failure rate 0.0000.
+  bge-m3:              0 calls this run (endpoint down, see BLOCKER); its earlier
+                       3-attempt exhaustion is recorded in the run that raised.
+  Retry policy: 3 attempts, backoff 0.5s then 1.0s, wrapping PURE API calls only.
+  Exhaustion raises EmbedderError naming the endpoint, the operation, the attempt
+  count and the last error. Tests cover: exhaustion counts a failure and raises,
+  recovery on the third attempt, backoff actually growing, and a wrong-dimension
+  or short or empty response being rejected rather than accepted.
+
+VERIFY: pytest evals/test_embedder_separation.py 36 passed (6s), no network;
+       ruff check on all 3 files: All checks passed (exit 0);
+       mypy --follow-imports=silent on all 3 as modules: Success, no issues;
+       python -m evals.embedder_separation: full tables, exit 0, report JSON
+       written. Test placement note: pytest testpaths is ["tests"] so this suite
+       is run explicitly and does not enter the default run; tests/ belongs to
+       dev1's harness and I kept out of it.
+RISKS:  1. THE COMPARISON IS MISSING, and that is the main risk in this ticket. A
+       one-model acceptance proof with no control is weaker evidence: I have
+       shown gemini separates EN/RO well, not that it separates BETTER than bge-m3.
+       Nothing here should be read as "gemini beats bge-m3".
+   2. The related/unrelated sets are 20 hand-written bilingual concepts, not a
+       benchmark. Perfect separation on 40 pairs is a sanity signal, not a
+       quality claim. The Romanian translations are mine and were not reviewed by
+       a native speaker — a translation error would depress the RELATED score and
+       therefore understate the margin, so the reported +0.3494 is conservative in
+       that direction, but the set should not be treated as authoritative.
+   3. I found and fixed a topical collision in my own data: the original unrelated
+       shift paired the vaccine concept with the caffeine one (sharing
+       "system"/"sistemul"), which would have contaminated the unrelated set. The
+       shift is now 9, chosen by checking that NO paired concept shares a content
+       word with its partner in any of four directions (EN/EN, RO/RO, EN/RO,
+       RO/EN); a test now enforces that. Earlier numbers quoted anywhere from the
+       shift-7 run are superseded.
+   4. The HotpotQA probe runs against gemini WITHOUT a bge-m3 baseline, so the
+       0.975 ER@3 has nothing to be compared against yet.
+   5. Host memory is the real operational risk and it is not mine to fix: while
+       this ticket ran, the OOM killer took down a shared production service. If
+       it is still down, production retrieval and rerank are affected.
+
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - SERIOUS: my retrieval probe reported EvidenceRecall@3 = 0.0 and @5 = 0.0 — a
+    recall that FALLS as k grows, which is impossible by construction. Root cause
+    was my own offset advancing inside the k loop, so k>=2 passed sliced-empty
+    candidate lists and scored 0. That is a falsified eval and it would have been
+    published had I not looked at the shape of the numbers. Fixed by building the
+    candidate slices once, and pinned by a monotonicity regression test plus a
+    gold-out-of-top-k test using a deterministic offline fake embedder.
+  - Three report sections (margins, failure_rates, legs_not_run) were dicts where
+    my printer expected row lists, which crashed the CLI three times AFTER the
+    numbers were computed. Caught each time before reporting; all are now row
+    lists with narrowing accessors.
+  - Two of my 36 tests initially failed on my own wrong expectations: I asserted
+    recall 1.0 where case "b" genuinely ranks its gold third (0.5/0.5/1.0 — the
+    probe was right and the expectation was wrong), and my "gold ranks last" case
+    actually ranked the gold FIRST because of how the fake embedder maps text to
+    an axis. Fixed the tests, not the probe.
+  - mypy caught a real bug in my own client code before it ran: I had written
+    `callable[[], None]` as a type annotation, which is not a valid type.
+  - A destructive-risk test I considered (renaming a real file) was avoided in
+    favour of mock transport, so nothing in this ticket touched real data.
+
+FOREIGN TREE MOVEMENT (reported, not forced): HEAD moved ac06a1b -> acf7655
+  mid-ticket (you committed dev1's harness work). dev1's evals/wikimultihop.py and
+  tests/unit/test_wikimultihop.py appeared; MAPPING.md/leaderboard.py/vendor and
+  test_eval_harness.py left the dirty list by being committed. No filename or
+  function collision with my three files; I touched none of his and did not chase
+  the convergence, per the card.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/eval008_{start,end}.txt):
+- START (HEAD `ac06a1b`): 26 dirty paths. Index empty.
+- END (HEAD `acf7655`): 26 dirty paths — my 3 files (?? evals/embedder_clients.py,
+  ?? evals/embedder_separation.py, ?? evals/test_embedder_separation.py), dev1's
+  wikimultihop files, and the untouched foreign handoffs.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty. The crash-looping container was NOT
+  restarted — that is reported for your decision, not taken.
+---
+
+## T-R02 — P0 HONEST UNAVAILABLE: no-op agent + synthetic research out of the prod path
+
+```text
+TASK: T-R02 — PRIO1 review findings 2 and 3. An unconfigured agent/research
+       request must NEVER return completed with fabricated output. Remove the
+       _NoopLLM default, the chk-1/ev-1 synthesis and the keyword-manufactured
+       unknowns/contradictions from PRODUCTION factories/paths; unconfigured
+       execution returns a structured typed UNAVAILABLE naming the missing piece
+       and makes NO provider/tool call. Test factories may keep fakes behind
+       explicit test-only construction.
+CHANGE: 7 files, all inside my allowlist.
+       M apps/api/app/agents/router.py — _NoopLLM DELETED. create_runtime() now
+         resolves a REAL provider and raises AgentUnavailableError when there is
+         none; start_run catches it and records a terminal unavailable run.
+       M apps/api/app/agents/research.py — the entire fabrication branch DELETED
+         (chk-1/ev-1, the grounded sentence echoing the topic, the "unknown"/
+         "conflict" keyword triggers). Unconfigured returns the typed
+         UNAVAILABLE report.
+       M packages/agents/interfaces.py — AgentErrorCode.UNAVAILABLE = "unavailable"
+         added to the typed taxonomy.
+       NEW packages/agents/unavailable.py — the contract: AgentUnavailableError,
+         the named missing pieces, and Unavailable.report() producing an empty
+         honesty package.
+       M tests/unit/test_agents.py — the taxonomy pin gains "unavailable"
+         (deliberately, with a comment, so the guard still catches future codes).
+       M tests/unit/test_research_api.py — one test rewritten (see SELF-CORRECTION).
+       NEW tests/unit/test_agent_unavailable_contract.py (22 tests).
+WHY:    Both defects returned confident, fabricated, CITED output from an
+       unconfigured service. The run path answered "what is 17x19" with the
+       literal string "Final Answer: done". The research path invented chunk
+       chk-1 / evidence ev-1 and conjured unknowns or contradictions purely
+       because the words "unknown" or "conflict" appeared in the user's topic.
+       A citation to evidence that was never retrieved is the worst failure
+       mode this system has: it launders a non-answer into a verifiable-looking
+       one. Fabrication was also the DEFAULT, so it was reachable in production
+       without anyone opting in.
+REUSED: The existing typed vocabulary (AgentErrorCode) rather than inventing a
+       parallel status string, and the existing honesty package on the research
+       report (abstained / abstention_reason / searched / limitations) rather
+       than a new shape — so a caller that already reads abstention now gets a
+       correct answer instead of a new thing to learn. The real provider factory
+       models.adapters.litellm_provider.create_llm_provider is now what
+       production wires, replacing the fake. Existing gate order (authz first,
+       then budget/context, then execution) is untouched.
+BUILT: The UNAVAILABLE contract, the provider resolver, and the 22-test suite.
+
+THE UNAVAILABLE CONTRACT (what a caller now gets):
+  Run path   POST /agent/runs, unconfigured ->
+               HTTP 201, status="failed", error_code="unavailable",
+               error names llm_provider. Terminal, so a poller stops.
+             GET  /agent/runs/{id} -> identical status/error_code (the stored
+             record agrees with the POST response; no second story on polling).
+  Research   POST /agent/research, unconfigured ->
+               HTTP 201, status="failed", error_code="unavailable",
+               missing="research_pipeline".
+             GET  .../report -> grounded_sentences=[], citations=[],
+             unknowns=[], contradictions=[], contradiction_outline=[],
+             abstained=True, abstention_reason="unavailable: <detail>",
+             limitations names the missing piece.
+  Why FAILED and not a new status: RunStatus.UNAVAILABLE would be a non-terminal
+  value the web client does not know, so TERMINAL_STATUSES would not contain it
+  and the run detail page would poll a dead run forever. FAILED is already
+  terminal and already renders, and error_code carries the "unavailable"
+  semantics. This keeps apps/web untouched and needs no frontend work.
+  HTTP stays 201 because the run/research record genuinely exists and is
+  auditable; what changed is its status and its empty honesty package, not
+  whether a record was created.
+
+METRIC 1 — unconfigured completions: 0. PROVEN.
+  * 17x19 probe: POST goal "what is 17x19?" -> status "failed",
+    error_code "unavailable", never "completed", never "done".
+  * Three goals asserted (arithmetic, summarise, list files) all unavailable:
+    no goal shape can reach a completion.
+  * Invented-budget probe: topic "invented budget of 900" -> unavailable,
+    citations=[], grounded_sentences=[], never chk-1.
+  * Five keyword topics ("unknown budget", "conflict of interest",
+    "unknown and conflict", "What is the unknown?", "any CONFLICT here") each
+    assert unknowns==[] AND contradictions==[] AND citations==[] — the triggers
+    are gone, so content words cannot conjure evidence.
+  * Source-level proof by AST (not text scan — this ticket's own comments quote
+    the removed strings on purpose): no "Final Answer: done", no "chk-1", no
+    "ev-1" string literal survives in either production module; no class whose
+    name contains "Noop" exists in router.py; and no `if <str> in <topic>`
+    comparison remains anywhere in the two modules.
+
+METRIC 2 — provider/tool calls from unavailable paths: 0. PROVEN, WITH A
+  NON-VACUITY CONTROL (the important part). A spy that is never wired up proves
+  nothing, so the same spies are shown detecting real calls on a configured
+  path:
+  * unavailable run path: ToolRegistry.register spy == 0,
+    create_llm_provider spy == 0, provider generate() spy == 0. The object graph
+    is never built, so there is nothing that COULD be called.
+  * unavailable research path: InMemoryChunkSource.put spy == 0 — that is the
+    exact call that used to write chk-1.
+  * CONTROL: with a patched factory supplying a real AgentRuntime, the registry
+    spy sees 1 registration and the provider spy sees >=1 generate() call. So the
+    zeros above are measurements, not an artefact of a disconnected spy.
+
+METRIC 3 — configured-path regressions: 1 FAILURE, AND IT IS MINE. DISCLOSED.
+  Full backend suite: 2 failed, 2207 passed, 1 skipped.
+  * tests/unit/test_workflow_v3_adapter_contract.py::test_declared_vocabulary_
+    still_matches_live_v3 — MINE. packages/workflow_engine/adapters/v3_contract.py
+    mirrors AgentErrorCode BY VALUE (its docstring: "A member that is not in this
+    enum is unmapped by definition, and map_error refuses it rather than
+    guessing"). Adding UNAVAILABLE to the live taxonomy therefore needs one line
+    in that enum. THAT FILE IS OUTSIDE MY ALLOWLIST, so I did NOT edit it and am
+    NOT weakening the parity test to hide it. Required follow-up for the
+    workflow_engine/V4 owner, exactly one line:
+        UNAVAILABLE = "unavailable"     # in class V3ErrorCode
+    Until then the behaviour is safe rather than broken: by that contract's own
+    documented rule, map_error REFUSES an unmapped code instead of guessing, so
+    a V4 node will reject an unavailable agent outcome rather than misread it.
+    The consequence to know: a V4 workflow node cannot yet interpret an
+    unavailable agent result.
+  * tests/unit/test_auth_hardening.py::test_rotation_revokes_everything_and_
+    swaps_the_secret — NOT MINE. Order-dependent: it passes in isolation (the
+    whole file is 37/37 green alone) and fails only in the full-suite run, from
+    dev1's in-flight T-R01 auth work. Untouched by me.
+
+VERIFY: pytest tests/unit/test_agent_unavailable_contract.py 22 passed;
+       the six related existing suites together: 265 passed / 0 failed
+       (test_agent_runs_api, test_research_api, test_agents, test_research,
+        test_research_contracts, test_workflow_agent_seam);
+       full tests/unit: 2 failed / 2207 passed / 1 skipped, with both failures
+       triaged above rather than hand-waved;
+       ruff check on apps/api/app/agents/, packages/agents/ and the touched
+       tests: All checks passed (exit 0);
+       mypy --follow-imports=silent on router, research, unavailable, interfaces
+       and the new test: Success, no issues.
+RISKS:  1. The V3 vocabulary gap above is the one real loose end and it is a
+       cross-lane contract change, not a code defect. It needs the owning ticket.
+   2. A configured-but-BROKEN provider is reported as unavailable rather than as
+       a provider error, because _resolve_llm_provider cannot distinguish them
+       at construction time. That is deliberately conservative (never fabricate),
+       but an operator debugging a bad gateway sees "unavailable" and must read
+       the detail text. If that ambiguity is unacceptable it needs a real health
+       probe, which is out of scope here.
+   3. Behaviour change for any caller that relied on the fake: runs that used to
+       come back completed now come back failed/unavailable, and research reports
+       that used to carry content now carry an abstained, empty report. That is
+       the point of the ticket, but it is a visible break for anything built
+       against the old behaviour, and the UI has no dedicated unavailable
+       message — it renders "failed".
+   4. tests/unit/test_research_api.py and tests/unit/test_agents.py are shared
+       files that dev1 may also be touching (T-R01). I verified by diff that my
+       edits are the ONLY changes in both, but a simultaneous edit by another
+       agent could still conflict at commit time.
+   5. The unavailable run is recorded with a run_id and status failed, so it is
+       visible in history. Nothing is deleted and nothing looks like a success.
+
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - One existing test asserted the DEFECT: test_research_report_passthrough_
+    unknowns_contradictions_citations depended on the production skeleton
+    manufacturing unknowns/contradictions from the words in the topic (its own
+    comments show it had been written around that behaviour). I did not delete or
+    weaken it: its real intent — report passthrough fidelity — is preserved by
+    staging the same report through an EXPLICIT test-only pipeline, which is
+    exactly the construction the card asks to keep. Same assertions, honest input.
+  - The taxonomy pin in test_agents.py exists precisely to catch invented error
+    codes, so adding UNAVAILABLE failed it. I added the code to the PIN with a
+    comment, rather than relaxing the guard, so a future invented code still
+    fails. (Its second half then exercised the new code through
+    RunState.transition_to automatically.)
+  - I first tried to prove "no fabrication in production source" with a grep,
+    which reported hits — because my own explanatory comments quote the removed
+    strings. Rewrote it as an AST scan over string literals and class names, the
+    same lesson as the earlier eval tickets. The grep version was worthless.
+  - mypy caught three real typing faults in my own edits (a `str|None` assigned to
+    a `str` in both branches of start_run, and a `type` returned as `dict` in a
+    test helper) before they shipped.
+
+FOREIGN TREE MOVEMENT (reported, not forced): HEAD moved b2ae6cc -> c16053f
+  mid-ticket as you committed dev1's work. My delta is exactly the 7 allowlisted
+  files above plus handoffs/CODE2-HANDOFF.md. My uncommitted eval files
+  (evals/embedder_*, evals/bfcl_*) were left untouched per your instruction. No
+  overlap with dev1's auth files.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr02_{start,end}.txt):
+- START (HEAD `b2ae6cc`): 30 dirty paths. Index empty.
+- END (HEAD `c16053f`): 37 dirty paths — my 7 files, dev1's eval/handoff files,
+  the reviews/ directory, and the untouched foreign handoffs.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.

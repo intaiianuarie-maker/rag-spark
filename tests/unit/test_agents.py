@@ -4466,6 +4466,11 @@ def test_failure_taxonomy_all_codes_pinned_no_invented() -> None:
         "tool_not_allowed", "tool_not_found", "tool_timeout", "tool_output_too_large",
         "tool_schema_invalid", "budget_exceeded", "deadline_exceeded", "cancelled",
         "provider_error", "schema_invalid", "workspace_mismatch", "source_revoked", "unknown_required",  # noqa: E501
+        # T-R02: typed UNAVAILABLE for unconfigured execution. Pinned here
+        # deliberately so it stays part of the stable taxonomy rather than
+        # becoming an ad-hoc string, and so any FUTURE invented code still
+        # fails this test.
+        "unavailable",
     }
     actual = {c.value for c in AgentErrorCode}
     assert actual == expected, f"taxonomy drift: {actual ^ expected}"

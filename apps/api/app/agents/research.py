@@ -19,6 +19,11 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from agents.unavailable import (
+    MISSING_RESEARCH_PIPELINE,
+    UNAVAILABLE_CODE,
+    Unavailable,
+)
 from agents.verifier import InMemoryChunkSource
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -75,6 +80,9 @@ class SubmitResearchResponse(BaseModel):
     workspace_id: str
     status: str
     topic: str
+    #: T-R02: set only when execution was refused as unavailable.
+    error_code: str | None = None
+    missing: str | None = None
 
 
 class ResearchStatusResponse(BaseModel):
@@ -100,6 +108,9 @@ class ResearchReportResponse(BaseModel):
     abstention_reason: str = ""
     searched: list[str] = Field(default_factory=list)
     limitations: list[str] = Field(default_factory=list)
+    #: T-R02: typed unavailable contract, empty on a completed report.
+    error_code: str | None = None
+    missing: str | None = None
 
 
 @router.post("", response_model=SubmitResearchResponse, status_code=status.HTTP_201_CREATED)
@@ -121,59 +132,51 @@ async def submit_research(
     # Uses the same pipeline components as in-process, but with in-memory fakes
     # so the route mechanics are tested without live LLM.
     source = InMemoryChunkSource()
-    # Create a trivial grounded evidence for the topic so report is not empty
-    # and carries provenance (same as in-process would)
     topic = body.topic.strip()
-    # If pipeline factory is patched, use it; otherwise use skeleton fakes
+    # If pipeline factory is patched, use it; otherwise there is no research
+    # capability at all.
     pipeline = create_research_pipeline()
-    if pipeline is not None:
-        # Patched pipeline returns a pre-staged report dict
-        staged = await pipeline(topic, str(workspace_id), principal.user_id)
-        report = staged
+    if pipeline is None:
+        # T-R02: no pipeline wired means NOTHING was researched. The previous
+        # fallback invented chunk "chk-1" / evidence "ev-1", a grounded sentence
+        # echoing the topic back, and unknowns/contradictions triggered purely by
+        # the words "unknown"/"conflict" appearing in the topic — a report that
+        # looked researched and cited evidence that was never retrieved. Return
+        # the typed UNAVAILABLE instead: an empty honesty package naming the
+        # missing piece, with nothing invented.
+        report = Unavailable(
+            MISSING_RESEARCH_PIPELINE,
+            "No research pipeline is configured; nothing was searched, retrieved, "
+            "generated or cited.",
+        ).report(topic)
     else:
-        # Skeleton: 1 grounded sentence + staged unknowns/contradictions via fakes
-        report = {
-            "grounded_sentences": [],
-            "unknowns": [],
-            "contradictions": [],
-            "contradiction_outline": [],
-            "citations": [],
-            "abstained": False,
-            "abstention_reason": "",
-            "searched": [topic],
-            "limitations": [],
-        }
-        # If topic contains "unknown" keyword, stage an unknown (proves passthrough)
-        if "unknown" in topic.lower():
-            report["unknowns"] = [{"question": topic, "searched": [topic], "reason": "NO_EVIDENCE", "tried_chunk_ids": []}]  # noqa: E501
-        if "conflict" in topic.lower():
-            report["contradictions"] = [{"question": topic, "claim_a": "A", "claim_b": "B", "evidence_a_id": "a", "evidence_b_id": "b", "chunk_ids_a": ["chk-a"], "chunk_ids_b": ["chk-b"]}]  # noqa: E501
-            report["contradiction_outline"] = [f"Contradiction on '{topic}': 'A' [chk-a] vs 'B' [chk-b]"]  # noqa: E501
-        # Grounded sentence for normal topics (so report not abstained)
-        if topic and "unknown" not in topic.lower():
-            # Only add grounded if not the unknowns-only case
-            report["grounded_sentences"] = [{"sentence": topic[:100], "chunk_ids": ["chk-1"], "evidence_ids": ["ev-1"], "citations": ["chk-1"]}]  # noqa: E501
-            report["citations"] = ["chk-1"]
-            source.put("chk-1", topic[:100])
-        if not report["grounded_sentences"] and not report["unknowns"]:
-            # Abstain case — still disclose searched
-            report["abstained"] = True
-            report["abstention_reason"] = "No groundable content: all claims failed grounding or no supporting evidence"  # noqa: E501
-            report["limitations"] = [f"Searched: {topic}"]
-        _ = source  # silence unused
+        # Patched pipeline returns a pre-staged report dict (test-only seam).
+        report = await pipeline(topic, str(workspace_id), principal.user_id)
+    _ = source  # retained: the wired pipeline path owns its own chunk source
+
+    unavailable = report.get("error_code") == UNAVAILABLE_CODE
+    status_value = "failed" if unavailable else "completed"
+    stage = "unavailable" if unavailable else "synthesis"
 
     _RESEARCH[research_id] = {
         "research_id": research_id,
         "workspace_id": str(workspace_id),
         "principal_id": principal.user_id,
         "topic": topic,
-        "status": "completed",
-        "stage": "synthesis",
+        "status": status_value,
+        "stage": stage,
         "created_at": created,
         "report": report,
     }
 
-    return SubmitResearchResponse(research_id=research_id, workspace_id=str(workspace_id), status="completed", topic=topic)  # noqa: E501
+    return SubmitResearchResponse(
+        research_id=research_id,
+        workspace_id=str(workspace_id),
+        status=status_value,
+        topic=topic,
+        error_code=str(rpt_error) if (rpt_error := report.get("error_code")) else None,
+        missing=str(rpt_missing) if (rpt_missing := report.get("missing")) else None,
+    )
 
 
 @router.get("/{research_id}", response_model=ResearchStatusResponse)
@@ -225,4 +228,6 @@ async def get_research_report(
         abstention_reason=rpt.get("abstention_reason", ""),
         searched=rpt.get("searched", []),
         limitations=rpt.get("limitations", []),
+        error_code=rpt.get("error_code"),
+        missing=rpt.get("missing"),
     )
