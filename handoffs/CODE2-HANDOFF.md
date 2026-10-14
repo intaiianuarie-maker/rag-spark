@@ -1345,3 +1345,19 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-F10 — durable store contract invariants
+
+```
+TASK: T-F10
+CHANGE:
+      - added tests/contract/test_durable_store_invariants.py (append-only/reject update, draft fail-closed, mode disclosure)
+INVOCATION:
+      PYTHONPATH=packages:apps/api python -m pytest tests/contract/ -q
+VERIFY:
+      - 3 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
