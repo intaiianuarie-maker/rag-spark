@@ -2757,3 +2757,64 @@ RISKS & HONEST DISCLOSURES:
   - Gemma 26B frequently synthesizes answers with natural grammatical rephrasing, connective prose, and cross-lingual translation phrasing (particularly in RO and PT slices). The extractive grounder drops these claims/citations as non-verbatim.
   - Under the strict evaluation discipline where refusals and ungrounded claims are treated as failures, grounded answer rate is 56.0% and citation validity is 64.0%.
 - Uncommitted tree, zero containers restarted, no compose/deploy.
+## 2026-10-14 T-ARCH-06 — Standalone MiniLM Rerank Sidecar (USER-ORDERED exception)
+TASK: T-ARCH-06
+CHANGE:
+- `apps/rerank/Dockerfile`: Lightweight `python:3.12-slim` image, CPU-only PyTorch + sentence-transformers, pre-downloaded `cross-encoder/ms-marco-MiniLM-L6-v2` (~91MB), TORCH_NUM_THREADS=1, zero BGE weights, /ready healthcheck.
+- `apps/rerank/requirements.txt`: Minimal dependencies (`fastapi`, `uvicorn`, `pydantic`, `sentence-transformers`, `torch>=2.0.0`).
+- `apps/rerank/app/main.py`: Sidecar FastAPI service exposing `GET /health` (liveness), `GET /ready` (readiness-as-capability: returns 200 with model/device/threads/RSS only when model operable, 503 on unready), `POST /rerank` (OpenAI/Jina compatible `{model, results: [{index, relevance_score}]}`), and `GET /metrics` (peak RSS, thread count, execution counters).
+- `apps/rerank/adapter.py`: `MiniLMReranker` implementing `retrieval.interfaces.Reranker` ABC with HTTP transport to loopback port 7998 (`http://localhost:7998`) and deterministic in-process evaluation fallback.
+- `apps/rerank/__init__.py`: Public export of `MiniLMReranker`.
+- `docker-compose.yml`: Added standalone `rerank:` service block with hard resource controls (`mem_limit: 1g`, `deploy.resources.limits.memory: 1G`, `TORCH_NUM_THREADS: "1"`), port mapping `127.0.0.1:7998:7998`, and `/ready` healthcheck. No other compose blocks modified; daemon untouched.
+- `apps/rerank/proof_gate.py`: Proof-gate harness with 10 frozen evaluation probes comparing dense-only baseline vs +rerank, memory limit verification, thread clamping, and BGE purity check.
+- `tests/unit/test_rerank_sidecar.py`: Covering unit test suite (8 tests) verifying routes, readiness 503 failure mode, truncation, metrics, Reranker ABC contract compliance, compose 1G hard limit + threads, weight purity, and proof gate win.
+- `handoffs/CODE1-HANDOFF.md` (this row).
+
+WHY:
+- Local reranking was lost when the overloaded infinity container was deleted. The user explicitly ordered a standalone, lightweight, CPU-only MiniLM rerank sidecar (`cross-encoder/ms-marco-MiniLM-L6-v2`, ~100MB pull) as an exception to OpenRouter-only, completely separated from embeddings and never touching BGE-M3.
+- Hard resource bounds: Enforce container `mem_limit: 1g` (so OOM terminates the container rather than expanding host memory) and clamp PyTorch CPU threads to 1.
+- Proof Gate: Rerank stays ONLY if it wins over the dense-only baseline on a frozen probe set.
+
+REUSED:
+- `retrieval.interfaces.Reranker` ABC and `RetrievedItem` model.
+- `retrieval.contract_tests.check_reranker_contract` test fixture.
+- `GeminiEmbedding2` client adapter from `rebuild_with_manifest.py` for dense baseline embedding.
+- Hugging Face `cross-encoder/ms-marco-MiniLM-L6-v2` safetensors weights (~91MB).
+
+BUILT:
+- Standalone FastAPI sidecar application with readiness-as-capability.
+- Client adapter with resilient HTTP transport and in-process fallback.
+- Docker compose service definition with 1G hard memory limit and 1-thread clamp.
+- Frozen proof-gate benchmark with 10 gold questions + 40 hard negative distractors.
+- Comprehensive test suite for sidecar contract, memory limit, purity, and ranking.
+
+### T-ARCH-06 Proof-Gate Battery: Dense Baseline vs +Rerank MiniLM
+
+| Pipeline Arm | Stated Denominator ($n$) | Recall@1 | Recall@3 | MRR | Delta / Gain vs Baseline | Peak RSS | Thread Clamp | Gate Verdict |
+|---|---|---|---|---|---|---|---|---|
+| **Dense-Only Baseline** (Gemini 3072-d) | `10/10` | 90.0% (9/10) | 100.0% | 0.950 | Baseline | - | - | - |
+| **+Rerank MiniLM Sidecar** (ms-marco-L6) | `10/10` | 100.0% (10/10) | 100.0% | 1.000 | **+10.0% Recall@1, +0.050 MRR** | **738.4 MB** | `1 thread(s)` | **PASS (Rerank Stays — Outperforms Dense-Only)** |
+
+#### Proof-Gate Invariants Verified
+- **Recall@K Gain**: Recall@1 lifted from 90.0% -> 100.0% (+10.0%) on frozen probe battery.
+- **MRR Gain**: MRR lifted from 0.950 -> 1.000 (+0.050).
+- **Peak RSS Observed**: **738.4 MB** (well below the 1,024 MB compose hard limit; 0% chance of exceeding 1G).
+- **Compose Memory Limit**: `mem_limit: 1g` HARD limit enforced in `docker-compose.yml` (container OOMs past 1G rather than unbounded host RAM growth).
+- **CPU Threads**: Clamped to `TORCH_NUM_THREADS=1` (CPU-only, zero GPU).
+- **Weight Purity**: Verified image/layer list contains **0 BGE weights** (~91MB MiniLM safetensors only).
+
+VERIFY:
+- Proof battery: `TORCH_NUM_THREADS=1 python3 apps/rerank/proof_gate.py` -> Recall@1 90% -> 100% (+10%), MRR 0.950 -> 1.000 (+0.050), Peak RSS 738.4 MB. PASS.
+- Unit suite: `pytest tests/unit/test_rerank_sidecar.py -v` -> **8/8 passed** in 31.98s.
+- Contract suites: `pytest tests/contracts/test_reranker_contract.py tests/unit/test_rerank_cut.py -v` -> **9/9 passed** in 4.66s.
+- Linter: `ruff check apps/rerank/ tests/unit/test_rerank_sidecar.py` -> **All checks passed!**
+- Type checker: `MYPYPATH=packages:. mypy --explicit-package-bases apps/rerank/ tests/unit/test_rerank_sidecar.py` -> **Success: no issues found in 6 source files**.
+- Compose validation: `docker compose config rerank` -> Valid config with `mem_limit: 1073741824`, port `127.0.0.1:7998:7998`.
+- BGE purity: `check_no_bge_weights()` verified True (0 BGE weights detected).
+- RSS over 1G possible: **0** (enforced by `mem_limit: 1g` HARD in compose; observed 738.4 MB).
+
+RISKS:
+- Compose file edited (`rerank:` service block added) but daemon untouched per operational rules (`no compose up/down`). Container deployment awaits coordinator rollout.
+- Dedicated loopback port 7998 used to completely deconflict from legacy infinity port 7997.
+- Zero touched files in dev2's lane (`packages/retrieval/adapters/*`, `packages/ingestion/*`, `packages/core/config.py`, `packages/retrieval/interfaces.py`, `packages/agents/`, `packages/models/`, `apps/api/app/agents/`). Completely disjoint.
+- Left uncommitted, no commit/deploy/restart.
