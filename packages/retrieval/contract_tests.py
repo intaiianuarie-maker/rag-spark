@@ -33,6 +33,7 @@ from __future__ import annotations
 import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 
+from .embedding_identity import EmbeddingIdentity
 from .interfaces import (
     EmbeddingProvider,
     LexicalStore,
@@ -45,6 +46,15 @@ from .interfaces import (
 
 CONTRACT_COLLECTION = "contract-tests"
 CONTRACT_DIMENSION = 4
+#: T-R06b: the boundary now refuses records with no embedding identity, so the
+#: contract's own fixture records carry one. Same four keys, built with dev2's
+#: stamping helpers — no parallel implementation here.
+CONTRACT_IDENTITY = EmbeddingIdentity(
+    provider="ContractStub",
+    model="contract-stub-model",
+    revision="contract-stub-rev1",
+    dimension=CONTRACT_DIMENSION,
+)
 
 
 def _fail(message: str) -> None:
@@ -97,6 +107,7 @@ async def check_vector_store_contract(
             chunk_id="chunk-a-1",
             page=1,
             section="Introduction",
+            metadata=CONTRACT_IDENTITY.as_metadata(),
         ),
         VectorRecord(
             id="a-2",
@@ -108,6 +119,7 @@ async def check_vector_store_contract(
             chunk_id="chunk-a-2",
             page=2,
             section="Method",
+            metadata=CONTRACT_IDENTITY.as_metadata(),
         ),
         # Same vector as the query: if ACL ran after ranking this row would win.
         VectorRecord(
@@ -120,6 +132,7 @@ async def check_vector_store_contract(
             chunk_id="chunk-b-1",
             page=1,
             section="Secret",
+            metadata=CONTRACT_IDENTITY.as_metadata(),
         ),
     ]
 
@@ -226,6 +239,7 @@ async def check_lexical_store_contract(store: LexicalStore) -> None:
             chunk_id="chunk-a-1",
             page=1,
             section="Introduction",
+            metadata=CONTRACT_IDENTITY.as_metadata(),
         ),
         VectorRecord(
             id="a-2",
@@ -237,6 +251,7 @@ async def check_lexical_store_contract(store: LexicalStore) -> None:
             chunk_id="chunk-a-2",
             page=2,
             section="Method",
+            metadata=CONTRACT_IDENTITY.as_metadata(),
         ),
         VectorRecord(
             id="b-1",
@@ -248,6 +263,7 @@ async def check_lexical_store_contract(store: LexicalStore) -> None:
             chunk_id="chunk-b-1",
             page=1,
             section="Secret",
+            metadata=CONTRACT_IDENTITY.as_metadata(),
         ),
     ]
     if await store.index(records=records) != 3:

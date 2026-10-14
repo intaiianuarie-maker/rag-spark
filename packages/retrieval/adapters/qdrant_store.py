@@ -93,6 +93,13 @@ from qdrant_client.http.models import (
     VectorParams,
 )
 
+from ..embedding_identity import (
+    EmbeddingIdentity,
+    EmbeddingIdentityError,
+    identity_from_metadata,
+    verify_query_identity,
+    verify_record_identity,
+)
 from ..interfaces import RetrievalMethod, RetrievedItem, SearchFilter, VectorRecord, VectorStore
 from ..serving import (
     ServingAliasState,
@@ -121,6 +128,32 @@ class VectorStoreError(RuntimeError):
 REJECT_DIMENSION = "dimension_mismatch"
 REJECT_NON_FINITE = "non_finite"
 REJECT_ZERO = "zero_vector"
+
+
+class VectorStoreIdentityError(VectorStoreError):
+    """A record or a collection failed EMBEDDING IDENTITY verification (T-R06b).
+
+    ``reason`` is ``"unlabelled_record"`` / ``"incompatible_record"`` /
+    ``"unknown_collection"`` / ``"incompatible_query"`` and ``field`` names the
+    disagreeing identity key when there is one, so a caller can branch on the
+    cause instead of matching message text. Always raised BEFORE the write or
+    the retrieval it guards.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        reason: str,
+        collection: str = "",
+        record_id: str | None = None,
+        field: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.reason = reason
+        self.collection = collection
+        self.record_id = record_id
+        self.field = field
 
 
 class VectorStoreInvalidVector(VectorStoreError):
@@ -179,10 +212,58 @@ def validate_record_vector(record: VectorRecord, *, expected_dim: int) -> None:
         )
 
 
-def validate_records(records: Sequence[VectorRecord], *, expected_dim: int) -> None:
-    """Validate a whole batch before a single point is built or sent."""
+def validate_records(
+    records: Sequence[VectorRecord],
+    *,
+    expected_dim: int,
+    identity: EmbeddingIdentity | None = None,
+    collection: str = "",
+) -> None:
+    """Validate a whole batch before a single point is built or sent.
+
+    T-R06b: identity is VERIFIED here, not merely labelled. Every record must
+    carry the four identity keys (``embedding_provider/model/revision/
+    dimension``) — a record without them is refused with the missing keys named,
+    because an unlabelled vector cannot be compared against a provider and
+    "probably fine" is not a check. When ``identity`` is supplied (the caller
+    knows which provider produced these vectors) the record must additionally
+    MATCH it, all four fields or nothing, and the disagreeing field is named.
+
+    Both refusals raise :class:`VectorStoreIdentityError` before any point is
+    built, so an unlabelled or mismatched batch means ZERO writes — the same
+    all-or-nothing property the vector checks already had.
+    """
     for record in records:
         validate_record_vector(record, expected_dim=expected_dim)
+        metadata = record.metadata or {}
+        if identity is None:
+            # Unlabelled check only: the record must still carry all four keys.
+            try:
+                identity_from_metadata(metadata)
+            except EmbeddingIdentityError as exc:
+                raise VectorStoreIdentityError(
+                    f"record {record.id}: {exc}",
+                    reason="unlabelled_record",
+                    collection=collection,
+                    record_id=record.id,
+                ) from exc
+            continue
+        try:
+            verify_record_identity(metadata, identity, collection=collection)
+        except EmbeddingIdentityError as exc:
+            # Name the disagreeing field using dev2's own reason text, so the
+            # store reports exactly which of the four keys refused the write.
+            try:
+                field = identity_from_metadata(metadata).mismatch_reason(identity).split(":")[0]
+            except EmbeddingIdentityError:
+                field = ""
+            raise VectorStoreIdentityError(
+                f"record {record.id}: {exc}",
+                reason="incompatible_record",
+                collection=collection,
+                record_id=record.id,
+                field=field,
+            ) from exc
 
 
 def _to_point_id(s: str) -> str:
@@ -383,6 +464,10 @@ class QdrantVectorStore(VectorStore):
         #: T-R05: serving alias → the physical collection it served before the
         #: last promotion, so a rollback has a target without asking the caller.
         self._previous_target: dict[str, str] = {}
+        #: T-R06b: collection → the embedding identity every record in it was
+        #: verified against. Populated by a verified write, or by a read-only
+        #: probe on first query. Absent means UNKNOWN, which queries refuse.
+        self._collection_identity: dict[str, EmbeddingIdentity] = {}
         #: T-V1-018 pre-evidence gate: who answers "which version is active".
         #: Defaults to the documents table; tests inject their own resolver.
         self._active_version_resolver: ActiveVersionResolver = (
@@ -519,7 +604,16 @@ class QdrantVectorStore(VectorStore):
             # point is built, so an invalid record means ZERO writes — not a
             # partial batch and not a poisoned index.
             expected_dim = await self._expected_dimension(coll)
-            validate_records(records, expected_dim=expected_dim)
+            # T-R06b: identity is verified at this boundary, and — when this
+            # process already knows what the collection holds — the record must
+            # match it, so a rebuild cannot quietly write a second model's
+            # vectors into a collection built by the first.
+            validate_records(
+                records,
+                expected_dim=expected_dim,
+                identity=self._collection_identity.get(coll),
+                collection=coll,
+            )
             points: list[PointStruct] = []
             for r in records:
                 payload: dict[str, Any] = {
@@ -548,6 +642,13 @@ class QdrantVectorStore(VectorStore):
                     )
                 )
             await self._client.upsert(collection_name=coll, points=points)
+            # The collection's identity is now known to this process (every
+            # record above was verified), so later reads and later writes can be
+            # checked against it without another round trip.
+            if coll not in self._collection_identity:
+                self._collection_identity[coll] = identity_from_metadata(
+                    records[0].metadata or {}
+                )
             return len(points)
         except VectorStoreError:
             raise
@@ -859,6 +960,36 @@ class QdrantVectorStore(VectorStore):
             ) from e
         return dict(active or {})
 
+    async def _collection_identity_of(self, coll: str) -> EmbeddingIdentity | None:
+        """The identity recorded for ``coll``, or ``None`` when UNKNOWN.
+
+        T-R06b. A cache hit comes from a write this process already verified.
+        Otherwise one read-only scroll reads a single point's payload; that is
+        enough because identity is stamped on every record, and it never
+        mutates anything. A collection built before identity stamping — or one
+        whose records disagree — resolves to ``None``, and ``None`` is refused
+        downstream rather than assumed compatible.
+        """
+        cached = self._collection_identity.get(coll)
+        if cached is not None:
+            return cached
+        try:
+            page = await self._client.scroll(
+                collection_name=coll, limit=1, with_payload=True, with_vectors=False
+            )
+        except Exception:
+            return None
+        points = getattr(page, "points", None) or []
+        if not points:
+            return None
+        payload = getattr(points[0], "payload", None) or {}
+        try:
+            identity = identity_from_metadata(payload.get("metadata") or {})
+        except EmbeddingIdentityError:
+            return None
+        self._collection_identity[coll] = identity
+        return identity
+
     async def search(
         self,
         *,
@@ -866,6 +997,7 @@ class QdrantVectorStore(VectorStore):
         vector: list[float],
         top_k: int,
         query_filter: SearchFilter,
+        query_identity: EmbeddingIdentity | None = None,
     ) -> list[RetrievedItem]:
         if top_k <= 0:
             return []
@@ -874,6 +1006,29 @@ class QdrantVectorStore(VectorStore):
         coll = collection or self._default_collection
         if not coll:
             raise VectorStoreError("collection name required")
+        # T-R06b: identity is verified BEFORE any retrieval is issued, so an
+        # unknown or incompatible collection can never return a ranked hit.
+        # An unknown collection identity is refused, never assumed compatible —
+        # that assumption is the quiet failure this check removes.
+        stored_identity = await self._collection_identity_of(coll)
+        if stored_identity is None:
+            raise VectorStoreIdentityError(
+                f"collection {coll!r} has no recorded embedding identity; refusing to "
+                "query with an unverified provider. Rebuild the collection with "
+                "identity-stamped records (the ingest and rebuild paths both stamp it) "
+                "and promote it with promote_replacement.",
+                reason="unknown_collection",
+                collection=coll,
+            )
+        if query_identity is not None:
+            try:
+                verify_query_identity(stored_identity, query_identity, collection=coll)
+            except EmbeddingIdentityError as exc:
+                raise VectorStoreIdentityError(
+                    str(exc),
+                    reason="incompatible_query",
+                    collection=coll,
+                ) from exc
         try:
             qfilter = _filter_from_search_filter(query_filter)
             # T-V1-018: widen the candidate window (CANDIDATE_OVERFETCH) so the

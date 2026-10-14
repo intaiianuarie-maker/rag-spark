@@ -34,6 +34,7 @@ from retrieval.adapters.qdrant_store import (
     VectorStoreError,
     VectorStoreInvalidVector,
 )
+from retrieval.embedding_identity import EmbeddingIdentity
 from retrieval.interfaces import VectorRecord
 
 pytestmark = [pytest.mark.unit]
@@ -168,7 +169,16 @@ def make_live_store() -> tuple[QdrantVectorStore, StubQdrantClient]:
     return store, client
 
 
-def record(*, id: str = "chunk-1", vector: list[float] | None = None) -> VectorRecord:
+#: T-R06b: the boundary verifies embedding identity, so the fixture records
+#: carry one. Built with dev2's stamping helpers, never by hand.
+IDENTITY = EmbeddingIdentity(
+    provider="BoundaryStub", model="stub-model", revision="stub-rev1", dimension=DIM
+)
+
+
+def record(
+    *, id: str = "chunk-1", vector: list[float] | None = None, metadata: dict | None = None
+) -> VectorRecord:
     return VectorRecord(
         id=id,
         vector=[0.5] * DIM if vector is None else vector,
@@ -176,6 +186,7 @@ def record(*, id: str = "chunk-1", vector: list[float] | None = None) -> VectorR
         workspace_id="ws-a",
         document_id="doc-a",
         chunk_id=id,
+        metadata=IDENTITY.as_metadata() if metadata is None else metadata,
     )
 
 

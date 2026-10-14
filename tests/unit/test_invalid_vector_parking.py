@@ -44,6 +44,7 @@ from retrieval.adapters.qdrant_store import (
     VectorStoreError,
     VectorStoreInvalidVector,
 )
+from retrieval.embedding_identity import EmbeddingIdentity
 from retrieval.interfaces import VectorRecord
 
 os.environ.setdefault("APP_ENV", "test")
@@ -312,8 +313,22 @@ def _make_store() -> tuple[QdrantVectorStore, _StubQdrantClient]:
     return store, client
 
 
-def _record(*, id: str = "chk-1", vector: list[float]) -> VectorRecord:
-    return VectorRecord(id=id, vector=vector, content="evidence", workspace_id="ws-a")
+#: T-R06b: records reaching the boundary must carry embedding identity.
+IDENTITY = EmbeddingIdentity(
+    provider="ParkingStub", model="stub-model", revision="stub-rev1", dimension=DIM
+)
+
+
+def _record(
+    *, id: str = "chk-1", vector: list[float], metadata: dict | None = None
+) -> VectorRecord:
+    return VectorRecord(
+        id=id,
+        vector=vector,
+        content="evidence",
+        workspace_id="ws-a",
+        metadata=IDENTITY.as_metadata() if metadata is None else metadata,
+    )
 
 
 async def test_boundary_writes_nothing_for_any_invalid_vector() -> None:
