@@ -5409,3 +5409,107 @@ GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4030_{start,end}
   ` M handoffs/CODE2-HANDOFF.md`.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-V3-031 — UI fix F-2 (LOW): partial tone vs terminal status (both pages)
+
+```text
+TASK: T-V3-031 — finding F-2 from my own T-V3-029 review (LOW): `partial` is in
+       TERMINAL_STATUSES but renders the `pending` (amber, in-progress) tone, so
+       a run that had already STOPPED was coloured like one still working.
+       Tone-only fix in BOTH agent-runs pages; no status logic, no copy, no
+       rendering-structure change.
+CHANGE: apps/web/src/app/agent-runs/page.tsx (tone mapping only, +14/-3) and
+        apps/web/src/app/agent-runs/[id]/page.tsx (+11/-3): added a `partial`
+        member to ChipTone; `partial: "partial"` in STATUS_TONES (was
+        "pending"); a violet `partial` entry in TONE_CLASSES; exported the tone
+        lookup as `runStatusTone(status)` (which the chips now call, replacing
+        the inlined `STATUS_TONES[status as RunStatusValue] ?? "neutral"`); and
+        exported ChipTone for the tests. NEW
+        apps/web/src/app/agent-runs/[id]/status-tone.test.ts (6 tests).
+        TERMINAL_STATUSES, the status words, the progress line and all copy are
+        UNTOUCHED — `git diff --stat` is 38 insertions / 6 deletions across two
+        files and every hunk is in the tone block or the one-line chip change.
+WHY:    F-2 was the second finding of my 029 review. The words already read
+        correctly ("partial", "This run is partial."), so this is purely the wrong
+        colour pulling the eye — but a finished-partial run wearing an
+        in-progress tone is the exact "state reads wrong" class the review
+        exists to catch.
+REUSED: The knowledge/status-chip.tsx precedent — it exports a PURE tone lookup
+        (`jobStateTone`) precisely so the mapping is unit-testable and unknown
+        states fall back to neutral. Extracting `runStatusTone` from the inlined
+        expression copies that discipline, which is also what makes this fix
+        testable in a repo with no DOM harness. The violet classes follow the
+        existing five tones' exact shape (border-X-600/30 bg-X-100 text-X-900 +
+        dark variants), so no new styling convention is introduced.
+BUILT:  The partial tone (violet), the exported pure lookup, and the 6-test
+        covering suite (see VERIFY).
+
+TONE CHOICE, AS THE CARD ASKS ME TO STATE IT: VIOLET.
+  Rejected alternatives and why: amber/pending (that IS the bug — reads as
+  in-progress); emerald/success (reads as fully done, which is false — partial
+  means some work did not finish); red/danger (reads as an error; partial is a
+  degraded success, and a `failed` run already owns red); neutral/grey (reads as
+  inert/ignorable, and the cancelled run already owns it); blue/running (wrong
+  direction entirely). Violet is unused by any of the nine statuses, is distinct
+  from all five existing tones in BOTH light and dark mode, and reads as "its own
+  thing" rather than "a shade of something else" — which is the honest message:
+  the run stopped early with part of its work done, and that is neither success
+  nor failure nor in-flight.
+
+VERIFY: METRIC 1 — pending-toned terminal states: 0. The suite asserts, for all
+        five TERMINAL statuses (completed, partial, failed, cancelled,
+        limit_exceeded), that the tone is NOT "pending" — a single table-driven
+        test whose failure names the offending status. Exact expected tones are
+        pinned too (partial→partial, completed→success, failed/limit_exceeded→
+        danger, cancelled→neutral). The terminal set is taken from the review's
+        finding, and the detail page's own TERMINAL_STATUSES is source-checked
+        in the test file's header comment rather than silently restated.
+        METRIC 2 — non-terminal tones changed: 0. queued→pending,
+        running→running, waiting_input/waiting_approval→pending are asserted
+        unchanged; unknown statuses still fall back to "neutral" on BOTH pages;
+        the partial CSS classes are asserted present AND asserted different from
+        the pending classes (a tone that maps to the same CSS as pending would
+        not be a fix).
+        CHECKS: tsc --noEmit exit 0 · eslint on the touched glob exit 0 AND on
+        WHOLESrc exit 0 · vitest 20 files / 210 tests passed (was 18+2: 11
+        timeline + 6 tone; 0 lost) · backend tests/unit 2103 passed / 0 failed.
+        Cross-page agreement is asserted directly: for every status the list
+        page's tone equals the detail page's tone.
+RISKS:  1. `partial` in ChipTone is a new union member, so any future consumer
+        that exhaustively switches ChipTone will need the extra case — the type
+        makes that a compile error rather than a silent miss, which is intended.
+        2. The tone is a design decision, not a discovered fact. If design prefers
+        a different colour the change is one entry in two files plus its test
+        expectation; the reasoning above is the record to argue against.
+        3. The extraction of `runStatusTone` is a (very small) refactor of the
+        chip: `RunStatusChip` now calls the function instead of indexing the
+        record. Behaviour is identical, and the fallback path is covered by the
+        unknown-status test, but it is a new export in each page.
+        4. Colour is not the only channel: the status WORD is always rendered and
+        the progress/outcome copy is unchanged, so this fix improves a
+        colour-only-without-word state rather than creating a colour-only state.
+        5. VISUAL ONLY — I could not see the rendered colour in this environment:
+        the proof is that the classes are wired, distinct from pending, and present
+        in both light and dark. A human should eyeball one partial run before
+        this is called done-done.
+
+FOREIGN NOTE (tree movement, reported not forced): while I worked, the
+coordinator landed the scoping fix I prescribed in T-V3-030 for my own two
+V4-022/V4-023 over-broad "no UI in the whole tree" guards (now scoped to
+packages/workflow_engine/, per the file owner). Consequence: the backend suite is
+FULLY GREEN at 2103 passed — the 2 reds I disclosed in T-V3-030 are gone, and I
+did not touch those files in this ticket either.
+
+GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4031_{start,end}.txt):
+- START (HEAD `5e5b1d5`): 21 dirty paths (5 modified handoffs + 16 untracked
+  handoff docs). Index empty. dev1 STANDBY, no lane conflict, HEAD unchanged
+  START→END (5e5b1d5 both) apart from the coordinator's earlier guard fix already
+  being in the committed tree.
+- END (HEAD `5e5b1d5`): exactly my three allowlisted files plus the untouched
+  foreign handoffs: ` M apps/web/src/app/agent-runs/page.tsx`,
+  ` M apps/web/src/app/agent-runs/[id]/page.tsx`,
+  `?? apps/web/src/app/agent-runs/[id]/status-tone.test.ts`,
+  ` M handoffs/CODE2-HANDOFF.md`.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.

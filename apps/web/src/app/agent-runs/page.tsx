@@ -135,7 +135,13 @@ function saveRecords(workspaceId: string, records: RunRecord[]): void {
   }
 }
 
-type ChipTone = "pending" | "running" | "success" | "danger" | "neutral";
+export type ChipTone =
+  | "pending"
+  | "running"
+  | "success"
+  | "danger"
+  | "neutral"
+  | "partial";
 
 const STATUS_TONES: Record<RunStatusValue, ChipTone> = {
   queued: "pending",
@@ -143,7 +149,12 @@ const STATUS_TONES: Record<RunStatusValue, ChipTone> = {
   waiting_input: "pending",
   waiting_approval: "pending",
   completed: "success",
-  partial: "pending",
+  // F-2 (T-V3-031): `partial` is TERMINAL, so it must not wear the in-progress
+  // amber tone. It gets its own violet tone: not pending (amber), not
+  // fully-succeeded (emerald), not an error (red), not inert (grey) — it read
+  // as "still working" before, which is exactly the wrong message for a run
+  // that has already stopped with some of its work done.
+  partial: "partial",
   failed: "danger",
   cancelled: "neutral",
   limit_exceeded: "danger",
@@ -155,11 +166,17 @@ const TONE_CLASSES: Record<ChipTone, string> = {
   success: "border-emerald-600/30 bg-emerald-100 text-emerald-900 dark:bg-emerald-900/50 dark:text-emerald-200",
   danger: "border-red-600/30 bg-red-100 text-red-900 dark:bg-red-900/50 dark:text-red-200",
   neutral: "border-neutral-400/30 bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300",
+  partial: "border-violet-600/30 bg-violet-100 text-violet-900 dark:bg-violet-900/50 dark:text-violet-200",
 };
+
+/** Pure tone lookup (exported for unit tests, mirroring knowledge/status-chip). */
+export function runStatusTone(status: RunStatusValue | string): ChipTone {
+  return STATUS_TONES[status as RunStatusValue] ?? "neutral";
+}
 
 /** Status chip — the status WORD is always rendered (never colour-only). */
 export function RunStatusChip({ status }: { status: RunStatusValue | string }) {
-  const tone = STATUS_TONES[status as RunStatusValue] ?? "neutral";
+  const tone = runStatusTone(status);
   return (
     <Badge variant="outline" className={`font-medium ${TONE_CLASSES[tone]}`}>
       {status}
