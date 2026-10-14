@@ -811,3 +811,17 @@ METRICS:
 RISKS: work remains.
 GIT: handoff only.
 ```
+
+## T-A04c (spike-first map)
+
+```text
+TASK: T-A04c seam map.
+SEAM MAP:
+  - packages/stores workflow_draft_store: DraftStore ABC method set {get, latest, history, count, workflow_ids, save_draft, revise}; SqliteDraftStore persists to SQLite.
+  - app workflows/store.py currently wraps in-memory dict for approvals, runs, executors and workflow_engine in-memory drafts.
+  - APIs differ: app/router expects draft save semantics; package store method is save_draft (no generic save).
+  - Approvals/runs have no durable workflow seam in packages (only agent RunStore), so stay for T-A04c2.
+STATUS: DEFERRED-WITH-MAP (drafts store wiring beyond this bounded pass).
+METRICS: no store change; spend 0.00.
+GIT: handoff only.
+```
