@@ -616,3 +616,22 @@ METRICS:
 RISKS: bge-m3 infinity endpoint unavailable prevents in-process paired eval.
 GIT: handoff only.
 ```
+
+## T-R13b (rescoped) — full-n eval on gemini production path
+
+```text
+TASK: T-R13b rescoped full-n gemini path.
+CHANGE: none (no harness built; no fake vectors).
+VERDICT: NOT RUN. Harness does not exist for the production embedding path;
+        Hotpot-style corpus not present in knowledge__serving as asked, and
+        building a production-leg harness + running full-n generation is beyond
+        this bounded turn. No metrics invented.
+REUSED: production OpenRouterProvider class (packages/models/adapters/openrouter_provider.py)
+        identified as the required embedding leg, but not wired into an eval run.
+METRICS:
+  - collection net delta: 0 (no data touched)
+  - metered spend: $0.00
+  - per-metric table: unavailable
+RISKS: evaluation work remains for a subsequent turn.
+GIT: handoff only.
+```
