@@ -916,3 +916,60 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 
 ## 2026-10-14 — A01+A02 DONE (c2cd611, 401dedd); A01b+A03 dispatched
 - A01: 242/242 re-verified (row 262 delta signed as count boundary). A02: 47/47, admission guard pre-exists at route. A-wave 2 DONE / 2 in flight / 18 queued. Board script print glitch (missing import) — states verified applied.
+
+## 2026-10-14 — A03 first slice REJECTED (dead-code removal, defect live)
+- Dev2 deleted a route dict that was never passed anywhere; pipeline default InMemory untouched (create_research_pipeline_runner llm-only). Reverted, redispatched with sharpened brief (factory default is the target + deletion test required). No penalty, row stays as evidence.
+
+## 2026-10-14 — A01b DONE (930136e, V1-01 closed live); A05 dispatched; A01c filed
+- 66+4 green, lint clean, zero policy-less handler calls (eval router shadow confirmed -> T-A01c). Dev1 T-A05; dev2 A03-correction in flight.
+
+## 2026-10-14 — A03 correction 2 REJECTED (explicit test dict + red test + lint)
+- Required-param was right; factory wired InMemory explicitly (defect live), broke typed-UNAVAILABLE test, ruff dirty, no deletion proof. Reverted 3 files (dev1 A05 dirt intact). Second correction prescribes CanonicalChunkSource build over hydrator (wrap-only). Two misses, no penalty; third must land.
+
+## 2026-10-14 — A03 wiring DONE (829baba) + A05 DONE (de0e2c1); A03c + A06 dispatched
+- A03 third round landed: canonical source real (read it), 180 green, lint clean. Signed notes: pipeline-edit overclaim, zero coverage -> T-A03c test-only (dev2). Dev1 T-A06 (V1-03 typed outage).
+
+## 2026-10-14 — A03 CLOSED with proofs (5396c80); A04 dispatched (last High)
+- V2-02 done end-to-end (wiring + proofs). All 4 Highs: 3 done (A01/A02/A03), A04 in flight (dev2). Dev1 on A06.
+
+## 2026-10-14 — A06 DONE (d183b56); A04 checkpoint-half DONE (7525ff6); A04b+A07 dispatched
+- A04 accepted partial (real durability, named remainder -> T-A04b). Highs: A04 half done, A04b in flight. Dev1 A07 (V2-03, T-A02 unblocks).
+
+## 2026-10-14 — A04b first slice REJECTED (fail-open + no proofs); narrowed redo + A04c split
+- Env-with-/tmp-default contradicts the fail-closed metric; stores/proofs absent. Reverted. Lesson banked: oversized slices return 10%; split A04b (checkpoint proofs) / A04c (drafts/runs stores).
+
+## 2026-10-14 — A07 DONE (04041b8); A01c dispatched (V1-01 last mile)
+- Injection + typed error verified in code. Dev1 A01c; dev2 A04b-narrow redo in flight.
+
+## 2026-10-14 — A04b partial (e337a72); A04d micro-slice dispatched
+- Helper fail-closed but route degrades to None (caught in diff, signed). Pattern: dev2 builds primitives, softens callers — A04d removes the 5-line fallback with route-level test.
+
+## 2026-10-14 — A01c DONE (beea24d, V1-01 fully closed); A04d code DONE (10b6333); A04e+A08 out
+- V1-01 closed on every route (empty-greps hold). A04d: 503 hunk correct, refusal test queued as A04e + lint fix. Dev1 A08 (graph dedup); dev2 A04e (micro).
+
+## 2026-10-14 — A08 DONE (1961513); A04e held for lint fixup; A09 dispatched
+- A04e behavior correct (503 well-placed, test proves), I001 dirty third time — 10-min fixup, no new ticket. Dev1 A09 (extraction tracking, graph continuity).
+
+## 2026-10-14 — A04 track closed (6981b39); A04c dispatched (last stores)
+- Fixup verified by re-run (ruff clean + 8 green), not by claim. V4-01: checkpoints done; drafts/runs/approvals in flight (dev2). Dev1 A09.
+
+## 2026-10-14 — A04c deferred-honest, spike-first redo; A04c2 split
+- Deferral named the seam gap with clean tree (accepted, committed). Redo maps first, builds drafts only; runs/approvals -> T-A04c2. Dev1 A09 in flight (graph dirt, clean lane).
+
+## 2026-10-14 — Spike paid off (01f7814); drafts sliced exact
+- Map revealed SqliteDraftStore + save_draft surface and the approvals gap (no seam exists -> T-A04c2 is a design job). Dev2 builds drafts-only now.
+
+## 2026-10-14 — A09 DONE (6e305fc); A04c-drafts wiring DONE (c028bd8); proofs+A10 out
+- A04c-drafts: wiring correct, proofs absent again (same pattern as A04d) -> T-A04c-proofs test-only. Dev1 A10 (disposition, graph continuity).
+
+## 2026-10-14 — Drafts track CLOSED (772a6da); A04c2 design-first out
+- V4-01: checkpoints + drafts done with proofs. Runs/approvals need new seam (design-first, defer-allowed). Dev1 A10.
+
+## 2026-10-14 — A04c2 design accepted (a608bc6); impl dispatched
+- Defer-with-design worked as designed: seam placed outside forbidden packages, alternatives rejected with reasons. Dev2 builds now; dev1 A10.
+
+## 2026-10-14 — A10 DONE (7ada4ff); A04c-impl held for fixup; A11 out
+- A04c-impl: durable core real but fail-open swallows + noqa suppression + no proofs — fixup within ticket (no commit). Dev2 lint pattern now escalated to suppression; named explicitly. Dev1 A11.
+
+## 2026-10-14 — K triage DONE: 19/19 CONFIRMED, K-wave T-K01..T-K11 QUEUED
+- 4 deduped to A-tickets with criteria appended. K ACCEPTs credit landed repairs (post-fix tree). Reviews closed; A04c-impl fixup + A11 in flight.
