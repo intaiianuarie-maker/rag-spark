@@ -3211,3 +3211,22 @@ Case table:
 Deferred live behavior: no API/container restart, no compose, no deploy, no restart performed (R01 AUTH_JWT_SECRET trap). Existing live api still reports infinity red until the coordinator's next secret-rotation restart release; this ticket's behavior is unit-proved only and makes no live /ready claim.
 RISKS: hidden consumers/tests that assert infinity must always be unreachable when unconfigured will need updating; pinned integration suite still sets INFINITY_URL to a closed port, so it remains red-tested there (expected and unchanged). No runtime restart means no live verification this round.
 Next: IDLE — pending T-R13b re-recon when coordinator permits; evals remain halted by user order.
+
+## 2026-10-14 T-R13b-RECON2 — post-restart stability re-check (dev1)
+TASK: T-R13b-RECON2 (w5:pG) — ~10 min /health + /ready sampling after restart release (F1 live, /ready TRUE, R01 rotation done); memory/swap; foreign sessions observed only; Qdrant/PG baseline. No eval.
+CHANGE (docs only): appended this row.
+WHY: decide whether T-R13b full-n paired eval may proceed from stability standpoint (evals authorized-when-stable per user, but remain halted until user lift).
+REUSED: live stack and T-F1 fix (infinity absent-tolerant now serving).
+BUILT: nothing. SCRATCH samples `/tmp/opencode/recon2_samples.csv` (37 rows).
+VERIFY:
+- whoami/date/uptime start: root, Wed Oct 14 21:37:15 CEST 2026, up 6d 9h, load avg 5.11/5.04/4.56.
+- sampled 37 points over ~9.3 min (15s cadence): /health 37/37 HTTP 200 (p50 7.0 ms, max 149.4 ms); /ready 37/37 HTTP 200, ready=true all (p50 400.1 ms, p95 578.4, max 635.0); dependency reachability all True every sample; 0 ready flips, 0 HTTP flaps.
+- `/ready` representative: PG 77.3ms, redis 89.2, qdrant 90.2, minio 98.1, infinity absent-tolerant true, llm 245.1, worker heartbeat 0.1s.
+- memory: free 616 MB, available 4242 MB, used 3693/7935; swap free 6918/12287 (swapfile 4G w/3.1G used, /swap-eval 8G w/2.1G used).
+- top: ~9.3% us, 16.7% sy, 72.2% idle, 0 zombies; load ~4.4 at sample.
+- Qdrant /readyz: "all shards are ready" in 22 ms. Postgres: pg_isready accepting; SELECT1 91.7 ms; 13 public tables in 35.8 ms.
+- foreign sessions observed only (untouched): hermes x2, cline, 4 codex (incl. app-server daemons), 6+ opencode (incl. serve pid 2624276). CPU load materially lower than RECON1 despite concurrency.
+RISKS:
+- VERDICT: **STABLE** — T-R13b may proceed if user lifts eval halt. No readiness flaps; real deps all healthy; Qdrant/PG responsive; sufficient swap+available memory; foreign load remains present but no resource starvation observed vs RECON1 (load ~10 -> ~4.4, free memory 1.7GB -> 4.2GB available, ready degraded -> true 37/37).
+- Residual: foreign opencode/codex/hermes load could spike; re-check if evals start. No code/database writes performed.
+Next: IDLE — appended row + push mandatory.
