@@ -30,6 +30,7 @@ from app.documents.upload import router as documents_router
 from app.eval.router import router as eval_router
 from app.search.search import legacy_router as legacy_search_router
 from app.search.search import router as search_router
+from app.workflows.router import router as workflow_router
 
 logger = logging.getLogger("knowledge_os.api")
 
@@ -106,6 +107,7 @@ def create_app() -> FastAPI:
     app.include_router(eval_router)
     app.include_router(agent_router)
     app.include_router(research_router)
+    app.include_router(workflow_router)
     register_auth_exception_handlers(app)
     return app
 

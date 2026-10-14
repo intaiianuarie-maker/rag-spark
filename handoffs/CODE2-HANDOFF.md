@@ -488,3 +488,54 @@ VERIFY:
       - mypy packages/agents/research_pipeline.py apps/api/app/agents/research.py tests/unit/test_v3_research_pipeline.py -> Success: no issues found in 3 source files
 GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched.
 ```
+
+---
+
+## T-R19 — V4 API + UI: handlers + minimal authoring surface (Phase 4 opens)
+
+```text
+TASK: T-R19 — V4 API + UI: handlers + minimal authoring surface (Phase 4 opens).
+      (1) V4 handlers (draft/import/validate/save/approve/run/status/cancel) authorized + workspace-scoped, built from existing schemas (no schema redesign);
+      (2) minimal authoring UI surface showing real drafts/revisions (0 mock content);
+      (3) R18's enforcement consumed via interfaces (append-only errors surfaced honestly — never swallowed into fake success).
+CHANGE:
+      - NEW apps/api/app/workflows/router.py (8 authorized + workspace-scoped handlers: draft list/latest/rev/history, import, validate, save revision 1, revise revision N, approve, run, status, cancel).
+      - NEW apps/api/app/workflows/schemas.py (typed request/response models reusing existing contracts: WorkflowImportRequest, WorkflowValidateRequest/Response, WorkflowApproveRequest/Response, WorkflowRunRequest/Response, DraftListResponse).
+      - NEW apps/api/app/workflows/store.py (DraftStore seam integration, approvals ledger, run store, and monotonic cancel).
+      - NEW apps/api/app/workflows/__init__.py (workflows router exported).
+      - MODIFIED apps/api/app/main.py (mounted workflow_router; R14/R15/R16 files read-only).
+      - NEW apps/web/src/app/workflows/page.tsx (WorkflowsAuthoringPage with real drafts listing, revision history, import flow, validate feedback, append revision, approve, run trigger, run status, and monotonic cancel).
+      - NEW apps/web/src/app/authoring/page.tsx (re-export alias for WorkflowsAuthoringPage).
+      - NEW apps/web/src/app/workflows/authoring-surface.test.ts (vitest suite verifying field-trace matrix, zero mock content, and 8 operation bindings).
+      - NEW tests/unit/test_v4_authoring_api.py (7 comprehensive unit tests covering Metric 1 cross-workspace refusal across all 8 handlers, Metric 3 append-only conflict/secret/mismatch/approval enforcement without swallowing, and end-to-end full lifecycle).
+WHY:  Phase 4 opens with a complete, secure V4 Visual Workflows API and minimal authoring UI. All 8 operations are
+      strictly scoped to the caller's active workspace, R18 append-only invariants are surfaced honestly without
+      swallowing, and the UI displays exclusively verified server data with zero mock content.
+REUSED:
+      - packages/workflow_engine/routes/schemas.py (DraftSaveRequest, DraftReviseRequest, DraftRevisionMeta, DraftRevisionDetail, DraftMutationResponse, DraftHistoryResponse, DraftErrorCode, assert_path_scope_matches)
+      - packages/workflow_engine/draft_store.py (DraftStore, InMemoryDraftStore, DraftConflictError, DraftNotFoundError, DraftIdentityError, DraftWorkspaceError)
+      - packages/workflow_engine/interfaces.py (WorkflowDefinition, WorkflowRevision, WorkflowRun, WorkflowRunStatus, CapabilityManifest, NodeType, ValidationError, ValidationResult)
+      - packages/workflow_engine/validator.py (WorkflowValidator)
+      - packages/workflow_engine/compiler.py (WorkflowCompiler)
+      - packages/workflow_engine/executor.py (WorkflowExecutor, FakeNodeExecutor)
+      - packages/workflow_engine/view_models.py (build_annotations, build_timeline, RunTimeline, EditorAnnotation)
+      - packages/workflow_engine/adapters/langflow_adapter.py (LangflowAdapter, LangflowImportError)
+      - apps/api/app/authz (require, Action.WORKSPACE_READ, Action.WORKSPACE_MANAGE, Resource, AuthorizationError, get_principal)
+      - apps/web/src/lib/auth-client.ts (auth.authFetch)
+      - apps/web/src/components/workspace/workspace-provider.tsx (useWorkspaces)
+      - apps/web/src/components/ui (Button, Badge, Input, Label)
+METRICS:
+      - handler paths without authorization scoping: 0 (cross-workspace refused with HTTP 403 on all 8 operations: draft, import, validate, save, approve, run, status, cancel).
+      - UI fields showing mock content as live: 0 (field-trace verified; 0 hardcoded mock workflows; empty states rendered honestly).
+      - enforcement refusals swallowed: 0 (DraftConflictError -> 409, StoreBoundsError -> 413, StoreSecretError -> 422, scope/identity mismatch -> 422, unvalidated approval -> 422, not found -> 404).
+VERIFY:
+      - pytest tests/unit/test_v4_authoring_api.py -> 7 passed in 3.81s
+      - pytest tests/unit/test_v4_authoring_api.py tests/unit/test_workflow_route_schemas.py tests/unit/test_workflow_draft_store.py tests/unit/test_workflow_validator.py tests/unit/test_workflow_compiler.py tests/unit/test_workflow_executor_honesty.py tests/unit/test_workflow_view_models.py tests/unit/test_workflow_langflow_adapter.py -> 377 passed in 12.08s
+      - vitest apps/web/src/app/workflows/authoring-surface.test.ts -> 4 passed in 1.08s
+      - vitest full suite (apps/web) -> 23 test files passed, 225 tests passed in 35.79s
+      - tsc (apps/web typecheck) -> 0 errors
+      - eslint (apps/web lint) -> 0 errors
+      - ruff check apps/api/app/workflows/ apps/api/app/main.py tests/unit/test_v4_authoring_api.py -> All checks passed!
+      - mypy apps/api/app/workflows/ apps/api/app/main.py tests/unit/test_v4_authoring_api.py -> Success: no issues found in 6 source files
+GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched (packages/stores/* untouched).
+```
