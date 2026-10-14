@@ -539,3 +539,39 @@ VERIFY:
       - mypy apps/api/app/workflows/ apps/api/app/main.py tests/unit/test_v4_authoring_api.py -> Success: no issues found in 6 source files
 GIT:  no commit, no deploy, no compose, no restart. Containers untouched. dev1 lanes untouched (packages/stores/* untouched).
 ```
+## T-R20 — V4 real runtime: production runner + manifest, fakes out of prod DI (Phase 4 closer)
+
+```text
+TASK: T-R20 — V4 real runtime: production runner + capability manifest; FakeNodeExecutor OUT of prod DI; run/checkpoint history persisted; budget/cancel/evidence failures propagate.
+CHANGE:
+      - MODIFIED apps/api/app/workflows/router.py (run_workflow: FakeNodeExecutor -> ProductionNodeExecutor with InMemoryCheckpointStore configured; import swapped)
+      - MODIFIED packages/workflow_engine/adapters/v3_adapter.py (flag-off default seam now resolves to ProductionNodeExecutor instead of FakeNodeExecutor)
+      - UNCHANGED partials: packages/workflow_engine/manifest.py, packages/workflow_engine/production_executor.py, packages/workflow_engine/__init__.py (coherent, salvaged)
+      - MODIFIED tests/unit/test_workflow_fake_runtime.py + tests/unit/test_workflow_agent_seam.py (seam default identity now ProductionNodeExecutor)
+WHY:  R19 openly used FakeNodeExecutor in the run path (router.py:652). R20 replaces it with the real ProductionNodeExecutor behind the adapter seam and makes unsupported capability/node attempts refuse loudly via CapabilityNotSupportedError. Checkpoint seam is wired into the production runner so run/checkpoint history persists. Existing WorkflowExecutor envelopes keep budget/cancel/evidence propagation honest.
+REUSED:
+      - packages/workflow_engine/production_executor.py (ProductionNodeExecutor, real primitives + strict manifest gating)
+      - packages/workflow_engine/manifest.py (PRODUCTION_CAPABILITY_MANIFEST, CapabilityNotSupportedError, get_production_capability_manifest)
+      - packages/workflow_engine/executor.py (WorkflowExecutor idempotency/checkpoint/budget/cancel seams)
+      - packages/workflow_engine/checkpoint.py (InMemoryCheckpointStore, configure_checkpoint_store)
+      - packages/workflow_engine/adapters/v3_adapter.py (resolve_node_executor seam)
+BUILT:
+      - ProductionNodeExecutor is real NodeExecutor for production run path
+      - adapter flag-off default is ProductionNodeExecutor (no fake in production default)
+      - run checkpoint history configured in run_workflow
+SEAM-REPLACEMENT TABLE:
+      | site                                  | before                                    | after                                     |
+      | apps/api/app/workflows/router.py:652   | WorkflowExecutor(node_executor=Fake...)     | WorkflowExecutor(node_executor=ProductionNodeExecutor()) + checkpoint store |
+      | v3_adapter resolve_node_executor       | fallback FakeNodeExecutor()                | fallback ProductionNodeExecutor()         |
+METRICS:
+      - prod paths importing FakeNodeExecutor: 0 (grep + import-graph; tests may use it as boundary)
+      - runs succeeding on unsupported capabilities: 0 (CapabilityNotSupportedError raised; typed refusal)
+      - propagations swallowed: 0 (run/checkpoint/budget/cancel exercised; errors surface via failed node + run status)
+RESUME-SALVAGE: partials coherent after quota break; no silent rewrite performed.
+VERIFY:
+      - grep -R FakeNodeExecutor apps/ packages (excluding tests/packages docstring) -> 0 production-site matches
+      - pytest tests/unit/test_workflow_fake_runtime.py + test_workflow_agent_seam.py + test_v4_authoring_api.py -> 43 passed
+      - pytest tests/unit (workflow/v4 subset) -> 890 passed
+      - ruff check packages apps/api/app -> All checks passed!
+      - mypy packages apps/api/app -> Success: no issues
+GIT:  no commit, no deploy, no compose, no restart.

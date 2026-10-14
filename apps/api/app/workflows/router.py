@@ -23,6 +23,7 @@ from datetime import UTC, datetime
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from workflow_engine.adapters.langflow_adapter import LangflowAdapter, LangflowImportError
+from workflow_engine.checkpoint import InMemoryCheckpointStore
 from workflow_engine.compiler import WorkflowCompiler
 from workflow_engine.draft_store import (
     DraftConflictError,
@@ -31,7 +32,7 @@ from workflow_engine.draft_store import (
     DraftRevision,
     DraftWorkspaceError,
 )
-from workflow_engine.executor import FakeNodeExecutor, WorkflowExecutor
+from workflow_engine.executor import WorkflowExecutor
 from workflow_engine.interfaces import (
     CapabilityManifest,
     NodeType,
@@ -39,6 +40,7 @@ from workflow_engine.interfaces import (
     WorkflowRun,
     WorkflowRunStatus,
 )
+from workflow_engine.production_executor import ProductionNodeExecutor
 from workflow_engine.routes.schemas import (
     DraftErrorCode,
     DraftHistoryResponse,
@@ -649,7 +651,8 @@ async def run_workflow(
 
     try:
         plan = WorkflowCompiler.compile(draft.revision)
-        executor = WorkflowExecutor(node_executor=FakeNodeExecutor())
+        executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
+        executor.configure_checkpoint_store(InMemoryCheckpointStore())
         run = await executor.execute(
             plan,
             draft.revision,

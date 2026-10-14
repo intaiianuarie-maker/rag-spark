@@ -33,7 +33,6 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol, runtime_checkable
 
-from workflow_engine.executor import FakeNodeExecutor
 from workflow_engine.interfaces import CapabilityManifest, NodeExecutor, NodeSpec
 
 #: Environment variable that enables the adapter. Default off: the flag must be
@@ -157,7 +156,7 @@ def resolve_node_executor(
     agent_runner: AgentRunner | None = None,
     manifest: CapabilityManifest | None = None,
     env: Mapping[str, str] | None = None,
-    default_factory: Any = FakeNodeExecutor,
+    default_factory: Any = None,
 ) -> NodeExecutor:
     """Seam: pick the node executor for this deployment.
 
@@ -170,10 +169,15 @@ def resolve_node_executor(
     that reaches it.
     """
     if not adapter_enabled(env):
-        return default_factory()
+        if default_factory is not None:
+            return default_factory()
+        from workflow_engine.production_executor import ProductionNodeExecutor
+
+        return ProductionNodeExecutor()
     if agent_runner is None:
         raise V3AdapterDisabled(
             f"{ADAPTER_FLAG_ENV} is enabled but no agent_runner was supplied; "
             "refusing to fall back to the default executor"
         )
     return V3NodeExecutor(agent_runner=agent_runner, manifest=manifest, enabled=True)
+

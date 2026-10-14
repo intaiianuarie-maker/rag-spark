@@ -628,7 +628,9 @@ def test_v3_adapter_flag_reads_env_and_defaults_off() -> None:
 def test_resolve_node_executor_flag_off_returns_default_executor() -> None:
     """Seam: flag off → the existing default executor (no V3 in the path)."""
     resolved = resolve_node_executor(env={})
-    assert isinstance(resolved, FakeNodeExecutor)
+    from workflow_engine.production_executor import ProductionNodeExecutor
+
+    assert isinstance(resolved, ProductionNodeExecutor)
 
 
 def test_resolve_node_executor_flag_on_requires_a_runner() -> None:

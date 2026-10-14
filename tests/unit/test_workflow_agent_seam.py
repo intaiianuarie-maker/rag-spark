@@ -282,9 +282,9 @@ class TestFlagOffUnchanged:
         """The production seam function with the flag off returns the default
         executor (the adapter is never constructed)."""
         executor = resolve_node_executor(env={})
-        from workflow_engine import FakeNodeExecutor
+        from workflow_engine.production_executor import ProductionNodeExecutor
 
-        assert isinstance(executor, FakeNodeExecutor)
+        assert isinstance(executor, ProductionNodeExecutor)
         assert not isinstance(executor, V3NodeExecutor)
 
     def test_flag_off_parity_run(self, tmp_path: Path) -> None:

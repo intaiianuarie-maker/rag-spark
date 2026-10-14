@@ -38,10 +38,18 @@ from .interfaces import (
     WorkflowRun,
     WorkflowRunStatus,
 )
+from .manifest import (
+    PRODUCTION_CAPABILITY_MANIFEST,
+    CapabilityNotSupportedError,
+    get_production_capability_manifest,
+)
+from .production_executor import ProductionNodeExecutor
 from .validator import WorkflowValidator
 
 __all__ = [
+    "PRODUCTION_CAPABILITY_MANIFEST",
     "CapabilityManifest",
+    "CapabilityNotSupportedError",
     "ExecutionEdgeInfo",
     "ExecutionPlan",
     "ExecutionStep",
@@ -56,6 +64,7 @@ __all__ = [
     "NodeSpec",
     "NodeType",
     "PortSpec",
+    "ProductionNodeExecutor",
     "ValidationError",
     "ValidationResult",
     "Workflow",
@@ -70,4 +79,6 @@ __all__ = [
     "WorkflowRun",
     "WorkflowRunStatus",
     "WorkflowValidator",
+    "get_production_capability_manifest",
 ]
+
