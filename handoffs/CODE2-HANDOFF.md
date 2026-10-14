@@ -1075,3 +1075,12 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K07b (deferred) — runtime state seam
+
+```text
+TASK: T-K07b
+STATUS: DEFERRED in this bounded turn (runtime state globals remain; full injectable seam requires larger refactor).
+METRICS: spend 0.00
+GIT: handoff only
+```
