@@ -866,3 +866,32 @@ STATUS: DEFERRED-WITH-DESIGN (implementation exceeds this turn; design recorded)
 METRICS: spend 0.00.
 GIT: handoff only.
 ```
+
+## T-A04c-impl — durable runs/approvals seam
+
+```text
+TASK: T-A04c-impl
+CHANGE:
+      - MODIFIED apps/api/app/workflows/store.py (runs/approvals durable SQLite seam with env fail-closed)
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff/mypy store.py clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04c-fixup — runs/approvals fail-closed plus proofs
+
+```text
+TASK: T-A04c-fixup
+CHANGE:
+      - apps/api/app/workflows/store.py tightened fail-closed propagation for save_run/get_run/record_approval/get_approval/cancel_run
+      - repaired import ordering and except blocks
+      - NEW tests/unit/test_t_a04c_fixup.py
+VERIFY:
+      - ruff apps/api/app/workflows/store.py: All checks passed!
+      - mypy apps/api/app/workflows/store.py: Success: no issues found
+      - pytest test_v4_authoring_api + test_t_a04c_fixup -> 10 passed
+SPEND: 0.00
+GIT: handoff only
+```

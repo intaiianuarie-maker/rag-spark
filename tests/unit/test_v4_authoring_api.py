@@ -22,6 +22,8 @@ import os
 
 os.environ.setdefault("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
 os.environ.setdefault("WORKFLOW_DRAFT_DB", "/tmp/opencode/v4_test_drafts.db")
+os.environ.setdefault("WORKFLOW_RUNS_DB", "/tmp/opencode/v4_test_runs.db")
+os.environ.setdefault("WORKFLOW_APPROVALS_DB", "/tmp/opencode/v4_test_approvals.db")
 
 import uuid
 from typing import Any
