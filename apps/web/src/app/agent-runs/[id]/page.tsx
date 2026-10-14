@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { auth } from "@/lib/auth-client";
 import { Badge } from "@/components/ui/badge";
@@ -157,7 +157,7 @@ export function RunStatusChip({ status }: { status: RunStatusValue | string }) {
 }
 
 /** One observed lifecycle state. `at` is when this browser saw it. */
-type TimelineEntry = {
+export type TimelineEntry = {
   at: string;
   status: RunStatusValue;
   error_code: RunErrorCode | null;
@@ -182,6 +182,34 @@ function appendTransition(
   ];
 }
 
+/**
+ * F-1 (T-V3-030) — the timeline belongs to EXACTLY ONE (workspace, run).
+ *
+ * A key change means a different run is on screen, so the observed-state
+ * history starts EMPTY: run A's lifecycle states must never render above run
+ * B's, or the timeline reads as one continuous history for a run that never
+ * had those states. Same key (a poll for the same run) keeps the history.
+ *
+ * Pure on purpose: this repo has no DOM test harness, so the decision is
+ * testable as a function rather than only as source text.
+ */
+export function timelineAfterKeyChange(
+  previousKey: string | null,
+  nextKey: string | null,
+  current: TimelineEntry[],
+): TimelineEntry[] {
+  return previousKey === nextKey ? current : [];
+}
+
+/** The per-run state key: workspace scope AND run id, or null while unknown. */
+export function runStateKey(
+  workspaceId: string | null,
+  runId: string | null,
+): string | null {
+  if (workspaceId === null || runId === null) return null;
+  return `${workspaceId}/${runId}`;
+}
+
 export default function AgentRunDetailPage() {
   const params = useParams();
   const runId = typeof params?.id === "string" ? params.id : null;
@@ -194,7 +222,23 @@ export default function AgentRunDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const loadedRef = useRef(false);
+
+  // F-1 (T-V3-030): keyed per-run state, reset whenever the workspace or the
+  // run id changes. React's "adjust state when a prop changes" pattern — the
+  // same shape the list page uses (T-V3-023, `page.tsx`) — so an A→B run
+  // navigation (or a workspace switch with a different run in the URL) starts
+  // run B from empty instead of showing run A's observed states, status chip
+  // and 404 alert. Polling the SAME run keeps its history (same key).
+  const key = runStateKey(workspaceId, runId);
+  const [loadedKey, setLoadedKey] = useState<string | null>(null);
+  if (key !== loadedKey) {
+    setLoadedKey(key);
+    setHistory((current) => timelineAfterKeyChange(loadedKey, key, current));
+    setSnapshot(null);
+    setRecord(null);
+    setNotFound(false);
+    setError(null);
+  }
 
   const load = useCallback(async () => {
     if (workspaceId === null || runId === null) return;
@@ -223,11 +267,22 @@ export default function AgentRunDetailPage() {
     }
   }, [workspaceId, runId]);
 
+  // Load on mount AND whenever the run's key changes (workspace or run id) —
+  // the F-1 fix: the previous `loadedRef` guard ran this exactly once for the
+  // component's lifetime, so navigating from run A to run B kept run A's
+  // timeline (and its snapshot) on screen until a poll happened to fetch B.
+  //
+  // The read is scheduled as a TIMER CALLBACK rather than called in the effect
+  // body: `load` sets state, and react-hooks/set-state-in-effect flags a
+  // synchronous call here (the whole-src lint baseline is otherwise clean, so
+  // this is the one line that would regress it). A 0 ms timeout is the
+  // effect-sanctioned shape — it fires on the next tick, which is not
+  // observable next to a network round-trip.
   useEffect(() => {
-    if (loadedRef.current) return;
-    loadedRef.current = true;
-    void load();
-  }, [load]);
+    if (key === null) return;
+    const timer = window.setTimeout(() => void load(), 0);
+    return () => window.clearTimeout(timer);
+  }, [load, key]);
 
   // Light polling while the run is active; stops at terminal statuses.
   useEffect(() => {

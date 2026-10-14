@@ -5292,3 +5292,120 @@ RISKS:
   5. This ticket changed nothing; if any finding is disputed, the diff to re-read
      is `git show 4bcb76a` (3 files, 899 insertions, all of which are addressed
      above).
+---
+
+## T-V3-030 — UI fix F-1 (MEDIUM): reset timeline on run/workspace change
+
+```text
+TASK: T-V3-030 — fix finding F-1 from my own T-V3-029 review (MEDIUM): navigating
+       from run A to run B (or switching workspace with a different run in the
+       URL) must show ONLY run B's timeline. Key the [id]/page.tsx load on
+       [workspaceId, runId] and clear history when either changes, following the
+       list-page pattern my review cited as precedent. No other behaviour changes.
+CHANGE: apps/web/src/app/agent-runs/[id]/page.tsx (history/effect only, +48/-9):
+        - `timelineAfterKeyChange(previousKey, nextKey, current)` — pure, exported:
+          same key keeps history, different key returns []. Pure so the behaviour
+          is testable without a DOM harness (this repo has none).
+        - `runStateKey(workspaceId, runId)` — pure, exported: the per-run key is
+          workspace scope AND run id, or null while either is unknown.
+        - render-time reset block (React's "adjust state when a prop changes",
+          the same shape T-V3-023's list page already uses): when key !==
+          loadedKey, setLoadedKey + setHistory([]) via the helper, and also
+          setSnapshot(null)/setRecord(null)/setNotFound(false)/setError(null) so
+          run A's status chip, browser-local record and 404/403 alert cannot
+          render under run B.
+        - `TimelineEntry` exported (the page already exports its wire types).
+        - the load effect is now keyed `[load, key]` and the `loadedRef`
+          once-per-lifetime guard is REMOVED — that guard was the mechanism of
+          the bug: it let the effect fire for run A only, so B's first read came
+          from a poll up to 3s later and B's states were APPENDED to A's.
+        apps/web/src/app/agent-runs/[id]/timeline-reset.test.ts (NEW, 11 tests).
+WHY:    F-1 was the top finding of the review I wrote: a timeline that mixes runs
+        misrepresents state (a user could conclude run B passed through states it
+        never had). It is the only finding a user could act on wrongly, so it
+        fixes first and alone; F-2 (partial tone) and F-3 (tool-call fallback)
+        ride separately.
+REUSED: The T-V3-023 list page's own pattern — `page.tsx:190-194` adjusts state
+        during render when the workspace changes (setLoadedWorkspace +
+        setRecords), which is the React-sanctioned shape for exactly this class
+        of reset. The fix copies that discipline rather than inventing one, which
+        is what my review recommended and what keeps the two pages consistent.
+BUILT:  The keyed-reset above, the two pure helpers, and the 11-test covering
+        suite (see VERIFY for the two-layer proof and why both layers exist).
+VERIFY: METRIC 1 — stale-timeline reproduction fixed, two-layer proof:
+        (a) BEHAVIOUR, not source text: `timelineAfterKeyChange` and
+        `runStateKey` are exercised directly — A→B returns [] and the resulting
+        B timeline contains no "completed"/A state; same-id-across-workspaces
+        (ws-a/run-1 → ws-b/run-1) resets; polling the SAME run returns the very
+        same array (identity, no reset on refresh); a null key never inherits a
+        previous timeline; and A→B→A re-observes A fresh rather than keeping the
+        stale A-with-B-appended history.
+        (b) WIRING: source-pinned (the repo has no DOM harness, so the page's own
+        text is the only available seam — the same convention as
+        ask/page-wiring.test.ts) — the page consults the helper for the reset,
+        keys state on workspace+run, resets snapshot/record/notFound/error with
+        the timeline, and the once-per-lifetime guard cannot run (asserted on the
+        guard CODE, not the identifier, so the page's explanatory comment naming
+        the removed guard cannot defeat the check — my first draft of that
+        assertion was defeated by documentation and the test caught it).
+        METRIC 2 — regressions: 0 in the frontend: tsc --noEmit exit 0;
+        `eslint src` (WHOLE src, not just my file) exit 0; vitest 19 files /
+        204 tests passed (baseline before this ticket was 18 files / 193 tests:
+        11 added, 0 lost).
+        ONE DISCLOSED BACKEND REGRESSION — 2 tests, both mine, both out of this
+        ticket's allowlist so NOT fixed here: tests/unit/test_workflow_palette.py
+        :test_no_ui_files_were_added_by_this_ticket (T-V4-022) and
+        tests/unit/test_workflow_view_models.py::test_no_ui_files_were_added_by_this_ticket
+        (T-V4-023) now fail, because each asserts "NO .tsx/.jsx, no components/
+        or app/ path changed in the WHOLE TREE". That assertion was a valid
+        per-ticket proof when I wrote it (those tickets were Python-only, so it
+        proved they added no UI) but it is NOT a global invariant — T-V3-030 is
+        supposed to change UI. Full backend unit run: 2 failed / 2101 passed, and
+        the two failures are exactly these, with the message naming my two files.
+        NOT fixed, NOT worked around, NOT weakened: editing those files is
+        outside T-V3-030's allowlist (page.tsx + covering test + handoffs), and
+        the standing rule is unlisted path = disclose rather than freelance.
+        Follow-up fix for whoever owns it (scoped to the original intent):
+        assert no UI paths under `packages/workflow_engine/` — e.g.
+        `[l for l in out if l.strip().endswith((".tsx",".jsx")) and "packages/workflow_engine" in l]`
+        — which still proves "this module added no UI" while letting a UI ticket
+        change UI. Allowed files for that follow-up would be those two test files.
+RISKS:  1. The backend regression above is the finding to carry: 2 red tests in a
+        green run are the kind of thing that gets silently papered over, and they
+        are mine. They stay red until a follow-up ticket scopes them (one line
+        each). Everything else in the backend suite is green.
+        2. The immediate read is scheduled with `window.setTimeout(..., 0)` rather
+        than called in the effect body: `load` sets state, and
+        react-hooks/set-state-in-effect flags a synchronous call (my first version
+        tripped it and the whole-src baseline proved the regression was mine — 1
+        problem, at my line, 0 elsewhere). The 0 ms timer is the
+        effect-sanctioned shape and is not observable next to a network
+        round-trip, but it IS a behavioural nuance: the first read lands one
+        macrotask later than a direct call would.
+        3. The reset also clears snapshot/record/notFound/error, not just
+        history. That is deliberate and narrow: it is the same stale-state class
+        (run A's chip/404 rendering under run B) and the review's goal was
+        "shows ONLY run B". The alternative — clearing only history — would leave
+        run A's 404 alert visible for run B, which is a worse version of the bug.
+        4. No DOM harness exists, so the behavioural proof is a pure function test
+        plus source wiring; the render-time reset itself is not executed by any
+        test in this repo. If a DOM harness is ever added, the wiring test should
+        become a real render test.
+        5. StrictMode double-invokes effects in dev; with the once-per-lifetime
+        guard gone, a mount issues two reads (both idempotent GETs). Harmless, but
+        it is the one thing the removed guard was silently buying.
+        6. The `key`/`loadedKey` reset uses the same render-time setState pattern
+        the list page uses, so it inherits that pattern's constraint: it must not
+        be hoisted into a callback or run conditionally on anything other than a
+        key change, or React will warn and the reset could loop.
+
+GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4030_{start,end}.txt):
+- START (HEAD `c837283`): 21 dirty paths (5 modified handoffs + 16 untracked
+  handoff docs). Index empty. dev1 on STANDBY as the card said — no lane conflict,
+  and the tree did not move under me: HEAD is unchanged at START and END.
+- END (HEAD `c837283`): exactly my two allowlisted files, plus untouched foreign
+  handoffs: ` M apps/web/src/app/agent-runs/[id]/page.tsx`,
+  `?? apps/web/src/app/agent-runs/[id]/timeline-reset.test.ts`,
+  ` M handoffs/CODE2-HANDOFF.md`.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty.

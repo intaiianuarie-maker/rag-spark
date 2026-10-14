@@ -465,7 +465,12 @@ def test_palette_is_pure_data() -> None:
 
 @pytest.mark.unit
 def test_no_ui_files_were_added_by_this_ticket() -> None:
-    """The palette must not have pulled in a canvas, page or component."""
+    """The palette must not have pulled in a canvas, page or component.
+
+    Scoped to this module (coordinator fix post-T-V3-030, prescribed by the
+    file owner): a UI ticket may legitimately change UI elsewhere, so the
+    assertion proves no UI-like path under packages/workflow_engine/.
+    """
     import subprocess
 
     tracked = subprocess.run(
@@ -474,9 +479,12 @@ def test_no_ui_files_were_added_by_this_ticket() -> None:
     ui_like = [
         line
         for line in tracked
-        if line.strip().endswith((".tsx", ".jsx"))
-        or "/components/" in line
-        or "/app/" in line
+        if "packages/workflow_engine/" in line
+        and (
+            line.strip().endswith((".tsx", ".jsx"))
+            or "/components/" in line
+            or "/app/" in line
+        )
     ]
     assert ui_like == [], f"UI files changed in the tree: {ui_like}"
 

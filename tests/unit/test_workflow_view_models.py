@@ -607,13 +607,20 @@ def test_no_ui_code_in_the_view_models() -> None:
 
 @pytest.mark.unit
 def test_no_ui_files_were_added_by_this_ticket() -> None:
+    """This module must not have pulled in UI (scoped post-T-V3-030, coordinator
+    fix prescribed by the file owner: a UI ticket may change UI elsewhere)."""
     out = subprocess.run(
         ["git", "status", "--porcelain"], capture_output=True, text=True, check=True
     ).stdout.splitlines()
     ui_like = [
         line
         for line in out
-        if line.strip().endswith((".tsx", ".jsx")) or "/components/" in line or "/app/" in line
+        if "packages/workflow_engine/" in line
+        and (
+            line.strip().endswith((".tsx", ".jsx"))
+            or "/components/" in line
+            or "/app/" in line
+        )
     ]
     assert ui_like == [], f"UI files changed in the tree: {ui_like}"
 
