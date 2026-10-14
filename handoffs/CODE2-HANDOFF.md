@@ -975,3 +975,10 @@ CHANGE: none.
 METRICS: spend 0.00
 GIT: handoff only
 ```
+
+## T-K06a DIAGNOSTIC
+
+```text
+TASK: T-K06a
+BLOCKED-WITH-REASON: readiness/version disclosure needs a store-mode introspection seam (app.workflows.store lacks public mode accessor); adding it is second scope beyond this diagnostic. Obstacle: packages/readiness has no store descriptor.
+```
