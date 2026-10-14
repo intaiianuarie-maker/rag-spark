@@ -1109,3 +1109,53 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-K11 — worker/queue silent branches surfaced
+
+```text
+TASK: T-K11
+CHANGE:
+      - packages/agents/worker.py logged park/recover exceptions with type
+      - packages/agents/queue.py fallback prefix changed from test: to app-env-based
+VERIFY:
+      - ruff/mypy clean on worker.py + queue.py
+      - pytest test_agent_lifecycle -> 14 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K11 FIXUP
+
+```text
+TASK: T-K11 FIXUP (summary)
+VERIFY: agent/worker suites 14 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+cat: T-K11: No such file or directory
+cat: FIXUP-2nnnEOFnherdr: No such file or directory
+cat: agent: No such file or directory
+cat: prompt: No such file or directory
+cat: w5:p4: No such file or directory
+cat: '"DONE': No such file or directory
+cat: T-K11-FIXUP-2:: No such file or directory
+cat: three: No such file or directory
+cat: proofs: No such file or directory
+cat: green: No such file or directory
+cat: +: No such file or directory
+cat: names,: No such file or directory
+cat: spend: No such file or directory
+cat: '0.00"': No such file or directory
+
+
+## T-K11 FIXUP-2
+
+```
+TASK: T-K11 FIXUP-2
+VERIFY:
+      - tests/unit/test_t_k11_proofs.py -> 3 passed
+        (test_park_failure_warning, test_recover_failure_surfaced, test_prefix_fallback_not_test_colon)
+      - agent/worker suites green; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
