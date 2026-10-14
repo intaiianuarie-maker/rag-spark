@@ -1318,3 +1318,30 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A13 — adapter validates requests/responses
+
+```
+TASK: T-A13
+CHANGE:
+      - packages/workflow_engine/adapters/v3_adapter.py validates V3NodeRequest before dispatch and V3NodeResponse/map_response at return
+      - malformed runner results no longer become completions
+VERIFY:
+      - test_workflow_v3_adapter_contract -> 46 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A13 FIXUP
+
+```
+TASK: T-A13 FIXUP
+VERIFY:
+      - tests/unit/test_workflow_v3_adapter_contract -> 49 passed (3 outcome tests)
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
