@@ -2561,3 +2561,41 @@ RISKS / OPERATOR NOTES:
    single-host-only. Flagged for the coordinator/build owner.
 5. **Count equality is provably insufficient and I pinned it:** `test_membership_fails_when_counts_match_
    but_ids_differ` (2 ghosts + 2 missing at count 2=2) FAILS by design. The audit will not pass on counts.
+
+
+## 2026-10-14 late — T-R07-PHASE2-RETRY (Phase 3 rehearsal GREEN; build paused at 524/2204 on 1GiB memory gate)
+TASK: T-R07-PHASE2-RETRY — resume clean rebuild into `knowledge__rebuild_20261014` using real `bge-m3` from frozen Phase-1 manifest.
+GATES ENFORCED:
+- Zero live writes: live `knowledge` (2041 points) and `knowledge__serving` alias untouched.
+- Zero container restarts/compose/deploy/commit: containers untouched.
+- Bounded memory gate: monitor memory and ABORT to BLOCKED if available drops under 1GiB.
+- Phase 3 checks & rehearsal: audit script validated against live scratch collection.
+
+EVIDENCE & PROGRESS:
+1. Root cause of previous timeout:
+   - In batch size 16, embedding a batch containing chunk 15 (1933 chars, max corpus length) causes PyTorch on CPU to pad all 16 items to max tokens, blowing up self-attention compute ($O(B \cdot L^2)$) and taking >300s, exceeding httpx 120s default timeout.
+   - Updated `scripts/rebuild_with_manifest.py`: added `request_timeout` parameter & `--timeout` CLI flag (default 300.0s via `INFINITY_TIMEOUT_SECONDS`).
+   - Benchmarked `--batch-size 4`: chunk 15 embedded alone in 19.47s; batch of 4 (including chunk 15) in 47.25s; short batches in ~1.5s.
+2. Scratch Collection Progress:
+   - Resumed into `knowledge__rebuild_20261014` with `--batch-size 4 --timeout 300 --resume`.
+   - Indexed batches 1-3 successfully, advancing point count from 512 to **524 points** (status: green).
+3. Memory Gate Abort to BLOCKED:
+   - While batch 4 ran, concurrent eval workloads (`evals/graph_paired_bge_m3_eval.py`) hit infinity port 7997 simultaneously.
+   - Infinity RSS grew to 5.5GB (VIRT 17.3GB), and host available memory dropped to **375 MiB** (well below the 1024 MiB threshold).
+   - Per the explicit rule ("monitor memory and ABORT to BLOCKED if available drops under 1GiB (no heroics near the OOM line)"), cancelled the rebuild task immediately before kernel OOM could trigger.
+   - Zero OOM kills; containers completely untouched.
+4. Phase-3 Rehearsal (`scripts/audit_rebuilt_index.py`):
+   - Discovered and fixed `uuid.UUID` vs `str` comparison bug in `audit_membership` and `audit_original_hashes`.
+   - Rehearsal audit on `knowledge__rebuild_20261014` (524 points):
+     - `identity`: 524/524 OK (0 unlabelled, 0 incompatible, 100% matched to `InfinityEmbeddingProvider` / `BAAI/bge-m3` / 1024-d).
+     - `membership`: 524 distinct chunk IDs, 0 extra/ghosts (`extra_points: []`, `extra_count: 0`). 1680 remaining manifest chunks.
+     - `original_hashes`: 524/524 verified matching 64-hex checksums in Postgres (`unresolved: 0`, `malformed: 0`, `ok: True`).
+     - `version_gate`: 524/524 verified current version in Postgres (`stale: 0`, `unknown: 0`, `ok: True`).
+5. Quality Gates & Tests:
+   - `pytest -q tests/unit/test_reindex_manifest.py tests/unit/test_rebuild_with_manifest.py tests/unit/test_audit_rebuilt_index.py tests/unit/test_embedding_identity_boundary.py` -> **51 passed in 5.62s**.
+   - `ruff check scripts/reindex_manifest.py scripts/rebuild_with_manifest.py scripts/audit_rebuilt_index.py` -> **All checks passed!**
+   - `mypy scripts/reindex_manifest.py scripts/rebuild_with_manifest.py scripts/audit_rebuilt_index.py` -> **Success: no issues found in 3 source files**.
+6. Status:
+   - **BLOCKED on 1GiB memory gate** (host available memory: 375-617 MiB, infinity holding 5.5GB RSS / 17.3GB VIRT).
+   - Phase-3 audit and rehearsal fully verified. Ready to resume remaining 1680 chunks via `--resume --batch-size 4 --timeout 300` as soon as memory window clears (>1GiB).
+   - Live collection `knowledge` (2041 points) untouched. No switch attempted. Holding for coordinator instructions.

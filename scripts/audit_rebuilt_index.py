@@ -82,7 +82,14 @@ def manifest_from_postgres(limit: int | None = None) -> list[dict[str, Any]]:
         "chunk_id", "workspace_id", "document_id", "version_id",
         "original_checksum", "text", "page", "section", "language", "chunk_metadata",
     )
-    return [dict(zip(keys, row, strict=False)) for row in rows]
+    _str_keys = ("chunk_id", "workspace_id", "document_id", "version_id")
+    return [
+        {
+            k: str(v) if k in _str_keys and v is not None else v
+            for k, v in zip(keys, row, strict=False)
+        }
+        for row in rows
+    ]
 
 
 def scroll_all_points(collection: str, qdrant_url: str) -> list[dict[str, Any]]:
@@ -171,8 +178,16 @@ def audit_membership(
     points: list[dict[str, Any]], manifest_rows: list[dict[str, Any]]
 ) -> dict[str, Any]:
     """chunk_id set equality, plus the two directional error lists."""
-    rebuilt = {(p.get("payload") or {}).get("chunk_id") for p in points}
-    manifest_ids = {r["chunk_id"] for r in manifest_rows}
+    rebuilt = {
+        str((p.get("payload") or {}).get("chunk_id"))
+        for p in points
+        if (p.get("payload") or {}).get("chunk_id") is not None
+    }
+    manifest_ids = {
+        str(r["chunk_id"])
+        for r in manifest_rows
+        if r.get("chunk_id") is not None
+    }
     extra = rebuilt - manifest_ids       # ghosts: points with no manifest row
     missing = manifest_ids - rebuilt     # silently dropped chunks
     return {
@@ -198,7 +213,11 @@ def audit_original_hashes(
     rebuilt chunk id MUST exist and carry a stable 64-hex checksum. A point
     whose chunk id has no manifest row is an unresolvable ghost, not a match.
     """
-    manifest_hashes = {r["chunk_id"]: r["original_checksum"] for r in manifest_rows}
+    manifest_hashes = {
+        str(r["chunk_id"]): r["original_checksum"]
+        for r in manifest_rows
+        if r.get("chunk_id") is not None
+    }
     checked = 0
     missing_row = 0
     malformed = 0

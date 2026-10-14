@@ -192,6 +192,7 @@ async def build(
     batch_size: int,
     dry_run: bool,
     resume: bool = False,
+    request_timeout: float | None = None,
 ) -> dict[str, Any]:
     """The Phase-2 build. Returns a build report summary."""
     assert_scratch_target(collection)
@@ -199,7 +200,10 @@ async def build(
     from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
-    provider = InfinityEmbeddingProvider()
+    effective_timeout = float(
+        request_timeout or os.environ.get("INFINITY_TIMEOUT_SECONDS", "300.0")
+    )
+    provider = InfinityEmbeddingProvider(timeout=effective_timeout)
 
     _log.info("fetching manifest (limit=%s)...", limit)
     t0 = time.monotonic()
@@ -377,6 +381,12 @@ async def main() -> None:
         "(read-only scroll) instead of refusing a non-empty collection. Only "
         "safe because every record is identity-verified at the boundary.",
     )
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="Timeout in seconds for provider calls (default 300.0s via INFINITY_TIMEOUT_SECONDS)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO)
@@ -388,6 +398,7 @@ async def main() -> None:
             batch_size=args.batch_size,
             dry_run=args.dry_run,
             resume=args.resume,
+            request_timeout=args.timeout,
         )
     except RebuildRefused as exc:
         _log.error("%s", exc)
