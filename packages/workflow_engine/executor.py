@@ -33,7 +33,8 @@ import json
 import time
 import uuid
 from collections import deque
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any, ClassVar
 
@@ -93,6 +94,77 @@ NODE_MAX_ATTEMPTS = 3
 #: schedule is deterministic and the total retry delay is bounded by
 #: base * (2^attempts - 1) -- 0.15 s worst case at the defaults.
 NODE_RETRY_BASE_S = 0.05
+
+# ---------------------------------------------------------------------------
+# T-V4-012: RUN-level envelope — stated, with defaults and reasons.
+#
+# The per-node bounds above are the inner layer (one node); these are the
+# outer envelope (one run).  COMPOSITION RULE: the deadline is measured as
+# WALL-CLOCK ELAPSED and the resource budget as NODE-SECONDS SPENT — so a
+# node timeout (charged once, as its own timeout) never consumes the run
+# deadline twice, and the effective per-node timeout is shortened to the
+# run deadline's remaining time so a node cannot outlive the run.
+# ---------------------------------------------------------------------------
+
+#: Run-wide wall-clock deadline.  Expiry cancels the run cleanly (CANCELLED,
+#: deadline named) instead of hanging it.  300 s covers any realistic
+#: authored workflow — with the validator's 200-node cap a legitimate run
+#: finishes far inside it.
+RUN_DEADLINE_S = 300.0
+
+#: Run-wide node-seconds budget: the sum of per-node execution time.  A run
+#: that burns its node-seconds fails loudly naming the spent value — never
+#: silent truncation.  600 s is 2x the deadline so parallelizable work
+#: still fits while bounding total compute.
+RUN_MAX_NODE_SECONDS = 600.0
+
+#: Run-wide executed-node cap.  With the validator's 200-node graph cap this
+#: is the accounting-side assertion that the executed set never exceeds the
+#: declared graph (non-binding today; stated so a future executor that
+#: re-enters nodes cannot escape accounting).
+RUN_MAX_NODES = 200
+
+
+@dataclass
+class _RunEnvelope:
+    """Run-level budget accounting (T-V4-012).
+
+    ``clock`` is injectable for deterministic tests; elapsed is measured
+    once per node boundary, so accounting is O(1) per node.
+    """
+
+    deadline_s: float | None = RUN_DEADLINE_S
+    max_node_seconds: float | None = RUN_MAX_NODE_SECONDS
+    max_nodes: int | None = RUN_MAX_NODES
+    clock: Callable[[], float] = time.monotonic
+    _started: float = field(default=0.0, init=False)
+    node_seconds: float = field(default=0.0, init=False)
+    nodes_executed: int = field(default=0, init=False)
+
+    def start(self) -> None:
+        self._started = self.clock()
+
+    def elapsed(self) -> float:
+        return self.clock() - self._started
+
+    def remaining(self) -> float | None:
+        if self.deadline_s is None:
+            return None
+        return self.deadline_s - self.elapsed()
+
+    def deadline_exceeded(self) -> bool:
+        return self.deadline_s is not None and self.elapsed() > self.deadline_s
+
+    def node_seconds_exceeded(self) -> bool:
+        return self.max_node_seconds is not None and self.node_seconds > self.max_node_seconds
+
+    def nodes_exceeded(self) -> bool:
+        return self.max_nodes is not None and self.nodes_executed > self.max_nodes
+
+    def charge_node(self, latency_ms: float) -> None:
+        """Account one executed node (its attempts + bounded backoff)."""
+        self.nodes_executed += 1
+        self.node_seconds += latency_ms / 1000.0
 
 
 @dataclass(frozen=True)
@@ -280,6 +352,54 @@ class WorkflowExecutor:
         self._max_attempts = NODE_MAX_ATTEMPTS
         self._retry_base_s = NODE_RETRY_BASE_S
         self._sleep = asyncio.sleep
+        # T-V4-012: run-level envelope defaults (see ``_RunEnvelope``).
+        self._run_deadline_s: float | None = RUN_DEADLINE_S
+        self._run_max_node_seconds: float | None = RUN_MAX_NODE_SECONDS
+        self._run_max_nodes: int | None = RUN_MAX_NODES
+        self._clock: Callable[[], float] = time.monotonic
+        #: Accounting of the most recent run (observability; asserted in tests).
+        self.last_envelope: _RunEnvelope | None = None
+
+    # ------------------------------------------------------------------ #
+    # T-V4-012: run-level envelope configuration
+    # ------------------------------------------------------------------ #
+    def configure_run_bounds(
+        self,
+        *,
+        deadline_s: float | None = None,
+        max_node_seconds: float | None = None,
+        max_nodes: int | None = None,
+        clock: Callable[[], float] | None = None,
+    ) -> None:
+        """Set the run-level envelope before execution (T-V4-012).
+
+        Values are validated at wiring time (deadline/node-seconds > 0,
+        nodes >= 1) so a misconfiguration fails before the run starts.
+        ``clock`` is the wall-clock source the deadline is measured against
+        (injectable for deterministic tests).
+        """
+        if deadline_s is not None and deadline_s <= 0:
+            raise ValueError("deadline_s must be > 0")
+        if max_node_seconds is not None and max_node_seconds <= 0:
+            raise ValueError("max_node_seconds must be > 0")
+        if max_nodes is not None and max_nodes < 1:
+            raise ValueError("max_nodes must be >= 1")
+        if clock is not None:
+            self._clock = clock
+        self._run_deadline_s = deadline_s
+        self._run_max_node_seconds = max_node_seconds
+        self._run_max_nodes = max_nodes
+
+    def _new_envelope(self) -> _RunEnvelope:
+        envelope = _RunEnvelope(
+            deadline_s=self._run_deadline_s,
+            max_node_seconds=self._run_max_node_seconds,
+            max_nodes=self._run_max_nodes,
+            clock=self._clock,
+        )
+        self.last_envelope = envelope
+        envelope.start()
+        return envelope
 
     # ------------------------------------------------------------------ #
     # T-V4-011: AGENT routing (executor -> injected seam, never around it)
@@ -412,6 +532,7 @@ class WorkflowExecutor:
             sorted([nid for nid, cnt in pending.items() if cnt == 0])
         )
 
+        envelope = self._new_envelope()
         try:
             return await self._run_loop(
                 plan=plan,
@@ -426,6 +547,7 @@ class WorkflowExecutor:
                 active_count=active_count,
                 node_outputs=node_outputs,
                 ready=ready,
+                envelope=envelope,
             )
         except asyncio.CancelledError:
             # External task cancellation: settle the in-flight node, end
@@ -457,6 +579,7 @@ class WorkflowExecutor:
         active_count: dict[str, int],
         node_outputs: dict[str, dict[str, Any]],
         ready: deque[str],
+        envelope: _RunEnvelope,
     ) -> WorkflowRun:
         """The readiness loop (extracted so the caller can settle on cancel)."""
         while ready:
@@ -464,6 +587,10 @@ class WorkflowExecutor:
             # cancelled run never proceeds to COMPLETED.
             if self._cancel.is_set():
                 return self._finish_cancelled(run, nodes_by_id)
+            # T-V4-012: the run deadline is observed before every dispatch —
+            # no node starts once the envelope's wall-clock is spent.
+            if envelope.deadline_exceeded():
+                return self._finish_deadline(run, nodes_by_id, envelope)
 
             node_id = ready.popleft()
             node = nodes_by_id.get(node_id)
@@ -540,18 +667,73 @@ class WorkflowExecutor:
             )
             run.node_runs[node_id] = node_run
 
+            # T-V4-012 composition rule: the effective per-node timeout is
+            # shortened to the run deadline's remaining time, so a node can
+            # never outlive the run; the node's own bound (T-V4-010) stays the
+            # inner layer and is named when it binds.
+            remaining = envelope.remaining()
+            if remaining is not None and remaining < self._node_timeout_s:
+                effective_timeout: float | None = remaining
+                timeout_reason = "run-deadline-adjusted per-node"
+            else:
+                effective_timeout = None
+                timeout_reason = None
+
             outcome = await self._execute_within_bounds(
-                node, node_input, revision.spec.workspace_id
+                node,
+                node_input,
+                revision.spec.workspace_id,
+                timeout_s=effective_timeout,
+                timeout_reason=timeout_reason,
             )
             node_run.latency_ms = outcome.latency_ms
             node_run.attempts = outcome.attempts
+            # The node's own record is written first (honest per-node state),
+            # then the run-level envelope decides the run's terminal status.
+            if outcome.ok:
+                node_run.status = NodeRunStatus.COMPLETED
+                node_run.output_data = outcome.result
+                result = outcome.result
+            else:
+                node_run.status = NodeRunStatus.FAILED
+                node_run.error = outcome.error
+                result = None
+            run.node_runs[node_id] = node_run
+            # Run-level accounting: one executed node, charged once (its
+            # attempts + bounded backoff) — the deadline is NOT double-counted.
+            envelope.charge_node(outcome.latency_ms)
+            # The envelope outranks the node's own outcome: a run whose
+            # wall-clock or budget is spent ends on the envelope, named.
+            if envelope.deadline_exceeded():
+                return self._finish_deadline(
+                    run, nodes_by_id, envelope, last_node_id=node_id
+                )
+            if envelope.node_seconds_exceeded():
+                run.status = WorkflowRunStatus.FAILED
+                run.error = (
+                    f"run node-seconds budget exhausted: "
+                    f"{envelope.node_seconds:.3f}s spent, budget "
+                    f"{envelope.max_node_seconds}s (node '{node_id}' crossed it)"
+                )
+                run.failed_node_id = node_id
+                run.finished_at = datetime.now(UTC).isoformat()
+                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                return run
+            if envelope.nodes_exceeded():
+                run.status = WorkflowRunStatus.FAILED
+                run.error = (
+                    f"run node-count budget exhausted: "
+                    f"{envelope.nodes_executed} nodes executed, budget "
+                    f"{envelope.max_nodes} (node '{node_id}' crossed it)"
+                )
+                run.failed_node_id = node_id
+                run.finished_at = datetime.now(UTC).isoformat()
+                self._settle_remaining(run, nodes_by_id, f"{_SKIP_UPSTREAM}: node '{node_id}' failed")  # noqa: E501
+                return run
             if not outcome.ok:
                 # T-V4-009 terminal honesty + T-V4-010 named bound breach:
                 # the node failed (timeout / output cap / retries exhausted /
                 # error payload) — the run fails naming it.
-                node_run.status = NodeRunStatus.FAILED
-                node_run.error = outcome.error
-                run.node_runs[node_id] = node_run
                 run.status = WorkflowRunStatus.FAILED
                 run.error = outcome.error
                 run.failed_node_id = node_id
@@ -626,11 +808,17 @@ class WorkflowExecutor:
         node: NodeSpec,
         node_input: dict[str, Any] | Any,
         workspace_id: str,
+        *,
+        timeout_s: float | None = None,
+        timeout_reason: str | None = None,
     ) -> _NodeOutcome:
         """Execute *node* inside all three bounds.
 
         * timeout — ``asyncio.wait_for`` per attempt; a hung node fails the
-          node, never the run's liveness;
+          node, never the run's liveness.  ``timeout_s`` overrides the
+          per-node bound for this node only (T-V4-012 passes the run
+          deadline's remaining time so a node cannot outlive the run);
+          ``timeout_reason`` names the adjusted bound in the breach message.
         * output cap — the result's canonical byte size is checked before
           it is stored or propagated;
         * retry cap — a transient failure retries with bounded exponential
@@ -646,13 +834,17 @@ class WorkflowExecutor:
         last_error: str | None = None
         # T-V4-011: this node's executor — the seam for AGENT nodes when wired.
         executor = self._executor_for(node)
+        effective_timeout = (
+            self._node_timeout_s if timeout_s is None else timeout_s
+        )
+        timeout_label = timeout_reason or "per-node"
         while attempts < self._max_attempts:
             attempts += 1
             attempt_started = time.perf_counter()
             try:
                 result = await asyncio.wait_for(
                     executor.execute_node(node, node_input, workspace_id),
-                    timeout=self._node_timeout_s,
+                    timeout=effective_timeout,
                 )
             except asyncio.CancelledError:
                 # Control flow: the caller settles the run (T-V4-009).
@@ -668,8 +860,8 @@ class WorkflowExecutor:
             except TimeoutError:
                 observed = time.perf_counter() - attempt_started
                 last_error = (
-                    f"node '{node.id}' exceeded the per-node timeout "
-                    f"({self._node_timeout_s}s bound; attempt {attempts} "
+                    f"node '{node.id}' exceeded the {timeout_label} timeout "
+                    f"({effective_timeout}s bound; attempt {attempts} "
                     f"timed out after {observed:.3f}s)"
                 )
             except Exception as exc:
@@ -716,12 +908,45 @@ class WorkflowExecutor:
             ok=False,
             error=(
                 f"node '{node.id}' failed after {attempts} attempts "
-                f"(bounds: timeout {self._node_timeout_s}s, max attempts "
+                f"(bounds: timeout {effective_timeout}s, max attempts "
                 f"{self._max_attempts}): {last_error}"
             ),
             attempts=attempts,
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
+
+    # ------------------------------------------------------------------ #
+    # T-V4-012: run-level envelope settlement
+    # ------------------------------------------------------------------ #
+    def _finish_deadline(
+        self,
+        run: WorkflowRun,
+        nodes_by_id: dict[str, NodeSpec],
+        envelope: _RunEnvelope,
+        last_node_id: str | None = None,
+    ) -> WorkflowRun:
+        """Settle the run after the run-wide deadline expired.
+
+        Completed nodes keep their recorded outputs (settled); nodes that
+        never ran are SKIPPED with the cancellation reason; the run ends
+        CANCELLED with the deadline and the observed elapsed time named —
+        never COMPLETED, never hung.
+        """
+        for node_id in nodes_by_id:
+            if node_id not in run.node_runs:
+                _mark_skipped(
+                    node_id, run,
+                    reason=f"{_SKIP_CANCELLED}: run deadline reached before start",
+                )
+        run.status = WorkflowRunStatus.CANCELLED
+        suffix = f" (node '{last_node_id}' crossed it)" if last_node_id else ""
+        run.error = (
+            f"run deadline reached: {envelope.elapsed():.3f}s elapsed, "
+            f"deadline {envelope.deadline_s}s{suffix}"
+        )
+        run.failed_node_id = None
+        run.finished_at = datetime.now(UTC).isoformat()
+        return run
 
     # ------------------------------------------------------------------ #
     # T-V4-009: terminal-state finalization
