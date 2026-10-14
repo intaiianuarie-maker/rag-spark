@@ -1292,3 +1292,29 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A12 — single executor factory
+
+```
+TASK: T-A12
+CHANGE:
+      - apps/api/app/workflows/router.py run path now calls resolve_node_executor(default_factory=ProductionNodeExecutor)
+VERIFY:
+      - test_v4_authoring_api -> 14 passed
+      - ruff/mypy clean; no direct ProductionNodeExecutor() in route
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A12 FIXUP
+
+```
+TASK: T-A12 FIXUP
+VERIFY:
+      - tests/unit/test_v4_authoring_api -> 15 passed (1 A12 flag-on test)
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```

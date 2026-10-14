@@ -24,6 +24,7 @@ from pathlib import Path
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from workflow_engine.adapters.langflow_adapter import LangflowAdapter, LangflowImportError
+from workflow_engine.adapters.v3_adapter import resolve_node_executor
 from workflow_engine.checkpoint import SqliteCheckpointStore
 from workflow_engine.compiler import WorkflowCompiler
 from workflow_engine.draft_store import (
@@ -661,7 +662,14 @@ async def run_workflow(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "invalid_definition", "message": safe},
             ) from exc
-        executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
+        try:
+            node_executor = resolve_node_executor(default_factory=ProductionNodeExecutor)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "v3_adapter_unconfigured", "message": str(exc)},
+            ) from exc
+        executor = WorkflowExecutor(node_executor=node_executor)
         try:
             executor.configure_checkpoint_store(SqliteCheckpointStore(checkpoint_db_path()))
         except ValueError as exc:

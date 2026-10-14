@@ -643,3 +643,22 @@ def test_a15_previously_approved_unexecutable_now_refused() -> None:
             f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1}
         )
         assert approve.status_code == 422, approve.text
+
+
+def test_a12_flag_on_unconfigured_refuses_before_run(monkeypatch) -> None:
+    import uuid
+
+    wid = "wf-A12-" + uuid.uuid4().hex[:6]
+    client = _make_client()
+    defn = _sample_definition(wid=wid, workspace=WS_ALLOWED)
+    sav = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=defn)
+    assert sav.status_code == 200
+    # approve
+    ap = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    assert ap.status_code == 200
+    monkeypatch.setenv("WORKFLOW_V3_ADAPTER", "1")
+    run = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/run",
+        json={"revision": 1},
+    )
+    assert run.status_code == 503, run.text
