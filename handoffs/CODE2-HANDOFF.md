@@ -1238,3 +1238,18 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-K06b-flip
+
+```
+TASK: T-K06b-flip
+CHANGE:
+      - draft_store_mode() persistent when migration_applied(None) true, legacy otherwise
+      - env-gated behavior unchanged
+VERIFY:
+      - test_t_a06a_seam -> 1 passed, test_t_k06b_probe -> 4 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```

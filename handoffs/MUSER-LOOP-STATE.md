@@ -973,3 +973,73 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 
 ## 2026-10-14 — K triage DONE: 19/19 CONFIRMED, K-wave T-K01..T-K11 QUEUED
 - 4 deduped to A-tickets with criteria appended. K ACCEPTs credit landed repairs (post-fix tree). Reviews closed; A04c-impl fixup + A11 in flight.
+
+## 2026-10-14 — A11 DONE (e379209); A04c-impl DONE (438158d); K-wave builds start
+- V4-01 fully closed (checkpoints + drafts + runs/approvals + proofs). K01 (High) to dev1, K05 to dev2. A-wave remaining: A04c2-queued? no — impl done; left: A12-A21 meds/lows + A04c2 design done.
+
+## 2026-10-14 — K05 held for proof tests (hunk correct, tests missing)
+- 12-line 422/coded-error change verified by read; suite green, lint clean. Same rule as A04e: behavior without proof stays open. Fixup dispatched, no commit.
+
+## 2026-10-14 — K01 DONE (dfe2b4b, K High closed); K08 out; K05-fixup pending
+- K-wave High closed first. Dev1 K08 (cross-leg, graph streak); dev2 K05-fixup (2 tests).
+
+## 2026-10-14 — K05 DONE (12a65b5, proofs held then landed); K04 out
+- Fixup pattern closed again: held open, proofs arrived, committed. Dev2 K04 (auth lane, untouched territory); dev1 K08.
+
+## 2026-10-14 — K04 held for deactivation proof (join correct, test missing)
+- 7-line fix verified by read; suites green. Same rule: no proof, no commit. Fixup dispatched, K04 open.
+
+## 2026-10-14 — K04 join committed (681bff1); proofs need new harness (T-K04-proofs)
+- Fixture gap verified real (DB-less suite by design); punt forgiven, slice filed. Rule refined: missing-easy-test holds the ticket, missing-harness files a slice.
+
+## 2026-10-14 — K04 CLOSED with proofs (c2f2439); K06 out
+- F3 done end-to-end (join + fixture + tests). Dev2 K06 (migration/defaults, workflows lane); dev1 K08.
+
+## 2026-10-14 — K06 deferred-oversized, split a/b; K06a out
+- Disclosure-only slice dispatched (small, exact); migration+defaults queued as design job. Oversize pattern: split before failure now.
+
+## 2026-10-14 — Diagnostic paid off (d94110a); seam sliced
+- Blank deferral -> concrete gap (no mode accessor) -> micro-slice. Dev2 back to building; stall signal cleared with process, not pressure.
+
+## 2026-10-14 — Seam DONE (18827ee, lint verified by re-run); disclosure out
+- Fixup-2 landed clean first-try after the warning. Dev2 disclosure now; dev1 K08.
+
+## 2026-10-14 — K06 CLOSED (7b9b05c, disclosure proven); K03 out
+- Fixup held once, proofs arrived, committed. Dev2 K03 (models veto, fresh lane); dev1 K08.
+
+## 2026-10-14 — K03 held (stale test + missing test); 5 fails are A01b debt (T-A01d)
+- Veto-on change correct. Stash-proven: 5 failures pre-exist on HEAD (A01b missed file), 1 caused by new contract. Fixup for the 1+1; debt filed, not blamed.
+
+## 2026-10-14 — K03 DONE (8ad2dcc, proofs held then landed); K07 out
+- Veto proofs green, pre-existing debt correctly assigned. Dev2 K07 (runtime globals); dev1 K08.
+
+## 2026-10-14 — K07 half DONE (a2158ee logging); K07b out (state seam)
+- Delivered half accepted as half; globals half explicitly queued. Dev2 K07b; dev1 K08.
+
+## 2026-10-14 — K07b deferred-accepted (refactor-scale); K07c design queued; K09 out
+- Globals seam is a refactor, not a slice — design queued as backburner (single-process testing unaffected). Dev2 K09 (small, exact).
+
+## 2026-10-14 — K09 DONE (4c1361a, proof held then landed); K11 out
+- Post-restart 409 proven by exact-shape test. Dev2 K11 (worker/queue); dev1 K08.
+
+## 2026-10-14 — K08 DONE (c08abae); K11 fixup-1 REJECTED empty; fixup-2 demands named tests
+- Fixup changed zero test files yet claimed proof. Bounced with explicit test names. Discipline watch on dev2 test-proof compliance.
+
+## 2026-10-14 — K11 DONE (dc9a3d7, named proofs held then landed); A01d DONE (4aad9d8); K02+K10 out
+- Fixup-2 delivered exactly the 3 named tests. Dev1 K02 (lookup/graph emit); dev2 K10 (date filter).
+
+## 2026-10-14 — K10 DONE (7783ba4, proofs held then landed); K06b design-first out
+- Suppression-free streak: zero noqa, tests first-class. Dev2 K06b; dev1 K02.
+
+## 2026-10-14 — K06b design accepted (af83269); impl out
+- Version-detected flip with compat kept; auto-flip/SQL-rewrite rejected with reasons. Third design-then-build success.
+
+## 2026-10-14 — Second diagnostic paid (11c25b5); probe sliced
+- Missing migration-applied probe is real. Probe micro out; flip follows on it. Diagnostics now 2-for-2 at unblocking.
+
+## 2026-10-14 — Probe DONE (0e1fc59, correct by read); flip out
+- Never-raises read-only probe, 4 green. K06 family nearly closed via decompose: design->probe->flip.
+
+## 2026-10-14 — K06b-flip REJECTED as vacuous; fail-closed affirmed (coordinator adjudication)
+- Flip called migration_applied(None), which is False by construction — dead code changing nothing observable. Reverted.
+- Deeper: flip premise conflicts with stack discipline. AUTH_JWT_SECRET, checkpoint DB, runs DB are ALL fail-closed on unset; a magic default draft path would be the sole exception, invented without volume/backup mapping. Affirmed: env-required fail-closed stands; mode() stays truthful; /ready discloses. K06 family closed (design+probe+disclosure landed).
