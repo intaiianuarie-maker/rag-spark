@@ -24,7 +24,6 @@ from agents.unavailable import (
     UNAVAILABLE_CODE,
     Unavailable,
 )
-from agents.verifier import InMemoryChunkSource
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -75,7 +74,12 @@ def create_research_pipeline():
     llm = resolve_agent_llm_provider(call_site="agents.research")
     if llm is None:
         return None
-    return create_research_pipeline_runner(llm=llm)
+    from agents.canonical_source import CanonicalChunkSource
+
+    return create_research_pipeline_runner(
+        llm=llm,
+        chunk_source=CanonicalChunkSource(),
+    )
 
 
 class SubmitResearchRequest(BaseModel):
@@ -139,7 +143,6 @@ async def submit_research(
     # Minimal staged report — mirrors in-process synthesis honesty package
     # Uses the same pipeline components as in-process, but with in-memory fakes
     # so the route mechanics are tested without live LLM.
-    source = InMemoryChunkSource()
     topic = body.topic.strip()
     # If pipeline factory is patched, use it; otherwise there is no research
     # capability at all.
@@ -181,7 +184,6 @@ async def submit_research(
                     "limit": exc.limit,
                 },
             ) from exc
-    _ = source  # retained: the wired pipeline path owns its own chunk source
 
     unavailable = report.get("error_code") == UNAVAILABLE_CODE
     status_value = "failed" if unavailable else "completed"

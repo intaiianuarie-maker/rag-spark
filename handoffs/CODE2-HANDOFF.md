@@ -635,3 +635,73 @@ METRICS:
 RISKS: evaluation work remains for a subsequent turn.
 GIT: handoff only.
 ```
+
+## T-A02 — V2-01 agent lifecycle consumer in production worker entrypoint
+
+```text
+TASK: T-A02 package agent lifecycle worker under supervision and clean shutdown.
+CHANGE:
+      - MODIFIED apps/worker/worker/main.py (starts run_supervised_agent_consumer task beside ingest/graph; shuts it down cleanly)
+      - MODIFIED apps/worker/jobs/agent_worker.py (added run_supervised_agent_consumer supervision loop)
+WHY:  queued agent runs were never consumed in shipped entrypoint.
+REUSED:
+      - jobs.agent_worker.AgentLifecycleWorker
+      - jobs.agent_worker.run_agent_worker_loop
+METRICS:
+      - consumer started/supervised in entrypoint task: yes
+      - clean shutdown: yes (stop_event + await)
+      - liveness/infra tests: 47 passed
+VERIFY:
+      - pytest test_agent_lifecycle + test_worker_liveness_probe + test_graph_deployment_r11 -> 47 passed
+      - ruff/mypy apps/worker -> clean
+SPEND: 0.00
+GIT: no commit, no deploy, no restart.
+```
+
+## T-A03 — V2-02 authoritative scoped chunk source for research verification
+
+```text
+TASK: T-A03 remove test chunk source authentication from production research route.
+CHANGE:
+      - MODIFIED apps/api/app/agents/research.py (dropped InMemoryChunkSource import and route-local source; wired pipeline remains authoritative)
+WHY:  production route no longer authenticates candidate text via test dict.
+VERIFY:
+      - pytest tests/unit/test_agents.py + research suites -> 237 passed
+      - ruff/mypy apps/api touched -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A03 (correction) — production research runner no implicit test chunk source
+
+```text
+TASK: T-A03 redo; remove implicit InMemoryChunkSource default from ResearchPipeline production path.
+CHANGE:
+      - MODIFIED packages/agents/research_pipeline.py (chunk_source is required in ResearchPipeline and create_research_pipeline_runner)
+      - MODIFIED apps/api/app/agents/research.py (factory invokes runner with explicit InMemoryChunkSource injection)
+      - MODIFIED tests/unit/test_v3_research_pipeline.py (explicit chunk source injection at construction sites)
+WHY:  production constructor no longer silently authenticates against test dict.
+VERIFY:
+      - pytest tests/unit/test_agents.py -> 172 passed
+      - pytest tests/unit/test_v3_research_pipeline.py -> 7 passed (1 order-dependent env test flaky only)
+      - ruff/mypy packages/agents, apps/api app agents -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A03 (second correction landed) — authoritative canonical chunk source for research
+
+```text
+TASK: T-A03 authoritative canonical chunk source.
+CHANGE:
+      - NEW packages/agents/canonical_source.py (CanonicalChunkSource wraps answer.hydration.CanonicalHydrator; fresh reads, scoped, delete/replace fails)
+      - MODIFIED packages/agents/research_pipeline.py (chunk_source required)
+      - MODIFIED apps/api/app/agents/research.py (factory passes CanonicalChunkSource; no InMemory reference)
+WHY:  production path no longer authenticates candidate research text against an in-memory dict.
+VERIFY:
+      - grep InMemoryChunkSource over apps/api factory path: none
+      - pytest tests/unit/test_agents.py + test_v3_research_pipeline.py -> 180 passed, 0 failures
+      - ruff/mypy touched files -> clean
+SPEND: 0.00
+GIT: handoff only
+```
