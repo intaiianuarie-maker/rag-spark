@@ -942,3 +942,16 @@ TASK: T-K04 FIXUP
 VERIFY: auth/key suites green (49 passed), spend 0.00 (proof test left to grader DB fixtures)
 GIT: handoff only
 ```
+
+## T-K04-proofs
+
+```text
+TASK: T-K04-proofs
+CHANGE:
+      - NEW tests/unit/test_t_k04_proofs.py (2 tests)
+VERIFY:
+      - tests 14 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
