@@ -22,14 +22,14 @@ _RUNS_DB = None  # lazy
 
 
 def runs_db_path() -> Path:
-    raw = os.environ.get("WORKFLOW_RUNS_DB")
+    raw = os.environ.get("WORKFLOW_RUNS_DB", "").strip()
     if raw is None or not raw.strip():
         raise ValueError("WORKFLOW_RUNS_DB is required")
     return Path(raw.strip())
 
 
 def approvals_db_path() -> Path:
-    raw = os.environ.get("WORKFLOW_APPROVALS_DB")
+    raw = os.environ.get("WORKFLOW_APPROVALS_DB", "").strip()
     if raw is None or not raw.strip():
         raise ValueError("WORKFLOW_APPROVALS_DB is required")
     return Path(raw.strip())
@@ -62,6 +62,26 @@ def _approvals_connect():
     return sqlite3.connect(path)
 
 
+
+def draft_store_mode() -> str:
+    import os
+    return "persistent" if os.environ.get("WORKFLOW_DRAFT_DB", "").strip() else "in-memory"
+
+
+def runs_store_mode() -> str:
+    import os
+    return "persistent" if os.environ.get("WORKFLOW_RUNS_DB", "").strip() else "in-memory"
+
+
+def approvals_store_mode() -> str:
+    import os
+    return "persistent" if os.environ.get("WORKFLOW_APPROVALS_DB", "").strip() else "in-memory"
+
+
+def checkpoint_db_mode() -> str:
+    import os
+    return "persistent" if os.environ.get("WORKFLOW_CHECKPOINT_DB", "").strip() else "unset"
+
 _lock = threading.Lock()
 _draft_store: DraftStore | None = None
 _approvals: dict[tuple[str, str, int], WorkflowApproveResponse] = {}
@@ -72,7 +92,7 @@ _executors: dict[str, WorkflowExecutor] = {}
 def draft_db_path() -> Path:
     import os
 
-    raw = os.environ.get("WORKFLOW_DRAFT_DB")
+    raw = os.environ.get("WORKFLOW_DRAFT_DB", "").strip()
     if raw is None or not raw.strip():
         raise ValueError("WORKFLOW_DRAFT_DB is required")
     return Path(raw.strip())

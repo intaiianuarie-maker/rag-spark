@@ -982,3 +982,34 @@ GIT: handoff only
 TASK: T-K06a
 BLOCKED-WITH-REASON: readiness/version disclosure needs a store-mode introspection seam (app.workflows.store lacks public mode accessor); adding it is second scope beyond this diagnostic. Obstacle: packages/readiness has no store descriptor.
 ```
+
+## T-K06a-seam — store-mode accessors
+
+```text
+TASK: T-K06a-seam
+CHANGE:
+      - apps/api/app/workflows/store.py added draft_store_mode, runs_store_mode, approvals_store_mode, checkpoint_db_mode
+VERIFY:
+      - ruff clean on store.py
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06a-seam FIXUP
+
+```text
+TASK: T-K06a-seam FIXUP
+VERIFY:
+      - pytest seam + v4 -> 11 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06a-seam FIXUP-2
+
+```text
+TASK: T-K06a-seam FIXUP-2
+VERIFY: ruff clean; 1 passed
+SPEND: 0.00
+```
