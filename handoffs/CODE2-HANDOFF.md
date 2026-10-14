@@ -4751,3 +4751,179 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tv4023_{start,end
   `?? tests/unit/test_workflow_view_models.py`.
 - 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty.
+---
+
+## T-V4-021 — B-1 PRODUCTION-EXECUTION GATE (held since the dispatch plan)
+
+**VERDICT: GATE GREEN — no BLOCKED defect found. No product file was touched
+(this ticket changes nothing but the gate test file).** Full evidence below.
+
+```text
+TASK: T-V4-021 (B-1) — hostile end-to-end battery through the FULL pipeline:
+       import -> validate -> compile -> execute -> checkpoint/resume ->
+       attribution, proving no layer can be bypassed and no guarantee is dropped
+       at any handoff. Verdict is the job: a red gate with precise evidence would
+       have been pushed as BLOCKED-with-evidence; no product fix was permitted.
+CHANGE: tests/unit/test_b1_production_execution_gate.py (NEW, 33 tests, ~730 lines)
+        — the gate battery. NO product files: no allowlisted product change was
+        made because none was needed (the gate is green).
+WHY:    W4/W5 built surface; B-1 decides whether it is trustworthy. The failure
+        mode the gate exists to catch is a layer that trusts its caller: a
+        compiler that assumes validation happened, an executor that assumes a
+        real compiler made the plan, a resume that assumes a same-scope
+        checkpoint, an attribution path that invents a node.
+REUSED: The real validator, compiler, executor, checkpoint store (InMemory),
+        ResumableExecutor/attach_evidence, and graph.attribution
+        extract_graph_attribution — the battery calls the production code under
+        test. The node executor is a fake only because it is the BOUNDARY, never
+        the guarantee; the executor's own bounds (deadline, output bytes,
+        retries) are the module constants the product actually uses, so a
+        hostile node meets the same envelope a production node would.
+BUILT:  A hostile battery per layer; an out-of-order battery per handoff (each
+        entry point called with something the layer below never produced); the
+        resume battery driven through the executor's REAL seam
+        (configure_checkpoint_store + execute(..., run_id=..., resume=True),
+        i.e. the same path a redelivery takes, not a synthetic wrapper); an
+        end-to-end honest run through WorkflowExecutor; and the gate record
+        (every hostile shape, the layer that refused it, and its typed codes).
+
+LAYER TABLE — each guarantee × each handoff × proof (33 tests, all green):
+
+  guarantee                     | handoff proven crossed     | proof
+  ------------------------------|----------------------------|---------------------------
+  unvalidated defs cannot       | validate -> compile        | compiler refuses with
+  compile                       |                            | "Cannot compile invalid
+                                |                            | workflow"; the ONLY way
+                                |                            | past is allow_unvalidated
+                                |                            | whose default is False
+                                |                            | and which still re-asserts
+                                |                            | the revision hash
+  post-publish spec mutation    | compile                    | nested mutation breaks the
+  cannot compile                |                            | content_hash -> refusal
+  uncompiled/foreign plan       | compile -> execute         | hand-built plan
+  cannot execute                |                            | (revision_hash="f"*64) and a
+                                |                            | plan bound to ANOTHER
+                                |                            | revision both refused
+                                |                            | ("revision_hash" ValueError)
+  no manifest support means     | validate -> compile        | an empty manifest refuses
+  no execution                  |                            | compilation
+  missing capability is a       | validate -> compile        | emits exactly
+  refusal, not a downgrade      |                            | UNSUPPORTED_CAPABILITY then
+                                |                            | refuses compilation
+  HOSTILE DEFINITIONS (9        | validate AND compile       | 9 shapes, BOTH layers refuse
+  shapes)                       |                            | each; every typed code
+                                |                            | recorded below
+  failing node fails the run    | execute                    | run FAILED, failed_node_id
+  never completes               |                            | set, node failure carried
+  oversized node output         | execute                    | 64MB output -> run not
+  refused, not swallowed        |                            | COMPLETED, node named
+  hung node never completes     | execute envelope           | a node sleeping far past
+                                |                            | every bound yields
+                                |                            | FAILED, not COMPLETED
+  cancellation/terminal named   | execute                    | terminal run carries run.error
+                                |                            | AND failed_node_id
+  resume refuses foreign        | checkpoint -> execute      | cross-workspace checkpoint
+  workspace                     | (REAL seam)                | raises ResumeStateError
+                                |                            | "resume workspace mismatch"
+  resume refuses foreign         | checkpoint -> execute      | mismatched revision_hash
+  revision                      | (REAL seam)                | raises ResumeStateError
+                                |                            | "resume revision mismatch"
+  hostile run resumes into the  | kill -> resume             | failed run refails after
+  same failure (no laundering)  |                            | resume, SAME failed_node_id
+  honest run resumes identically| kill -> resume             | checkpoint + resume ->
+                                |                            | COMPLETED, output intact
+  pre-kill evidence survives    | checkpoint -> resume       | evidence row re-attaches with
+  the restart, not orphaned     |                            | node_id + payload intact
+  attribution traces to real    | execute -> attribution     | graph item's entity/
+  nodes/chunks                  |                            | relationship/community ids
+                                |                            | and chunk score preserved
+  attribution never invents     | attribution                | a run with no graph items
+  provenance                    |                            | yields NO row (None) — no
+                                |                            | fabricated provenance
+  HAPPY PATH control            | all layers                | a valid definition compiles
+                                |                            | and completes, so the gate
+                                |                            | is not refusing everything
+
+  HOSTILE LAYER RECORD (9 of 9 refused at the validator layer, each also
+  refused by the compiler):
+    shape                       codes
+    empty workflow              EMPTY_WORKFLOW, NO_OUTPUT_NODE
+    trigger only, no output     DANGLING_SOURCE, DANGLING_TARGET, NO_OUTPUT_NODE
+    duplicate node id           DUPLICATE_NODE_ID, DANGLING_SOURCE, ORPHANED_NODE,
+                                UNCONNECTED_REQUIRED_INPUT
+    duplicate edge id           DUPLICATE_EDGE_ID
+    dangling target node        DANGLING_TARGET, ORPHANED_NODE, UNCONNECTED_REQUIRED_INPUT
+    dangling source node        DANGLING_SOURCE, ORPHANED_NODE, UNCONNECTED_REQUIRED_INPUT
+    dangling target port        DANGLING_TARGET_PORT, ORPHANED_NODE,
+                                UNCONNECTED_REQUIRED_INPUT
+    orphaned node               ORPHANED_NODE, UNCONNECTED_REQUIRED_INPUT
+    cycle                       CYCLE_DETECTED, ORPHANED_NODE, UNCONNECTED_REQUIRED_INPUT
+
+VERIFY: tests/unit/test_b1_production_execution_gate.py → 33 passed (twice, 91s
+        each — the gate is slow because it really executes).
+        tests/unit (full) → 2045 passed, 0 failed.
+        ruff check my gate file → All checks passed.
+        mypy (isolated) → Success, no issues found in 1 source file.
+        Non-vacuous proof: (a) the compiler's invalid refusal and the hung-node
+        cancellation were reproduced OUTSIDE the test to confirm they fire for
+        real; (b) each hostile test asserts the specific typed code / exception
+        message, so a guard removed in product code would fail the named test.
+        METRIC 1 — hostile shapes reaching production execution: 0. The 9-shape
+        definition battery plus the hand-built-plan, foreign-revision-plan,
+        empty-manifest, missing-capability and oversized-output cases all name
+        their refusing layer (validator / compiler / executor) and none reaches
+        an executing node. Every refusal carries typed codes or a typed
+        exception, never a bare message.
+        METRIC 2 — guarantees dropped at any handoff: 0. Each layer re-asserts:
+        compiler re-validates (allow_unvalidated defaults OFF) AND re-checks the
+        revision hash; executor re-asserts plan.revision_hash ==
+        recomputed spec hash and refuses a foreign plan; executor+checkpoint
+        re-asserts scope and revision on resume through the REAL
+        configure_checkpoint_store/execute(resume=True) path; attribution reports
+        None rather than inventing provenance. The happy-path controls prove the
+        gate is not simply refusing everything.
+RISKS:  1. The gate is SLOW (~91s) because it executes real workflows including
+        one node that sleeps past every bound. Intentional: a fast gate that
+        fakes the executor would prove nothing about the envelope. If this
+        becomes a CI burden, the honest split is a fast subset (validate/compile
+        refusals) and the slow subset under a marker — not a weaker executor.
+        2. The resume battery drives the executor's real seam
+        (configure_checkpoint_store + run_id/resume=True) rather than calling
+        ResumableExecutor directly, which is what makes the cross-workspace and
+        revision-mismatch refusals production-shaped rather than synthetic.
+        A future refactor of that seam must be reflected here or these tests
+        become vacuous — flagged for whoever refactors the checkpoint seam.
+        3. The node executor used for hostile-node cases is a deliberate fake
+        (always-fails / always-hangs / always-64MB). The BOUNDS under test
+        (NODE_TIMEOUT_S, RUN_DEADLINE_S, MAX_NODE_OUTPUT_BYTES, NODE_MAX_ATTEMPTS)
+        are the product's own module constants, so the envelope is real even
+        though the node is fake.
+        4. GAP DISCLOSED, not hidden: the gate covers the engine's own executor
+        seam (NODE_TIMEOUT_S etc. are module constants, not per-run parameters in
+        this build). There is currently no way to drive a per-run deadline or a
+        per-run node timeout through the public execute() signature, so
+        "deadline enforced per run" is proven by the run-level constants rather
+        than by a per-hostile-run override. If B-1 expects a per-run budget
+        knob, that is a PRODUCT change and out of this ticket's allowlist — it is
+        the one thing this gate could not drive directly.
+        5. Attribution coverage is the engine's graph-attribution extractor
+        (entity/relationship/community ids + retrieval_mode + chunk scores). The
+        answer→citation traceability check (every rendered citation resolves to a
+        stored chunk in the caller's workspace) is Q9's gate, not this one; the
+        gate proves the run's node ids are the provenance an evidence row
+        references, and that no row is fabricated when there is nothing to cite.
+        6. The gate asserts the current refusal wording ("Cannot compile invalid
+        workflow", "resume workspace mismatch", "resume revision mismatch"). If
+        those strings are reworded in product code the gate fails — which is the
+        point (a refusal that silently stops refusing is a dropped guarantee),
+        but it means the gate is coupled to message text, not just to types.
+
+GIT SELF-REPORT (`git status --short`; snapshot /tmp/opencode/tv4021_{start,end}.txt):
+- START (HEAD `06298e0`): 23 dirty paths — 5 modified handoffs, dev1's
+  connectors.py + its test, 16 untracked handoff docs. Index empty.
+- END (HEAD `4235884`, coordinator landed work mid-ticket): dev1's connectors were
+  committed and are no longer dirty; my delta is exactly ONE file:
+  `?? tests/unit/test_b1_production_execution_gate.py`.
+- 0 foreign paths modified by me; 0 commits, 0 deploys, 0 restarts,
+  0 compose changes, index left empty. NO product file touched (nothing needed
+  fixing: the gate is green, so nothing was fixed and nothing was hidden).
