@@ -220,6 +220,10 @@ async def enqueue_graph_job(
             "document_id": document_id,
             "version_id": version_id,
             "chunk_ids": chunk_ids or [],
+            # T-R11: enqueue time, so "how old is the oldest queued job" is a
+            # fact rather than an inference from queue depth. Previously a deep
+            # queue was indistinguishable from a young one.
+            "enqueued_at": time.time(),
         }
     )
     # Use version_id as dedup key? For now each call enqueues a new job;

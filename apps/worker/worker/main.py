@@ -12,6 +12,14 @@ import signal
 
 from core.config import get_settings
 from core.logging import configure_logging
+
+# Imported eagerly but side-effect free: consumer_enabled()/graph_mode() are
+# plain env reads, and flag-off never constructs a consumer.
+from graph.consumer import (
+    consumer_enabled,
+    graph_mode,
+    run_supervised_graph_consumer,
+)
 from jobs.ingest_worker import run_worker
 
 from worker.adapters.redis_broker import RedisBroker
@@ -45,11 +53,36 @@ async def run() -> None:
             pass
 
     worker_task = asyncio.create_task(run_worker(stop))
+
+    # T-R11: the graph extraction consumer, supervised. GRAPH_MODE=off (the
+    # default) starts nothing and touches no graph code, so the flag-off path
+    # stays byte-identical to before. When on, the consumer runs beside
+    # ingestion, and a crash restarts it with backoff instead of taking the
+    # worker down — or, worse, vanishing without a trace.
+    graph_task: asyncio.Task | None = None
+    if consumer_enabled():
+        graph_task = asyncio.create_task(
+            run_supervised_graph_consumer(stop),
+            name="graph-consumer",
+        )
+        logger.info(
+            "graph_consumer_enabled",
+            extra={"event": "graph_consumer_enabled", "graph_mode": graph_mode()},
+        )
+    else:
+        logger.info(
+            "graph_consumer_disabled",
+            extra={"event": "graph_consumer_disabled", "graph_mode": graph_mode()},
+        )
+
     try:
         await stop.wait()
     finally:
         stop.set()
         await worker_task
+        if graph_task is not None:
+            # The supervisor also honours stop_event, so this returns promptly.
+            await graph_task
         await broker.close()
         logger.info("worker_stopped", extra={"event": "worker_stopped"})
 

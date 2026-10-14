@@ -101,6 +101,16 @@ x-backend-env: &backend-env
   LITELLM_URL: ${LITELLM_URL:-https://openrouter.ai/api/v1}
   ANSWER_MODEL: ${ANSWER_MODEL:-nvidia/nemotron-3.5-lightning:free}
   INFINITY_URL: ${INFINITY_URL:-http://infinity-rerank:7997}
+  # T-R11: ONE shared persistent graph store. Previously graph_db_path() defaulted
+  # to the RELATIVE "./.graph/graph.db", so every service resolved it inside its
+  # own container filesystem and api, worker and extraction each held a PRIVATE
+  # sqlite file: rows written by the worker were invisible to the api, and no
+  # amount of correct code could fix that. The path is now absolute and identical
+  # on both services, and /app/.graph is a shared named volume.
+  # Default stays "off" so the graph leg is opt-in and flag-off behaviour is
+  # unchanged for anyone who does not set it.
+  GRAPH_MODE: ${GRAPH_MODE:-off}
+  GRAPH_DB_PATH: ${GRAPH_DB_PATH:-/app/.graph/graph.db}
   READINESS_TIMEOUT_SECONDS: ${READINESS_TIMEOUT_SECONDS:-1.5}
   # T-R05 (coordinator ops): explicit collection name on BOTH services sharing
   # this anchor (api + worker). Fail-closed :? form — export VECTOR_COLLECTION
@@ -206,6 +216,8 @@ services:
     volumes:
       - ./apps/api:/app/apps/api
       - ./packages:/app/packages
+      # T-R11: shared with the worker so both open the SAME graph sqlite file.
+      - graphdata:/app/.graph
     command:
       ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
@@ -222,6 +234,9 @@ services:
     volumes:
       - ./apps/worker:/app/apps/worker
       - ./packages:/app/packages
+      # T-R11: same named volume as api. Extraction writes here and the api
+      # reads here; without this the two processes never see each other's rows.
+      - graphdata:/app/.graph
 
   web:
     # Frontend shell owned by code2 (apps/web). Uses the app's production
@@ -285,6 +300,8 @@ services:
       - "127.0.0.1:7997:7997"
 
 volumes:
+  # T-R11: the ONE persistent graph store shared by api and worker.
+  graphdata:
   pgdata:
   redisdata:
   qdrantdata:

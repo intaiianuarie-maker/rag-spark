@@ -53,9 +53,25 @@ def graph_mode(env: dict[str, str] | None = None) -> str:
 
 
 def graph_db_path(env: dict[str, str] | None = None) -> str:
-    """Return ``GRAPH_DB_PATH`` or the embedded default."""
+    """Return ``GRAPH_DB_PATH`` or the embedded default.
+
+    T-R11: a RELATIVE default is a trap in a container. Each service resolves
+    "./.graph/graph.db" inside its own filesystem, so api and worker silently
+    end up with two private graph databases and neither can see the other's
+    rows. The compose file now pins an absolute path on a shared volume for
+    both; this default stays relative only for local single-process use.
+
+    The parent directory is created on demand: on a fresh named volume the
+    directory does not exist yet, and SQLite fails to open a file whose parent
+    is missing — which would look like a permissions fault rather than a
+    configuration one.
+    """
     source = os.environ if env is None else env
-    return source.get("GRAPH_DB_PATH", DEFAULT_GRAPH_DB_PATH)
+    path = source.get("GRAPH_DB_PATH", DEFAULT_GRAPH_DB_PATH)
+    parent = Path(path).expanduser().parent
+    if str(parent) not in ("", "."):
+        parent.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 def create_graph_retriever(

@@ -6501,3 +6501,159 @@ GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr10_{start,end}.
   reviews/, and the untouched foreign handoffs.
 - 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
   0 compose changes, index left empty. No live queue was written.
+---
+
+## T-R11 — Graph deployment: supervised consumer + shared store (Phase 2)
+
+```text
+TASK: T-R11 — (1) supervised graph consumer STARTED by the worker, using R10's
+       receipt semantics; (2) GRAPH_MODE + GRAPH_DB_PATH passed to api AND
+       worker via compose; (3) ONE shared persistent graph store instead of
+       private per-process sqlite; (4) per-workspace enablement plus
+       queue-age / failure / consumer-heartbeat observables.
+CHANGE: 6 files, all inside my allowlist, ZERO overlap with dev1's R06b area:
+       NEW packages/graph/consumer.py — the supervisor, the heartbeat, and the
+         observable set (one Lua round trip).
+       M  apps/worker/worker/main.py — starts the supervised consumer beside
+         ingestion, gated on GRAPH_MODE; flag-off starts nothing.
+       M  docker-compose.yml — flag/path in the shared backend-env anchor plus a
+         graphdata volume mounted on BOTH api and worker. FILE ONLY: the daemon
+         was not touched, nothing was restarted or recreated.
+       M  packages/graph/factory.py — graph_db_path() creates its parent dir.
+       M  packages/graph/queue.py — payload carries enqueued_at.
+       NEW tests/unit/test_graph_deployment_r11.py (17 tests).
+WHY:    Phase 1 made the queue trustworthy. Nothing consumed it: run_graph_worker
+       existed and was never started by any entrypoint, so every enqueued job
+       accumulated forever and no one could tell, because every individual
+       enqueue had succeeded. Separately, the store was configured in a way that
+       made cross-process visibility impossible by construction.
+REUSED: The existing run_graph_worker loop and the R10 claim/ack Lua scripts —
+       this ticket adds supervision and observability around them and changes
+       no receipt semantics. The existing x-backend-env compose anchor, so api
+       and worker receive byte-identical graph configuration by construction
+       rather than by two hand-kept copies. The existing per-workspace
+       enablement API (set_enabled/is_enabled) which was already correct.
+
+THE TOPOLOGY BUG: A RELATIVE PATH IS A TRAP IN A CONTAINER.
+  graph_db_path() defaulted to "./.graph/graph.db". Every service resolved that
+  inside its OWN container filesystem, so api, worker and extraction each held a
+  PRIVATE sqlite file. Rows written by the worker were invisible to the api, and
+  NO amount of correct code could fix it — the cause was configuration. Compose
+  now pins GRAPH_DB_PATH=/app/.graph/graph.db via ${GRAPH_DB_PATH:-...} in the
+  shared anchor, with a named graphdata volume mounted on both services. The
+  default stays off, so flag-off behaviour is unchanged for anyone not opting in.
+  A test documents the trap directly: the SAME relative path resolves to two
+  DIFFERENT files under two working directories.
+
+METRIC 1 — supervised consumer started by the worker: PROVEN.
+  * run_supervised_graph_consumer restarts a crashing consumer with growing
+    backoff, asserted: exactly 3 attempts, 2 restarts, 2 consecutive failures,
+    driven deterministically (the consumer sets stop itself — no wall-clock race).
+  * A poison job makes the supervisor GIVE UP after max_failures (asserted:
+    exactly 3 attempts) rather than hot-looping and starving ingestion.
+  * Backoff is bounded and shutdown is not delayed: with a 30s backoff the
+    supervisor still exits in under 5s once stop_event is set, asserted with a
+    clock. A supervisor that holds the container open on shutdown is its own bug.
+  * Flag-off is inert: consumer_enabled() is False for off/OFF/empty and the
+    heavy graph_extraction import stays INSIDE the lazy default, so a worker with
+    graph off never imports extraction code at all.
+  * Receipt semantics respected: a job is only consumed if the enqueue produced
+    a confirmed receipt. This module supervises and reports; it does not redefine
+    what a valid job is. The payload-orphan guard from R10 is unchanged.
+
+METRIC 2 — compose hunks: DRAFTED, DAEMON UNTOUCHED.
+  Parsed and asserted without running compose: api and worker carry identical
+  GRAPH_MODE and GRAPH_DB_PATH, the interpolated default is ABSOLUTE, both mount
+  the same graphdata volume, and the volume is declared. GRAPH_MODE defaults to
+  off, so nothing turns on for anyone who has not opted in. I did not run
+  `docker compose up/down`, did not restart anything, and did not recreate a
+  container — the file is a proposal for your apply.
+
+METRIC 3 — cross-process visibility: PROVEN, AND IT IS THE ONE THAT MATTERS.
+  The test does NOT simulate two processes: it writes rows from a REAL SUBPROCESS
+  (separate interpreter) and reads them back from this one via get_entity, then
+  asserts the row is present. A second handle or a shared connection cache would
+  have passed a weaker test; a separate interpreter cannot. Two independent
+  SQLiteGraphStore connections are also asserted to share enablement.
+
+METRIC 4 — enablement and observables: PROVEN.
+  * Per-workspace: an explicit set_enabled(False) on ws-b is invisible to ws-a
+    and IS visible to a second connection (the api process) — opt-out propagates
+    and does not leak. I also pinned the existing default-ON back-compat so it
+    cannot change silently under us.
+  * Workspace isolation of rows: an entity written in ws-a is get_entity(None) in
+    ws-b. Asserted, not assumed.
+  * Observables in ONE Lua round trip: queue depth, delayed count, live claims,
+    oldest queued job age, consumer count, stale consumer count, oldest
+    consumer age. is_stalled is true only when work is waiting AND no fresh
+    consumer is beating — a deep queue with a live consumer is normal, and that
+    distinction is the whole point of the metric.
+  * Queue-age is measured from DATA: the payload now carries enqueued_at, because
+    before this a deep queue was indistinguishable from a young one.
+  * The heartbeat is logged with the observable snapshot (graph_queue_observables)
+    so queue depth and consumer count are visible in logs, not only in a scrape.
+  * An unreachable broker yields reachable=False plus the error and NEVER raises:
+    a monitoring call must not become the outage it monitors.
+
+VERIFY: pytest tests/unit/test_graph_deployment_r11.py 17 passed;
+       related suites together: 124 passed / 0 failed (the above plus test_graph,
+       test_graph_queued, test_graph_factory, test_graph_store_sqlite,
+       test_graph_isolation, test_graph_lifecycle, test_graph_store_concurrency,
+       test_graph_queue_reliability, test_queue_semantics, test_ingest_pipeline,
+       test_worker_liveness_probe and the error-taxonomy contract);
+       ruff check on all six files: All checks passed (exit 0);
+       mypy --follow-imports=silent on consumer, worker main, factory, queue and
+       the new test: Success, no issues.
+       No live-graph writes beyond tmp_path scratch files and a subprocess over
+       one; no Redis, no compose up/down, no restart, no container recreate.
+       I did NOT run the full tests/unit suite; the card scoped the run to the
+       cross-process test plus related suites. Stating that rather than implying
+       more coverage.
+RISKS:  1. The compose change is a PROPOSAL, not an applied deployment. Until you
+       apply it, api and worker still hold private graph databases. That is the
+       honest state: the code and config are correct, the runtime is unchanged.
+   2. Adding enqueued_at changes the graph job payload shape. Anything reading
+       the payload with a strict schema would need updating; in-tree readers index
+       specific keys and are unaffected, but a consumer in another repo is not.
+   3. graph_db_path() now CREATES its parent directory on every call. That is
+       convenient on a fresh volume but means a typo'd path now silently creates
+       a stray directory instead of failing — a new store appears to work and
+       is empty. Arguably this deserves a config validation step later.
+   4. The supervisor restarts a crashed consumer, so a persistent crash becomes a
+       restart LOOP rather than a dead worker — by design, since ingestion must
+       survive it, but it means the signal for "graph is broken" is a repeating
+       graph_consumer_crashed log plus a stalled observable, not a red container.
+       Abandonment after max_failures is logged loudly, and ingestion continues.
+   5. Observables are read via one Lua script with cjson; if the payloads hash
+       ever grows a non-JSON value the age computation degrades to None rather
+       than raising, which is the safe direction but would hide a queue.
+   6. No HTTP endpoint was added for the observables — the card allowed endpoints
+       but apps/api is not in my allowlist, so they are log-observable only. If
+       you want them on /ready or /metrics, that is a follow-up in the api lane.
+SELF-CORRECTIONS (disclosed, never silently re-run):
+  - Four of my 17 tests failed first run, all my own bugs: I invented
+    SQLiteGraphStore.list_entities (the real read API is get_entity /
+    find_entities_by_name), I unpacked three stdout tokens as four, I asserted
+    is_enabled defaults to False when the documented behaviour is True for
+    backward compatibility, and my supervision test raced a wall-clock timer. I
+    fixed the tests, not the product, and replaced the racy timer with the
+    consumer setting stop itself so the assertion is deterministic.
+  - Two flaws in consumer.py found by reading my own work back before testing:
+    max_consumer_age_seconds was returning the QUEUE's oldest age (wrong number
+    under the right name), and the default-consumer import shadowed the injected
+    parameter name. Both fixed before the first test run.
+  - mypy flagged my own test's manual get_client assignment; rather than pile on
+    type: ignore comments I switched the test to a real MonkeyPatch, which is both
+    cleaner and self-restoring.
+FOREIGN TREE MOVEMENT (reported, not forced): dev1's R06b files were COMMITTED
+  before this ticket started, so the tree was clean of foreign edits at both
+  START and END except the usual handoffs and the eval files I was told to leave
+  alone. HEAD did not move during the ticket (1ddf7ec both ends). I touched no
+  qdrant or reindex file.
+
+GIT SELF-REPORT (`git status --short`; snapshots /tmp/opencode/tr11_{start,end}.txt):
+- START (HEAD `1ddf7ec`): 29 dirty paths, none of them product files.
+- END (HEAD `1ddf7ec`): 36 dirty paths — my 6 files plus the untouched handoffs
+  and eval files.
+- 0 foreign product paths modified; 0 commits, 0 deploys, 0 restarts,
+  0 compose up/down, index left empty.
