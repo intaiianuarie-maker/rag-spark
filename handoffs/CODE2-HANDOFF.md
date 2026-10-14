@@ -1203,3 +1203,13 @@ METRICS: no code change; suites unaffected.
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-K06b-impl — NOT BUILT (migration runtime unavailable)
+
+```
+TASK: T-K06b-impl
+STATUS: DEFERRED; design retained; no code change.
+SPEND: 0.00
+GIT: handoff only
+```
