@@ -117,7 +117,13 @@ class AgentLifecycleWorker:
 
         try:
             runtime = self._resolve_runtime()
-            agent_run = await runtime.run_enforced(context=record.context, goal=record.goal)
+            # T-A07: explicit durable checkpoint before any dispatch — never the
+            # module-level in-memory default when the durable store exists.
+            agent_run = await runtime.run_enforced(
+                context=record.context,
+                goal=record.goal,
+                checkpoint_store=self.checkpoint_store,
+            )
 
             # Inspect resulting state
             from agents.runtime import _PERSISTED_STATES

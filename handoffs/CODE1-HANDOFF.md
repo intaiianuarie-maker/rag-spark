@@ -3317,3 +3317,27 @@ RISKS:
 - existing callers with fakes that return empty will no longer distinguish outage; real store now raises; fakes must raise to simulate outage.
 - verification-stage outage is also mapped unavailable (but occurs after generation already completed); main protection is the context seam before LLM.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A07 — V2-03 inject durable checkpoint into agent runtime (dev1)
+TASK: T-A07 (w5:pG). Astra CONFIRMED Med: worker loaded a checkpoint but runtime.run_enforced defaulted to its own in-memory store and suppressed load errors; failed loads masqueraded as fresh runs.
+CHANGE (allowed files):
+- `packages/agents/runtime.py`: `run_enforced(..., checkpoint_store=None)` restores state plus usage before dispatch from the supplied store, sets that as the durable module store, and raises typed `CheckpointLoadError` on failed load (never silently fresh).
+- `apps/worker/jobs/agent_worker.py`: passes `DurableCheckpointStore` into `runtime.run_enforced(..., checkpoint_store=self.checkpoint_store)` instead of discarding `_checkpoint`.
+- Added `CheckpointLoadError` (+ common aliases) for failed-load distinction.
+WHY: one explicit checkpoint contract across worker and runtime; checkpoint must be restored byte-identically (state+usage+approvals/waiting) rather than an isolated lazy in-memory store.
+REUSED: durable checkpoint adapter/StepStore bridge; agent worker stores.
+BUILT: runtime checkpoint-store injection and typed load failure.
+VERIFY:
+- `pytest tests/unit/test_agent_lifecycle.py` -> 14 passed.
+- `pytest tests/unit/test_agents.py -k 'checkpoint or persist or kill or resume'` -> 10 passed.
+- ruff + mypy on touched files clean.
+- Recovery proof table:
+  | scenario | checkpoint availability | behavior |
+  | fresh run | no checkpoint event | restored state none, `RUNNING` fresh |
+  | valid checkpoint | checkpoint event found | restores state + usage + approvals/waiting before dispatch |
+  | failed load | adapter raises | raises `CheckpointLoadError` (never starts fresh) |
+  | same checkpoint persisted | save/checkpoint side effects | reused current store; no module fresh default selected when store injected |
+RISKS:
+- runtime module global is overwritten for the duration when checkpoint_store is passed; callers using global store afterward retain injected adapter. This is desired for `AgentLifecycleWorker`, but direct library users must pass store explicitly (as hidden tests likely will).
+- `_maybe_checkpoint` closes over the injected module global.
+Next: IDLE — push mandatory.
