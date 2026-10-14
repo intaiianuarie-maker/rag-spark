@@ -425,3 +425,456 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 ## Log
 - 2026-10-12 ~13:55 UTC: loop founded. Host vmi3584180/root verified. Stack healthy (api/worker/pg/redis/qdrant/seaweedfs/infinity). HEAD 46fbf67 +20M/14U dirty (F2/F3/F5/F6 in flight per CODE1-HANDOFF round2). ITER1 dispatched to Dev1 (stabilization evidence, no commit). Awaiting Dev1 idle.
 - ~14:10 UTC: parallel reviews landed. Review-A (backend F2/F3/F5): APPROVE + 3 nits (test rename trivial; infinity 5xx-as-reachable low → `<500` fix; graph-purger re-eval low, pre-existing QF-04). Review-B (answer F6/classifier/trace): REQUEST-CHANGES minor → queued as micro-slices: B1 models.py content-guarantee vs legacy no-grounder path (MED); B2 verification.py docstring contradiction (LOW); B3 dead _citation helper (INFO); B4 add graph-path + store-grounder content tests (MED). Noted: QF-06 untouched by trace-panel change; QF-16 fail-closed still open (not claimed).
+
+## 2026-10-13 ~21:5xZ — museR cycle 32 (T-V4-007 DONE; T-V4-008 out)
+- T-V4-007 (dev1): committed `7927a76` — stated port matrix (identity + declared any wildcard) + recursive element checking + per-port nullable; 75 new green, 434 workflow green, ruff+mypy clean. The 2 workflow failures at verify time were dev2's UNCOMMITTED T-V4-016 checkpoint tests (in-flight, his lane) — excluded from dev1's baseline with cause, not swept.
+- DOING: dev1 T-V4-008 (compiler determinism + join lock, dispatched); dev2 T-V4-016 (checkpoint/resume, in flight). V4: 8 DONE / 2 IN-PROGRESS / 17 QUEUED. Board 154.
+
+## 2026-10-14 ~00:1xZ — museR cycle 33 (T-V4-016 DONE; T-V4-017 out)
+- T-V4-016 (dev2): committed `1c1b785` — W3 checkpoint/resume/evidence (2 NEW files only; ResumableExecutor wraps, core untouched; no V3 imports; redaction+bounds at the store boundary). Verified: 14 new + 22 franchise green; workflow 448 green; FULL unit 1620/0; ruff+mypy clean.
+- FOREIGN-RED handled correctly: dev2 attributed 5 compiler/join failures to dev1's in-flight T-V4-008 with a HEAD-worktree control (434/0 at HEAD), touched nothing outside its lane, and disclosed its own rebuilt bounds test. Dev1 repaired his 5 mid-flight; tree green at commit.
+- DOING: dev1 T-V4-008 (compiler, in flight — JoinStrategy + determinism test file landed mid-commit, untouched); dev2 T-V4-017 (W4 draft/revision store, dispatched). V4: 9 DONE / 2 IN-PROGRESS / 16 QUEUED. Board 154.
+
+## 2026-10-14 ~00:3xZ — museR cycle 34 (T-V4-008 DONE; T-V4-009 out)
+- T-V4-008 (dev1): committed `5de416c` — compiler determinism (cross-process PYTHONHASHSEED 1/2/12345 identical, _canonical_payload seed fix) + join lock (undeclared refuses, CONDITION->any inference removed, 5 re-pins strictly stronger). Verified: 16 new green (all subtests cited); workflow 464 green; ruff+mypy clean.
+- Full unit 1658 + 6 failures, ALL in dev2's untracked T-V4-017 draft-store tests (in-flight, foreign lane) — excluded with cause, prompt carries the warning forward.
+- DOING: dev1 T-V4-009 (executor honesty, dispatched); dev2 T-V4-017 (W4 store, in flight). V4: 10 DONE / 2 IN-PROGRESS / 15 QUEUED. Board 154.
+
+## 2026-10-14 ~00:5xZ — museR cycle 35 (T-V4-017 DONE; T-V4-018 out)
+- T-V4-017 (dev2): committed `ffbf378` — W4 append-only draft/revision store (2 NEW product files + 28 tests; ONE hash via WorkflowRevision.create; refuse-not-redact deviation reasoned+recorded; 2 self-found defects fixed, not re-run away). Verified: 28 new, 42 both stores, workflow 492, FULL unit 1664/0 exact, ruff+mypy clean. Scope exact (3 new files, zero modified product).
+- DOING: dev1 T-V4-009 (executor honesty, in flight); dev2 T-V4-018 (migration draft review-only, dispatched). V4: 11 DONE / 2 IN-PROGRESS / 14 QUEUED. Board 154.
+
+## 2026-10-14 ~01:2xZ — museR cycle 36 (T-V4-018 DONE; T-V4-019 out)
+- T-V4-018 (dev2): committed `dece808` — W4 migration draft review-only (CREATE-only up + byte-identical-restore down + draft doc + 18 tests; 0 live writes proven 4 ways). Verified: 18 new, 60 three-suite, workflow 523 green at commit, ruff+mypy clean. Foreign reds (3, dev1's T-V4-009 honesty) proven by header+HEAD-absence; dev1 repaired mid-flight, tree green.
+- DOING: dev1 T-V4-009 (executor honesty, in flight); dev2 T-V4-019 (route contracts schemas-only, dispatched). V4: 12 DONE / 2 IN-PROGRESS / 13 QUEUED. Board 154.
+
+## 2026-10-14 ~01:4xZ — museR cycle 37 (T-V4-009 DONE; T-V4-010 out)
+- T-V4-009 (dev1): committed `4257643` — terminal honesty (COMPLETED/FAILED/CANCELLED table; error-payloads FAIL; cancel settles; partial barriers FAIL naming join; skips disclosed). One re-pin strictly stronger (old test asserted the false shape). Verified: 13 new, workflow 523 (superset of mid-ticket 477), FULL unit 1695/0 exact, ruff+mypy clean. Dev2's routes/ untouched.
+- DOING: dev1 T-V4-010 (bounded node semantics, dispatched); dev2 T-V4-019 (route contracts, in flight). V4: 13 DONE / 2 IN-PROGRESS / 12 QUEUED. Board 154.
+
+## 2026-10-14 ~02:0xZ — museR cycle 38 (T-V4-019 + T-V4-010 DONE; T-V4-020/011 out)
+- T-V4-019 (dev2): committed `d399d3d` — W4 route contracts schemas-only (AST-proven unwired; StrictInt asymmetry + no-secret-screening + revise-unknown-r1 + no-pagination all disclosed+pinned). Verified: 26 new, 563 workflow, FULL 1735/0, ruff+mypy clean.
+- T-V4-010 (dev1): committed `17fbf8e` — bounded node semantics (timeout/output-cap/retry-cap/backoff, executor-level only). Verified: 14 new, 563 workflow, FULL 1735/0 exact on commit tree, ruff+mypy clean.
+- RECORD: dev1's row claimed 7 mypy errors in routes/schemas — does NOT reproduce (Success twice, same files); likely settings/scope difference, not chased.
+- DOING: dev1 T-V4-011 (executor: bounded node semantics follow-up — check board title at dispatch); dev2 T-V4-020 (ACL+hygiene, in flight). V4: 14 DONE / 2 IN-PROGRESS / 11 QUEUED. Board 154.
+
+## 2026-10-14 ~02:4xZ — museR cycle 39 (T-V4-011 DONE; T-V4-012 out)
+- T-V4-011 (dev1): committed `ae662ce` — AGENT via abstract seam (routing rule, exact-once delegation, 0 V3 imports by grep+import-graph, flag-off identical, refusals honored). Verified: 14 new, workflow 603/0 (superset of mid-ticket 505), FULL 1775/0 (dev1-reported transient in dev2's draft_migration settled before commit), ruff+mypy clean. Dev2's W4 files untouched.
+- DOING: dev1 T-V4-012 (run budgets/deadlines, outer envelope over 010's node bounds, dispatched); dev2 T-V4-020 (ACL+hygiene, in flight). V4: 15 DONE / 2 IN-PROGRESS / 10 QUEUED. Board 154.
+
+## 2026-10-14 ~03:1xZ — museR cycle 40 (T-V4-020 DONE; T-V4-014 out)
+- T-V4-020 (dev2): committed `b060006` — W4 scoped reads (workspace_id-first everywhere + DB PK) + credential_hygiene single-source (12 value-forms refused, 7 reference-forms verbatim, both boundaries). Verified: 17 new, W4 114, workflow 605, FULL 1777/0 exact, ruff+mypy clean (15 files). Three self-found defects fixed + two cruft self-catches.
+- RUFF-FLIP recorded: one mid-verify run flagged 2 fixable, clean on re-run --no-cache — attributed to dev1's half-written executor.py (T-V4-012, 73+/1-) landing mid-run, not dev2's files. Dev1's edits untouched.
+- DOING: dev1 T-V4-012 (run envelope, in flight); dev2 T-V4-014 (V3 seam contract, dispatched). V4: 16 DONE / 2 IN-PROGRESS / 9 QUEUED. Board 154.
+
+## 2026-10-14 ~04:0xZ — museR cycle 41 (T-V4-014 + T-V4-012 DONE; T-V4-022/013 out)
+- T-V4-014 (dev2): committed `546d0dd` — V3 seam contract only (45 tests; vocab fix: no CANCELLED status, cancellation as error code; DEADLINE_EXCEEDED->cancelled documented). Verified: 45 new, workflow 663/0, FULL 1835/0, ruff+mypy clean, adapter diff empty.
+- T-V4-012 (dev1): committed `f5fc30b` — run envelope (300s/600 node-s/200 nodes + composition rule in code). Verified: 13 new, workflow 663/0 (superset of mid-ticket 504), FULL 1835/0 exact, ruff+mypy clean.
+- SELF-CORRECTION: my T-V4-013 prompt contains stray CJK characters (last兌executor) — cosmetic, ticket fully specified, not re-prompted (would interrupt in-flight work). Same class as the backtick incident; prompts need a re-read before send.
+- DOING: dev1 T-V4-013 (idempotency/cancel/resume, last executor ticket, dispatched); dev2 T-V4-022 (palette contract, dispatched). V4: 18 DONE / 2 IN-PROGRESS / 7 QUEUED. Board 154.
+
+## 2026-10-14 ~04:4xZ — museR cycle 42 (T-V4-022 DONE; T-V4-023 out)
+- T-V4-022 (dev2): committed `11005e4` — W5 palette catalogue (9 entries, both-direction agreement, UI 0 by AST+status+JSON). Verified: 66 new, 739 workflow-or-palette, FULL 1911/0 exact, ruff+mypy clean. Two self-found defects fixed (bool ports, retriever loop) + documented-inert judgement rule.
+- FOREIGN transient recorded: dev1's executor.py briefly non-importable mid-ticket (SyntaxError :962, self-resolved) + his idempotency test flaked 3x once — both settled pre-commit (parses OK, 10/10); his files untouched.
+- DOING: dev1 T-V4-013 (idempotency, in flight); dev2 T-V4-023 (view models, dispatched). V4: 19 DONE / 2 IN-PROGRESS / 6 QUEUED. Board 154.
+
+## 2026-10-14 ~05:1xZ — museR cycle 43 (T-V4-013 DONE; T-V4-024 out)
+- T-V4-013 (dev1): committed `a17473a` — idempotency (key/fingerprint/ledger-before-execute, conflict loudly) + cancel/resume via 016 seam unchanged. Verified: 10 new, workflow 739/0, FULL 1911/0, ruff+mypy clean.
+- POST-PUSH CORRECTION honored: dev1's UP037 (quoted IdempotencyLedger annotation) was the transient ruff flag from verification — fixed via ruff --fix, confirmed in-tree (clean + 10/10) before commit, recorded in the message. The loop's third post-push self-fix; the push-then-correct pattern holds because corrections arrive before commit, never after.
+- Executor chain 009–013 CLOSED (honesty/bounds/seam/envelope/idempotency). Dev1 turns to the W6/W7 tail (024–027 per plan).
+- DOING: dev1 T-V4-024 (schedule/trigger contracts, disabled default, dispatched); dev2 T-V4-023 (view models, in flight). V4: 20 DONE / 2 IN-PROGRESS / 5 QUEUED. Board 154.
+
+## 2026-10-14 ~05:4xZ — museR cycle 44 (T-V4-023 DONE; T-V4-021 gate RELEASED)
+- T-V4-023 (dev2): committed `06298e0` — W5 view models (23-code source-scraped mapping both directions + key-for-key timeline + e2e real-run + UI 0 triple-proof). Verified: 48 new, 787 workflow-or-palette, FULL 1959/0 (dev1's mid-edit connectors-test collection error excluded with cause: test 2min newer than impl, export-missing, his lane), ruff+mypy clean. Two self-corrections credited.
+- GATE RELEASED: plan condition met (006–013 + 015–020 all DONE; validator/executor surface exists). T-V4-021 dispatched to dev2 as a NO-PRODUCT-CHANGE proof ticket: full-pipeline hostile battery, defects reported as BLOCKED-with-evidence not fixed. W-line complete (015–023); tails 024 (dev1, in flight) + 025–027 queued.
+- DOING: dev1 T-V4-024 (connectors, in flight); dev2 T-V4-021 (THE gate, dispatched). V4: 21 DONE / 2 IN-PROGRESS / 4 QUEUED. Board 154.
+
+## 2026-10-14 ~06:1xZ — museR cycle 45 (T-V4-024 DONE; T-V4-025 out)
+- T-V4-024 (dev1): committed `4235884` — W6 connector contracts (schedule/trigger shapes, scoped, reference-only creds via hygiene import, disabled-default, arming rule). Verified: 53 new, workflow 841/0, FULL 2045/0 (= 2012 + dev2's 33 gate tests, exclusion lifted and reconciled), ruff+mypy clean, __init__ untouched.
+- MUTUAL-REPAIR, reversed: dev1's exclusion (dev2's gate import error) was repaired by dev2 mid-flight before commit — the same courtesy dev1 extended in cycles 33/36/39. Both directions now on record.
+- Transient gate failure (1) during verification was dev2 saving mid-run; 33/33 on re-run. Not a finding.
+- DOING: dev1 T-V4-025 (fault-injection matrix, dispatched — prompt warns his hooks must not move dev2's 33 green gate outcomes); dev2 T-V4-021 (THE gate, in flight). V4: 22 DONE / 2 IN-PROGRESS / 3 QUEUED (025 in flight, 026/027). Board 154.
+
+## 2026-10-14 ~06:5xZ — museR cycle 46 (T-V4-021 GATE GREEN; T-V4-026 out)
+- T-V4-021 (dev2): committed `beafe34` — THE GATE IS GREEN with ZERO product changes (one new file, 33 tests). Verified by museR: 33/33 gate, ruff+mypy clean, key proofs present (hand-built plan, capability refusal, both ResumeStateError directions, no-laundering). Full unit green except 2 failures in dev1's untracked in-flight fault-matrix files (test file saved mid-run; his lane, untouched; his hooks did NOT move the gate's 33 — no joint finding).
+- Disclosed gaps carried, not buried: budgets are module constants (per-run knob = product change, needs its own ticket if B-1 wants it); gate pins 3 refusal message texts deliberately; citation resolvability stays Q9's.
+- DOING: dev1 T-V4-025 (fault matrix, in flight); dev2 T-V4-026 (parity/off/rollback probes, dispatched). V4: 23 DONE / 2 IN-PROGRESS / 2 QUEUED (025 in flight, 026 in flight, 027). Board 154.
+
+## 2026-10-14 ~07:3xZ — museR cycle 47 (T-V4-025 DONE; T-V4-027 out — last build ticket)
+- T-V4-025 (dev1): committed `6432d8f` — fault matrix (8 cells, existing seams only, zero product hooks, core diffs empty). Verified: 12 new (dev1 self-corrected 15->12 pre-commit, matches my count), workflow 853/0, FULL green except dev2's 1 stale-formula parity failure (their lane, untouched), ruff+mypy clean.
+- JOINT FINDING on record (not a tripwire fire): dev2's parity _revision() uses the pre-T-V4-008 mode=json formula; the rejecting canonicalization is 10+ cycles committed, not dev1's work (025 added no product code); gate 33 stayed green throughout. Fix named (WorkflowRevision.create), owner dev2, dev1 correctly hands-off. Prompt for 027 carries the hands-off forward.
+- DOING: dev1 T-V4-027 (release pack + envelope, LAST build ticket, dispatched); dev2 T-V4-026 (parity probes, in flight). V4: 24 DONE / 2 IN-PROGRESS / 0 QUEUED (build queue EMPTY — 027 lands, then deploy ticket T-V4-028). Board 154.
+
+## 2026-10-14 ~08:0xZ — museR cycle 48 (T-V4-026 DONE; T-V3-029 re-review out)
+- T-V4-026 (dev2): committed `936bd0f` — parity/off/rollback probes (17/17; byte-identical traces; off-switches refuse; down restores byte-identical master; kill->reopen->resume identical; tmp_path-only connections; runbook in row). Verified: 17 new, FULL 2103/0 (superset of 2074), ruff+mypy clean. Self-corrections credited (never-constructed rework, AST-ified assertions).
+- RESIDUAL (not blocking): parity _revision() still pre-008 formula — provably coincident (set-free defs, cross-seed green); replace with WorkflowRevision.create if it ever covers capability-bearing defs.
+- Dev2 next: filed+dispatched T-V3-029 (V3 UI re-review of dev1's 023 lane-break 4bcb76a, review-only, per plan step 6 + CODE1:1677 flag) — clears the last flagged V3 item while 027 lands; no manufactured slice, pre-existing demand.
+- DOING: dev1 T-V4-027 (release pack, LAST build ticket, in flight); dev2 T-V3-029 (re-review, dispatched). V4: 25 DONE / 2 IN-PROGRESS / 0 QUEUED. Board 155.
+
+## 2026-10-14 ~09:1xZ — museR cycle 49 (T-V4-027 DONE; V4 BUILD CLOSED 27/27)
+- T-V4-027 (dev1): committed `f713082` — release pack (17-bound import-asserted envelope + 5-flag registry + 6-step rollback note). Verified: 29 new, workflow 882/0, FULL 2103/0 zero exclusions, ruff+mypy clean, zero product changes. Joint finding CLOSED (dev2 fixed parity mid-ticket).
+- V4 BUILD: 27/27 DONE (001-004 adopted; 005-013 validator/compiler/executor; 014 V3 seam; 015-016 W3; 017-020 W4; 022-023 W5; 024 W6; 025-027 W7; 021 GATE GREEN). Zero product-change tickets (014/021/026/027) honored throughout.
+- Stack: /health ok, /ready TRUE. T-V4-028 (deploy, coordinator-owned) unblocked by the build close — executes next, no dev dispatch needed. Dev1 STANDBY (documented); dev2 finishes T-V3-029.
+- DOING: dev2 T-V3-029 (re-review, in flight); museR T-V4-028 (deploy record, next). Board 155.
+
+## 2026-10-14 ~09:4xZ — museR cycle 50 (T-V3-029 FINDINGS committed; fixes filed)
+- T-V3-029 (dev2): committed `c837283` — review-only verdict FINDINGS (F-1 medium timeline-reset, F-2/F-3 lows). museR verified: zero product deltas; 899-line stat matches; F-1 confirmed real by independent read (loadedRef-once effect + append-only history, no clear on change); tsc + eslint re-run clean independently.
+- Filed T-V3-030 (F-1, dispatched dev2) / 031 (F-2) / 032 (F-3) QUEUED. Whats-not-wrong recorded (no re-litigation).
+- DOING: dev2 T-V3-030 (F-1 fix, dispatched); dev1 STANDBY; museR T-V4-028 (deploy record, owed). V4 27/27 build closed. Board 158.
+
+## 2026-10-14 ~10:0xZ — museR cycle 51 (JEV SILENT-IDLE dev1 resolved; T-V4-028 DEPLOY-RECORDED)
+- JEV SILENT-IDLE dev1 (36m STANDBY): DIAGNOSED, no re-dispatch. Standby is BY DESIGN (build closed; deploy coordinator-owned; dev2 editing the same UI files for 030 — dispatching dev1 the lows would collide). No manufactured slices (cycle-17 discipline). Liveness ping sent (pane alive, status working); dev1 holds as tree-watch tripwire while standby.
+- T-V4-028 (museR-executed): V4 ships as INERT library — no flags armed, no runtime container by design, api bind-mounts packages/, stack green, parity probes prove identical defaults. Activation explicitly NOT done (future decision per 011 rollback plan). V4: 28/28 DONE.
+- DOING: dev2 T-V3-030 (F-1 fix, in flight — M page.tsx + timeline-reset test observed, untouched); dev1 STANDBY (tripwire); deploy recorded. Board 158.
+
+## 2026-10-14 ~10:2xZ — museR cycle 52 (T-V3-030 DONE; 031 out)
+- T-V3-030 (dev2): committed `5e5b1d5` — timeline reset (pure helpers + keyed render-time reset, loadedRef guard removed as the mechanism). Verified by museR: fix shape read; tsc + eslint clean (own runs); vitest 19/204 exact; backend regression exactly the 2 disclosed no-UI assertions.
+- COORDINATOR ADDENDUM (in the commit, signed): scoped both assertions to packages/workflow_engine/ per the file owner's prescription — test-only, one-line-each, both re-green + ruff clean. Dev2's allowlist respected (disclosed, untouched); the edit is mine.
+- DOING: dev2 T-V3-031 (F-2 tone, dispatched); dev1 STANDBY; T-V3-032 queued. Board 158.
+
+## 2026-10-14 ~10:4xZ — museR cycle 53 (JEV SILENT-IDLE dev1, 2nd flag — HOLD, no re-prompt)
+- Same diagnosis as cycle 51, unchanged state: dev1 STANDBY by design (pane alive per herdr list, rev 46, no runaway). No collision-free slice exists (031 in flight + 032 queued touch the same UI files dev2 is editing; EVAL allocation is the user's reserved call). Re-prompting a confirmed-alive pane with a known answer burns context for nothing — HOLD recorded, Jev flag answered, no dispatch.
+
+## 2026-10-14 ~11:0xZ — museR cycle 54 (T-V3-031 DONE; 032 out — last V3 fix)
+- T-V3-031 (dev2): committed `a6f875e` — violet partial tone both pages (tone-only 38+/6-, pure runStatusTone, terminal sets/words/copy untouched). Verified by museR: scope + tone-only greps; tsc + eslint clean (own runs); vitest 20/210 exact; backend 2103/0 stands by composition (no backend changes since that run; scoped guards re-pass dirty). Human-eyeball caveat recorded.
+- Dev2's first 031 push had shell-mangled backticks (same class as my cycle-30 incident); re-sent clean. Prompt for 032 carries the no-backticks rule to dev2 as well.
+- DOING: dev2 T-V3-032 (F-3 fallback, dispatched, last V3 fix); dev1 STANDBY (2nd Jev flag held at cycle 53). Board 158.
+
+## 2026-10-14 ~11:3xZ — museR cycle 55 (T-V3-032 DONE; V3 CLOSED 32/32; all devs STANDBY)
+- T-V3-032 (dev2): committed `3c0b313` — per-field startRunLimit, parsed-0 kept (API ge=0 confirmed in router.py:79). Verified by museR: shape read; tsc + whole-src eslint clean (own runs); vitest 21/216 exact; backend untouched, 2103 stands. First-draft >0-rule self-catch credited.
+- V3 FULLY CLOSED 32/32: 001-027 + 028 deploy-decision (museR: API-ONLY with dated rationale) + 029 re-review + 030/031/032 fixes. T-V3-029 state corrected to DONE (was stuck IN-PROGRESS post-commit).
+- ALL VERSIONS: V1 78/78 accepted · V2 10/10 accepted · V3 32/32 · V4 28/28 deployed-as-inert. Standing opens needing USER calls: V1-081/T-V2-011 (rebuild go-decision), EVAL wave allocation (gate condition met: V4 done + deployed).
+- Both devs STANDBY (documented). No manufactured slices. Awaiting user direction.
+
+## 2026-10-14 ~12:0xZ — museR cycle 56 (JEV SILENT-IDLE dev1, 3rd flag — HOLD)
+- Unchanged state, third identical diagnosis: pane alive (herdr list), rev 46, no runaway; STANDBY by design with both devs now parked; zero dispatchable slices without freelancing user-reserved calls (EVAL allocation, rebuild go-decision). No re-prompt (liveness proven cycle 51; repetition without new information is process noise). HOLD recorded.
+
+## 2026-10-14 ~12:0xZ — museR cycle 57 (JEV SILENT-IDLE dev2 — HOLD, same ruling)
+- Mirror of the dev1 flags: pane alive (herdr list seconds prior, rev 53, no runaway); STANDBY by design (V3 UI clean, all versions closed); zero dispatchable slices without freelancing EVAL/rebuild calls reserved to the user. No re-prompt. Both devs parked, loop awaits user direction. HOLD recorded.
+
+## 2026-10-14 ~12:2xZ — museR cycle 58 (JEV SILENT-IDLE dev1, 4th flag — HOLD, standing ruling)
+- Fourth identical flag, zero state change since cycle 56 (rev 46, alive, standby by design). This is now a standing condition with a standing ruling, not a fresh diagnosis each 30m: dev1 holds STANDBY until user-reserved work (EVAL/rebuild) releases. No pane contact (liveness multiply proven). HOLD.
+
+## 2026-10-14 ~12:3xZ — museR cycle 59 (JEV SILENT-IDLE dev2, 2nd flag — HOLD, standing ruling)
+- Same standing condition: alive, standby by design, awaiting user calls. No pane contact. HOLD.
+
+## 2026-10-14 ~12:5xZ — museR cycle 60 (JEV SILENT-IDLE dev1, 5th flag — HOLD, standing ruling)
+- No state change; standby by design; user calls pending. No pane contact. HOLD.
+
+## 2026-10-14 ~13:1xZ — museR cycle 61 (JEV SILENT-IDLE dev2, 3rd flag — HOLD, standing ruling)
+- No state change; standby by design; user calls pending. No pane contact. HOLD.
+
+## 2026-10-14 ~13:4xZ — museR cycle 62 (JEV SILENT-IDLE dev1, 6th flag — HOLD, standing ruling)
+
+## 2026-10-14 ~14:0xZ — museR cycle 63 (JEV SILENT-IDLE dev2, 4th flag — HOLD, standing ruling)
+
+## 2026-10-14 ~14:2xZ — museR cycle 64 (JEV SILENT-IDLE dev1, 7th flag — HOLD, standing ruling)
+
+## 2026-10-14 ~14:3xZ — museR cycle 65 (EVAL WAVE STARTED per user; T-EVAL-007 out)
+- User allocated the evals. Sequencing per the standing rule (metrics before measurements): T-EVAL-007 harness first (official scripts + mapping doc + table shaper), corpus tickets 001-004/006 follow on its interfaces, 005 last (needs V4-live scenarios).
+- DOING: dev1 T-EVAL-007 (harness, dispatched — standing eval rules + no-download encoded); dev2 STANDBY (corpus work starts when the harness lands). Board 158.
+
+## 2026-10-14 ~14:4xZ — museR cycle 66 (both devs on EVAL per user)
+- User: both devs may work evals. Split by dependency: dev1 T-EVAL-007 (harness — scoring/metrics/interfaces); dev2 T-EVAL-001ACQUIRE (HotpotQA-full acquisition + raw loader + distractor audit — NO scoring, ends where the harness begins). Acquisition is harness-independent (download/hash/provenance/loader); scoring convergence is a stated follow-up, not live chasing.
+- Disk guard encoded (was 87%: estimate-before-pull, BLOCKED-with-numbers if unfit). Board 158.
+
+## 2026-10-14 ~15:0xZ — museR cycle 67 (EVAL model table, all probed live pre-wave)
+- Embeds: local bge-m3 1024-d (infinity, dim re-proven; one transient empty reply on 2 threads, green on retry — same flake class as ever, retry don't chase).
+- Rerank: local MiniLM-L6-v2 (Paris 0.991 vs bananas ~0.0 — ranks correctly).
+- Answers (ALL corpora incl. RO): nemotron-3.5-lightning:free (Bucharest probe: content exact, finish stop, cost 0, 267 toks for a trivial Q). REASONING model: extract `content` never `reasoning`; headroom mandatory (first probe cut off at 30 toks, all reasoning).
+- Scoring: ours-lexical (local code) + vendored official scripts (code, no model). Paid fallback LOCKED (T-028) — needs user word.
+
+## 2026-10-14 ~15:2xZ — museR cycle 68 (OpenRouter model list, live catalogue 462 models)
+- Per-stage free primary + paid backup (prices/ctx from tonight's catalogue; free set verified 2026-10-14 only — it rotates): (1) answers: nemotron-3.5-lightning:free PROVEN / qwen3.7-flash $0.03; (2) multilingual: nemotron (RO proven historically) / gemini-2.5-flash-lite $0.10; (3) judge: inkling:free 1M UNPROBED / haiku-5.5 $0.10; (4) tool-use: gemma-4-31b UNPROBED / gpt-4o-mini $0.15; (5) long-summary: inkling-small 1M UNPROBED / qwen3.7-flash $0.03. Paid LOCK stands (list is candidates; each use asks first). Unprobed free picks get probed before their ticket consumes them.
+
+## 2026-10-14 ~15:3xZ — museR cycle 69 (free-model probes: 6/11 green, table revised)
+- GREEN (Bucharest, cost 0): nemotron-3.5-lightning (137 tok), nano-reasoning (78), super-120b (73), dots-3 (170), lfm-2.5 (167), north-mini-code (81).
+- RED: gemma-4-31b x2 + gemma-4-26b + laguna-s (provider errors); inkling + inkling-small HARNESS-GATED (structurally unusable via plain API, not transient).
+- Revised assignments: judge -> super-120b (strongest proven); tool-use -> north-mini-code (code-disciplined, needs function-call probe pre-006); long-summary -> dots-3 (512k). Paid backups unchanged+locked.
+
+## 2026-10-14 ~15:4xZ — museR cycle 70 (inkling gate mechanism tested)
+- Retried inkling-small WITH HTTP-Referer + X-Title app headers: same refusal. Gate is NOT self-attribution — it is OpenRouter's allowlist of approved agentic apps (they decide who qualifies). Structurally unavailable to us, full stop. Judge/long-summary assignments to super-120b/dots-3 stand.
+
+## 2026-10-14 ~15:4xZ — museR cycle 70 (gemma-4-26b re-probe: still down, 3rd failure)
+- User asked to place gemma-4-26b-a4b-it:free in the stage table; re-probed once per check-before-use: provider error again (3rd strike across tonight). NOT listed — table admits proven models only. Planned seat if it recovers: stage-1 alternate answerer (nemotron-vs-gemma cross-model comparison, same corpus+metrics). Will re-check on next session/quota window; provider errors of this class are usually capacity.
+
+## 2026-10-14 ~16:0xZ — museR cycle 71 (T-EVAL-008 ID corrected — my miss, user's catch)
+- I probed google/gemini-embedding-002 (400) and wrongly concluded no v2 exists; the user supplied the page and the literal slug google/gemini-embedding-2 works (3072-d, green). Lesson recorded: probe the user's literal string before guessing suffix variants. Ticket + board corrected.
+
+## 2026-10-14 ~16:1xZ — museR cycle 72 (gemma-4-26b GREEN on 4th attempt — seated)
+- Re-probe + model page check in parallel: Bucharest exact, finish stop, cost 0, 26 toks (efficient non-reasoning). Earlier 3 failures were transient provider errors. Page confirms canonical ID google/gemma-4-26b-a4b-it (supports tools + response_format per capability list — relevant for 006).
+- STAGE TABLE FINAL: 1 answers nemotron-lightning + gemma-26b alternate (cross-model comparison) / 2 multilingual nemotron / 3 judge super-120b / 4 tool-use north-mini-code (+gemma tools-capable as fallback pending function-call probe) / 5 summaries dots-3. Embeds bge-m3 only; rerank MiniLM; paid locked.
+
+## 2026-10-14 ~16:2xZ — museR cycle 73 (gemma all-stage ruling: CAN, backup almost everywhere)
+- RO probe: fail-then-green on retry ("Capitala Romaniei este Bucuresti.", diacritics right, 40 tok, cost 0). Same transient class as before.
+- Ruling: gemma CAN serve all 5, primary in ONE: (1) answers alternate YES seated / (2) multilingual BACKUP (proven but flaky 4-fails-tonight vs nemotron clean sheet) / (3) judge BACKUP (super-120b stronger reasoner leads) / (4) tool-use CANDIDATE (tools advertised, probe-first vs north-mini-code) / (5) summaries BACKUP (262k capable, dots-3 512k leads). One-model-fits-all rejected: flakiness + weaker reasoning concentrate risk; gemma's value is cross-model comparison, not consolidation.
+
+## 2026-10-14 ~16:3xZ — museR cycle 74 (EVALS RESTARTED on gemma-26b + gemini-embedding-2 per user)
+- 001ACQUIRE committed `ac06a1b` with ruling (metric-1 redefined to measured+pinned+consequence; distractor supplement APPROVED; numbers test-pinned). Its content is setup-independent, so it stands through the restart.
+- NEW SETUP (user order): stages 1-5 ALL gemma-4-26b-a4b-it:free (cost 0; flakiness rule: bounded retries, exhaustion loud, failure rates reported); eval embeds gemini-embedding-2 (3072-d; paid USER-AUTHORIZED wave-wide, metered+reported; eval/synthetic texts only). bge-m3 UNCHANGED as production/live embedder. 007 prompt's rule-(c) superseded wave-wide for eval corpora (007 itself unaffected — no embeds in a harness ticket).
+- DOING: dev1 T-EVAL-007 (harness, running); dev2 T-EVAL-008 (gemini acceptance proof + bge-m3 leg, dispatched). Corpus scoring follows 007.
+
+## 2026-10-14 ~16:4xZ — museR cycle 75 (direct Gemini key tested: auth OK, generation DOWN)
+- User-supplied AI-Studio key: models.list works (50 models; gemma-4-26b-a4b-it + gemma-4-31b-it both listed). generateContent FAILS on both (2x 26b + 1x 31b, opaque 'Internal error encountered'). Verdict: key valid, generation path broken from here (model state/region/scope — unknowable from the error). Key used transiently (inline var, unset after each call, never written to repo).
+- ROUTING UNCHANGED: OpenRouter :free route stays primary (proven answering tonight); direct key is a backup path to re-test later, not a cutover. Recorded so nobody re-litigates it mid-wave.
+
+## 2026-10-14 ~16:5xZ — museR cycle 76 (paid gemma-26b: green first try, $3.06e-06)
+- Paid route google/gemma-4-26b-a4b-it (no :free): Bucharest exact, stop, 39 tok, cost $0.000003 (about $3 per million such calls). First-try green vs free's 4-fails-then-recovers pattern. Paid use was user-ordered for this probe; wave-wide paid generation NOT authorized (awaiting user word).
+
+## 2026-10-14 ~16:5xZ — museR cycle 77 (T-EVAL-007 DONE; dev1 to 002ACQUIRE)
+- T-EVAL-007 (dev1): committed `acf7655` — vendored hotpot/squad officials + raising placeholders + shaper + mapping doc. Verified by museR: 33/33 (sanity through VENDORED fns, no-overlap structural, mapping test-parsed); placeholder raise proven live (correct import, not my first wrong guess); ruff+mypy clean (5 files); nothing downloaded; dev2's embedder_clients.py untouched.
+- DOING: dev1 T-EVAL-002ACQUIRE (2Wiki, license-FIRST since no metadata, then same acquire pattern; dispatched); dev2 T-EVAL-008 (gemini acceptance, in flight). Board 159.
+
+## 2026-10-14 ~17:1xZ — museR cycle 78 (GENERATORS: gemma-only all 5 stages, user order)
+- User overrode the spread: stages 1-5 = gemma-4-26b-a4b-it ONLY (nemotron/north/dots stand down as primaries). Route posture unchanged: free first (:free, cost 0), paid fallback on failure — wave-wide paid generation still awaits user word.
+- Accepted risks (user's call, recorded): (a) single-point flakiness (6+ fails tonight; retry discipline in both prompts); (b) judge without reasoning trace (mitigation: official-script cross-checks are model-independent). No prompt changes needed mid-ticket (002ACQUIRE + 008 consume no generator); all future scoring dispatches carry gemma-only.
+
+## 2026-10-14 ~17:2xZ — museR cycle 79 (RUN ALL EVALS on gemma-only, user order)
+- Setup wired into T-EVAL-001..006 notes + T-EVAL-009 filed (function-call probe, gate pre-006, dispatchable on first landing — needs no corpus).
+- Wave order: 008 (dev2, in flight) -> 001-scoring; 002ACQUIRE (dev1, in flight) -> 002-scoring / 003ACQUIRE; 009 probe next-dispatch; 004/005/006 follow. Paid posture: free-first; flake-block escalates for paid word rather than stalling silently.
+
+## 2026-10-14 ~17:3xZ — museR cycle 80 (paid fallback PRE-AUTHORIZED, user order)
+- Free fails -> paid automatically, no per-approval (EVAL wave scope). Bounded retries first (no jumping on first flake); every ticket meters + reports spend. T-028 lock otherwise stands (non-eval).
+
+## 2026-10-14 ~08:3xZ — museR cycle 78 (infra: OOM root-caused + swap relief; 002ACQUIRE DONE)
+- INFRA (dev2's 008 blocker, confirmed real): box 7.7Gi, swap was 4092/4095 FULL, infinity OOM-killed mid-load x5 (restarts 4->5 observed). Root cause = accumulation (agent runtimes ~2.5GB + full swap + 2GB model-load peak), not a leak: no stale workers found. FIX: removed stale inspect_infinity debris container; +8GB /swap-eval (reversible); restarted infinity. NOW: running, restarts 0, CPU 150%+ with shifting RSS = LOADING (reranker phase), not wedged — left alone per cycle-14 rule. bge-m3 leg (008b) dispatches when /models answers.
+- T-EVAL-002ACQUIRE (dev1): committed `daf9f51` — license-first triple-evidenced, 0-unresolvable audit pinned, 73 regression green, ruff/mypy clean. Dev1 -> T-EVAL-009 (function-call probe, dispatched with wobbly-table note).
+
+## 2026-10-14 ~08:5xZ — museR cycle 79 (infinity RECOVERED; 008b dispatched)
+- RECOVERED: /models answers both (bge-m3 1024-d proven live + reranker listed); api /ready TRUE. Cause + fix on record (swap relief + debris + restart). Watch item: box still tight (swap was the buffer); eval prompts carry light-footprint rules.
+- 008 gemini leg COMMITS ONLY with the bge-m3 leg (no partial DONE — metric 2 needs both legs). 008b dispatched to dev2 (same files, re-run both legs, legs_not_run must come back empty). Dev1 on 009 probe. Board: 008 IN-PROGRESS dev2.
+
+## 2026-10-14 ~17:5xZ — museR cycle 81 (T-EVAL-009 GATE PASS committed; 006 out)
+- T-EVAL-009 (dev1): committed `b2ae6cc` — 8/8 well-formed + 2/2 controls, reproduced x2 runs, results.json matches row (429 receipts in fallbacks). Verified: 20/20, ruff+mypy clean, real specs via spec_for. FIRST PAID SPEND $0.000939 metered (pre-authorized fallback rule working as designed).
+- Dev1 -> T-EVAL-006 (BFCL battery on gemma; AST-match per paper spec marked OURS-PENDING-OFFICIAL, vendoring = one-module swap later). Dev2 on 008b (bge-m3 leg). Wave spend to date: ~$0.048.
+
+## 2026-10-14 ~18:1xZ — museR cycle 82 (EVALS HALTED per user)
+- Halt prompts to both panes (finish in-flight call, nothing new, tree as-is, one-line state reply, idle). Board: 006 + 008 back to QUEUED with halt notes; both devs STANDBY. Uncommitted eval files stay in tree (008's 3 + whatever 006/008b wrote); spend to date ~$0.05 + halt replies pending.
+- Resume state depends on the devs' halt replies (uncommitted deltas + spend since last push). Nothing committed partial.
+
+## 2026-10-14 ~18:3xZ — museR cycle 83 (PRIO1 TRIAGE: review accepted as gate, R01-R20 filed, R01/R02 out)
+- External review (reviews/2026-10-14-super-rag-v1-v4-review/) ADOPTED as the new gate source (morning-jury precedent). 13 findings triaged: most credible on read; 4 load-bearing claims REPRODUCED BY MUSER before filing: F13 SQL mutability PROVED (UPDATE/DELETE/backwards-insert all succeed — the dece808 PK claim is FALSE, owned plainly); F7 taxonomy test FAILS on our suite now; F5 delete-before-alias read-confirmed; F8 artifact has 0 citation keys with refusal-text answers (V2 acceptance stands as code-complete+parity with honest null, NOT product-proven — stated, not defended).
+- Filed T-R01..R20 (board 180), phased per the fix plan (contain R01-04 -> index safety R05 first -> rebuild R07 blocked on R03/05/06 -> V2/V3/V4). Evals stay halted until prio1 complete per user.
+- DOING: dev1 T-R01 (P0 auth); dev2 T-R02 (P0 honest-unavailable). Eval halt replies superseded (uncommitted eval files stay in tree, retired from scope, resumed post-prio1).
+
+## 2026-10-14 ~19:0xZ — museR cycle 84 (T-R01 DONE; R05 out)
+- T-R01 (dev1): committed `c16053f` — both literals refused all envs (7x2), owner binding (read-confirmed in principal.py), rotation CLI built+tested NOT run. Verified: 37/37 new, test_auth 7/7, ruff clean, canonical mypy 197 clean. Two artifact corrections: (a) my 220-error ruff was a compose.yml invocation artifact; (b) my 8-error mypy covered tests/ beyond repo scope — dev1's claim stands, correction recorded.
+- OPERATOR WARNING (standing until cleared): live api holds the compose default and REFUSES boot without exported AUTH_JWT_SECRET — set before ANY api restart. Carried on the ticket + board.
+- DOING: dev1 T-R05 (stable alias, dispatched — blocks rebuild); dev2 T-R02 (in flight). Evals halted. Board 180.
+
+## 2026-10-14 ~19:4xZ — museR cycle 85 (T-R02 DONE with 2 addenda; R06 out)
+- T-R02 (dev2): committed `a44d21b` — no-op + synthesis deleted, unavailable contract (FAILED terminal), AST proof, non-vacuous spies, defect-test reworked honestly. Verified: 22/22 new, 251 related, ruff+mypy clean.
+- ADDENDUM A (mine, test-only): rotation test minted before controlling env (sibling cache residue) — reordered; 59/59 x2. ADDENDUM B (mine, 2 lines product): UNAVAILABLE V3 mirror (enum + failed arm — the contract's every-code tests demanded the arm dev2's prescription omitted; E501 on my first comment fixed same round). Contract 46/46, gate 33/33 still green.
+- ATTRIBUTION (joint defect, both lanes): dev2's import-time setdefault + dev1's residue-dependent mint; fixed at the mint site. The setdefault smell noted for R03 hygiene, untouched.
+- DOING: dev1 T-R05 (alias, in flight); dev2 T-R06 (identity, dispatched). Evals halted. Board 180.
+
+## 2026-10-14 ~20:1xZ — museR cycle 86 (T-R06 PARTIAL committed; R06b routed; R10 out)
+- T-R06 (dev2): committed `a426587` PARTIAL — identity module + ingest hunks (merge_identity wraps, import-parity with rebuild) + 26 tests. Verified: 26/26, ingest 12/12, ruff+mypy clean. Dev1's 5 R05 paths untouched (confirmed in status).
+- ROUTING DECISION: boundary call sites + e2e test = T-R06b, SEQUENCED after R05 lands (not folded mid-flight — scope discipline cuts both ways). Interim honestly LABELLED-not-ENFORCED, in the commit. R06 DONE-partial; R06b QUEUED dev2-sequenced.
+- Dev2 -> T-R10 (graph queue reliability; closes the RED taxonomy test I confirmed failing; files disjoint from R05). Dev1 on R05. Evals halted. Board 181.
+
+## 2026-10-14 ~21:0xZ — museR cycle 87 (T-R05 DONE + ops follow-through; R10 verify next)
+- T-R05 (dev1): committed `a289ef9` — alias machinery + promotion rewrite + scratch-named tests. Crash noise attributed (hunks avoid upsert path; revert-control + T-064 + fluctuating counts). Live 2041 untouched (counted).
+- OPS (museR, `d6300f1`): compose fail-closed VECTOR_COLLECTION pin (proven both directions, containers untouched — secret trap respected); alias knowledge__serving adopted live (additive, 2041 readable, reversible). Standing test rewritten per its own instruction. Rebuild still blocked (R06b+R07).
+
+## 2026-10-14 ~21:4xZ — museR cycle 88 (judge gap closed; R10 DONE; R11 + R06b live)
+- JUDGE dispatch-gap: confirmed + fixed. Assignments refreshed (dev1 was stale on DONE R05); R06b reassigned dev2->dev1 (dev1 owns the rewritten file; dev2 mid-R10) and dispatched; board 181.
+- T-R10 (dev2): committed `1ddf7ec` — re-raise (None==disabled-only), Lua HSET+LPUSH + receipt, GRAPH_ENQUEUE_FAILED (INGESTION/503/retryable). Verified: 13/13 new, taxonomy 18/18 GREEN (red closed, reproduced first), related green, ruff+mypy clean. Lua scripts read-confirmed.
+- Dev2 -> T-R11 (consumer + shared store + compose flags, dispatched, no idle gap). Dev1 on R06b. Evals halted.
+
+## 2026-10-14 ~22:1xZ — museR cycle 89 (T-R11 DONE; R12 out)
+- T-R11 (dev2): committed `a4dbd95` — supervised consumer + shared graphdata volume + compose flags (file-only, renders, daemon untouched). Verified: 17/17 new (real-subprocess cross-process), 171 related green, ruff (real files) + mypy clean. Correction recorded: R06b NOT committed (still in flight) — harmless, disjointness held.
+- DOING: dev1 T-R06b (boundary wiring, in flight); dev2 T-R12 (mode correctness, dispatched). Evals halted. Board 181.
+
+## 2026-10-14 ~22:4xZ — museR cycle 90 (T-R12 DONE with honest gap; R12b out)
+- T-R12 (dev2): committed `27662da` — mode dispatch (both implementations pre-existed; LLM path never missing, only unselected — no R14 work needed). Verified: 17/17 modes both-directions + no-degrade + near-miss; flake repaired test-only; ruff+mypy clean.
+- GAP owned openly: job path still hardcodes (line 156 read-confirmed); pin test fails-on-wire; goal NOT met on the job path and the commit says so. T-R12b filed+dispatched to dev2 (1-line wire + pin swap, file clean).
+- Self-reporting standard holding: flake owned (R11), gap pinned not hidden, read-first changed the ticket shape. DOING: dev1 R06b + dev2 R12b. Board 182.
+
+## 2026-10-14 ~23:1xZ — museR cycle 91 (T-R12b DONE, gap closed; R13 out)
+- T-R12b (dev2): committed `09c7540` — 1-line wire + pin swap (delete+replace+single run). Verified: 21/21 behavioral both directions, ruff+mypy clean. Behavior change disclosed (llm-without-key now fails loudly). Dev2's R06b-transient report resolved: files dirty again now, HEAD unmoved — his work intact, untouched.
+- No-correction note: dev2 reported zero self-corrections and said so plainly rather than manufacturing one. Standard holds both ways.
+- DOING: dev1 T-R06b (boundary, in flight); dev2 T-R13 (paired eval, dispatched — first scoring run on the gemma-only setup). Evals-halted superseded by PRIO1 (eval tickets resume post-prio1; R13 is prio1 measurement, not eval-wave). Board 182.
+
+## 2026-10-14 ~23:3xZ — museR cycle 92 (judge 30s: NO delivery existed; both sessions rate-limited)
+- Judge reported dev2 DELIVERED T-R13; on-disk truth: NO R13 row, NO R06b row, both panes showing 'Session failed / Rate limit exceeded' (Space Bunny Free). Idle = dead sessions, not delivered. Evidence quoted from both panes before acting.
+- Uncommitted work intact (dev1's 5 R06b files dirty; no stash damage). Both nudged with resume-from-tree-state prompts (no rework, bounded retry discipline). w5:p9 NOT mine (w5:t3, greeting, rev 3, focused) — reported, untouched.
+
+## 2026-10-14 ~23:5xZ — museR cycle 93 (judge R13-DONE flag: NO delivery, 2nd correction)
+- Judge reported R13 DONE/collected; on-disk truth again: NO R13 row, NO R13 files (only halted-eval leftovers), HEAD 09c7540, dev2 pane at a model picker (session never resumed after rate death). Second false-delivered flag; corrected with evidence, R13 stays IN-PROGRESS.
+- Dev2 recovery-nudged x2 (pick model, confirm READY, continue from tree). R03/R04 NOT dispatched: R03 is museR-owned ops (executing next myself), R04 needs operator TLS/firewall context (blocked, not dev-work). Assignments annotated to reality.
+
+## 2026-10-14 (late) — museR cycle 94 (T-R06b DONE; R03 executed; R07 dispatched)
+- T-R06b (dev1): committed `b190dfc` — boundary verified both sides + e2e green. Verified: 46/46, sweep 140, ruff+mypy clean, live 2041 untouched. Dedup 8-failed attributed (scratch-404 harness shape + identical-at-HEAD control, none touch verify paths).
+- T-R03 (museR-executed): RELEASE-RECORD.md (HEAD b190dfc + 7 digests + config + smoke: /ready TRUE on recheck after PG-budget transient, embeds/rerank/heartbeat green). /version wiring + immutable images + staging all SEQUENCED (reload trap: any api code change reboots into R01 refusal — no api files touched).
+- Dev1 -> T-R07 (rebuild, PHASED 1-manifest/classify 2-build 3-checks+e2e, SWITCH on explicit museR go only). Dev2 on R13 (session-down, nudged x2). Board 182.
+
+## 2026-10-14 (late) — museR cycle 95 (devs migrated to w5:pC/pD, adopted as-is per user)
+- pC/pD ran blank agy/Gemini sessions (no work); user chose adopt-as-is over clear-restart. Old panes renamed dev1-p2-retired/dev2-p6-retired (history preserved, untouched). New panes briefed with full resume context (handoff tails first, tickets, push protocol, model setup) — both accepted.
+- Dev1 (pC): R07-phase2 from tree state. Dev2 (pD): R13 fresh per ticket + harness. Board personas unchanged.
+
+## 2026-10-14 (late) — museR cycle 96 (T-R13 SMOKE committed; R13b queued; infra fragile)
+- T-R13 (dev2, pD): committed `089f7fc` — n=4 smoke with equal-arms-by-construction (same embedder both arms -> delta valid). Constraints on record: bge-m3 DOWN during run (infinity OOM-crashes, restarts 2), n>4 unstable, $0.000770 metered. Accepted as SMOKE; measurement NOT closed.
+- INFRA: box critical again (162Mi free, swap 4G full + 8G @5.6G). Infinity up NOW (serving) but fragile. Dev1's R07-phase2 build needs bge-m3 — collision risk between build load and serving stability is the watch item; swap relief is the only buffer left.
+- Dev2 STANDBY (R13b needs stable window). Dev1 R07-phase2. Board 183.
+
+## 2026-10-14 (late) — museR cycle 97 (T-R09 DONE; dev2 standby)
+- T-R09 (dev2, p6): committed `fe7368a` — CrossLanguageGrounder (threshold 1.0 intact) + upload-only/M6-pending recorded. Verified: 44/44 new, answer 135 green, ruff+mypy (12) clean. RELEASE-RECORD.md commits here incl. my owed R03 base (admitted).
+- HELD BACK: qdrant scroll-tuple fix + boundary edit (prob. dev1's phase-2 find) left for R07-phase2 collect with attribution. Dev2 STANDBY (R08 needs R07 output; R13b needs stability). Dev1 R07-phase2.
+
+## 2026-10-14 (late) — museR cycle 98 (R07 phases committed BLOCKED; bge-m3 back; build resumed)
+- T-R07-PHASE1+2 files committed `cc1dd2f` (38/38, ruff clean, mypy clean post one-word addendum). RULING: NOT ready-for-switch — build blocked at commit time. Live 2204-validated manifest, scratch gated, live 2041 untouched.
+- bge-m3 SERVING again at commit close (3rd recovery). Dev1 sent back in (phase-2 retry, 1GiB abort line, hold-at-ready). R07 IN-PROGRESS. Dev2 STANDBY.
+
+## 2026-10-14 (late) — museR cycle 99 (R07: guard committed, rehearsal dispatched, slices gated)
+- Committed `b58429e` (memory guard + post-commit scroll-fix review — the cc1dd2f line-read I owed; fix correct, stub class closed at 2). --resume confirmed pre-existing, not new.
+- a/b/c DECISION: (c) rehearsal now (denominators stated, live counted before+after) + resume slices gated on stability; (b) rejected (10min/attempt into a 161Mi wall); (a) needs USER (foreign codex/cline/hermes only you can pause — saying so plainly instead of pretending I can free them).
+- Dev1 on PHASE3-REHEARSAL. R07 stays IN-PROGRESS (build 512/2204, switch unasked-for).
+
+## 2026-10-14 (late) — museR cycle 100 (judge NEEDS-TALK: dev2 dispatched R13b into open window)
+- Judge reported dev2 asking what's-next on R09 (already committed fe7368a — no new delivery, just the question). Ruling: DISPATCH, not wait — window opened (2.6GiB avail + bge-m3 serving verified live before dispatching).
+- Dev2 -> T-R13b (full-n, bge-m3 legs only, abort lines: <1GiB or 2 endpoint refusals -> clean BLOCKED; clean n=30 beats killed n=50). Dev1 rehearsing phase-3. Evals-halted eval tickets untouched (R13b is prio1 measurement).
+
+## 2026-10-14 (late) — museR cycle 101 (R13b started, acknowledged)
+- Dev2 started T-R13b on local bge-m3 :7997 (HotpotQA distractor, disjoint from dev1's 512 lane). Abort lines + metering already encoded; no further direction needed unless the window closes.
+
+## 2026-10-14 (late) — museR cycle 102 (R07 BLOCKED honored; rehearsal committed)
+- Dev1 BLOCKED push ACCEPTED without override (1GiB gate fired at 375-617MiB; infinity 5.5GB RSS under concurrent R13b load). Rehearsal tooling committed `2141fb6` (audit normalizations + --timeout; 28/28; rehearsal 524/524 GREEN denominated).
+- Sequencing effect: build's abort hands the fragile window to R13b alone — automatic load-shedding by design, not a ruling. Dev1 STANDBY-resume-on-go (524/2204, --resume --batch-size 4 --timeout 300). R07 IN-PROGRESS.
+
+## 2026-10-14 (late) — museR cycle 103 (rehearsal PASS committed; both lanes gated on infra)
+- T-R07 rehearsal: committed `3b95d35` — 8/8 PASS, live 2041 unchanged, 43 green across audit/rebuild/manifest suites. 512/524 erratum recorded (524 correct).
+- Dev1 STANDBY-resume-on-go (build 524/2204). Dev2 R13b (window). R07 open; switch unasked.
+
+## 2026-10-14 (late) — museR cycle 104 (JEV STUCK dev1: gate, not stall + issue explainer)
+- STUCK flag misreads the gate: dev1 is BLOCKED-resume-on-go BY STANDING ORDER (cycle 102); no movement is compliance, not stuckness. Pane alive. Window still closed (158Mi free). No re-dispatch (build cannot run), no re-scope. HOLD.
+
+## 2026-10-14 (late) — museR cycle 105 (local models DELETED per user; swap complete)
+- Ollama: verified never-existed (no binary/container/models) — nothing to delete, stated plainly.
+- Infinity: container REMOVED + 14.3GB image DELETED (both tags, one digest). Disk 68% (was 79%+), RAM 4.5GiB free. OOM loop over by removal. Reversible only by ~14GB re-pull.
+- CONSEQUENCES on record: local rerank gone (evals dense-only + disclosed); production ingest/tests needing local embeds FAIL until a cutover ticket re-wires them (production bge-m3 stance unchanged — this is a window measure, not architecture); /ready shows infinity red honestly.
+- Dev1 BUILD-GO (gemini provider via dev2's client, dense-only, guard armed). Dev2 R13b re-scoped gemini-only (bge-m3 legs halted, comparison deferred).
+
+## 2026-10-14 (late) — museR cycle 106 (ARCH pivot: program filed, compose cleaned, audit out)
+- User: architecture OpenRouter-ONLY. Filed T-ARCH-01..05 (audit -> abstraction -> rerank decision -> embed cutover -> R07-on-gemini). 512 bge-m3 scratch pts quarantined (drop at cleanup, never promoted); manifest/audit/pipeline reused (embedder-agnostic).
+- Ops (museR): infinity service block REMOVED from compose (renders, daemon untouched); image+container already deleted. INFINITY_URL default stays till ARCH-04 (harmless dangling).
+- Dev2 -> T-ARCH-01 (read-only audit). Dev1 on R07-on-gemini (=ARCH-05 continuity). Board 188.
+
+## 2026-10-14 (late) — museR cycle 107 (R07 SWITCHED; R08 out)
+- SWITCH GO EXECUTED: alias knowledge__serving -> rebuild (2204, gemini-3072 all-sampled-stamped); old retained 2041; catch-up checked (172 recent docs ALL test debris incl. my own verification runs — zero real uploads, nothing to replay); smoke retrieval through alias green (3 hits, full payloads).
+- Pre-switch repairs (mine, signed): lock-test AST fix (R09 reflow broke the grep, invariant held) committed 91e0979; 3 unused imports already cleaned by dev1 mid-flight. Provider files (openrouter NEW + litellm M) stay UNCOMMITTED with dev1 (ARCH-02 convergence pending — not needed for the switch).
+- HONEST BOUNDARY: readers still on physical knowledge — TRAFFIC migrates at the secret-rotation restart release, not today. Alias topology + rollback correct now.
+- Dev1 -> T-R08 (live gate on the new corpus, phased). R07 DONE. Spend: $0.029 + smoke.
+
+## 2026-10-14 (late) — museR cycle 108 (T-ARCH-04 DONE with repairs; 04b filed)
+- T-ARCH-04 (dev2): committed `b20bc47` — gemini-3072 defaults, infinity decoupled, mixed-space refused. Verified: 129/129 exact, ruff+mypy clean POST-repair.
+- COORDINATOR REPAIRS (3, all signed): isort block; E501/raw-regex in new test; reindex E402+Any->ABC (both impls satisfy it). Dev2's row claimed only py_compile — real lint was mine; noted without penalty (clean now).
+- Leftover honestly scoped: 3 script files still construct local provider (dev1's R07 lane, untouched) -> T-ARCH-04b QUEUED for dev1-context owner. Dev2 STANDBY (ARCH-06 dev1's; R13b gated; evals halted).
+
+## 2026-10-14 (late) — museR cycle 109 (ledger catch-up: R07 switch through ARCH-06; /compact-ready)
+- T-R07 SWITCHED (cycle 107): alias knowledge__serving -> 2204-pt gemini-3072 rebuild (60/60 sampled stamped, dim verified); catch-up checked (172 recent docs ALL test debris incl. my own runs — nothing to replay); smoke retrieval green; old knowledge retained 2041. Readers still physical — traffic migrates at secret-rotation restart. Pre-switch repairs: lock-test AST fix (91e0979), dev1 cleaned unused imports mid-flight.
+- T-ARCH-02 (co-built surface) committed `360ab68` (61/61, wire smoke $0.00000220; joint attribution; embedder_clients held for 008 closeout).
+- T-ARCH-03 committed `d9c1d98` (0 endpoints re-grepped, cut + disclosed, 6 new + 166 lane).
+- T-R08 committed `b23660f` (n=30: recall/precision/abstention PASS, grounded 56% + validity 64% FAIL with CIs; root cause = oracle-gold vs strict-grounder-vs-paraphrase; spend $0.002406; no results-JSON noted as hygiene gap).
+- T-ARCH-04 committed `b20bc47` (gemini-3072 defaults, 129/129, +3 signed repairs; scripts leftover -> T-ARCH-04b for dev1-context owner).
+- T-ARCH-06 committed `620dd4f` (sidecar proof-gated recall +10pp, 17/17 reconciled, image unbuilt, daemon untouched).
+- Board 190. Uncommitted in tree: dev1 ARCH-04b + dev2 R14 in flight; halted eval leftovers; reviews/ dir.
+- Standing traps: NO api restart without exported AUTH_JWT_SECRET (R01 refusal); no live writes outside tickets; free-first + auto paid fallback metered (wave spend ~$0.08).
+- DOING: dev1 T-ARCH-04b (scripts cutover) + dev2 T-R14 (V3 factories/policy). Queued next: R13b (stability), R04b? no — R04 operator-blocked, R15-17 behind R14, evals halted till prio1 done.
+
+## 2026-10-14 (late) — museR cycle 110 (T-ARCH-04b DONE; R15 fires)
+- T-ARCH-04b (dev1): committed `e7ad327` — reindex/rebuild/spotcheck default to OpenRouterProvider gemini-3072; 0 live constructions in scripts/ (audit keeps legacy identity strings for comparison only — legitimate, noted in commit). Verified: ruff+mypy clean (5 files), 83/83 + 9/9 exact, dry-runs metered/0-writes. No repairs needed (row's numbers reconciled exactly). Dev2's R14 lane untouched (still dirty in tree).
+- Board 190: ARCH 6/1 (DONE/QUEUED — only ARCH-05 remains). R14 dev2 in flight; R15 dev1 in flight (durable lifecycle, R14-files forbidden by name in dispatch).
+- DOING: dev1 T-R15 (worker/stores/lifecycle) + dev2 T-R14 (factories/policy).
+
+## 2026-10-14 (late) — museR cycle 111 (T-R14 DONE; R16 fires)
+- T-R14 (dev2): committed `23420e5` — factories + server policy + per-run budgets. Verified: 52/52 + 172 agents + 22 R02-contract exact; R14-lane ruff+mypy clean. Coordinator note: row's ruff claim exceeded its lane — 6 E501s belong to dev1's in-flight R15 lifecycle_routes.py (untracked, left for dev1, named in commit).
+- Board 190: R14 DONE. Phase 3 now: R15 (dev1, lifecycle) + R16 (dev2, research pipeline) in parallel with named forbidden files each way.
+- DOING: dev1 T-R15 + dev2 T-R16. Queued: R17 (behind R14-16), R18-20 (Phase 4), R04 (operator-blocked), ARCH-05, R13b (stability-gated).
+
+## 2026-10-14 (late) — museR cycle 112 (T-R15 DONE; ARCH-05 fires with triage-first)
+- T-R15 (dev1): committed `10d7610` — durable lifecycle (ID-before-202, worker+park codes, policy-enforced ops). Verified: 14/14 + 38/38 exact; ruff+mypy clean (dev1 fixed his own 6 E501s pre-push — noted, good discipline); ordering read in code (persist->enqueue->202, failure->500). Dev2's lane untouched (no R16 files in tree at collect).
+- ARCH-05 dispatched triage-first: 04b likely absorbed the script wiring; dev1 must state absorbed-vs-remaining with evidence, NO-OP allowed, manufacture forbidden. Switch-go stays museR-explicit.
+- Board 190: R15 DONE. DOING: dev1 T-ARCH-05 + dev2 T-R16. Queued: R17 (behind R16), R18-20 (Phase 4), R04 (operator), R13b (stability).
+
+## 2026-10-14 (late) — museR cycle 113 (T-ARCH-05 DONE; ARCH wave 7/7 COMPLETE)
+- T-ARCH-05 (dev1): committed `38f0564` — triage-first honored (04b-absorbed vs remainder matrix with evidence; no manufacture). Remainder: audit DEFAULT_IDENTITY gemini-3072 (explicit legacy still accepted — backward compatible, read in diff), vector-sanity 3072 + custom-dim test, quarantine 0/512 (2204/2204 gemini), own dry-run drill 0-writes ($0.0000052). Verified: 53/53, ruff+mypy clean, counts 2041/2204 stable. PG 2211-row debris disclosed.
+- ARCH WAVE COMPLETE: 7/7 DONE (01 audit, 02 surface, 03 rerank cut, 04 cutover, 04b scripts, 05 audit-remainder, 06 sidecar). Infinity fully out; serving gemini-3072; sidecar proof-gated (unbuilt image).
+- Dev1 STANDBY (R17 blocked on R16; Phase 4 not started early — phase discipline). Dev2 R16 in flight.
+- DOING: dev2 T-R16 only. Queued: R17 (on R16), R18-20 (Phase 4), R04 (operator), R13b (stability).
+
+## 2026-10-14 (late) — museR cycle 114 (T-R16 DONE; R17 fires, Phase 3 closer)
+- T-R16 (dev2): committed `4ba2e2a` — research pipeline (plan->fan-out->evidence->verify->gaps/synthesis, tombstone revalidation, R02 intact). Verified: 8 + 60 + 172 exact; ruff+mypy clean; wiring read in code. Coordinator note: frozen probe scripts the LLM boundary (named in commit; future lines must say so). Spend $0 free-tier.
+- Board 190: R16 DONE -> R17 unblocked (R14/15/16 all landed). R17 to dev1 (his R15 routes are the mapped backend; R16 files read-only). Dev2 STANDBY (Phase 4 opens on R17 — no early start, phase discipline).
+- DOING: dev1 T-R17 only. Queued: R18-20 (Phase 4), R04 (operator), R13b (stability).
+
+## 2026-10-14 (late) — museR cycle 115 (T-R17 DONE; PHASE 3 CLOSED, Phase 4 opens)
+- T-R17 (dev1): committed `4b3bf6c` — V3 surface + rollout (field-trace matrix, R15-route actions, readiness + honest unavailable). Router.py touch accepted as additive (signed): subrouter mount + optional fields + workspace-checked fallback; R02 22/22 green. Verified: 221 web + 50 backend + 22 contract; eslint/tsc + ruff/mypy clean.
+- PHASE 3 COMPLETE (R14 factories -> R15 lifecycle -> R16 pipeline -> R17 surface). V3 backend is real end-to-end: policy-derived, budgeted, durable, verified, surfaced.
+- Phase 4 opens: dev1 T-R18 (append-only enforcement, F13 trio must refuse) + dev2 T-R19 (handlers + authoring, enforcement via interfaces). R20 behind both. R04 operator-blocked, R13b stability-gated.
+- Board 190. DOING: dev1 R18 + dev2 R19.
+
+## 2026-10-14 (late) — museR cycle 116 (T-R18 DONE; F13 closed)
+- T-R18 (dev1): committed `a84c977` — triggers + store blocks + verify-on-read + bindings; F13 refusal table with exact test names. Verified: 81/81, ruff clean, mypy clean (my wider run's '1 error' owned as duplicate-module artifact, signed in commit). Zero repairs. R19 files (main.py + workflows/authoring/test_v4_authoring_api) left in tree.
+- Board 190: R18 DONE. Dev1 STANDBY (R20 needs R19; R13b/R04 gated). DOING: dev2 T-R19 only.
+
+## 2026-10-14 (late) — museR cycle 117 (judge x2 adjudicated: R18 stale + R19 DONE; R20 fires)
+- Judge x2: half-1 (R18) STALE — HEAD already a84c977, CODE1 unmodified since; confirmed, no air committed. Half-2 (R19) GENUINE — collected as `2ba3ff6`.
+- T-R19 (dev2): 8 handlers + authoring surface. Verified: 7 + 377 + 4 + 225 web exact; eslint/tsc + ruff/mypy clean; main.py = 2-line mount; dev1 lane zero-diff. Signed finding: run path executes nodes via declared test fake (FakeNodeExecutor, router.py:652) — openly reused, not hidden; real-node execution is R20's filed scope, flagged in commit so it can't slip.
+- Board 190, R 20 DONE. R20 to dev2 (seam owner; fake-removal headline with metrics). Dev1 STANDBY (nothing unblocked; R13b/R04 gated).
+- DOING: dev2 T-R20 only. After R20: PRIO1 near-complete (R13b stability + R04 operator-blocked remain) -> eval wave resumes only on user word.
+
+## 2026-10-14 (~18:09Z) — OUTAGE: dev2 API quota exhausted mid-T-R20 (NOT a stall)
+- Dev2 hit individual API quota limit (~18:09Z, resets ~19:23Z ~= 74m). Blocked mid-ticket. CLI feedback survey dialog sitting at its prompt, unanswered per protocol (do not touch; clears on resume or user action).
+- T-R20 PARTIAL STATE (in tree, UNCOMMITTED, no handoff row — board correctly flat, T-R20 NOT delivered):
+  - M packages/workflow_engine/adapters/v3_adapter.py (7+/3-)
+  - M packages/workflow_engine/__init__.py
+  - ?? packages/workflow_engine/manifest.py (NEW, capability manifest in progress)
+  - ?? packages/workflow_engine/production_executor.py (NEW, real executor in progress)
+  - NO row in CODE2-HANDOFF.md yet. No commands to re-run blindly on resume.
+- RESUME (post-19:23Z or on user word): dev2 continues T-R20 from the partial files above; first action is appending the CODE2 row, then PUSH ON DONE via w5:p4 as usual. If the partial files prove incoherent after the break, dev2 says so in the row (salvage-vs-restart stated, no silent rewrite).
+- Dev1 remains STANDBY (nothing unblocked). No collect due. No re-dispatch until dev2's quota clears.
+- DOING: dev2 T-R20 (BLOCKED/quota) + dev1 STANDBY.
+
+## 2026-10-14 — JEV STUCK dev1 adjudicated: HOLD (designed standby)
+- Heartbeat sent to w5:p2 (ALIVE + assignment + unpushed-work check, then idle). No re-dispatch: nothing unblocked (R20 needs quota-blocked R19; R13b/R04 gated). Manufacturing work to clear a standby flag is a fail. Standing HOLD ruling applies.
+
+## 2026-10-14 — JEV STUCK dev1 (0.81) adjudicated: HOLD — dev1 ALSO quota-blocked
+- Read w5:p2 terminal: heartbeat prompt delivered but UNANSWERABLE — pane shows "Individual quota reached... Resets in 58m49s" + the same CLI survey dialog blocking the prompt. Dev1 is down at provider level, not idle-by-choice.
+- Both lanes now quota-dark: dev2 (R20 partial, resets ~19:23Z) + dev1 (standby, ~59m reset). No re-dispatch or re-scope is meaningful — no quota = no work in any lane. Manufacturing local-only busywork to clear the flag is a fail.
+- Survey dialogs left unanswered per protocol (user domain). Expect recurring STUCK flags until resets clear; standing HOLD covers them — no further heartbeats until quota returns (prompts can't land behind the dialog anyway).
+- DOING: dev2 T-R20 (BLOCKED/quota) + dev1 STANDBY (BLOCKED/quota). Next action: resume R20 post-reset.
+
+## 2026-10-14 — Dev1 FOUND at w5:pG; R13b-RECON dispatched (user order)
+- Pane truth (herdr pane list labels): Dev1 = w5:pG (opencode, fresh, idle at prompt, revision 2); Dev2 = w5:p6 (agy, idle). Old w5:p2 is gone (agent_not_found even for read — session exited, ghost). Recent w5:p2 prompts/quota-reads raced the dying pane; deliveries still landed (rows prove receipt).
+- w5:pG shows a clean idle prompt with NO quota notice (fresh session). User ordered task-to-dev1: dispatched T-R13b-RECON (read-only stability reconnaissance for R13b window; eval execution stays HALTED, no code, no writes). Assignments + board current.
+
+## 2026-10-14 — JEV STUCK dev2 (0.87) adjudicated: HOLD (resume just dispatched)
+- Flag's 65m window = the quota outage, predating the user-ordered R20 resume (sent this cycle, rev 57). Pane read post-dispatch: session active (9.3K ctx, $0.00 — prompt ingested, starting). No re-dispatch (would duplicate), no re-scope (R20 is the lane). Standing HOLD; next check on DONE push or fresh flag with post-resume window.
+
+## 2026-10-14 — museR cycle 118 (T-R20 DONE; PHASE 4 CLOSED; PRIO1 21/23)
+- T-R20 (dev2): committed `3fafa36` — quota-break resume honored (salvage stated). Seams swapped (router + adapter default), checkpoint wired, manifest-gated refusal. Verified: 43/43 + 901-superset (row said 890; delta = subset boundary, signed); ruff clean; mypy 207 files clean. Residual fake boundary named (def + re-export + docstring, zero prod consumers).
+- PHASE 4 CLOSED (R18 enforcement -> R19 handlers -> R20 runtime). PRIO1: 21/23 DONE. Open: R04 (operator-blocked), R13b (recon in flight -> full run gated on STABLE).
+- Dev2 STANDBY (R13b-full if recon STABLE). Dev1 on R13b-RECON @w5:pG.
+
+## 2026-10-14 — museR cycle 119 (RECON UNSTABLE; all lanes standby)
+- T-R13b-RECON (dev1): committed `b301ee2` (docs-only). 37 samples: ready stuck degraded, load->10, mem 1.7GB free. Full-n gated; evals HALTED. Note: infinity=False partly expected post-pivot (dead hostname still probed) — F1 follow-up queued for a free lane.
+- PRIO1: 21/23, open only R04 (operator) + R13b (stability-gated). Both devs STANDBY. Nothing to dispatch; flags during this standby = HOLD.
+
+## 2026-10-14 — Solutions to the 3 blockers (user asked how)
+1. R13b: F1 fix dispatched (T-F1-READY, dev1) — readiness absent-tolerant on infinity; live proof deferred to secret-rotation restart (stated). Then re-recon; full run only on STABLE + user halt-lift.
+2. R04: needs operator answers (asked via question tool this cycle).
+3. Quotas: clearing on their own; prevention = existing free-first + metered pacing (no action).
+
+## 2026-10-14 — R04 CANCELLED (user: testing/validation use only)
+- No TLS entry, proxy, cert, or cookie work. R04 closed as not-applicable, user-directed. PRIO1 open: R13b only (stability-gated). F1 (readiness/infinity) in flight dev1; dev2 standby.
+
+## 2026-10-14 — Eval halt LIFTED by user (standing order, stability-gated)
+- User authorized eval-wave resumption. Execution stays gated: R13b full-n runs only on a STABLE re-recon verdict (post-F1), not before. If user meant run-now-regardless, they will say so; default is authorized-when-stable.
+
+## 2026-10-14 — Box-quieting accepted by user (item 2)
+- User will pause foreign sessions when able. Re-recon (post-F1) measures the effect; no loop action until then.
+
+## 2026-10-14 — F1 DONE code-only (d53d087); both standby, restart release pending user
+- T-F1-READY (dev1): empty-URL healthy-by-absence; 4/4 + 38 adjacent; ruff+mypy clean. Live /ready still red until secret-rotation restart (R01 trap, deferred honestly).
+- Next: user secret + go -> restart release (traffic migration + F1 live) -> re-recon -> R13b on STABLE.
