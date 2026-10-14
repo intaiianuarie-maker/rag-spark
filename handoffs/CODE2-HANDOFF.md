@@ -1213,3 +1213,13 @@ STATUS: DEFERRED; design retained; no code change.
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-K06b-impl DIAGNOSTIC
+
+```
+TASK: T-K06b-impl
+BLOCKED-WITH-REASON: store draft mode at packages/apps/api/app/workflows/store.py:68 derives from WORKFLOW_DRAFT_DB env only; no migration-applied detection API exists to gate default flip.
+SPEND: 0.00
+GIT: handoff only
+```
