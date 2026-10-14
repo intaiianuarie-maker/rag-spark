@@ -894,3 +894,10 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 
 ## 2026-10-14 — Repo public + pushed (user orders)
 - rag-spark PRIVATE->PUBLIC; origin/main 46fbf67->cbc4833 fast-forward (194 commits), 0 unpushed. DISCLOSED: old dev-default JWT literal lives in public history (rotated away at release, unverifiable under new secret); live secret never committed (inline-only).
+
+## 2026-10-14 — K review dispatched (T-REVIEW-V1V4-K, user order)
+- Same brief as astra, own file reviews/K-V1-V4-2026-10-14.md, independent verdicts. w6:kimi untouched (foreign, working).
+
+## 2026-10-14 — Astra triage DONE: 22/22 CONFIRMED, repair wave T-A01..T-A21 QUEUED
+- All 4 REJECTs sustained (each has >=1 confirmed High). 3 narrowed (V1-03 logged, V2-06 needs silent retry-write fail, V2-04 causal link explanatory-only). Record: reviews/ASTRA-TRIAGE-2026-10-14.md.
+- Wave waits behind R13b + K dedup. Deps: T-A07 needs T-A02; T-A13 latent until T-A12.
