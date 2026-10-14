@@ -965,3 +965,13 @@ CHANGE: none.
 METRICS: spend 0.00
 GIT: handoff only
 ```
+
+## T-K06a (deferred scope) — disclosure helper
+
+```text
+TASK: T-K06a
+STATUS: DEFERRED in this bounded turn.
+CHANGE: none.
+METRICS: spend 0.00
+GIT: handoff only
+```
