@@ -3484,3 +3484,17 @@ RISKS:
 - graph leg now contributes less in HYBRID_GRAPH mode (damped 0.5); recall of graph-only chunks may drop slightly in hybrid queries — acceptable trade-off per K triage (table-QA flood was the larger risk).
 - GRAPH_FUSION_CAP=10 is a policy constant; if a workspace has >10 relevant graph-only chunks, the excess are dropped from fusion (still traced in graph leg output, just not ranked).
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A01d — update stale fakes for the sensitive kwarg (dev1)
+TASK: T-A01d (w5:pG). Coordinator stash-proved 5 failures pre-exist on HEAD in `tests/unit/test_router_precedence_lock.py`: fakes build `_factory()` without the `sensitive` kwarg A01b added to `build_answer_engine`.
+CHANGE (allowed files):
+- `tests/unit/test_router_precedence_lock.py`: `_factory` fake now accepts `sensitive: bool = False` — matches the current `build_answer_engine` signature; no behavior change.
+WHY: A01b threaded the workspace egress policy into the engine factory; the fakes in this file were missed. Small debt, cleaned.
+REUSED: existing `_ask` helper and `_FakeEngine`.
+BUILT: none — one-line signature fix.
+VERIFY:
+- `pytest tests/unit/test_router_precedence_lock.py` → 20 passed (was 5 failed, 15 passed).
+- `ruff check tests/unit/test_router_precedence_lock.py` → All checks passed.
+- K03 graph tests stay green: `pytest tests/unit/test_graph_retrieval_eval.py` → 7 passed.
+RISKS: none — fake signature only; no product code touched.
+Next: IDLE — push mandatory.

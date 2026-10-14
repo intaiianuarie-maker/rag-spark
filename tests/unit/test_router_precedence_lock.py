@@ -217,7 +217,7 @@ async def _ask(monkeypatch, *, override_model: str | None = None):
 
     engine = _FakeEngine()
 
-    def _factory(*, model: str):
+    def _factory(*, model: str, sensitive: bool = False):
         engine.model = model
         return engine
 
