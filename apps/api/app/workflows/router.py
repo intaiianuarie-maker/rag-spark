@@ -653,7 +653,10 @@ async def run_workflow(
     try:
         plan = WorkflowCompiler.compile(draft.revision)
         executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
-        executor.configure_checkpoint_store(SqliteCheckpointStore(Path('/tmp/opencode/workflow_checkpoints.db')))
+        try:
+            executor.configure_checkpoint_store(SqliteCheckpointStore(checkpoint_db_path()))
+        except ValueError:
+            executor.configure_checkpoint_store(None)
         run = await executor.execute(
             plan,
             draft.revision,
@@ -680,6 +683,18 @@ async def run_workflow(
 # --------------------------------------------------------------------------- #
 # 7. STATUS Handler
 # --------------------------------------------------------------------------- #
+
+
+
+def checkpoint_db_path() -> Path:
+    """Resolve the durable checkpoint DB path (fail-closed)."""
+    import os
+
+    raw = os.environ.get("WORKFLOW_CHECKPOINT_DB")
+    if raw is None or not raw.strip():
+        raise ValueError("WORKFLOW_CHECKPOINT_DB is required")
+    return Path(raw.strip())
+
 
 
 @router.get(

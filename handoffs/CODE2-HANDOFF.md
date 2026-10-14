@@ -733,3 +733,31 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A04b — checkpoint path config + yet-more durable store status
+
+```text
+TASK: T-A04b follow-up.
+CHANGE:
+      - MODIFIED apps/api/app/workflows/router.py (checkpoint path from WORKFLOW_CHECKPOINT_DB env, fail-open default path retained)
+VERIFY:
+      - pytest test_v4_authoring_api -> green
+      - ruff/mypy touched file -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04b (narrow landed)
+
+```text
+TASK: T-A04b narrow checkpoint path fail-closed + proofs.
+CHANGE:
+      - apps/api/app/workflows/router.py adds checkpoint_db_path() (fail-closed env requirement)
+      - routing uses SqliteCheckpointStore only when env present, else no checkpoint store
+      - NEW tests/unit/test_t_a04b_checkpoint_path.py
+VERIFY:
+      - 3 proof tests + full v4 authoring suite -> 10 passed
+      - ruff clean on touched files
+SPEND: 0.00
+GIT: handoff only
+```
