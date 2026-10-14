@@ -12,12 +12,14 @@ down).
 from __future__ import annotations
 
 import logging
+from collections.abc import Sequence
 from types import SimpleNamespace
 from typing import Any
 
 import pytest
 from retrieval.adapters.infinity_embed import EmbeddingProviderError
 from retrieval.adapters.qdrant_store import VectorStoreError
+from retrieval.interfaces import EmbeddingProvider
 from retrieval.serving import serving_alias_name
 
 from scripts import reindex_all_chunks as reindex_mod
@@ -132,16 +134,19 @@ class _FakeSession:
         return SimpleNamespace(all=lambda: rows)
 
 
-class _ProviderBase:
-    """Stands in for InfinityEmbeddingProvider: identity attrs, canned vectors."""
+class _ProviderBase(EmbeddingProvider):
+    """Stands in for OpenRouterProvider: identity attrs, canned vectors."""
 
-    model_name = "BAAI/bge-m3"
-    revision = "BAAI/bge-m3"
+    model_name = "google/gemini-embedding-2"
+    revision = "google/gemini-embedding-2"
     dimension = _DIM
-    base_url = "http://infinity.test"
+    base_url = "http://openrouter.test"
 
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+    async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         return [[0.25] * _DIM for _ in texts]
+
+    async def embed_query(self, text: str) -> list[float]:
+        return [0.25] * _DIM
 
 
 class _VectorStoreBase:
@@ -234,7 +239,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
         return factory
 
     monkeypatch.setenv("QDRANT_URL", "http://qdrant.test")
-    monkeypatch.setattr(reindex_mod, "InfinityEmbeddingProvider", FakeProvider)
+    monkeypatch.setattr(reindex_mod, "OpenRouterProvider", FakeProvider)
     monkeypatch.setattr(reindex_mod, "QdrantVectorStore", FakeVectorStore)
     monkeypatch.setattr(reindex_mod, "PostgresLexicalStore", FakeLexicalStore)
     monkeypatch.setattr(reindex_mod, "inspect_collection", fake_inspect)
@@ -333,7 +338,7 @@ async def test_real_run_builds_into_the_replacement_then_promotes_it(
     written = [r for c in _calls(store) if c[0] == "upsert" for r in c[2]]
     assert len(written) == 3
     assert all(len(r.vector) == _DIM and any(x != 0.0 for x in r.vector) for r in written)
-    assert all(r.metadata["embedding_model"] == "BAAI/bge-m3" for r in written)
+    assert all(r.metadata["embedding_model"] == "google/gemini-embedding-2" for r in written)
     # The FTS side reindexes the same validated records.
     assert sum(len(batch) for batch in harness.lexical[0].batches) == 3
     # T-R05: the switch targets the stable serving alias, and the superseded
@@ -376,8 +381,8 @@ async def test_verified_replacement_is_kept_and_still_switched(
         points=3,
         dims=_DIM,
         checked=3,
-        models=["BAAI/bge-m3"],
-        revisions=["BAAI/bge-m3"],
+        models=["google/gemini-embedding-2"],
+        revisions=["google/gemini-embedding-2"],
         recorded_dims=[str(_DIM)],
     )
 
@@ -456,23 +461,26 @@ async def test_replacement_must_differ_from_the_live_collection(
 # --------------------------------------------------------------------------
 # Part 3 — T-V1-060: one slow provider batch must not kill a 40-minute rebuild
 # --------------------------------------------------------------------------
-class _FlakyProvider:
+class _FlakyProvider(EmbeddingProvider):
     """Fails the first ``fail_times`` calls with the provider's own error type."""
 
-    model_name = "BAAI/bge-m3"
-    revision = "BAAI/bge-m3"
+    model_name = "google/gemini-embedding-2"
+    revision = "google/gemini-embedding-2"
     dimension = _DIM
-    base_url = "http://infinity.test"
+    base_url = "http://openrouter.test"
 
     def __init__(self, fail_times: int) -> None:
         self.fail_times = fail_times
         self.calls = 0
 
-    async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+    async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
         self.calls += 1
         if self.calls <= self.fail_times:
-            raise EmbeddingProviderError("infinity /embeddings request failed: ReadTimeout:")
+            raise EmbeddingProviderError("openrouter /embeddings request failed: ReadTimeout:")
         return [[0.25] * _DIM for _ in texts]
+
+    async def embed_query(self, text: str) -> list[float]:
+        return [0.25] * _DIM
 
 
 async def test_a_slow_batch_is_retried_and_the_run_finishes(
@@ -492,7 +500,7 @@ async def test_a_slow_batch_is_retried_and_the_run_finishes(
     monkeypatch.setattr(reindex_mod.asyncio, "sleep", instant_sleep)
     provider = _FlakyProvider(fail_times=1)
 
-    vectors = await reindex_mod.embed_batch_with_retry(provider, ["a", "b"])  # type: ignore[arg-type]
+    vectors = await reindex_mod.embed_batch_with_retry(provider, ["a", "b"])
 
     assert vectors == [[0.25] * _DIM, [0.25] * _DIM]
     assert provider.calls == 2, "one failure, one retry — never a silent success"
@@ -507,7 +515,7 @@ async def test_a_persistently_slow_batch_fails_loudly_and_stops_the_run(
     provider = _FlakyProvider(fail_times=99)
 
     with pytest.raises(EmbeddingProviderError, match="ReadTimeout"):
-        await reindex_mod.embed_batch_with_retry(provider, ["a"])  # type: ignore[arg-type]
+        await reindex_mod.embed_batch_with_retry(provider, ["a"])
 
     assert provider.calls == reindex_mod._EMBED_BATCH_ATTEMPTS
 
@@ -541,13 +549,13 @@ async def test_a_failing_batch_prevents_the_switch(
 
         calls = 0
 
-        async def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        async def embed_documents(self, texts: Sequence[str]) -> list[list[float]]:
             type(self).calls += 1
             if type(self).calls == 1:  # the probe — must still succeed
                 return [[0.25] * _DIM for _ in texts]
-            raise EmbeddingProviderError("infinity /embeddings request failed: ReadTimeout:")
+            raise EmbeddingProviderError("openrouter /embeddings request failed: ReadTimeout:")
 
-    monkeypatch.setattr(reindex_mod, "InfinityEmbeddingProvider", DeadProvider)
+    monkeypatch.setattr(reindex_mod, "OpenRouterProvider", DeadProvider)
 
     with pytest.raises(EmbeddingProviderError):
         await reindex(collection="knowledge", replacement="knowledge_v2", batch_size=2)

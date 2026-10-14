@@ -3,7 +3,7 @@
 T-V1-014 — reindex through the REAL validated embedding provider (never zeros):
 
 * **No zero-vector repair path.** Vectors come only from
-  ``InfinityEmbeddingProvider``; ``validate_vector`` rejects wrong-dimension,
+  ``OpenRouterProvider``; ``validate_vector`` rejects wrong-dimension,
   non-finite and all-zero vectors before a record is even built, and the
   provider itself refuses zero vectors — there is no fallback that can
   manufacture an embedding.
@@ -84,17 +84,14 @@ import httpx
 from core.config import get_settings
 from ingestion.persistence import get_session_factory
 from models.adapters.openrouter_provider import OpenRouterProvider
-from retrieval.adapters.infinity_embed import (
-    EmbeddingProviderError,
-    InfinityEmbeddingProvider,
-)
+from retrieval.adapters.infinity_embed import EmbeddingProviderError
 from retrieval.adapters.pg_fts import PostgresLexicalStore
 from retrieval.adapters.qdrant_store import QdrantVectorStore, VectorStoreError
 from retrieval.interfaces import EmbeddingProvider, VectorRecord
 from retrieval.serving import assert_explicit_collection, serving_alias_name
 from sqlalchemy import text
 
-_OriginalInfinityEmbeddingProvider = InfinityEmbeddingProvider
+_OriginalOpenRouterProvider = OpenRouterProvider
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("reindex")
@@ -199,7 +196,7 @@ async def embed_batch_with_retry(
     raise last if last is not None else EmbeddingProviderError("embedding failed")
 
 
-def provider_identity(provider: Any, observed_dim: int) -> dict[str, Any]:
+def provider_identity(provider: EmbeddingProvider, observed_dim: int) -> dict[str, Any]:
     """Provider identity stamped into every record's metadata (T-V1-014 metric)."""
     return {
         "embedding_provider": type(provider).__name__,
@@ -395,10 +392,11 @@ async def reindex(
         )
 
     session_factory = get_session_factory()
-    # T-ARCH-04: Default to OpenRouterProvider (google/gemini-embedding-2, 3072-d).
-    # If a test monkeypatches InfinityEmbeddingProvider, honor the test override.
-    if InfinityEmbeddingProvider is not _OriginalInfinityEmbeddingProvider:
-        embed_provider: Any = InfinityEmbeddingProvider()
+    # T-ARCH-04b: Default to OpenRouterProvider (google/gemini-embedding-2, 3072-d).
+    # If a test monkeypatches OpenRouterProvider, honor the test override.
+    embed_provider: EmbeddingProvider
+    if OpenRouterProvider is not _OriginalOpenRouterProvider:
+        embed_provider = OpenRouterProvider()
     else:
         embed_provider = OpenRouterProvider(call_site="reindex_all_chunks")
 

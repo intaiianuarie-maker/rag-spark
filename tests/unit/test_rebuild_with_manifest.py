@@ -12,6 +12,7 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -82,8 +83,8 @@ def test_manifest_rows_mapped_to_records_in_select_order() -> None:
     from retrieval.embedding_identity import EmbeddingIdentity, identity_from_metadata
 
     identity = EmbeddingIdentity(
-        provider="InfinityEmbeddingProvider", model="BAAI/bge-m3",
-        revision="rev-1", dimension=1024,
+        provider="OpenRouterProvider", model="google/gemini-embedding-2",
+        revision="google/gemini-embedding-2", dimension=3072,
     )
     row = ("chk-1", "ws-a", "doc-a", "ver-a", "0" * 64, "evidence text", 1, "Intro",
            "en", {"language": "en", "title": "t"})
@@ -108,14 +109,14 @@ def test_identity_wins_over_caller_supplied_value() -> None:
     from retrieval.embedding_identity import EmbeddingIdentity, identity_from_metadata
 
     identity = EmbeddingIdentity(
-        provider="InfinityEmbeddingProvider", model="BAAI/bge-m3",
-        revision="rev-1", dimension=1024,
+        provider="OpenRouterProvider", model="google/gemini-embedding-2",
+        revision="google/gemini-embedding-2", dimension=3072,
     )
     row = ("chk-2", "ws-a", "doc-a", "ver-a", "0" * 64, "t", None, None, "en",
            {"embedding_model": "smuggled-model", "language": "en"})
     records = rebuild.build_records([row], identity=identity, column_order=COLUMN_ORDER)
     meta = identity_from_metadata(records[0].metadata)
-    assert meta.model == "BAAI/bge-m3"      # not "smuggled-model"
+    assert meta.model == "google/gemini-embedding-2"      # not "smuggled-model"
     assert records[0].metadata["language"] == "en"
 
 
@@ -123,12 +124,12 @@ def test_placeholder_vector_is_replaced_by_the_real_embedding_in_the_loop() -> N
     from retrieval.embedding_identity import EmbeddingIdentity
 
     identity = EmbeddingIdentity(
-        provider="InfinityEmbeddingProvider", model="BAAI/bge-m3",
-        revision="rev-1", dimension=1024,
+        provider="OpenRouterProvider", model="google/gemini-embedding-2",
+        revision="google/gemini-embedding-2", dimension=3072,
     )
-    row = ("chk-3", "ws-a", "doc-a", "ver-a", "0" * 64, "t", None, None, "en", {})
+    row: tuple[Any, ...] = ("chk-3", "ws-a", "doc-a", "ver-a", "0" * 64, "t", None, None, "en", {})
     records = rebuild.build_records([row], identity=identity, column_order=COLUMN_ORDER)
-    real_vector = [0.1] * 1024
+    real_vector = [0.1] * 3072
     for rec, vec in zip(records, [real_vector], strict=True):
         rec.vector = vec
     assert records[0].vector is real_vector

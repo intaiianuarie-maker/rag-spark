@@ -66,13 +66,13 @@ async def run_spot_checks(
         raise SpotCheckError(
             f"refusing to spot-check the live collection {collection!r}"
         )
-    from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
+    from models.adapters.openrouter_provider import OpenRouterProvider
     from retrieval.adapters.qdrant_store import (
         QdrantVectorStore,
         VectorStoreIdentityError,
     )
     from retrieval.embedding_identity import EmbeddingIdentity, provider_identity
-    from retrieval.interfaces import SearchFilter
+    from retrieval.interfaces import EmbeddingProvider, SearchFilter
 
     _reindex = _load("reindex_all_chunks", "scripts/reindex_all_chunks.py")
 
@@ -82,7 +82,7 @@ async def run_spot_checks(
         raise SpotCheckError("manifest is empty")
     rows = rows[:sample]
 
-    provider = InfinityEmbeddingProvider()
+    provider: EmbeddingProvider = OpenRouterProvider(call_site="spotcheck_rebuilt_index")
     store = QdrantVectorStore(collection=collection)
     try:
         observed_dim, _ = await _reindex.probe_provider(provider)
@@ -153,6 +153,10 @@ async def run_spot_checks(
         }
     finally:
         await store.close()
+        if hasattr(provider, "aclose"):
+            await provider.aclose()
+        elif hasattr(provider, "close"):
+            provider.close()
 
 
 async def main() -> None:

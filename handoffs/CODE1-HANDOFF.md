@@ -2818,3 +2818,42 @@ RISKS:
 - Dedicated loopback port 7998 used to completely deconflict from legacy infinity port 7997.
 - Zero touched files in dev2's lane (`packages/retrieval/adapters/*`, `packages/ingestion/*`, `packages/core/config.py`, `packages/retrieval/interfaces.py`, `packages/agents/`, `packages/models/`, `apps/api/app/agents/`). Completely disjoint.
 - Left uncommitted, no commit/deploy/restart.
+
+## 2026-10-14 T-ARCH-04b — Scripts Cutover Leftover: reindex/rebuild/spotcheck to OpenRouterProvider gemini-3072
+TASK: T-ARCH-04b
+CHANGE:
+- `scripts/reindex_all_chunks.py`: Removed `InfinityEmbeddingProvider` import/construction; default `embed_provider: EmbeddingProvider = OpenRouterProvider(call_site="reindex_all_chunks")`; typed `provider_identity` with `EmbeddingProvider` ABC (no Any-widening); established `_OriginalOpenRouterProvider = OpenRouterProvider` monkeypatch seam; updated module docstring.
+- `scripts/rebuild_with_manifest.py`: Removed `InfinityEmbeddingProvider` import/construction; default `provider: EmbeddingProvider = OpenRouterProvider(timeout=..., call_site="rebuild_with_manifest")`; added robust `_extract_spend` supporting `CallStats.as_row()` for metered cost accounting; updated CLI `--provider` choices to `[openrouter, gemini, gemini_legacy]`; updated docstring.
+- `scripts/spotcheck_rebuilt_index.py`: Removed `InfinityEmbeddingProvider` import/construction; default `provider: EmbeddingProvider = OpenRouterProvider(call_site="spotcheck_rebuilt_index")`; added proper `aclose`/`close` cleanup in `finally`.
+- `tests/unit/test_reindex.py`: Updated `_ProviderBase` and `_FlakyProvider` to subclass `EmbeddingProvider` ABC and report `model_name = "google/gemini-embedding-2"` (3072-d); monkeypatched `OpenRouterProvider`; updated simulated existing index models to `google/gemini-embedding-2`; removed unused type: ignore comments.
+- `tests/unit/test_rebuild_with_manifest.py`: Updated test records and assertions to assert `OpenRouterProvider` and `google/gemini-embedding-2` (3072-d) instead of legacy infinity bge-m3; typed `row: tuple[Any, ...]`.
+- `handoffs/CODE1-HANDOFF.md` (this row).
+
+WHY:
+- T-ARCH-04 cut over runtime serving to gemini-3072 (`google/gemini-embedding-2`, 3072-d) via `OpenRouterProvider`, but left scripts constructing `InfinityEmbeddingProvider` out-of-lane because they were dev1's R07 files.
+- The switch already serves gemini-3072: offline scripts (`reindex_all_chunks.py`, `rebuild_with_manifest.py`, `spotcheck_rebuilt_index.py`) and their tests must agree with live serving, not the deleted infinity past.
+- Metric requirements: 0 `InfinityEmbeddingProvider` constructions in `scripts/`; 0 provider-ABC violations.
+
+REUSED:
+- `models.adapters.openrouter_provider.OpenRouterProvider` (ARCH-02 unified surface with call_site accounting).
+- `retrieval.interfaces.EmbeddingProvider` ABC.
+- Existing Qdrant and Postgres store seams.
+
+BUILT:
+- Clean monkeypatch seam on `OpenRouterProvider` in `reindex_all_chunks.py`.
+- Unified spend extraction helper in `rebuild_with_manifest.py` for `OpenRouterProvider` metering.
+- Updated unit test fakes adhering strictly to `EmbeddingProvider` ABC without Any-widening.
+
+VERIFY:
+- Constructions grep: `grep -rn "InfinityEmbeddingProvider(" scripts/` -> **0 occurrences (exit 1)**.
+- ABC / Type cleanliness: `MYPYPATH=packages:. mypy --explicit-package-bases scripts/reindex_all_chunks.py scripts/rebuild_with_manifest.py scripts/spotcheck_rebuilt_index.py tests/unit/test_reindex.py tests/unit/test_rebuild_with_manifest.py` -> **Success: no issues found in 5 source files**.
+- Linter: `ruff check scripts/reindex_all_chunks.py scripts/rebuild_with_manifest.py scripts/spotcheck_rebuilt_index.py tests/unit/test_reindex.py tests/unit/test_rebuild_with_manifest.py` -> **All checks passed!**.
+- Test suite: `pytest tests/unit/test_reindex.py tests/unit/test_rebuild_with_manifest.py tests/unit/test_embed_cutover.py tests/unit/test_embedding_identity.py tests/unit/test_vector_store_boundary.py` -> **83 passed** in 4.53s.
+- Rerank suites: `pytest tests/contracts/test_reranker_contract.py tests/unit/test_rerank_cut.py` -> **9 passed** in 3.69s.
+- Live dry-run (rebuild): `python3 scripts/rebuild_with_manifest.py --dry-run --limit 2 --collection knowledge__rebuild_scratch` -> Executed with `OpenRouterProvider` (3072-d), 0 writes, spend metered at $0.0000052.
+- Live dry-run (reindex): `PYTHONPATH=... python3 scripts/reindex_all_chunks.py --collection knowledge__rebuild_20261014 --dry-run` -> Validated 3,890 chunks through `OpenRouterProvider` (3072-d), 0 writes.
+
+RISKS:
+- Offline scripts now require OpenRouter API access or credentials (`OPENROUTER_API_KEY`) when run live (metered and accounted per user order); test suites remain 100% offline and in-process via fakes.
+- Disjoint from dev2's lane (`packages/agents/`, `packages/models/`, `apps/api/app/agents/`).
+- Left uncommitted, no commit/deploy/restart.

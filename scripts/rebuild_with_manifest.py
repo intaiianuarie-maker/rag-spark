@@ -3,7 +3,7 @@
 
 Reads the T-R07 Phase-1 manifest (current-version, non-deleted, authorized
 workspaces, original checksums, expected chunk ids) out of Postgres, embeds each
-chunk through the REAL bge-m3 provider, and writes into a FRESH physical Qdrant
+chunk through the REAL OpenRouterProvider (gemini-3072), and writes into a FRESH physical Qdrant
 collection — never the live collection, never the R05 serving alias.
 
 Identity per write (T-R06/T-R06b): every record is stamped with
@@ -216,6 +216,14 @@ def build_records(
     return records
 
 
+def _extract_spend(provider: Any) -> Any:
+    if hasattr(provider, "stats"):
+        st = provider.stats() if callable(provider.stats) else provider.stats
+        if hasattr(st, "as_row"):
+            return st.as_row()
+    return None
+
+
 async def build(
     *,
     collection: str,
@@ -225,7 +233,7 @@ async def build(
     dry_run: bool,
     resume: bool = False,
     request_timeout: float | None = None,
-    provider_type: str = "gemini",
+    provider_type: str = "openrouter",
 ) -> dict[str, Any]:
     """The Phase-2 build. Returns a build report summary."""
     assert_scratch_target(collection)
@@ -237,12 +245,15 @@ async def build(
         or os.environ.get("OPENROUTER_TIMEOUT_SECONDS")
         or os.environ.get("INFINITY_TIMEOUT_SECONDS", "300.0")
     )
-    provider: Any
-    if provider_type == "infinity":
-        from retrieval.adapters.infinity_embed import InfinityEmbeddingProvider
-        provider = InfinityEmbeddingProvider(timeout=effective_timeout)
-    else:
+    provider: EmbeddingProvider
+    if provider_type == "gemini_legacy":
         provider = GeminiEmbedding2(timeout=effective_timeout)
+    else:
+        from models.adapters.openrouter_provider import OpenRouterProvider
+
+        provider = OpenRouterProvider(
+            timeout=effective_timeout, call_site="rebuild_with_manifest"
+        )
 
     _log.info("fetching manifest (limit=%s)...", limit)
     t0 = time.monotonic()
@@ -323,7 +334,7 @@ async def build(
                     "duration_s": round(time.monotonic() - t0, 1),
                     "resumed": True,
                     "complete": True,
-                    "spend": provider.stats.as_row() if hasattr(provider, "stats") else None,
+                    "spend": _extract_spend(provider),
                 }
 
         # 3) Batch loop: embed → stamp identity → verified upsert.
@@ -381,7 +392,7 @@ async def build(
         "batch_size": batch_size,
         "duration_s": round(time.monotonic() - t0, 1),
         "resumed": bool(already),
-        "spend": provider.stats.as_row() if hasattr(provider, "stats") else None,
+        "spend": _extract_spend(provider),
     }
 
 
@@ -427,9 +438,9 @@ async def main() -> None:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument(
         "--provider",
-        default="gemini",
-        choices=["gemini", "infinity"],
-        help="Embedding provider to wire (default: gemini via GeminiEmbedding2)",
+        default="openrouter",
+        choices=["openrouter", "gemini", "gemini_legacy"],
+        help="Embedding provider to wire (default: openrouter via OpenRouterProvider)",
     )
     parser.add_argument(
         "--resume",
@@ -442,7 +453,7 @@ async def main() -> None:
         "--timeout",
         type=float,
         default=None,
-        help="Timeout in seconds for provider calls (default 300.0s via INFINITY_TIMEOUT_SECONDS)",
+        help="Timeout in seconds for provider calls (default: OPENROUTER_TIMEOUT_SECONDS)",
     )
     args = parser.parse_args()
 
