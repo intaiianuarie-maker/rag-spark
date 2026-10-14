@@ -705,3 +705,17 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+## T-A03c — proof tests for canonical deletion/replacement
+
+```text
+TASK: T-A03c proof tests through CanonicalChunkSource with fake hydrator seam.
+CHANGE:
+      - NEW tests/unit/test_t_a03c_canonical_proof.py (2 tests)
+      - deletion and replacement both return None and tombstone
+VERIFY:
+      - pytest tests/unit/test_t_a03c_canonical_proof.py + test_agents.py + test_v3_research_pipeline.py -> 182 passed
+      - ruff/mypy touched test file clean
+SPEND: 0.00
+GIT: handoff only
+```
