@@ -3341,3 +3341,24 @@ RISKS:
 - runtime module global is overwritten for the duration when checkpoint_store is passed; callers using global store afterward retain injected adapter. This is desired for `AgentLifecycleWorker`, but direct library users must pass store explicitly (as hidden tests likely will).
 - `_maybe_checkpoint` closes over the injected module global.
 Next: IDLE — push mandatory.
+
+## 2026-10-14 T-A01c — eval shadow factory and agents tools egress policy (dev1)
+TASK: T-A01c (w5:pG). Closes remaining integration paths from V1-01: eval router had its own policy-less `create_orchestrator()`; agents/tools called `create_orchestrator()` with no workspace egress policy.
+CHANGE (allowed files):
+- `apps/api/app/eval/router.py`: `create_orchestrator(*, sensitive=False)` seam; resolves workspace config and passes `sensitive=_eval_sensitive`.
+- `packages/agents/tools.py`: `_resolve_orchestrator(workspace_id=None)` resolves workspace config and passes `sensitive`; execute passes `workspace_id`.
+- No changes to factory/orchestrator/routes.
+WHY: zero retrieval-constructing routes remain policy-less outside tests.
+REUSED: A01/A01b workspace-policy loading and refusal seam.
+BUILT: workspace-sensitive eval shadow and agent tool orchestrator paths.
+VERIFY:
+- grep policy-less calls in non-test app/package code:
+  - `grep -rn 'create_orchestrator()' apps packages --include=*.py | grep -v '__pycache__/\\|/tests/'`: only documentation in `packages/graph/factory.py`; no production calls.
+  - `grep -rn 'build_answer_engine(' apps packages --include=*.py | grep -v '__pycache__/\\|/tests/\\|def build_answer_engine' | grep -v 'sensitive='`: none.
+- `pytest -q tests/unit/test_eval.py tests/unit/test_eval_harness.py` -> 33 passed.
+- `pytest -q tests/unit -k "agents or tools"` -> 165 passed.
+- ruff + mypy on touched files clean.
+RISKS:
+- agents/tools still lacks a workspace context if a future caller invokes `_resolve_orchestrator()` without workspace_id; current execute always passes workspace. Such a call defaults non-sensitive, disclosed as prior behavior.
+- `packages/agents/tools.py` is outside V1-01 route scope but has a retrieval construction path, so included to make the empty-grep proof true.
+Next: IDLE — push mandatory.

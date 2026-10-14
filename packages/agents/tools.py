@@ -385,15 +385,26 @@ class KnowledgeSearchTool(Tool):
         if cost_usd is not None:
             self.cost_usd = cost_usd
 
-    def _resolve_orchestrator(self) -> Any | None:
+    def _resolve_orchestrator(self, workspace_id: str | None = None) -> Any | None:
         if self._orchestrator is not None:
             return self._orchestrator
         # Lazy, best-effort construction for production use — never imports
         # qdrant_client here; the orchestrator factory owns the adapter wiring.
+        sensitive = False
+        if workspace_id is not None:
+            try:
+                from models.router_config import load_workspace_config as _load_workspace_config
+
+                _workspace_config = _load_workspace_config(str(workspace_id))
+                sensitive = (
+                    _workspace_config.sensitive if _workspace_config is not None else False
+                )
+            except Exception:
+                sensitive = False
         try:
             from answer.factory import create_orchestrator
 
-            return create_orchestrator()
+            return create_orchestrator(sensitive=sensitive)
         except Exception:
             return None
 
@@ -462,7 +473,7 @@ class KnowledgeSearchTool(Tool):
                 "error_code": AgentErrorCode.TOOL_SCHEMA_INVALID,
             }
 
-        orchestrator = self._resolve_orchestrator()
+        orchestrator = self._resolve_orchestrator(workspace_id)
         if orchestrator is None:
             return {
                 "error": "search not configured",

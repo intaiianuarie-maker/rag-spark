@@ -26,7 +26,7 @@ from app.eval.models import GoldenExample
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/eval", tags=["eval"])
 
 
-def create_orchestrator():
+def create_orchestrator(*, sensitive: bool = False):
     """Module seam over answer.factory.create_orchestrator (patchable).
 
     Function-local import keeps adapter clients lazy — only needed when an eval
@@ -34,7 +34,7 @@ def create_orchestrator():
     """
     from answer.factory import create_orchestrator as factory
 
-    return factory()
+    return factory(sensitive=sensitive)
 
 
 def _make_retriever(orchestrator, acl_scope: ACLScope):
@@ -108,7 +108,11 @@ async def run_eval(
         ],
     )
 
-    orchestrator = create_orchestrator()
+    from models.router_config import load_workspace_config as _load_workspace_config
+
+    _eval_workspace = _load_workspace_config(str(workspace_id))
+    _eval_sensitive = _eval_workspace.sensitive if _eval_workspace is not None else False
+    orchestrator = create_orchestrator(sensitive=_eval_sensitive)
     acl_scope = ACLScope(user_id=principal.user_id, workspace_ids=[str(workspace_id)])
     retrieve = _make_retriever(orchestrator, acl_scope)
 
