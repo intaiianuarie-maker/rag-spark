@@ -600,3 +600,19 @@ VERIFY:
 RISKS: leftover scratch user/workspace in DB.
 GIT: handoffs modified; evals scratch not in repo.
 ```
+
+## T-R13b — full-n paired eval on STABLE post-restart stack
+
+```text
+TASK: T-R13b full-n paired eval.
+CHANGE: none. No result artifact produced.
+WHY: Eval harness depends on in-process bge-m3 Infinity (127.0.0.1:7997), which is down on this host. Avoiding a silent/hung full run; no fake metrics.
+VERDICT: NOT RUN (blocked). R08 baseline retained (recall/precision/abstention PASS; grounded 56%; validity 64% FAIL). No regression/improvement claim could be measured honestly.
+REUSED: knowledge__serving collection remains 2204-pt and unchanged.
+METRICS:
+  - collection net delta: 0 (no scratch data)
+  - metered spend: $0.00
+  - per-metric table: unavailable (harness blocked)
+RISKS: bge-m3 infinity endpoint unavailable prevents in-process paired eval.
+GIT: handoff only.
+```
