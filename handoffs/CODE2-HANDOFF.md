@@ -1361,3 +1361,23 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A22-rerank
+
+```
+TASK: T-A22-rerank
+RESULT: NOT-CALLABLE (no OPENROUTER_API_KEY in environment; no live probe attempted)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-wire (DEFERRED-WITH-DESIGN)
+
+```
+TASK: T-A22-wire
+STATUS: DEFERRED; design: rerank adapter behind RERANK_ENABLED (default false), reuse A01 egress refusal, disclose degraded/no-rerank
+SPEND: 0.00
+GIT: handoff only
+```
