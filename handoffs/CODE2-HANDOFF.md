@@ -1558,3 +1558,19 @@ STATUS: DEFERRED (scope exceeds turn; durable seam requires env-gated sqlite def
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I01a — shared durable agent seam design
+
+```
+TASK: T-I01a
+DESIGN:
+  (1) Module: extend packages/stores/agent_stores.py with SqliteRunStore/SqliteStepStore/SqliteCheckpointStore selection; reuse one AGENT_STORE_DB sqlite file under a named volume, mirroring WORKFLOW_* paths.
+  (2) Env vars: AGENT_RUN_STORE_DB, AGENT_STEP_STORE_DB, AGENT_CHECKPOINT_STORE_DB, AGENT_QUEUE_DB (optional single consolidated file preferred: AGENT_STORE_DB) with :? fail-closed forms in compose.
+  (3) Install points: api startup (after store reset/init) calls set_run_store/sqlite and set_queue(sqlite queue) if AGENT_STORE_DB present; worker main installs same before consuming.
+  (4) Fail-closed: unset path stays in-memory only in tests/dev; production compose uses :? and raises on unset; no silent cross-process divergence.
+  (5) Rejected: keep InMemory defaults in prod (review breakage), separate DB per table (complexity), Redis (out of scope).
+STATUS: DESIGN ONLY
+SPEND: 0.00
+GIT: handoff only
+```
