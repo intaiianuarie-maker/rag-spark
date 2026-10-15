@@ -20,7 +20,7 @@ def test_availability_failure() -> None:
 
     prov = CohereRerankProvider(api_key="x", transport=transport)
     with pytest.raises(RerankAvailabilityError):
-        prov.rerank("q", ["a", "b"])
+        prov.rerank(query="q", documents=["a","b"])
 
 
 def test_offline_fields() -> None:
@@ -31,7 +31,7 @@ def test_offline_fields() -> None:
         ]}}
 
     prov = CohereRerankProvider(api_key="x", transport=transport)
-    res = prov.rerank("q", ["a", "b"])
+    res = prov.rerank(query="q", documents=["a","b"])
     assert res.latency_ms >= 0.0
     assert res.cost_usd > 0
     assert len(res.items) == 2

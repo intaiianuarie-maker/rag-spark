@@ -127,6 +127,7 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
     # T-ARCH-04: OpenRouter gemini-embedding-2 (3072-d) default embedding provider.
     # T-A01: sensitive/local-only workspaces must never receive it.
     reranker = None
+    rerank_enabled = False
     embedding: object
     if sensitive:
         from retrieval.orchestrator import RefusingEmbeddingProvider
@@ -135,13 +136,20 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
     else:
         # T-ARCH-04: OpenRouter gemini-embedding-2 (3072-d) default embedding provider.
         embedding = OpenRouterProvider(call_site="answer.orchestrator")
+        import os
+
+        if os.environ.get("RERANK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+            from rerank.openrouter_provider import CohereRerankProvider, OpenRouterReranker
+
+            reranker = OpenRouterReranker(CohereRerankProvider(sensitive=False))
+            rerank_enabled = True
     return HybridRetrievalOrchestrator(
         dense=dense,
         embedding=embedding,
         lexical=lexical,
         collection=collection,
         reranker=reranker,
-        rerank_enabled=False,
+        rerank_enabled=rerank_enabled,
         graph=graph_retriever,
         sensitive=sensitive,
     )

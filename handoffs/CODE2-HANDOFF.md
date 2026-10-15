@@ -1408,3 +1408,44 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A22-seam
+
+```
+TASK: T-A22-seam
+CHANGE:
+      - packages/answer/factory.py constructs OpenRouterReranker only when RERANK_ENABLED=true and workspace not sensitive
+      - packages/rerank/openrouter_provider.py supports orchestrator async Reranker shape
+METRICS:
+      - rerank suite tests/unit/test_t_a22_adapt -> 3 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-seam FIXUP
+
+```
+TASK: T-A22-seam FIXUP
+VERIFY:
+      - mypy clean on packages/rerank/openrouter_provider.py and packages/answer/factory.py
+      - ruff clean; 3 rerank tests passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-seam FIXUP-2
+
+```
+TASK: T-A22-seam FIXUP-2
+VERIFY:
+      - import path rerank (unprefixed)
+      - ruff check packages/answer/factory.py packages/rerank clean
+      - mypy packages/answer/factory.py clean, mypy packages/rerank/openrouter_provider.py clean
+      - suite 3 passed
+SPEND: 0.00
+GIT: handoff only
+```
