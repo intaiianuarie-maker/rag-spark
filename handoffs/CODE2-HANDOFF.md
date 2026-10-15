@@ -1574,3 +1574,28 @@ STATUS: DESIGN ONLY
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I01b FIXUP
+
+```
+TASK: T-I01b FIXUP
+METRICS:
+      - run store/queue/checkpoint step under set_agent_store_db
+      - reopen persists (3 tests)
+      - full suite green; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I06
+
+```
+TASK: T-I06
+RESULT: CONFIRMED (source-grounded plus read)
+EVIDENCE: apps/worker/jobs/ingest_pipeline.py:961 builds OpenRouterProvider(call_site="ingest_pipeline") unconditionally; no workspace sensitivity load before embed_documents
+FIX SHAPE: load workspace policy in ingest pipeline and use RefusingEmbeddingProvider or bail when sensitive (reuse A01 egress machine)
+SPEND: 0.00
+GIT: handoff only
+```
