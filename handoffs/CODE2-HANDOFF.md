@@ -1504,3 +1504,20 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-EVAL-CORPUS
+
+```
+TASK: T-EVAL-CORPUS
+CHANGE:
+      - evals/ingest/manifest.json (48 items)
+      - evals/ingest/docs/*.txt supporting docs
+      - evals/ingest/CLEANUP_PLAN.md
+VERIFY:
+      - n=48, gold coverage 48/48
+      - checksum b586fa5a952b9e780428499f7869dad2ffa1c3937cdfe80af70a0b9381ad8b64
+      - json valid
+SPEND: 0.00
+GIT: handoff only
+```
