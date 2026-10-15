@@ -3700,3 +3700,30 @@ Next: IDLE — push mandatory.
 - **Concurrently-landed dev2 work, disjoint from this ticket.** During T-A20 the tree gained uncommitted changes to `packages/workflow_engine/checkpoint.py` (dev2 T-A21: allocate+insert in ONE transaction so concurrent appenders cannot race sequence allocation) and `packages/workflow_engine/migrations/0001_workflow_draft_revisions.up.sql` (append-only trigger hardening with NULL parent handling). Dev1's T-A20 touched only `packages/workflow_engine/executor.py` + `tests/unit/test_workflow_idempotency.py`. No shared file, no shared function — no pause needed, no BLOCKED post.
 - **w7 failure attribution, checked against true HEAD.** `tests/unit/test_w7_parity_off_rollback.py::test_probe3_migration_down_*` (2 tests, SQLite `OperationalError` at line 533) fail with **all** uncommitted work stashed, i.e. on true HEAD — pre-existing, not caused by T-A20 and not caused by the in-flight dev2 work either. Lane run therefore stands as 949 passed / 2 pre-existing failures.
 - **A18 is committed.** `6440c8d fix(v4): T-A18+A19 checkpoint exactness + failure surfacing (dev1+dev2-verified)` is an ancestor of HEAD; the current `checkpoint.py` delta belongs to dev2's T-A21, not to dev1's already-landed A18.
+
+## 2026-10-15 T-EVAL-HARNESS — production-leg eval harness (R08 protocol, full n) (dev1)
+TASK: T-EVAL-HARNESS (w5:pG). Build the production-leg harness at full n after recon2 reported STABLE. Dev2's corpus + fixtures under `evals/ingest/` are **inputs imported, never written**. NO metered run executed this ticket — the coordinator sequences it once the corpus lands.
+CHANGE (allowed files — new files under evals/ only):
+- `evals/v1_full_harness.py` — the harness. Retrieval + generation + claim verification + reporting with strata and provenance.
+- `evals/v1_full_harness_ingest.py` — the **production ingest leg**: real `POST /v1/workspaces/{ws}/documents` route → real `ingest_worker.process_one` → chunk/embed/upsert, then purge with a net-zero point-count proof.
+WHY: R08 inserted straight into Postgres/Qdrant, so a green R08 says nothing about the production ingest path. This runs the real one, at full n, repeatably.
+R08 METRIC PARITY (proof, not assertion):
+- Every shared definition is **imported** from `evals.live_v1_gate`, not re-typed: `EvalItem`, `percentile`, `wilson_score_interval`, `TARGETS`, `SERVING_COLLECTION`, `ORGANIZATION_ID` — all verified `is`-identical to R08's objects.
+- Faithfulness floor verified numerically: `float("0.90") == FAITHFULNESS_FLOOR`.
+- **Differential parity test vs R08's real logic**: refusal rule IDENTICAL over 18 (status × phrase) cases; grounded/precision/validity IDENTICAL over 16 (answerable × status × citations × claims) cases. Definitions: recall@20 = gold id present in top-20 (1.0 N/A for unanswerable); grounded = not-refusal ∧ ANSWERED ∧ ≥1 citation ∧ faith ≥ 0.90 (refusal of an answerable item is a FAILURE); precision = fraction of claims with faith ≥ 0.90; validity = ≥1 citation; abstention = refused ∧ zero citations.
+- Faithfulness is `app.eval.metrics.score_faithfulness` in both. Citations come from the engine's real `verify_claims` + canonical lookup; `citations_canonical` is reported alongside the R08 gate as corroboration.
+METRIC 1 — dry-run proves ZERO metered calls:
+- `MeteredGuard` snapshots `GLOBAL_ACCOUNTING` before/after the whole run and raises `MeteredCallLeak` on any call/token/cent. `python evals/v1_full_harness.py --dry-run` → `{"n_calls":0,"n_paid_calls":0,"total_tokens":0,"cost_usd":0.0}`.
+- Negative-tested three ways: a metered call raises; a *free* call raises; a **zero-token zero-cost** call raises. That last case caught a real bug — `CallStats.as_dict` keys are `calls`/`paid_calls`, not `n_calls`/`n_paid_calls`; the first implementation read the wrong keys, silently reported 0 calls and would have let a tokenless call slip past. Fixed, and `_snapshot` now **asserts** the expected keys exist so the guard can never under-count again.
+METRIC 2 — reporting at full n: `overall` + per-stratum (`multi-hop` ← slice `multi`, `table` ← slice `tables`, `other`) each with n_total / n_answerable / n_unanswerable, rates, Wilson 95% CIs, R08 target pass flags, latency p50/p95, mean faithfulness; plus run id, corpus checksum (sha256 over content_sha256+question+gold per item), embedding + generation model ids, and spend.
+RULES HONOURED: no commit, no deploy, no compose/restart, no live-collection writes (scratch workspace only, cleanup returns a `net_zero` point-count proof), **no full-n run executed**.
+VERIFY:
+- `python evals/v1_full_harness.py --dry-run` → zero metered calls, 3/3 synthetic items scored, report written to /tmp/opencode/v1_full_harness.json.
+- Differential parity vs R08: 18/18 refusal, 16/16 grounded/precision/validity.
+- `ruff check evals/v1_full_harness.py evals/v1_full_harness_ingest.py` → `All checks passed!` (output pasted above).
+RISKS:
+- `evals/ingest/` does not exist yet, so the **production ingest leg is unexercised**: `load_corpus()` refuses with a clear error rather than falling back to another dataset (a fallback would make the reported checksum describe unaudited data). The ingest leg must be smoke-tested on a small slice before the metered full-n run.
+- Dry-run recall (0.5) is a plumbing artifact — the dry-run retrieval stub returns only `chunk_ids[0]`, so a gold chunk in a later paragraph misses. Dry-run proves wiring, not quality; real recall needs the real run.
+- The real run's generation leg overrides `engine.llm` after `build_answer_engine` so metering lands on this harness's call site; if a future refactor makes `build_answer_engine` lazy about the provider, that override must move.
+- Per-item `citations_canonical` needs `ref.chunk_ids`, which the production leg reads from the `chunks` table; a worker that renumbers chunks would make it read 0 rather than lie.
+Next: IDLE — awaiting corpus, then the coordinator sequences the metered full-n run.
