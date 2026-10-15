@@ -1381,3 +1381,30 @@ STATUS: DEFERRED; design: rerank adapter behind RERANK_ENABLED (default false), 
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A22-adapt
+
+```
+TASK: T-A22-adapt
+CHANGE:
+      - packages/rerank/openrouter_provider.py added CohereRerankProvider
+      - tests/unit/test_t_a22_adapt.py -> 3 passed
+VERIFY:
+      - sensitive refusal, availability failure, latency/cost fields
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-adapt FIXUP
+
+```
+TASK: T-A22-adapt FIXUP
+VERIFY:
+      - packages/rerank/__init__.py sorted (ruff clean)
+      - suite 3 passed
+SPEND: 0.00
+GIT: handoff only
+```
