@@ -3779,3 +3779,37 @@ CONFOUND (4) QUANTIFIED AND BOUNDED — mix is NOT the main cause: R08's answera
 RECOMMENDED SINGLE NEXT TICKET (highest leverage): **a paraphrase-tolerant grounding scorer behind the existing `ClaimGrounder` Protocol.** `verification.py:477-492` states the seam explicitly — "a future semantic (embedding) grounder can replace it behind this same interface **without touching `verify_claims`**" — so this is plug-in work with no metric redefinition and no change to the retrieval or ingest legs. It addresses Groups A+B = **79.2%** of the failure mass, versus Driver 4 (config, ~0% of the metric gap) or Driver 3 (a harness metric fix that changes no behaviour). A/B it on the SAME 48 items under the SAME corpus checksum (`89a8dcb7…`) for a clean paired read; one re-run costs ~$0.014 against the proven budget. Second, separate: fix the precision survivorship so the next run can actually measure generation faithfulness.
 WHAT A FRESH INSTRUMENTED RUN MUST RECORD (so this becomes FULL, not PARTIAL): per-item answer text, per-item n_citations, per-item answer-level faithfulness, per-claim grounding scores, and the grounder's rejection reasons. The current JSON has none of these, which is why Driver 1 is mechanistically evidenced but not per-item observed.
 NO metered calls were made by this ticket. No metric definition, harness file, or product file was modified.
+
+## 2026-10-15 T-I03 — pg_fts lifecycle join for tombstoned docs (P1) (dev1)
+TASK: T-I03 (w5:pG). Review finding 3 (P1, `reviews/2026-10-15-super-rag-review.md`): `pg_fts.py` read `lexical_docs` with no document tombstone / current-version join, so deleted-document text stayed searchable between the tombstone commit and the FTS purge — and forever if that purge failed.
+CHANGE (allowed files):
+- `packages/retrieval/adapters/pg_fts.py` (**query only**): `search()` now LEFT JOINs `documents` + `document_versions` and applies a named lifecycle predicate in the WHERE clause. All existing predicates qualified `ld.` because the joins introduce `workspace_id`/`document_id` ambiguity. New shared helpers `LIFECYCLE_JOINS` and `LIFECYCLE_PREDICATE` (query only, no behaviour outside `search`).
+- `tests/unit/test_pg_fts_lifecycle_gate.py`: 7 new tests.
+WHY: `lexical_docs` is a denormalised index row that can outlive its document; ranking must consult the authoritative lifecycle, not the index row's own claim.
+REUSED: the dense store's existing authority semantics verbatim — `qdrant_store._postgres_active_versions` / `_is_active_version` (`packages/retrieval/adapters/qdrant_store.py:345-416`): tombstone (`deleted_at`) never eligible; only `current_version_id` is live; "authority makes no claim → pass through" keeps pre-migration rows alive. Both stores now agree on what eligible means.
+BUILT: the SQL-level lifecycle gate for the lexical leg.
+BOTH FAILURE PATHS COVERED: **delayed cleanup** (row retained, tombstoned doc) and **failed cleanup** (same observable state, purge never ran) are the identical query-time case — the gate is on the authority, not on cleanup progress. Additionally **superseded generation** is gated on both `documents.current_version_id` and `document_versions.superseded_at`.
+DESIGN NOTES:
+- Applied **inside the query, ahead of `ORDER BY`/`LIMIT`**, so a stale row cannot consume a `top_k` slot. A post-LIMIT Python filter would have hidden it while still letting it displace live evidence.
+- Join casts the **UUID column to text** (`d.id::text = ld.document_id`), never TEXT→UUID, so a legacy/fixture id that is not UUID-shaped cannot turn a search into `invalid input syntax for type uuid` (asserted by test).
+- LEFT JOINs + `d.id IS NULL` pass-through preserve pre-migration rows whose `current_version_id` was never set.
+VERIFY:
+- `pytest tests/unit/test_pg_fts_lifecycle_gate.py` → 7 passed.
+- `pytest tests/unit -k 'lexical or fts or retrieval or orchestrator or search'` → 158 passed.
+- `ruff check packages/retrieval/adapters/pg_fts.py tests/unit/test_pg_fts_lifecycle_gate.py` → `All checks passed!` (pasted above).
+- `mypy packages/retrieval/adapters/pg_fts.py` → `Success: no issues found in 1 source file` (pasted above).
+Proof table:
+| case | result |
+|---|---|
+| retained row, tombstoned document (`deleted_at` set) | not returned, not ranked |
+| retained row, superseded version (`current_version_id` moved / `superseded_at` set) | not returned, not ranked |
+| current version of a live document | still returned (gate does not over-block) |
+| lifecycle predicate present in WHERE before ORDER BY / LIMIT | asserted structurally |
+| ACL + language filters after `ld.` qualification | still applied, params intact |
+- Regression proof: removing **only** the query usage (constants untouched) fails 3 of the tests — `test_retained_tombstone_row_is_not_returned_or_ranked`, `test_superseded_version_row_is_not_returned_or_ranked`, `test_emitted_sql_filters_before_ranking`; restoring returns 7/7.
+NOTES ON TEST DESIGN: the behavioural proofs run against the **real database**, not a session double, because the claim under test is about SQL semantics — a canned double returns rows regardless of the WHERE clause and cannot demonstrate filtering at all. A session double is retained only for the SQL-text structural assertions. Each behavioural test also asserts a precondition (the stale row really is present in `lexical_docs`) so a false pass cannot come from the seed silently not landing.
+RISKS:
+- The extra joins cost a `documents`/`document_versions` lookup per search. They are LEFT JOINs on indexed primary keys (`d.id::text` is a text-side cast, so this specific predicate may not use the UUID index — flagged for the coordinator; correctness first, and if it shows up in latency the fix is an expression index on `documents(id::text)`, not weakening the gate).
+- Rows whose document the authority does not know still pass through (documented, matches the dense store). A row naming a document id that exists but has no `current_version_id` is eligible — deliberate, to avoid stranding pre-migration data.
+- Existing rows written before this change are unaffected structurally; the gate changes what is *retrievable*, which is the intent.
+Next: IDLE — push mandatory.
