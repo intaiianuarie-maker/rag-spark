@@ -1625,3 +1625,15 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I07
+
+```
+TASK: T-I07
+RESULT: CONFIRMED
+EVIDENCE: ingest_pipeline.py merge into ChunkRow metadata at :856, but FTS (:904) and qdrant (:1014) metadata use language + c.metadata only; chunk_disclosure omitted from both index surfaces
+FIX SHAPE: merge chunk_disclosure at index-write time (before VectorRecord metadata) for both FTS and qdrant
+SPEND: 0.00
+GIT: handoff only
+```
