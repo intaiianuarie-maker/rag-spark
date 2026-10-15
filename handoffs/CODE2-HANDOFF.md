@@ -1599,3 +1599,16 @@ FIX SHAPE: load workspace policy in ingest pipeline and use RefusingEmbeddingPro
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I06b — ingest egress gap closed
+
+```
+TASK: T-I06b
+CHANGE:
+      - apps/worker/jobs/ingest_pipeline.py loads workspace policy; sensitive raises POLICY_BLOCKED before embedding
+VERIFY:
+      - ingest tests 36 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```

@@ -950,14 +950,21 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
 
     try:
         from models.adapters.openrouter_provider import OpenRouterProvider
+        from models.router_config import load_workspace_config
         from retrieval.adapters.qdrant_store import QdrantVectorStore
         from retrieval.embedding_identity import (
             merge_identity,
             observed_dimension,
             provider_identity,
         )
-
         coll = vector_collection()
+        _ws_cfg = load_workspace_config(str(job.workspace_id))
+        if _ws_cfg is not None and bool(getattr(_ws_cfg, "sensitive", False)):
+            raise IngestPipelineError(
+                "POLICY_BLOCKED",
+                "sensitive workspace refuses cloud embedding egress",
+                retryable=False,
+            )
         embed_provider = OpenRouterProvider(call_site="ingest_pipeline")
         qdrant = QdrantVectorStore(collection=coll)
         try:
