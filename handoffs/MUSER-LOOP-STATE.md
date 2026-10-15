@@ -1077,3 +1077,8 @@ RESUME HERE after context loss / long outage. Verified at write time:
 - NEXT QUEUED PICKUPS after A14/A22-adapt complete: dev1 -> T-A16 (V4-02 cancel visibility) or T-F02 (entailment judge); dev2 -> T-A22-seam or T-A17.
 - STANDING GATES: no commit by devs; R01 secret exported (rotated); live api+worker on knowledge__serving@2204; /ready true pre-outage; evals halted until EVAL-INGEST; rerank stays RERANK_ENABLED=false; no api restarts.
 - RESUME TRIGGER: endpoint recovery or model switch (operator). On resume: confirm DOING tickets from assignments file, verify panes alive, let current tickets finish, then pull next QUEUED per lane discipline.
+
+## 2026-10-15 — OUTAGE OVER (recovery observed); A22-adapt held on lint
+- Dev2 pane alive and delivered T-A22-adapt (CohereRerankProvider read-verified: sensitive refusal, typed availability, injectable transport, latency+cost envelope, 0.001 fallback matches probe). HELD: packages/rerank/__init__.py I001 dirty with "clean" claimed — fixup dispatched, open.
+- Dev1 pane alive on a DIFFERENT model (Space Bunny Free — switched off LongCat), executing; assume T-A14 progress, watch for push.
+- Outage block in prior resume point superseded from here; remainder (A16-A21, A22-seam queue) unchanged.
