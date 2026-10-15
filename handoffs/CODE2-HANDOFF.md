@@ -1521,3 +1521,16 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-RS10 — docs/DX truth pass
+
+```
+TASK: T-RS10
+CHANGE:
+      - README.md, apps/web/README.md, infrastructure/docker/README.md de-staled
+VERIFY:
+      - zero M0-skeleton claims; every quickstart command matches Makefile targets
+SPEND: 0.00
+GIT: handoff only
+```
