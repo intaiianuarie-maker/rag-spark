@@ -1464,3 +1464,17 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A19
+
+```
+TASK: T-A19
+CHANGE:
+      - packages/workflow_engine/executor.py logs checkpoint append failures; resume refuses when store present but no checkpoint
+VERIFY:
+      - test_workflow_idempotency etc green; test_checkpoint_redacts_secrets pre-existing (dev1 T-A18)
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```

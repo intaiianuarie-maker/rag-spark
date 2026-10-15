@@ -3581,3 +3581,86 @@ RISKS:
 - Node-level progress is not persisted mid-execution: the executor exposes no live-run handle and executor semantics are read-only for this ticket, so granularity is initial-registered → terminal. Per-node tracing is available in the terminal run's `node_runs`.
 - Supervised tasks are in-process; a process restart mid-run leaves the row `running` with no live executor, so cancel then returns 409 (pre-existing post-restart behavior, unchanged).
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-seam-tests — diagnose agent-seam failures: test-drift, fixed (dev1)
+TASK: T-seam-tests (w5:pG). Coordinator stash-proved 4 failures in `tests/unit/test_workflow_agent_seam.py` on HEAD, untouched since; suspected fallout from A12/A13 adapter boundary validation.
+CHANGE (allowed files):
+- `tests/unit/test_workflow_agent_seam.py` (TEST FAKE ONLY): `_DelegationSpy` now returns the A13 contract shape `{"status": "completed", "output_data": {...}}` instead of the pre-A13 bare output-port mapping. No assertions were weakened — the delegation-count metrics (`spy.calls`, `adapter.dispatches`, `primary.calls`) and the "recorded UNCHANGED" output assertion are untouched and still pass.
+- No product code touched.
+WHY: A13 (`7803d3f`) made the seam contract-validated; the spy fake still spoke the old protocol.
+REUSED: `v3_contract.V3NodeResponse` as the response shape; existing `_DelegationSpy` recording behavior.
+BUILT: nothing — one fake updated to the current contract.
+CAUSE PER FAILURE (cite):
+| # | test | cause | evidence |
+|---|---|---|---|
+| 1 | `test_agent_execution_reaches_runner_exactly_once` (:158) | test-drift (contract change) | spy returns `{"output": ...}`; `V3NodeResponse.model_validate` rejects it (`status` Field required) -> node FAILED |
+| 2 | `test_each_agent_node_delegates_once` (:199) | test-drift | same rejected shape on both AGENT nodes |
+| 3 | `test_non_agent_nodes_never_reach_the_seam` (:211) | test-drift | same rejected shape; `run.status` assert is the failing line |
+| 4 | `test_flag_on_with_runner_delegates` (:399) | test-drift | same rejected shape via `resolve_node_executor` |
+VERDICT: TEST-DRIFT, not a real behavior regression. Proof:
+- `V3NodeResponse.model_validate({"output": {...}})` -> ValidationError ("status Field required"; also `extra="forbid"`); the contract shape validates and `output_data` passes through unchanged.
+- A13 commit message: "responses validated at return with failed/cancelled mapped away from completions" — the tightening was the intent.
+- `v3_contract.py` docstring states the seam previously "returns an unvalidated mapping ... that is a working seam but not a checkable one" — the module exists to close exactly this.
+- **No production `AgentRunner` implementation exists anywhere** (`grep -rn "AgentRunner" apps/` -> zero hits; only the Protocol in `v3_adapter.py`). No real caller can regress; the adapter is flag-off by default.
+- The 3 spy uses that DO pass (`disabled adapter`, `missing capability` x2) never reach the runner, so the contract is never exercised — consistent with drift, not a runtime defect.
+SCOPE NOTE (corrected mid-task): the sweep also showed 2 failures in `tests/unit/test_workflow_fake_runtime.py` (same drift class, sibling file). These were fixed in parallel by dev2 during this session, NOT by me — my first-pass hypothesis that they were collateral from the seam failures was wrong. That file is outside this ticket's allowed files and is dev2's to land. Net pre-existing failure count on HEAD was **6**, not 4.
+VERIFY:
+- `pytest tests/unit/test_workflow_agent_seam.py` -> 14 passed, zero failures.
+- `pytest tests/unit/test_workflow_agent_seam.py tests/unit/test_workflow_fake_runtime.py` -> 36 passed.
+- `pytest tests/unit -k 'workflow or draft or v4'` -> 904 passed, 0 failed (twice, incl. default random order).
+- Isolation proof: reverting ONLY this test file (dev2's fix left in place) -> exactly the 4 named failures return; restoring -> 36 passed.
+- `ruff check tests/unit/test_workflow_agent_seam.py` -> All checks passed.
+RISKS:
+- The spy is now coupled to the A13 contract shape; if that contract changes again, this fake needs the same update (it is a fake, not a contract test — `test_workflow_v3_adapter_contract.py` is the contract's own home).
+- No assertion was relaxed: the run-completion and "output recorded unchanged" checks still verify real behavior, now against a contract-valid response.
+Next: IDLE — push mandatory.
+
+### RETRACTED 2026-10-15 — T-seam-tests (coordinator retraction, dispatch overlap)
+
+Coordinator retracted T-seam-tests: dispatch overlap, coordinator's error. The same 4 failures were already fixed by dev2's T-A17 slice, committed as `9a922eb` (A13 contract drift — spy shape), full workflow selector 890 green with zero failures.
+
+Retraction notes, recorded so the row above is not read as dev1's landed work:
+- **No dev1 fix is live.** The `_DelegationSpy` contract-shape edit above was never committed by dev1; dev2's `9a922eb` swept the equivalent working-tree change into their commit. `tests/unit/test_workflow_agent_seam.py` is clean against HEAD and is dev2's to own — do not attribute it to dev1.
+- **The diagnosis above still stands** (it was independently correct and is the reason dev2's fix has the right shape): cause is A13 contract drift in the test fake — `V3NodeResponse.model_validate` rejects the pre-A13 bare output mapping (`status` Field required, `extra="forbid"`). No production `AgentRunner` implementation exists (`grep -rn "AgentRunner" apps/` -> zero hits), so there was no real behavior regression to report as BLOCKED-REGRESSION.
+- **Correction carried forward:** the net pre-existing failure count on HEAD was 6 (4 in `test_workflow_agent_seam.py` + 2 in `test_workflow_fake_runtime.py`, same drift class). dev2's T-A17 covered both files.
+- Nothing else was touched by dev1 for this ticket; no product code was modified.
+
+## 2026-10-15 T-A18 — V4-04 separate redacted observability from exact resume state (dev1)
+TASK: T-A18 (w5:pG). Astra CONFIRMED Med: `WorkflowCheckpoint.to_json()` — the single serialization used for durable state — applied `_redact()`, truncating every text field to 8192 chars and scrubbing secrets, while the in-memory object kept originals. So a reopened checkpoint held *different values* than the live run and a resumed run computed different downstream results from an uninterrupted one.
+CHANGE (allowed files):
+- `packages/workflow_engine/checkpoint.py` (serialization split only):
+  - `to_json()` now emits the **exact resumable state** (`model_dump(mode="json")`, byte-exact, no truncation/redaction) with a docstring stating why it must not be lossy.
+  - NEW `to_observability_json()` and `observability_view()` emit the **redacted copy** (bounded per text field + secrets stripped) for evidence trails / operator inspection / metrics.
+  - `MAX_TEXT_CHARS` and `_DENY_KEYS` docstrings rescoped to observability; module docstring gained an "Exact state vs observability" section.
+- `tests/unit/test_workflow_checkpoint.py`: `test_checkpoint_redacts_secrets` re-pointed to the observability path (plus a byte-exactness assertion on the resumable payload); NEW `test_oversized_node_output_persists_exactly` (reopened-checkpoint, 3x cap) and `test_resumed_run_computes_identical_results_for_long_outputs` (downstream result equality, non-multiple-of-cap length). Added `MAX_TEXT_CHARS` to the existing import.
+WHY: the durable record IS the resumable execution state; observability shaping must never be applied to it, or resume diverges from an uninterrupted run.
+REUSED: existing `_redact`/`_redact_text` deny-list machinery (moved onto the observability path, unchanged logic), `_enforce_bounds`, both stores.
+BUILT: the two-path serialization split.
+VERIFY:
+- `pytest tests/unit/test_workflow_checkpoint.py` -> 16 passed, zero failures.
+- `pytest tests/unit -k 'checkpoint or workflow or draft or v4 or resume'` -> 932 passed, 0 failed.
+- ruff + mypy on touched files clean (outputs pasted above).
+Proof table:
+| case | result |
+|---|---|
+| 24576-char (3x cap) node output, SQLite round-trip | reopened value byte-exact; length preserved |
+| resumed run consuming a long output | downstream result identical to uninterrupted run |
+| secrets in node output, observability copy | redacted, `[REDACTED]` present |
+| observability copy of the long output | bounded to exactly `MAX_TEXT_CHARS` |
+| aggregate-oversized checkpoint | still refused via `ResumeStateError` (bound kept, never lossy) |
+- Regression proof: reverting only `to_json()` to the redacting form fails 3 of the tests; restoring returns 16/16.
+RISKS:
+- **Security trade-off, coordinator ruling applied:** the durable checkpoint file now stores values byte-exact, so a secret that reached a node output is written verbatim to disk (previously scrubbed). Reordering is the directive for this ticket (exact resume), and `MAX_CHECKPOINT_BYTES` still refuses oversized payloads rather than truncating. If "secrets never at rest" must be preserved, the follow-up is to separate *which* fields are resumable vs observability-only at the model level, not to re-blunt `to_json()` — flagged here for an explicit ruling.
+- No consumer breaks: `to_json()` is referenced only by `_enforce_bounds` inside this module (verified by repo-wide grep), so the observability path is additive and callers opt in explicitly.
+- Values persisted exactly means larger checkpoints for long outputs — still bounded by `MAX_CHECKPOINT_BYTES`, but a run producing >256 KB of state will now be refused where it previously "fit" after truncation.
+Next: IDLE — push mandatory.
+
+### T-A18 overlap check vs dev2 T-A19 (no BLOCKED post required)
+
+The coordinator pre-warned that dev2 lands T-A19 next and that overlap means pause + BLOCKED post. Checked: **no overlap, no pause needed.**
+
+- dev1 (this ticket) touched: `packages/workflow_engine/checkpoint.py`, `tests/unit/test_workflow_checkpoint.py`, `handoffs/CODE1-HANDOFF.md`.
+- dev2 (in flight during this session) touched: `packages/workflow_engine/executor.py` (+11/-1) — checkpoint *append failure* logging and a refusal when resume is requested with no checkpoint found.
+- The two areas are thematically adjacent (both concern checkpoints) but disjoint in file and in contract: dev2 changes executor-side failure/resume semantics; dev1 changes the serialization split. No shared file, no shared function (`to_json`/`_redact`/`_enforce_bounds` live only in `checkpoint.py`; the executor neither calls nor redefines them).
+- Re-ran the lane with dev2's change present in the tree: `pytest tests/unit -k 'checkpoint or workflow or draft or v4 or resume'` -> 932 passed, 0 failed. No interference in either direction.
+- Note for the coordinator: `executor.py` and `checkpoint.py` are both in the workflow-engine lane; if a follow-up ticket needs to touch both, they should be sequenced rather than run concurrently.

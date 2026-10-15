@@ -567,8 +567,14 @@ class WorkflowExecutor:
         )
         try:
             await self._checkpoint_store.append(checkpoint)
-        except Exception:
+        except Exception as exc:
             self.checkpoint_failures += 1
+            import logging
+
+            logging.getLogger("knowledge_os.workflow.executor").warning(
+                "checkpoint_append_failed",
+                extra={"run_id": run_id, "error_type": type(exc).__name__},
+            )
 
     # ------------------------------------------------------------------ #
     # T-V4-012: run-level envelope configuration
@@ -725,6 +731,10 @@ class WorkflowExecutor:
         base_executor = self._executor
         if resume:
             checkpoint = await self._load_checkpoint(run_id)
+            if checkpoint is None and self._checkpoint_store is not None:
+                raise ResumeStateError(
+                    f"resume requested but no checkpoint found for run {run_id!r}"
+                )
             if checkpoint is not None:
                 if checkpoint.workspace_id and checkpoint.workspace_id != revision.spec.workspace_id:  # noqa: E501
                     raise ResumeStateError(

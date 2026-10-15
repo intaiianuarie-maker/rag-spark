@@ -4,8 +4,26 @@ Workflow execution checkpoints durably and resumes identically after a kill;
 evidence produced before the kill re-attaches to the resumed run instead of
 being orphaned by the restart.
 
-Discipline mirrors the V3 ``StepStore`` pattern (append-only, ordered, redacted,
-bounded) but is a **separate implementation** — the W3 adapter
+Exact state vs observability (T-A18)
+------------------------------------
+The durable record and the observability record are **two different things** and
+are serialized separately:
+
+* :meth:`WorkflowCheckpoint.to_json` — the **exact resumable state**. Byte-exact
+  execution values, never truncated or redacted, because this is what a resumed
+  run replays from. Applying redaction here (as the module previously did) made
+  a resumed run compute *different* downstream results from an uninterrupted one
+  — a node output over ``MAX_TEXT_CHARS`` came back silently truncated.
+* :meth:`WorkflowCheckpoint.to_observability_json` — the **redacted copy** used
+  for evidence trails, operator inspection and metrics. Bounded per text field
+  and stripped of secret-looking values.
+
+The durable record remains *bounded*, just not *lossy*: an oversized checkpoint
+is still refused outright (:func:`_enforce_bounds`) rather than truncated, so a
+run never resumes into a state it never actually produced.
+
+Discipline mirrors the V3 ``StepStore`` pattern (append-only, ordered, bounded)
+but is a **separate implementation** — the W3 adapter
 (``adapters/v3_adapter.py``) is the only bridge to V3 and it stays flagged
 off, so nothing here imports V3 product code across the seam.
 
@@ -59,10 +77,15 @@ from .interfaces import (
 
 #: Maximum size of one serialized checkpoint payload (bytes).
 MAX_CHECKPOINT_BYTES = 262_144  # 256 KB
-#: Maximum length of any single redacted text field.
+#: Maximum length of any single text field in the **observability** copy.
+#: T-A18: this bounds what is logged/shown, never the persisted resumable state.
 MAX_TEXT_CHARS = 8_192
-#: Secrets are never stored. Deny-list mirrors the V3 StepStore deny-list; kept
-#: as a separate tuple rather than imported across the seam.
+#: Secrets are never emitted in the observability copy. Deny-list mirrors the
+#: V3 StepStore deny-list; kept as a separate tuple rather than imported across
+#: the seam. T-A18 scope note: the exact resumable payload is persisted
+#: byte-exact by design, so a secret that reached a node output is now written
+#: verbatim to the checkpoint file — the observability view is where redaction
+#: applies. See the T-A18 handoff row.
 _DENY_KEYS = (
     "api_key",
     "apikey",
@@ -121,7 +144,12 @@ def _enforce_bounds(checkpoint: WorkflowCheckpoint) -> str:
 
 
 def _redact_text(text: Any) -> Any:
-    """Redact secrets from ``text`` at the store boundary (never store them)."""
+    """Bound + redact one text field for the **observability** copy.
+
+    T-A18: this shapes the observability view only. It is deliberately NOT
+    applied to the persisted resumable state — see
+    :meth:`WorkflowCheckpoint.to_json`.
+    """
     if not isinstance(text, str):
         return text
     redacted = text[:MAX_TEXT_CHARS]
@@ -141,7 +169,7 @@ def _redact_text(text: Any) -> Any:
 
 
 def _redact(value: Any) -> Any:
-    """Recursively redact + bound a JSON-ish value before it is persisted."""
+    """Recursively redact + bound a JSON-ish value for the observability copy."""
     if isinstance(value, str):
         return _redact_text(value)
     if isinstance(value, dict):
@@ -187,7 +215,9 @@ class WorkflowCheckpoint(BaseModel):
     initial_input: dict[str, Any] = Field(default_factory=dict)
     #: Completed node ids at checkpoint time.
     completed_nodes: list[str] = Field(default_factory=list)
-    #: Checkpointed node outputs (pre-redaction), keyed by node id.
+    #: Checkpointed node outputs, keyed by node id. Persisted **byte-exact**
+    #: (T-A18): this is the resumable execution state, not an observability
+    #: view, so it is never truncated or redacted on the way to the store.
     node_outputs: dict[str, Any] = Field(default_factory=dict)
     #: Serialized completed NodeRuns at checkpoint time.
     node_runs: dict[str, NodeRun] = Field(default_factory=dict)
@@ -197,7 +227,29 @@ class WorkflowCheckpoint(BaseModel):
     checkpointed_at: str = ""
 
     def to_json(self) -> str:
+        """Serialize the **exact resumable state** — byte-exact, unaltered.
+
+        T-A18: the durable record is what a resumed run replays from, so it
+        must carry the same values the uninterrupted run had. Truncation and
+        redaction belong to the observability copy
+        (:meth:`to_observability_json`), never to this one — applying them
+        here is what made a resumed run compute different downstream results
+        from an uninterrupted one.
+        """
+        return json.dumps(self.model_dump(mode="json"), ensure_ascii=False)
+
+    def to_observability_json(self) -> str:
+        """Serialize the **redacted observability copy** — safe to log/show.
+
+        Truncates each text field to ``MAX_TEXT_CHARS`` and strips
+        secret-looking values. This is a *view* for evidence trails, operator
+        inspection and metrics; it is never the input to a resume.
+        """
         return json.dumps(_redact(self.model_dump(mode="json")), ensure_ascii=False)
+
+    def observability_view(self) -> dict[str, Any]:
+        """The redacted observability copy as data (see :meth:`to_observability_json`)."""
+        return _redact(self.model_dump(mode="json"))
 
 
 # ---------------------------------------------------------------------------
