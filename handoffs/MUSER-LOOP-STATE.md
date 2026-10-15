@@ -1065,3 +1065,15 @@ REVIEW, DONE requires reviewer PASS on the commit (no more IN-PROGRESS→DONE ju
 - Tree verified clean: no partial code from either dev. Nothing to salvage, no rows pending.
 - Board actual: 258 tickets (judge dial read 225 — stale snapshot, flagged for their side).
 - NO re-dispatch (would stack prompts on frozen turns). Resume point: this row + assignments file. A-wave resumes when either endpoint recovers or models are switched (operator decision).
+
+## 2026-10-15 — COMPACTION-SAFE RESUME POINT (dual-provider outage, long-form)
+RESUME HERE after context loss / long outage. Verified at write time:
+- OUTAGE: dev1 (w5:pG, LongCat 2.5 Preview Free) frozen since ~22:05Z; dev2 (w5:p6, Cat Jam Free) frozen since ~22:12Z. Panes idle at dead prompts; NOT re-dispatched (stacking rule).
+- DEV1 DOING: T-A14 (V3-03, approval binds runtime authority). Last commit e9b4f82 (T-K02). No partial code.
+- DEV2 DOING: T-A22-adapt (rerank adapter, CohereRerankProvider, offline tests only). Last commit dbd730c (T-A22-wire design). No partial code.
+- HEAD: 37db0fd (outage ledger). Tree clean. Foreign w4-session handoff writes remain uncommitted by design.
+- BOARD (verified): 258 tickets = 225 DONE + 4 CANCELLED (T-R04, T-R13b, T-K06b-flip, +1) + 22 QUEUED + 7 IN-PROGRESS. FULL = 87.2%.
+- A-wave remainder when devs return: A16..A21 (V4: cancel-visibility, transform-error, checkpoint-exactness, resume-identity+concurrency, migration-NULL) + A22-seam (rerank wiring after adapter). K07c (runtime-state design) backburner. T-A15 DONE.
+- NEXT QUEUED PICKUPS after A14/A22-adapt complete: dev1 -> T-A16 (V4-02 cancel visibility) or T-F02 (entailment judge); dev2 -> T-A22-seam or T-A17.
+- STANDING GATES: no commit by devs; R01 secret exported (rotated); live api+worker on knowledge__serving@2204; /ready true pre-outage; evals halted until EVAL-INGEST; rerank stays RERANK_ENABLED=false; no api restarts.
+- RESUME TRIGGER: endpoint recovery or model switch (operator). On resume: confirm DOING tickets from assignments file, verify panes alive, let current tickets finish, then pull next QUEUED per lane discipline.
