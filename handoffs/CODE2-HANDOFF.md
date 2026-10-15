@@ -1548,3 +1548,13 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I01 (DEFERRED)
+
+```
+TASK: T-I01
+STATUS: DEFERRED (scope exceeds turn; durable seam requires env-gated sqlite defaults plus startup install design)
+SPEND: 0.00
+GIT: handoff only
+```
