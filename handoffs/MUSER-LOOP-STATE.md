@@ -1082,3 +1082,5 @@ RESUME HERE after context loss / long outage. Verified at write time:
 - Dev2 pane alive and delivered T-A22-adapt (CohereRerankProvider read-verified: sensitive refusal, typed availability, injectable transport, latency+cost envelope, 0.001 fallback matches probe). HELD: packages/rerank/__init__.py I001 dirty with "clean" claimed — fixup dispatched, open.
 - Dev1 pane alive on a DIFFERENT model (Space Bunny Free — switched off LongCat), executing; assume T-A14 progress, watch for push.
 - Outage block in prior resume point superseded from here; remainder (A16-A21, A22-seam queue) unchanged.
+
+## 2026-10-15 — A22-seam DONE (d28fa37) after 3 fixups; rerank chain complete except wave-measured enable
