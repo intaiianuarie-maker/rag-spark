@@ -3551,3 +3551,33 @@ RISKS:
 - Approver authority currently requires the approver to be the run's own principal — matching the runtime's cross-principal replay re-check. Delegated approvers are not yet modelled.
 - Legacy `AgentRunStatus` maps WAITING_APPROVAL to RUNNING, so tests assert the durable `_WAITING` tuple rather than the legacy enum.
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-A16 — V4-02 register run plus cancel handle before dispatch (dev1)
+TASK: T-A16 (w5:pG). Astra CONFIRMED Med: `run_workflow` awaited `executor.execute(...)` and only then called `save_run(run, executor)` — so during execution there was no run id, no run row, and no registered executor; the lifecycle surface only worked on terminal runs.
+CHANGE (allowed files):
+- `apps/api/app/workflows/router.py` (run path only): registers an initial `RUNNING` row AND the cancel handle BEFORE dispatch, returns the run id immediately, and executes inside a supervised `asyncio` task. The supervisor persists the terminal run, maps node/runtime failures to the coded `runtime_failure` shape (no traceback leak), and preserves `CANCELLED` monotonically so a late-finishing task never flips a cancelled run to completed. Compile/executor-wiring failures still fail closed (422/503) and persist a coded FAILED run.
+- `apps/api/app/workflows/store.py` (run registry only): added `register_run()` (pre-dispatch row + cancel handle), `persist_run()` (live/final state), and a supervised-task registry (`register_dispatch` / `get_dispatch` / `clear_dispatch`) that keeps a strong reference so the loop cannot GC an in-flight run; cleared in `reset_workflow_stores`.
+- `tests/unit/test_t_a16_run_dispatch.py`: 4 new tests using a blocking node executor and `httpx.ASGITransport` (true concurrency, one event loop).
+- `tests/unit/test_v4_authoring_api.py`: updated the runtime-failure test to the new async-dispatch contract — the run response returns the run id, and the coded terminal failure is read from the status handler via a new `_await_terminal` poll helper. Intent (coded error, no traceback leak) preserved.
+WHY: a run must be addressable and cancellable the moment it starts; a cancel surface that only exists after completion cannot control an in-flight run.
+REUSED: `WorkflowExecutor.request_cancel()` (deterministic, observed before the next node dispatch), existing `save_run`/`cancel_run`/`get_run`, `build_timeline`, supervisor-free executor semantics untouched.
+BUILT: pre-dispatch registration, supervised dispatch, monotonic terminal merge, dispatch-task registry.
+VERIFY:
+- `pytest tests/unit/test_t_a16_run_dispatch.py tests/unit/test_v4_authoring_api.py` → 19 passed.
+- `pytest tests/unit -k 'workflow or draft or v4'` → 898 passed, 6 failed — all 6 pre-existing on stash (dev2 in-flight `v3_adapter.py` work in `test_workflow_agent_seam.py` / `test_workflow_fake_runtime.py`), unrelated to these files.
+- ruff + mypy on touched files clean (outputs pasted above).
+Proof table:
+| case | result |
+|---|---|
+| blocked node, run response | 200 with run id + `status=running` before completion |
+| in-flight status poll | 200, `running` — row visible while executing |
+| in-flight cancel | 200, `cancelled`; live executor reached |
+| release gate after cancel | run stays `cancelled` (monotonic, never `completed`) |
+| `get_run` during execution | row registered and durable pre-dispatch |
+| cancel with no live executor | 409 (terminal-cancel behavior unchanged) |
+- Regression proof: reverting only the router dispatch block makes 3 of the 4 new tests fail (run POST blocks on the node and never returns the run id); restoring returns 4/4.
+RISKS:
+- The run response now returns `running` rather than a terminal state, so API clients must poll `GET .../runs/{run_id}`. The one existing test asserting a synchronous terminal failure was updated accordingly.
+- Node-level progress is not persisted mid-execution: the executor exposes no live-run handle and executor semantics are read-only for this ticket, so granularity is initial-registered → terminal. Per-node tracing is available in the terminal run's `node_runs`.
+- Supervised tasks are in-process; a process restart mid-run leaves the row `running` with no live executor, so cancel then returns 409 (pre-existing post-restart behavior, unchanged).
+Next: IDLE — push mandatory.

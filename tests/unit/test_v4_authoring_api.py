@@ -63,6 +63,28 @@ def _make_client(user_roles: dict[str, Role] | None = None) -> TestClient:
     return TestClient(app)
 
 
+_TERMINAL = ("completed", "failed", "cancelled")
+
+
+def _await_terminal(client: TestClient, wid: str, run_id: str, attempts: int = 100) -> dict:
+    """T-A16: poll the status handler until the supervised task settles.
+
+    The run id is returned before dispatch, so the terminal state is read from
+    the status route rather than from the run response.
+    """
+    import time
+
+    last: dict = {}
+    for _ in range(attempts):
+        res = client.get(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/{run_id}")
+        assert res.status_code == 200, res.text
+        last = res.json()["run"]
+        if last["status"] in _TERMINAL:
+            return last
+        time.sleep(0.02)
+    return last
+
+
 def _sample_definition(
     wid: str = "wf-test-1",
     workspace: str = WS_ALLOWED,
@@ -521,9 +543,15 @@ def test_run_workflow_runtime_failure_returns_coded_error():
     )
     assert resp.status_code == 200
     data = resp.json()["run"]
-    assert data["status"] == "failed"
-    assert data["error"].startswith("node 'llm-1' failed: LLM node")
-    assert "traceback" not in resp.text.lower()
+    # T-A16: the run id is returned BEFORE dispatch, so the terminal outcome is
+    # observed through the status handler once the supervised task settles.
+    assert data["status"] in ("running", "failed")
+    run_id = data["id"]
+
+    final = _await_terminal(client, wid, run_id)
+    assert final["status"] == "failed"
+    assert final["error"].startswith("node 'llm-1' failed: LLM node")
+    assert "traceback" not in str(final).lower()
 
 
 def test_cancel_without_live_executor_returns_409(monkeypatch):

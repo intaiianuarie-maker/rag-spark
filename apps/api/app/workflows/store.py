@@ -6,6 +6,7 @@ without modifying or coupling to packages/stores/* (dev1's R18 lane).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sqlite3
 import threading
@@ -87,6 +88,10 @@ _draft_store: DraftStore | None = None
 _approvals: dict[tuple[str, str, int], WorkflowApproveResponse] = {}
 _runs: dict[tuple[str, str], WorkflowRun] = {}
 _executors: dict[str, WorkflowExecutor] = {}
+#: T-A16: supervised dispatch tasks, keyed by run id. A strong reference is
+#: required: without it the event loop may garbage-collect an in-flight run
+#: task mid-execution.
+_dispatch_tasks: dict[str, asyncio.Task[None]] = {}
 
 
 def draft_db_path() -> Path:
@@ -169,6 +174,40 @@ def save_run(run: WorkflowRun, executor: WorkflowExecutor | None = None) -> None
             (f"{run.workspace_id}:{run.id}", payload),
         )
         con.commit()
+
+
+def register_run(run: WorkflowRun, executor: WorkflowExecutor) -> None:
+    """T-A16: register the run row AND its cancel handle BEFORE dispatch.
+
+    Called *before* ``executor.execute`` is dispatched so that a concurrent
+    ``GET .../runs/{run_id}`` sees the run and ``POST .../runs/{run_id}/cancel``
+    can reach the live executor. Registering only after execution (the previous
+    behaviour) meant no run id and no cancel surface existed while running.
+    """
+    save_run(run, executor)
+
+
+def persist_run(run: WorkflowRun, executor: WorkflowExecutor | None = None) -> None:
+    """T-A16: persist live/final run state for an already-registered run."""
+    save_run(run, executor)
+
+
+def register_dispatch(run_id: str, task: asyncio.Task[None]) -> None:
+    """Keep a strong reference to a supervised dispatch task (T-A16)."""
+    with _lock:
+        _dispatch_tasks[run_id] = task
+
+
+def get_dispatch(run_id: str) -> asyncio.Task[None] | None:
+    """Return the supervised dispatch task for a run, if any."""
+    with _lock:
+        return _dispatch_tasks.get(run_id)
+
+
+def clear_dispatch(run_id: str) -> None:
+    """Drop the dispatch task reference once it has settled."""
+    with _lock:
+        _dispatch_tasks.pop(run_id, None)
 
 
 def get_run(workspace_id: str, run_id: str) -> WorkflowRun | None:
@@ -261,6 +300,7 @@ def reset_workflow_stores() -> None:
         _approvals.clear()
         _runs.clear()
         _executors.clear()
+        _dispatch_tasks.clear()
 
 
 def migration_applied(db_path: str | None) -> bool:

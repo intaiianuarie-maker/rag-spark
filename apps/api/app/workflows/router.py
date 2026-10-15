@@ -17,6 +17,7 @@ Append-only and store invariants are never swallowed, returning HTTP 409 / 413 /
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
 from pathlib import Path
@@ -70,9 +71,13 @@ from app.workflows.schemas import (
 )
 from app.workflows.store import (
     cancel_run,
+    clear_dispatch,
     get_draft_store,
     get_run,
+    persist_run,
     record_approval,
+    register_dispatch,
+    register_run,
     save_run,
 )
 
@@ -677,16 +682,10 @@ async def run_workflow(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
                 detail={"error": "checkpoint_unavailable", "message": str(exc)},
             ) from exc
-        run = await executor.execute(
-            plan,
-            draft.revision,
-            initial_input=request.inputs,
-            run_id=run_id,
-        )
     except HTTPException:
         raise
     except Exception as exc:
-        # Node/runtime failures: coded error on persisted run, raw text stays server-side.
+        # Compile/executor wiring failure: coded error, raw text stays server-side.
         safe_code = "runtime_failure"
         run = WorkflowRun(
             id=run_id,
@@ -697,11 +696,65 @@ async def run_workflow(
             created_at=datetime.now(UTC).isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
         )
-        executor = None
+        save_run(run, None)
+        timeline = build_timeline(run)
+        return WorkflowRunResponse(run=run, timeline=timeline)
 
-    save_run(run, executor)
-    timeline = build_timeline(run)
-    return WorkflowRunResponse(run=run, timeline=timeline)
+    # T-A16: register the run row AND its cancel handle BEFORE dispatch, so the
+    # run id exists and status/cancel can control the in-flight run. Previously
+    # the route awaited execute() first, leaving no run id and no cancel surface.
+    initial_run = WorkflowRun(
+        id=run_id,
+        workspace_id=workspace_id,
+        workflow_id=workflow_id,
+        status=WorkflowRunStatus.RUNNING,
+        initial_input=request.inputs,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    register_run(initial_run, executor)
+
+    async def _supervise_run() -> None:
+        """Execute and persist the final state; never raise into the loop."""
+        try:
+            final_run = await executor.execute(
+                plan,
+                draft.revision,
+                initial_input=request.inputs,
+                run_id=run_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Node/runtime failure: coded error, raw text stays server-side.
+            safe_code = "runtime_failure"
+            final_run = WorkflowRun(
+                id=run_id,
+                workspace_id=workspace_id,
+                workflow_id=workflow_id,
+                status=WorkflowRunStatus.FAILED,
+                initial_input=request.inputs,
+                error=f"{safe_code}: {type(exc).__name__}",
+                created_at=initial_run.created_at,
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+        # Monotonic: a run already CANCELLED by the API keeps CANCELLED.
+        stored = get_run(workspace_id, run_id)
+        if stored is not None and stored.status == WorkflowRunStatus.CANCELLED:
+            final_run = final_run.model_copy(
+                update={
+                    "status": WorkflowRunStatus.CANCELLED,
+                    "error": stored.error or final_run.error,
+                    "finished_at": stored.finished_at or final_run.finished_at,
+                }
+            )
+        persist_run(final_run, executor)
+
+    task = asyncio.create_task(_supervise_run())
+    register_dispatch(run_id, task)
+    task.add_done_callback(lambda _t: clear_dispatch(run_id))
+
+    timeline = build_timeline(initial_run)
+    return WorkflowRunResponse(run=initial_run, timeline=timeline)
 
 
 # --------------------------------------------------------------------------- #
