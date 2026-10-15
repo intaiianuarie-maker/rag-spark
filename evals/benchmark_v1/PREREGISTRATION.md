@@ -18,7 +18,7 @@ results, label exploratory and require a new untouched test set.**
 | Missing/failures | Timeout, provider error, rejected answer, invalid citations, unsupported claims → GSR=0 for that attempt; audit every failure |
 | Sample size rule | Exactly R=2, N=150, precommitted before scoring; report `NOT EXECUTED/INCOMPLETE` if blocked |
 | McNemar | Optional, on frozen Repeat 1 binary pairs only |
-| Budget | $2.00 billed-service hard ceiling including preflight; no Phase 3 authorization. AMENDED 2026-10-15 (pre-unblinding): one-time H2 index build fund ~$1.60 authorized (66,635 vectors, reusable scratch artifact, per-call ledgered, abort on overrun). Phase 2 H1 runs inside $2.00. |
+| Budget | $2.00 billed-service hard ceiling including preflight; no Phase 3 authorization. AMENDED 2026-10-15 (pre-unblinding): one-time H2 index build fund ~$1.60 authorized, TOPPED UP 2026-10-15 to ~$1.95 (projection $1.5926 + 20% reserve = $1.91 must fit) (66,635 vectors, reusable scratch artifact, per-call ledgered, abort on overrun). Phase 2 H1 runs inside $2.00. |
 | Contamination | Mandatory 50-item P0 no-context diagnostic before any public H2 capability/competitive claim |
 | T-G01 branch | Post-generation only (commit `6f03fac`); shared-upstream A/B valid; flag `AGENT_PARAPHRASE_GROUNDER` default OFF |
 | Experiment A (replay) | DEFERRED — TRACE-GAP recorded T-P01: no replayable captured traces exist; relabelling unrelated arms forbidden |
