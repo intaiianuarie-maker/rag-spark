@@ -131,6 +131,10 @@ x-backend-env: &backend-env
   WORKFLOW_RUNS_DB: ${WORKFLOW_RUNS_DB:?WORKFLOW_RUNS_DB must be set to the durable workflow runs sqlite path}
   WORKFLOW_APPROVALS_DB: ${WORKFLOW_APPROVALS_DB:?WORKFLOW_APPROVALS_DB must be set to the durable workflow approvals sqlite path}
   WORKFLOW_CHECKPOINT_DB: ${WORKFLOW_CHECKPOINT_DB:?WORKFLOW_CHECKPOINT_DB must be set to the durable workflow checkpoint sqlite path}
+  # T-I01c: optional shared agent-store sqlite path. Empty (default) = wiring
+  # no-ops and each process keeps its current store behaviour; set it to give
+  # api + worker one shared run/checkpoint DB (xproc-proven).
+  AGENT_STORE_DB: ${AGENT_STORE_DB:-}
 
 services:
   postgres:
