@@ -3523,3 +3523,31 @@ RISKS:
 - lookup=None means legacy existence/scope-only verification (no canonical hydration) — acceptable degradation per K triage.
 - graph items with empty content rely on hydration to fill canonical text; if hydration is unavailable the item is dropped (never cited).
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-A14 — V3-03 bind approval to runtime authority (dev1)
+TASK: T-A14 (w5:pG). Astra CONFIRMED Med: the approve branch only re-queued the run; runtime `approve_run` was never called, so a restored run re-checked `_is_approved(run, principal, tool, policy_revision)` → false, stayed WAITING_APPROVAL and looped QUEUED → WAITING forever.
+CHANGE (allowed files):
+- `packages/agents/adapters/approval.py`: added `ApprovalAdapter.resolve_and_approve()` — resolves the pending action from the runtime `_WAITING` tuple (the single authority), verifies approver authority, checks policy revision freshness, checks the requested tool IS the pending action, then durably binds `approve_run(run, principal, tool, policy_revision)`. Typed refusals: `ApprovalTargetMissing`, `ApprovalAuthorityDenied`, `ApprovalPolicyStale`, `ApprovalActionMismatch` (all under `ApprovalBindingError`), plus a frozen `ResolvedApproval` result.
+- `apps/api/app/agents/lifecycle_routes.py` (approve path only): the approve branch now resolves and binds the approval BEFORE re-queueing; typed refusals map to 403 (authority) / 409 (stale policy, wrong action). Returns `approval_binding_unavailable` in `error` when no pending action is visible in this process — no phantom approval is invented.
+- `tests/unit/test_t_a14_approval_authority.py`: 6 new tests.
+WHY: approval must resolve to the real pending action and carry runtime authority, otherwise human approval is inert and the run loops.
+REUSED: runtime `_WAITING` / `approve_run` / `_is_approved` as the single authority; existing workspace-policy and run-state checks; the ApprovalAdapter seam.
+BUILT: server-side action resolution, authority/policy/action verification, typed refusal surface.
+VERIFY:
+- `pytest tests/unit -k 'agent_lifecycle or v3_surface or agent_runs_api or agents or approval'` → 208 passed.
+- ruff + mypy on touched files clean (outputs pasted above).
+- Proof table:
+  | case | result |
+  |---|---|
+  | approve → resume | binding written; exactly 1 dispatch of `publish` |
+  | stale policy (rev1 action, rev2 run) | 409 `approval_policy_stale`, no approval recorded |
+  | wrong action (`delete_all` vs pending `publish`) | 409 `approval_action_mismatch`, no approval recorded |
+  | non-owner approver | 403 `approval_authority_denied`, no approval recorded |
+  | no pending action in this process | 200 + `approval_binding_unavailable`, `_APPROVALS` empty |
+  | cross-workspace approval | 403 (isolation unchanged) |
+- Regression proof: reverting only the route binding makes 4 of the 6 new tests fail; restoring it returns 6/6.
+RISKS:
+- `_WAITING` is in-process state, so an API replica that did not run the worker sees no pending action and re-queues without binding (disclosed via `approval_binding_unavailable`); a durable waiting store is out of scope here (checkpoint semantics are read-only for this ticket).
+- Approver authority currently requires the approver to be the run's own principal — matching the runtime's cross-principal replay re-check. Delegated approvers are not yet modelled.
+- Legacy `AgentRunStatus` maps WAITING_APPROVAL to RUNNING, so tests assert the durable `_WAITING` tuple rather than the legacy enum.
+Next: IDLE — push mandatory.

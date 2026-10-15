@@ -625,6 +625,43 @@ async def approve_or_reject_run(
         )
 
     if body.decision == "approved":
+        # T-A14: bind the approval to the real pending action BEFORE re-queueing.
+        # Previously the route only flipped the state, so the runtime re-check
+        # (_is_approved) never passed and a restored run looped WAITING forever.
+        from agents.adapters.approval import (
+            ApprovalActionMismatch,
+            ApprovalAdapter,
+            ApprovalAuthorityDenied,
+            ApprovalBindingError,
+            ApprovalPolicyStale,
+        )
+
+        current_revision = (
+            rec.context.authz_policy_revision if rec.context is not None else None
+        )
+        try:
+            binding = ApprovalAdapter.resolve_and_approve(
+                run_id,
+                approver_principal_id=principal.user_id,
+                run_principal_id=rec.principal_id,
+                current_policy_revision=current_revision,
+                tool_name=body.tool_name,
+            )
+        except ApprovalAuthorityDenied as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": exc.code, "message": str(exc)},
+            ) from exc
+        except (
+            ApprovalActionMismatch,
+            ApprovalPolicyStale,
+            ApprovalBindingError,
+        ) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": exc.code, "message": str(exc)},
+            ) from exc
+
         # Transition back to QUEUED and re-enqueue to resume execution
         rec.state.status = RunStatus.QUEUED
         run_store.update_status(run_id, RunStatus.QUEUED)
@@ -635,6 +672,7 @@ async def approve_or_reject_run(
             workspace_id=rec.workspace_id,
             status=RunStatus.QUEUED.value,
             decision="approved",
+            error=None if binding is not None else "approval_binding_unavailable",
         )
     else:
         rec.state.transition_to(
