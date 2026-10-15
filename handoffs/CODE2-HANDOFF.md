@@ -1534,3 +1534,17 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I02 — compose workflow store paths
+
+```
+TASK: T-I02
+CHANGE:
+      - docker-compose.yml backend env gets all four WORKFLOW_*_DB :? paths
+      - workflowdata named volume on api and worker
+VERIFY:
+      - four vars on both services; named volume; docker compose config OK
+SPEND: 0.00
+GIT: handoff only
+```

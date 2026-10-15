@@ -127,6 +127,10 @@ x-backend-env: &backend-env
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set explicitly (>=32 chars, no shipped default) - see handoffs/CODE1-HANDOFF.md T-R01}
   # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
   CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
+  WORKFLOW_DRAFT_DB: ${WORKFLOW_DRAFT_DB:?WORKFLOW_DRAFT_DB must be set to the durable workflow draft sqlite path}
+  WORKFLOW_RUNS_DB: ${WORKFLOW_RUNS_DB:?WORKFLOW_RUNS_DB must be set to the durable workflow runs sqlite path}
+  WORKFLOW_APPROVALS_DB: ${WORKFLOW_APPROVALS_DB:?WORKFLOW_APPROVALS_DB must be set to the durable workflow approvals sqlite path}
+  WORKFLOW_CHECKPOINT_DB: ${WORKFLOW_CHECKPOINT_DB:?WORKFLOW_CHECKPOINT_DB must be set to the durable workflow checkpoint sqlite path}
 
 services:
   postgres:
@@ -218,6 +222,7 @@ services:
       - ./packages:/app/packages
       # T-R11: shared with the worker so both open the SAME graph sqlite file.
       - graphdata:/app/.graph
+      - workflowdata:/app/.workflow
     command:
       ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
@@ -237,6 +242,7 @@ services:
       # T-R11: same named volume as api. Extraction writes here and the api
       # reads here; without this the two processes never see each other's rows.
       - graphdata:/app/.graph
+      - workflowdata:/app/.workflow
 
   web:
     # Frontend shell owned by code2 (apps/web). Uses the app's production
@@ -291,6 +297,7 @@ services:
       retries: 3
 
 volumes:
+  workflowdata:
   # T-R11: the ONE persistent graph store shared by api and worker.
   graphdata:
   pgdata:
