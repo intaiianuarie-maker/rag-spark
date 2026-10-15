@@ -1108,3 +1108,9 @@ RESUME HERE after context loss. Verified at write time:
 - T-I01 tail remaining: T-I01c entrypoint wiring (api startup + worker main shared store), cross-process proof, then coordinator compose AGENT_STORE_DB edit.
 - HEAD b5e957c; tree has foreign WIP (modified evals/graph_paired_eval.py, graph_paired_real_results.json, handoffs; untracked bfcl/embedder evals files) — not mine, untouched.
 - HELD: no new dispatch until user approves recalc strategy + budget (pending answer); then G01 first (A/B grounder), rest per lane.
+
+## 2026-10-15 — BENCHMARK PHASE 0 GO (user authorized; plan v1.4)
+- Dispatched: dev1 T-G01 (grounder OFF/ON + fork-boundary proof, verifier.py only, offline fixtures); dev2 T-B00 (H2 manifest + frozen 150 IDs, evals/benchmark_v1/ only, no ingest). Both spend 0, no commit, push-on-done via w5:p4.
+- Board: 278 tickets; IN-PROGRESS: T-I01 (dev2, parked tail), T-G01 (dev1), T-B00 (dev2, disjoint files).
+- Pre-verified: distractor validation 7405 rows exact; T-G01 unimplemented; benchmark_v1 absent (as planned).
+- Next: preregistration freeze after B00; Phase 1 replay ($0) after G01; Phase 2 live only on preflight math + re-authorization.
