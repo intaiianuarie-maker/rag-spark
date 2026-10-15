@@ -896,7 +896,11 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                 content=c.text,
                 page=c.page,
                 section=c.section,
-                metadata={"language": result.language, **(c.metadata or {})},
+                metadata={
+                    "language": result.language,
+                    **(c.metadata or {}),
+                    **(chunk_disclosure or {}),
+                },
             )
             for c in result.chunks
         ]
@@ -1015,7 +1019,11 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                     # T-R06: identity is merged AFTER caller metadata, so a
                     # chunk cannot overwrite embedding_* and mislabel its vector.
                     metadata=merge_identity(
-                        {"language": result.language, **(c.metadata or {})},
+                        {
+                            "language": result.language,
+                            **(c.metadata or {}),
+                            **(chunk_disclosure or {}),
+                        },
                         embed_identity,
                     ),
                 )

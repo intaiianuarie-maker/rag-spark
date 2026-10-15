@@ -1637,3 +1637,17 @@ FIX SHAPE: merge chunk_disclosure at index-write time (before VectorRecord metad
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I07b — index disclosure merge
+
+```
+TASK: T-I07b
+CHANGE:
+      - ingest FTS and qdrant index metadata both include chunk_disclosure
+      - identity merge preserved after disclosure
+VERIFY:
+      - ingest suites 36 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
