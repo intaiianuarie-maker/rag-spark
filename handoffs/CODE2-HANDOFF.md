@@ -1651,3 +1651,32 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-B00
+
+```
+TASK: T-B00
+CHANGE:
+      - evals/benchmark_v1/scripts/build_corpus.py
+      - corpus_manifest.json raw=125760 unique=56683 collisions=69077 titles=54957
+      - frozen_sample_150.json 75/75 (seed 42)
+VERIFY:
+      - script ruff clean; json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B00 rework
+
+```
+TASK: T-B00 rework
+CHANGE:
+      - dataset=hotpotqa (distractor validation), raw=73700 unique=66635 collisions=7065
+      - manifest <2MB (346 bytes), 150 sample 75/75 HotpotQA IDs
+VERIFY:
+      - script ruff clean; json valid; reproducible SHA
+SPEND: 0.00
+GIT: handoff only
+```

@@ -1,0 +1,10 @@
+{
+  "dataset": "hotpotqa",
+  "split": "distractor_validation",
+  "dedup_rule": "normalized (lowercased trimmed title + whitespace-collapsed paragraph)",
+  "raw_placements": 73700,
+  "unique_paragraphs": 66635,
+  "collisions": 7065,
+  "unique_titles": 66581,
+  "content_sha256": "cb67996071b5b515389702dd77eb42d563a50ccf80c515bcd7e92be213467fd3"
+}
