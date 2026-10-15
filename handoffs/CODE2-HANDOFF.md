@@ -1478,3 +1478,29 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A21 — atomic checkpoint plus NULL-safe migration
+
+```
+TASK: T-A21
+CHANGE:
+      - packages/workflow_engine/checkpoint.py: single-transaction append, INSERT (no replace), IntegrityError -> CheckpointSequenceError
+      - migration trigger: NULL-safe parent comparisons
+VERIFY:
+      - test_workflow_checkpoint -> 16 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A21 FIXUP-2
+
+```
+TASK: T-A21 FIXUP-2
+VERIFY:
+      - tests/contract/test_t_a21_proofs.py -> 2 passed
+      - ruff clean, suites green
+SPEND: 0.00
+GIT: handoff only
+```

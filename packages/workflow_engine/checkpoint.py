@@ -339,21 +339,34 @@ class SqliteCheckpointStore(CheckpointStore):
             return int(cur.fetchone()[0]) + 1
 
     async def append(self, checkpoint: WorkflowCheckpoint) -> WorkflowCheckpoint:
-        expected_seq = await self.next_sequence(checkpoint.run_id)
-        if checkpoint.sequence and checkpoint.sequence > expected_seq:
-            raise CheckpointSequenceError(
-                f"checkpoint sequence {checkpoint.sequence} is ahead of expected "
-                f"{expected_seq} for run {checkpoint.run_id}"
-            )
-        checkpoint.sequence = expected_seq
-        raw = _enforce_bounds(checkpoint)
+        # Allocate + insert in ONE connection/transaction so concurrent
+        # appenders cannot race on sequence allocation or overwrite.
         with sqlite3.connect(self.path) as con:
-            con.execute(
-                "INSERT OR REPLACE INTO workflow_checkpoints"
-                " (run_id, sequence, data) VALUES (?, ?, ?)",
-                (checkpoint.run_id, checkpoint.sequence, raw),
+            cur = con.execute(
+                "SELECT COALESCE(MAX(sequence), 0) FROM workflow_checkpoints"
+                " WHERE run_id=?",
+                (checkpoint.run_id,),
             )
-            con.commit()
+            expected_seq = int(cur.fetchone()[0]) + 1
+            if checkpoint.sequence and checkpoint.sequence > expected_seq:
+                raise CheckpointSequenceError(
+                    f"checkpoint sequence {checkpoint.sequence} is ahead of "
+                    f"expected {expected_seq} for run {checkpoint.run_id}"
+                )
+            checkpoint.sequence = expected_seq
+            raw = _enforce_bounds(checkpoint)
+            try:
+                con.execute(
+                    "INSERT INTO workflow_checkpoints"
+                    " (run_id, sequence, data) VALUES (?, ?, ?)",
+                    (checkpoint.run_id, checkpoint.sequence, raw),
+                )
+                con.commit()
+            except sqlite3.IntegrityError as exc:
+                raise CheckpointSequenceError(
+                    f"stale checkpoint writer for run {checkpoint.run_id!r}: "
+                    f"{exc}"
+                ) from exc
         return checkpoint
 
     async def latest(self, run_id: str) -> WorkflowCheckpoint | None:

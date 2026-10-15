@@ -87,9 +87,11 @@ BEGIN
     THEN RAISE(ABORT, 'workflow_draft_revisions initial revision must be 1 with no parent')
     WHEN (SELECT COUNT(*) FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id) > 0
          AND (
-           NEW.revision != (SELECT MAX(revision) + 1 FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id)
-           OR NEW.parent_revision != (SELECT MAX(revision) FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id)
-           OR NEW.parent_hash != (SELECT content_hash FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id AND revision = (SELECT MAX(revision) FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id))
+           NEW.parent_revision IS NULL
+           OR NEW.parent_hash IS NULL
+           OR NEW.revision != (SELECT MAX(revision) + 1 FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id)
+           OR NEW.parent_revision IS NOT (SELECT MAX(revision) FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id)
+           OR NEW.parent_hash IS NOT (SELECT content_hash FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id AND revision = (SELECT MAX(revision) FROM workflow_draft_revisions WHERE workspace_id = NEW.workspace_id AND workflow_id = NEW.workflow_id))
          )
     THEN RAISE(ABORT, 'workflow_draft_revisions is append-only: out-of-order or backwards revision insertion prohibited')
   END;
