@@ -3877,3 +3877,40 @@ RISKS:
 - Lexical paraphrase tolerance is weaker than NLI/embedding similarity and will still reject heavy reordering or synonym substitution (e.g. "bought" vs "purchased"). That is a deliberate floor — a stronger scorer means a weaker bar, and this ticket's metric is that unsupported claims stay rejected.
 - The private stopword list is English-only; cross-language claims fall back to stricter behaviour (they will still pass if verbatim), which is conservative rather than unsafe.
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-P01 — Phase 1 grounder trace replay: TRACE-GAP + rubric drafted (dev1)
+TASK: T-P01 (w5:pG), benchmark Phase 1 machine part, offline, spend 0. Plan `/tmp/opencode/RAG-Spark_Benchmark_Plan_v1.4.md` §4.1 (Experiment A) + §21 (rubric).
+CHANGE (allowed files):
+- `evals/benchmark_v1/judges/trace_inventory.py`: offline inventory that scans every committed `evals/**/*.json` artifact and reports whether a **replayable** trace exists (candidate answer + retrieved passage TEXT + citation refs together).
+- `evals/benchmark_v1/judges/rubric_v1.md` + `worked_examples.jsonl`: rubric draft from §21, 8 machine-readable worked examples. **PROPOSAL, NOT FROZEN** — the coordinator freezes.
+STEP 1 VERDICT: **TRACE-GAP** — no usable traces exist. No candidates were generated (that is metered Phase 2, out of scope).
+EVIDENCE (10 artifacts scanned, 0 replayable):
+| artifact | n | candidate answer | passage TEXT | citation refs |
+|---|---|---|---|---|
+| `evals/v1_full_results.json` (the T-EVAL-RUN artifact) | 0 per-item | no | no | no — aggregates only |
+| `evals/graph_paired_real_results.json` | 40 | **yes** (`answer`) | **NO** | yes (`citations`, `evidence_ids`) |
+| `evals/g5_paired_results.json` | 20 | **yes** (`off_answer`/`on_answer`) | **NO** | no |
+| `evals/gemma_call_probe.results.json` | 10 | no (tool-call AST) | no | `chunk_id` only |
+| `evals/bfcl_battery.results.json` | 10 | no (tool-call AST) | no | `chunk_id` only |
+| `evals/benchmark_v1/datasets/frozen_sample_150.json` | 150 | no — question-ID strings only | no | no |
+| `evals/benchmark_v1/datasets/corpus_manifest.json` | — | no — corpus checksum/dedup summary | no | no |
+| `evals/ingest/manifest.json` | 48 | no | no | no |
+| `evals/g5_hotpot_pin.json`, `evals/openrouter_models_catalogue.json` | — | no | no | no |
+WHAT IS MISSING, per §4.1's four replay inputs:
+1. **Retrieved passage TEXT — missing in every artifact.** `graph_paired_real_results.json` and `g5_paired_results.json` carry only evidence IDs; an id is not text and cannot be grounded against. Not recoverable from the DB either: the T-EVAL-RUN cleanup purged 480 documents / 497 chunks and dropped the scratch collection with net-zero proven, so the passages that were retrieved no longer exist anywhere.
+2. **Candidate citations** — present only in `graph_paired_real_results.json`.
+3. **Candidate answer** — present in `graph_paired_real_results.json` (n=40) and `g5_paired_results.json` (n=20), but from **different experiments whose `off`/`on` mean something else** (graph leg off/on; G5 off/on), not T-G01 arms.
+4. **Provenance metadata required by §4.1's candidate-provenance gate — missing everywhere**: no draft model/prompt hash, no timestamp, no retrieved-context hash, no original-arm flag, no grounding-feedback-influenced flag.
+WHY THE EXISTING TRACES MUST NOT BE RELABELLED: §4.1 forbids re-labelling a post-repair ON candidate as shared upstream. Mapping `graph_paired`'s or `g5_paired`'s `off`/`on` onto "T-G01 OFF-origin / ON-origin" would be exactly that error — those arms are unrelated flags, and neither carries the passage text needed to replay a grounder decision at all. So the provenance split (OFF-origin / ON-origin / neutral) is **undefined**, and D (distinct answer-level discordances) is **not computable**.
+RECOMMENDED NEXT STEP (coordinator decision, needs metered spend): capture traces during a future run — persist per-item `retrieved passage text + candidate answer + claim→chunk citations + draft model/prompt hash + retrieved-context hash` at capture time. This is a small addition to an eval harness's own output (not product code) and is the prerequisite for §4.1. The current `evals/v1_full_harness.py` records **rates only**, which is precisely why T-EVAL-DX had to report a PARTIAL diagnosis.
+STEP 2 (delivered regardless): rubric draft `rubric_v1.md` + `worked_examples.jsonl` (8 examples: pass, unsupported elaboration, unrelated citation, false refusal, correct abstention, closed-book, ambiguity quarantine, non-material spans). Marked `PROPOSAL_NOT_FROZEN` in every record. The rubric states §21.1's caveat explicitly: **these are logical illustrations, not gold labels, and real dev-set calibration examples with gold evidence and reviewer rationales are still required before any holdout review.**
+VERIFY:
+- `python evals/benchmark_v1/judges/trace_inventory.py` → `artifacts scanned: 10`, `REPLAYABLE: 0` (exit code 1 by design when none exist).
+- `worked_examples.jsonl` parses as JSONL, n=8, no missing required keys, all rows `PROPOSAL_NOT_FROZEN`.
+- `ruff check evals/benchmark_v1/judges/trace_inventory.py` → `All checks passed!` (pasted above).
+- Spend 0. No model/LLM/metered call, no ingestion, no product code touched.
+RISKS:
+- A rubric drafted before the traces exist risks encoding the wrong unit; the coordinator should re-check §21.1's "core answer + every material claim + citation validity" against the real trace shape **before** freezing, since the trace schema is what the replay consumes.
+- The inventory's replayability test is a field-name heuristic over committed JSON. It is a screening tool, not a proof of absence — a trace could exist inside a database or an uncommitted file. I checked the committed artifacts and the eval DB state (purged); a coordinator with knowledge of other storage locations should confirm.
+- `trace_inventory.py` excludes by filename for tool-call batteries but still records them; it does not hard-code any other benchmark's schema, so it will drift silently if new artifacts change shape. Re-run it when new results land.
+Next: IDLE — push mandatory.
