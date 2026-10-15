@@ -1084,3 +1084,5 @@ RESUME HERE after context loss / long outage. Verified at write time:
 - Outage block in prior resume point superseded from here; remainder (A16-A21, A22-seam queue) unchanged.
 
 ## 2026-10-15 — A22-seam DONE (d28fa37) after 3 fixups; rerank chain complete except wave-measured enable
+
+## 2026-10-15 — A17 DONE (9a922eb) incl scoop of seam-tests; overlap owned; A18+A19 out with file split
