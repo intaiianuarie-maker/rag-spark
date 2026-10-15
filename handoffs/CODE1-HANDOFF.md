@@ -3914,3 +3914,34 @@ RISKS:
 - The inventory's replayability test is a field-name heuristic over committed JSON. It is a screening tool, not a proof of absence — a trace could exist inside a database or an uncommitted file. I checked the committed artifacts and the eval DB state (purged); a coordinator with knowledge of other storage locations should confirm.
 - `trace_inventory.py` excludes by filename for tool-call batteries but still records them; it does not hard-code any other benchmark's schema, so it will drift silently if new artifacts change shape. Re-run it when new results land.
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-P02 — Phase 0 metered preflight (dev1)
+TASK: T-P02 (w5:pG). Plan §10.2. Bounded live first drafts on DEV-ONLY ids to price the full design against the preregistered **$2.00** hard ceiling (which includes this preflight).
+STEP 1 — RATE CARD PINNED:
+- Generation: `google/gemma-4-26b-a4b-it:free` requested → paid fallback `google/gemma-4-26b-a4b-it` (free-first routing is in `OpenRouterProvider.generate`, `openrouter_provider.py:483-489`).
+- Snapshot: `evals/benchmark_v1/reports/rate_card_snapshot.json`, retrieved **2026-10-15T21:16:27Z** from OpenRouter's free `/models` endpoint (no paid call).
+- **Paid rates: prompt $0.0765 / 1M, completion $0.255 / 1M.** Free tier: $0/$0. Context length 262,144.
+- Embedding `google/gemini-embedding-2` is **absent from OpenRouter's public catalogue**, so **no published rate card could be pinned**; its price is taken as an empirical upper bound from the T-EVAL-RUN ledger ($0.00002393/vector).
+STEP 2 — PRE-CALL ARITHMETIC (computed and gated BEFORE any metered call; `preflight.py` exits `BUDGET-GATE` having spent nothing):
+Assumed pessimistically — free tier unavailable, 4,000 prompt + 512 completion tokens, 5 embed calls, max 3 attempts:
+`$0.00166818/draft` → 16 drafts = **$0.026691 worst case** = 1.3% of cap → **PROCEED**. Full design at that worst case: shared 373 + 20% = $0.7467; unshared 746 + 20% = $1.4934 (both under $2.00).
+STEP 3 — 16 DRAFTS RUN ON DEV-ONLY IDS. `evals/benchmark_v1/reports/preflight_dev_ids.json` records the full list. **Never the frozen 150**: the sample is HotpotQA, these are 2wikimultihopqa validation, and the intersection is asserted empty in code (`select_dev_ids`). Coverage: bridge_comparison, comparison, compositional, inference (4 per type), 10 docs/item each.
+STEP 4 — LEDGER: `evals/benchmark_v1/reports/budget_ledger.csv`, 16 rows, one per draft, with tokens, embed+generation cost split, model requested vs used, fallback and failure counts. 32 calls total (16 embed + 16 generate), 18,547 prompt / 319 completion tokens.
+MEASURED: **spent $0.00089134** (mean $0.00005571/draft, worst $0.00011097). **0 errors, 16 fallbacks, 0 free-tier successes.**
+STEP 5 — VERDICT: **GO for the draft legs, BLOCKED-UNPRICED for corpus indexing.**
+| projection (mean + 20% reserve) | cost | vs remaining $1.999109 |
+|---|---|---|
+| shared 373 drafts | $0.0249 | fits |
+| unshared 746 drafts | $0.0499 | fits |
+| worst-case 746 (worst per-draft) | $0.0993 | fits |
+**The binding risk is NOT generation — it is corpus indexing.** 66,635 unique paragraphs at the empirical embedding upper bound = **$1.5946 = 79.7% of the entire $2.00 cap**, which was NOT priced here because the HotpotQA corpus is not on disk to index. Drafts are ~30× cheaper than my worst-case assumption; indexing could consume the budget on its own. **Phase 2 must not start until the embedding price is pinned and the indexing cost is resolved** (either a published rate card, or an agreed scope reduction).
+OPERATIONAL FINDING (corroborates T-EVAL-DX): **the free tier served 0 of 16 drafts — every one fell back to the paid model.** "Free-first" is currently operationally always-paid. This does not threaten the cap at the observed prices, but the plan's cost assumptions should not treat the free tier as a saving.
+VERIFY / artifacts: `rate_card_snapshot.json` (dated), `preflight_arithmetic.json`, `preflight_dev_ids.json`, `budget_ledger.csv`, `preflight_summary.json`. `ruff check evals/benchmark_v1/scripts/` → `All checks passed!`.
+RISKS / LIMITATIONS — stated rather than papered over:
+- **No HotpotQA distractor ids were used**: no HotpotQA parquet exists on disk (only the frozen ID list), so the preflight prices 2wiki-shaped contexts. The confirmatory corpus is HotpotQA distractor; its retrieval-context shape is **not** what was measured here.
+- **Retrieval was not exercised**: only the two metered legs (query embedding, first-draft generation) were priced. No corpus was indexed.
+- The embedding price is an **upper bound** derived by attributing *all* T-EVAL-RUN spend to 593 vectors; the true per-vector price is lower, so $1.5946 is conservative. It is still the dominant unknown.
+- The 16 drafts used provider-side grounding prompts, not the product `/ask` path, so this prices tokens, not end-to-end GSR behaviour.
+- 319 completion tokens across 16 drafts (~20/draft) is very low; the model answered tersely. Real drafts with repair loops may produce more completion tokens, which the worst-case projection covers but the mean may understate.
+Spend this ticket: **$0.00089134** of $2.00. No judge, no scoring, no holdout id, no product code, no flag default touched.
+Next: IDLE — push mandatory.

@@ -1,0 +1,22 @@
+{
+  "ids": [
+    "e3333830088111ebbd6dac1f6bf848b6",
+    "2839db3e087b11ebbd67ac1f6bf848b6",
+    "e765d558090911ebbdadac1f6bf848b6",
+    "15f03853087011ebbd62ac1f6bf848b6",
+    "3d03e0260bde11eba7f7acde48001122",
+    "76cacca20bde11eba7f7acde48001122",
+    "962889100baf11ebab90acde48001122",
+    "6a953aae0bb011ebab90acde48001122",
+    "04a065a60bde11eba7f7acde48001122",
+    "62a9691e0bb011ebab90acde48001122",
+    "9558f80608cf11ebbd95ac1f6bf848b6",
+    "dab62b000baf11ebab90acde48001122",
+    "77f0ff4e0bb011ebab90acde48001122",
+    "7fe79ad1096911ebbdafac1f6bf848b6",
+    "1948b12e0bda11eba7f7acde48001122",
+    "e525d2da0bae11ebab90acde48001122"
+  ],
+  "n": 16,
+  "dataset": "2wikimultihopqa validation (disjoint from frozen HotpotQA 150)"
+}
