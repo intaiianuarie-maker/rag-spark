@@ -1449,3 +1449,18 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-A17 — typed transform failure
+
+```
+TASK: T-A17
+CHANGE:
+      - packages/workflow_engine/production_executor.py transform no longer echoes template; raises TransformError
+VERIFY:
+      - test_workflow_fake_runtime/agent_seam -> 36 passed
+      - grep zero except-return-template in transform path
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```

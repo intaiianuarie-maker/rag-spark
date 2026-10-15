@@ -518,7 +518,7 @@ class _DelegationSpy:
 
     def __init__(self, outputs: dict[str, Any] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._outputs = outputs if outputs is not None else {"out": "v3"}
+        self._outputs = outputs if outputs is not None else {"status": "completed", "output_data": {"out": "v3"}}
 
     async def __call__(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self.calls.append(dict(request))
@@ -594,7 +594,7 @@ def test_v3_adapter_delegates_every_call_to_the_v3_authority() -> None:
 def test_v3_adapter_does_not_transform_authority_output() -> None:
     """Whatever the authority returns is returned unchanged (no mock success)."""
     authority_output = {"out": {"nested": [1, 2, 3]}, "extra": None}
-    spy = _DelegationSpy(outputs=authority_output)
+    spy = _DelegationSpy(outputs={"status": "completed", "output_data": authority_output})
     adapter = V3NodeExecutor(agent_runner=spy, enabled=True)
     got = asyncio.run(adapter.execute_node(_agent_node(), {}, "ws-1"))
     assert got == authority_output

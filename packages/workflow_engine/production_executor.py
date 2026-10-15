@@ -18,6 +18,10 @@ from .interfaces import CapabilityManifest, NodeSpec, NodeType
 from .manifest import PRODUCTION_CAPABILITY_MANIFEST, CapabilityNotSupportedError
 
 
+class TransformError(ValueError):
+    """Raised when a TRANSFORM node cannot render its template."""
+
+
 class ProductionNodeExecutor:
     """Production NodeExecutor adhering to the NodeExecutor Protocol.
 
@@ -106,8 +110,10 @@ class ProductionNodeExecutor:
             if template and isinstance(val, dict):
                 try:
                     return {"output": template.format(**val)}
-                except Exception:
-                    return {"output": template}
+                except Exception as exc:
+                    raise TransformError(
+                        f"transform node {node.id}: invalid or missing field ({exc})"
+                    ) from exc
             if isinstance(val, dict) and "key" in node.config:
                 return {"output": val.get(node.config["key"])}
             return {"output": val}
