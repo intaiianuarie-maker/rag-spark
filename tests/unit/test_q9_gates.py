@@ -17,7 +17,15 @@ import pytest
 
 _REPO = Path(__file__).resolve().parents[2]
 _EVALS = _REPO / "evals"
-for _p in (_REPO / "packages", _REPO / "apps" / "api", _REPO, _EVALS):
+# T-I05: ``evals/`` is deliberately NOT prepended to sys.path here. It contains
+# ``graph_paired_eval.py`` — the same module name as the fixture helper in
+# ``tests/fixtures/`` that ``tests/conftest.py`` puts on the path. Prepending it
+# shadowed the helper with the CLI driver, so a later ``import graph_paired_eval``
+# self-imported and broke collection for the whole unit suite.
+#
+# Nothing is lost: the three modules below are loaded by explicit file path via
+# ``_load()``, which does not require their directory on sys.path.
+for _p in (_REPO / "packages", _REPO / "apps" / "api", _REPO):
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 

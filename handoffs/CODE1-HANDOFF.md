@@ -3813,3 +3813,26 @@ RISKS:
 - Rows whose document the authority does not know still pass through (documented, matches the dense store). A row naming a document id that exists but has no `current_version_id` is eligible — deliberate, to avoid stranding pre-migration data.
 - Existing rows written before this change are unaffected structurally; the gate changes what is *retrievable*, which is the intent.
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-I05 — eval module-name collision breaks whole-suite collection (P2) (dev1)
+TASK: T-I05 (w5:pG). Review finding 5 (P2): `evals/graph_paired_eval.py:51` imported the unqualified name `graph_paired_eval` (its own module name / the fixture helper's filename); `tests/unit/test_q9_gates.py` prepended `evals/` to sys.path, so collection loaded the CLI driver instead of the helper and raised `ImportError: DEFAULT_K` — interrupting collection for the whole suite.
+ROOT CAUSE (three layers, all fixed): two different modules share the top-level name `graph_paired_eval` — the fixture helper `tests/fixtures/graph_paired_eval.py` and the CLI driver `evals/graph_paired_eval.py`. `tests/conftest.py` puts `tests/fixtures/` on sys.path, and `test_q9_gates.py` then prepended `evals/` ahead of it, shadowing the helper. The driver compounded it by importing itself by bare name, so whichever copy won became a self-import ("partially initialized module").
+CHANGE (allowed files only):
+- `evals/graph_paired_eval.py` (**its import line only**): the fixture helper is now loaded from its real path via `importlib.util.spec_from_file_location` under the private alias `_g5_fixture_graph_paired_eval`; `DEFAULT_K`, `DatasetValidationError`, `load_labelled_dataset`, `run_paired_eval`, `synthetic_multihop_dataset` are re-exported from it. The driver no longer depends on sys.path ordering at all.
+- `tests/unit/test_q9_gates.py`: `evals/` is no longer prepended to sys.path. Nothing is lost — all three evals modules are already loaded by explicit file path via `_load()`, which does not need their directory on the path.
+- `tests/unit/test_graph_paired_eval.py`: loads the helper by explicit path under the same private alias, so the test is immune to any other module mutating sys.path (including `tests/unit/test_graph_dataset_manifest.py`, which appends `evals/` and is outside this ticket's scope).
+WHY: a name collision resolved by import order turns one stray import into a whole-suite collection outage; resolving by explicit path removes the ordering dependency entirely rather than relying on it.
+BUILT: deterministic, path-explicit resolution for both the driver and the test.
+VERIFY:
+- **Exact repro** `TMPDIR=/tmp python -m pytest --collect-only -q tests/unit/test_q9_gates.py tests/unit/test_graph_paired_eval.py` → `35 tests collected`, zero errors (was: `21 collected, 1 error`, collection interrupted).
+- **FULL unit+contract collection** `pytest --collect-only -q -m 'unit or contract'` → `1874/2829 tests collected (955 deselected)`, **zero collection errors**.
+- `pytest tests/unit/test_q9_gates.py tests/unit/test_graph_paired_eval.py tests/unit/test_graph_dataset_manifest.py` → 58 passed.
+- Driver still runs standalone: `python evals/graph_paired_eval.py --help` prints usage.
+- `ruff check` on all three touched files → `All checks passed!` (pasted above).
+- Regression proof: reverting only the test to its bare `from graph_paired_eval import ...` restores the original failure exactly (`21 collected, 1 error`); restoring the fix returns 35/35 clean.
+DIRTY-TREE ANNOUNCEMENT (foreign work I did NOT touch): `apps/worker/jobs/ingest_pipeline.py` is modified (+10/-2, threading a `chunk_disclosure` mapping into vector metadata) — that is another agent's in-flight work, unrelated to this ticket. Also present and left alone: untracked `evals/bfcl_astspec.py`, `evals/bfcl_battery.py`, `evals/bfcl_battery.results.json`, `evals/embedder_clients.py`, `evals/embedder_separation.py`, `evals/test_bfcl_battery.py`, `evals/test_embedder_separation.py`, plus modified `evals/graph_paired_real_results.json`. My three edits are the only `.py` changes I made.
+RISKS:
+- The private alias `_g5_fixture_graph_paired_eval` is registered in `sys.modules` under a non-package name by both the driver and the test. If both run in one process they share that single module object — intentional and harmless (the helper is stateless), but it means a future test that needs to monkeypatch the helper module must patch `_g5_fixture_graph_paired_eval`, not `graph_paired_eval`.
+- I did not rename either file. Renaming would be the more permanent fix but touches files outside this ticket's allowed set (`tests/fixtures/graph_paired_eval.py`), so it is left for the coordinator to sequence.
+- `evals/` remains importable-shadowable for any OTHER module-name collision; the general hazard (many single-file evals sharing fixture-helper names) is not addressed here — only this collision.
+Next: IDLE — push mandatory.
