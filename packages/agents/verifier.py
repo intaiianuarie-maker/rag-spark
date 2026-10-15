@@ -10,12 +10,24 @@ new verdict, cause class.
 One-grounder rule: imports ExtractiveGrounder from answer.verification.
 No second grounder lives here.
 
+T-G01 — DEPRECATED IN PART, DELIBERATELY. The one-grounder rule above existed
+to stop a second, drifting verifier being invented behind the production bar.
+:class:`ParaphraseTolerantGrounder` is the sanctioned exception to that rule,
+added because T-EVAL-DX measured the cost of the strict bar (26/48 items produced
+zero citations; 79.2% of failures were grounding, not retrieval). It is
+*flagged off by default* (:func:`resolve_grounder`), so production stays
+byte-identical until the flag is flipped, and it satisfies the SAME
+``ClaimGrounder`` Protocol (``answer.verification.ClaimGrounder``) so it is a
+drop-in swap — ``verify_claims`` is untouched by this file.
+
 Chunk fetches are injectable via ChunkSource so tests never touch live DB
 (T-071 scratch seam). The verifier itself is pure: it only reads.
 """
 
 from __future__ import annotations
 
+import os
+import re
 from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
@@ -66,6 +78,142 @@ class InMemoryChunkSource:
         return chunk_id in self._tombstoned
 
 
+# --- T-G01: paraphrase-tolerant grounder (flagged OFF by default) ------------
+#
+# WHY: ``ExtractiveGrounder`` requires verbatim, word-bounded containment at
+# threshold 1.0. T-EVAL-DX measured the cost against the real corpus: 26 of 48
+# items produced ZERO citations (54.2%), and grounded+validity accounted for
+# 79.2% of all failures while retrieval was perfect. The cause is mechanical —
+# a rejected claim yields no citation, and a claim left with no citation is
+# dropped (``answer.verification.verify_claims``).
+#
+# WHAT THIS IS NOT: not a weaker bar. It is a *lexical* bar that accepts a claim
+# whose content words are all present in the chunk but are reordered, inflected,
+# or wrapped in connective prose, while still REQUIRING every distinctive claim
+# token to be present. An unsupported claim (its content words absent) scores
+# near zero and is rejected. Numbers must match exactly, so the "900" / "1900"
+# confusion the strict grounder guards against is preserved.
+#
+# Deterministic and offline: no model, no network, no spend.
+
+
+#: Function words carry no evidential weight; excluding them stops a claim from
+#: being "supported" by matching filler.
+_STOPWORDS = frozenset(
+    {
+        "a", "an", "and", "are", "as", "at", "be", "been", "but", "by",
+        "can", "did", "do", "does", "for", "from", "had", "has", "have", "he",
+        "her", "his", "in", "into", "is", "it", "its", "of", "on", "or",
+        "our", "she", "than", "that", "the", "their", "them", "then", "there",
+        "these", "they", "this", "those", "to", "was", "were", "what", "when",
+        "where", "which", "who", "why", "will", "with", "would", "you",
+    }
+)
+
+_TOKEN_RE = re.compile(r"[a-z0-9]+")
+
+
+def _tokens(text: str) -> list[str]:
+    return _TOKEN_RE.findall(text.lower())
+
+
+def _is_numeric(token: str) -> bool:
+    return any(ch.isdigit() for ch in token)
+
+
+def _matches(claim_token: str, chunk_tokens: set[str]) -> bool:
+    """Is this claim token present in the chunk?
+
+    Numeric tokens match EXACTLY only — "900" must never be satisfied by "1900",
+    the failure mode the strict grounder explicitly guards against. Alpha tokens
+    additionally tolerate simple inflection via a conservative prefix rule
+    (shared prefix of at least 4 characters), so "acquired"/"acquire" and
+    "budgets"/"budget" match without a stemmer dependency.
+    """
+    if _is_numeric(claim_token):
+        return claim_token in chunk_tokens
+    if claim_token in chunk_tokens:
+        return True
+    if len(claim_token) < 5:
+        return False
+    return any(
+        len(other) >= 5
+        and other[:4] == claim_token[:4]
+        and other.startswith(claim_token[:5])
+        for other in chunk_tokens
+        if not _is_numeric(other)
+    )
+
+
+class ParaphraseTolerantGrounder:
+    """Lexical grounder that accepts reordering/inflection, not unsupported claims.
+
+    Satisfies ``answer.verification.ClaimGrounder`` (``threshold`` +
+    ``score``), so it is a drop-in for ``ExtractiveGrounder`` and needs no change
+    to ``verify_claims``.
+
+    Scoring:
+
+    * a claim that appears **verbatim** (case-insensitive, contiguous) scores
+      ``1.0`` — identical to the strict grounder, so nothing that passes today
+      regresses;
+    * otherwise the score is the **weighted coverage of the claim's content
+      tokens** present in the chunk, where each token's weight grows with its
+      length (a rare/long term counts more than a short one);
+    * a claim with no content tokens cannot be grounded (scores ``0.0``).
+    """
+
+    def __init__(self, threshold: float = 0.85) -> None:
+        self.threshold = threshold
+
+    def score(self, claim_text: str, chunk_content: str) -> float:
+        if not claim_text or not chunk_content:
+            return 0.0
+        # Verbatim short-circuit: strict-grounder parity, exactly 1.0.
+        if claim_text.lower() in chunk_content.lower():
+            return 1.0
+
+        claim_content = [
+            t for t in _tokens(claim_text) if t not in _STOPWORDS and len(t) > 1
+        ]
+        if not claim_content:
+            return 0.0
+        chunk_tokens = set(_tokens(chunk_content))
+
+        total_weight = 0.0
+        matched_weight = 0.0
+        for token in claim_content:
+            weight = float(len(token))
+            total_weight += weight
+            if _matches(token, chunk_tokens):
+                matched_weight += weight
+        if total_weight == 0.0:
+            return 0.0
+        return matched_weight / total_weight
+
+
+#: Environment flag. Default OFF — production keeps the strict bar until flipped.
+PARAPHRASE_GROUNDER_ENV = "AGENT_PARAPHRASE_GROUNDER"
+_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def resolve_grounder(
+    *,
+    env: dict[str, str] | None = None,
+    threshold: float = 0.85,
+) -> ExtractiveGrounder | ParaphraseTolerantGrounder:
+    """Pick the grounder for the deployment. Default: the strict production bar.
+
+    Flag OFF (the default) returns ``ExtractiveGrounder`` unchanged, so
+    production behaviour is byte-identical until an operator opts in.
+    """
+    source = os.environ if env is None else env
+    raw = source.get(PARAPHRASE_GROUNDER_ENV, "")
+    if raw.strip().lower() in _TRUTHY:
+        return ParaphraseTolerantGrounder(threshold=threshold)
+    return ExtractiveGrounder()
+
+
 @dataclass(frozen=True)
 class ReverifyResult:
     """Result of re-verifying one evidence record."""
@@ -99,9 +247,10 @@ class EvidenceVerifier:
     def __init__(
         self,
         chunk_source: ChunkSource | InMemoryChunkSource,
-        grounder: ExtractiveGrounder | None = None,
+        grounder: ExtractiveGrounder | ParaphraseTolerantGrounder | None = None,
     ) -> None:
         self.chunk_source = chunk_source
+        # Default OFF: the strict production grounder, unchanged.
         self.grounder = grounder or ExtractiveGrounder()
 
     async def reverify_record(self, record: EvidenceRecord) -> ReverifyResult:

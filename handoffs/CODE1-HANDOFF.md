@@ -3836,3 +3836,44 @@ RISKS:
 - I did not rename either file. Renaming would be the more permanent fix but touches files outside this ticket's allowed set (`tests/fixtures/graph_paired_eval.py`), so it is left for the coordinator to sequence.
 - `evals/` remains importable-shadowable for any OTHER module-name collision; the general hazard (many single-file evals sharing fixture-helper names) is not addressed here — only this collision.
 Next: IDLE — push mandatory.
+
+## 2026-10-15 T-G01 — paraphrase-tolerant grounder behind ClaimGrounder Protocol (dev1)
+TASK: T-G01 (w5:pG), benchmark Phase 0 critical path (plan §4). Confirmed unimplemented before starting: `grep -rn "T-G01" --include=*.py .` → **0 code refs**.
+WHY: T-EVAL-DX (fd56c11) measured the cost of the strict bar against the real corpus — 26/48 items produced ZERO citations (54.2%), grounding was 79.2% of all failures while retrieval was perfect. Mechanism: `ExtractiveGrounder` needs verbatim, word-bounded containment at threshold 1.0; a rejected claim yields no citation and a claim with no citation is dropped (`answer.verification.verify_claims:1136-1141,1168`).
+CHANGE (allowed files):
+- `packages/agents/verifier.py` (**grounder only**): added `ParaphraseTolerantGrounder` (satisfied `threshold` + `score(claim, chunk) -> [0,1]`, exactly the `answer.verification.ClaimGrounder` Protocol), `resolve_grounder()` flag resolver, `PARAPHRASE_GROUNDER_ENV = "AGENT_PARAPHRASE_GROUNDER"`, and helpers `_STOPWORDS` / `_tokens` / `_matches`. `EvidenceVerifier.__init__`'s grounder annotation widened to accept the new class; its **default remains `ExtractiveGrounder()`**.
+- `tests/unit/test_agents_paraphrase_grounder.py`: 14 new tests.
+SCORING (deterministic, lexical, offline — no model, no network, spend 0):
+- verbatim (case-insensitive, contiguous) → **exactly 1.0** (strict-grounder parity);
+- otherwise **length-weighted coverage of the claim's content tokens** present in the chunk (longer/rarer terms weigh more; stopwords excluded);
+- alpha tokens tolerate conservative inflection via a ≥5-char shared prefix; **numeric tokens must match EXACTLY**, preserving the strict grounder's "900" ≠ "1900" guard;
+- a claim with no content tokens scores 0.0.
+FLAG / DEFAULT-OFF PROOF: `resolve_grounder(env={})` returns `ExtractiveGrounder`; only a truthy `AGENT_PARAPHRASE_GROUNDER` returns the new grounder. **Production is byte-identical until flipped** — nothing wires the resolver into production in this ticket.
+FORK-BOUNDARY PROOF (plan §4.2):
+- **Branch-point SHA: `ab2b5916482aef60832791c0c0a6254b2c05212c`** (`docs(loop): benchmark Phase 0 go (G01+B00 dispatched)`).
+- **Sits POST-GENERATION ONLY.** It touches neither retrieval nor drafting: it scores an already-produced claim string against an already-retrieved chunk string, inside verification. New symbols, all in `packages/agents/verifier.py`: `ParaphraseTolerantGrounder` (`__init__`, `score`), `resolve_grounder`, `PARAPHRASE_GROUNDER_ENV`, `_STOPWORDS`, `_tokens`, `_matches`, `_TOKEN_RE`. The only pre-existing symbol changed is `EvidenceVerifier.__init__`'s type annotation (widened; default value unchanged). **`verify_claims`, retrieval, prompts, and the drafting/generation path are untouched** — the Protocol swap is the whole mechanism.
+- Conformance is asserted structurally via `@runtime_checkable ClaimGrounder`, which is what makes "swap without touching verify_claims" checkable rather than aspirational.
+ONE-GRUNDER RULE, DEPRECATED IN PART — DELIBERATE: this module's docstring said "No second grounder lives here." That rule existed to stop a second *drifting* verifier being invented behind the production bar; this grounder is the sanctioned exception, flagged off by default. The docstring is annotated rather than silently deleted, so the invariant change is visible in the file.
+VERIFY:
+- `pytest tests/unit -k 'verifier or grounder or agents or agent_ or research'` → **347 passed**.
+- `pytest tests/unit -k 'verifier or grounder or agents or research or answer or cross_language'` → **462 passed**.
+- `ruff check packages/agents/verifier.py tests/unit/test_agents_paraphrase_grounder.py` → `All checks passed!` (pasted above).
+- `mypy packages/agents/verifier.py` → `Success: no issues found in 1 source file` (pasted above).
+Proof table:
+| case | result |
+|---|---|
+| supported paraphrase, flag OFF | rejected (strict bar unchanged) |
+| supported paraphrase, flag ON | accepted |
+| unsupported claim, flag ON | rejected (`< 0.2`, below threshold) |
+| partial support (some words absent), ON | rejected |
+| verbatim, both grounders | accepted; lenient scores exactly `1.0` |
+| anything strict accepts | lenient also accepts (no-regression invariant) |
+| "900" vs chunk "1900" | rejected (numeric exact-match guard held) |
+| flag unset / falsy | `ExtractiveGrounder` (production byte-identical) |
+- Regression proof: sabotaging the grounder to accept any claim with content words fails exactly 3 safety tests — `test_unsupported_claim_is_rejected_even_when_flag_on`, `test_partial_support_is_not_enough`, `test_numeric_tokens_must_match_exactly`; restoring returns 14/14.
+RISKS:
+- This changes **no production behaviour yet** (flag off). Its measured effect is therefore UNPROVEN — the T-EVAL-DX A+B=79.2% figure is a diagnosis of the strict bar, not a forecast for this one. Before flipping, the next run must re-measure with the flag ON and per-item answers recorded (T-EVAL-DX's "WHAT A FRESH RUN MUST RECORD").
+- Threshold 0.85 is a starting policy value, not a tuned one; it is constructor-injectable and has NOT been swept against the corpus (no metered spend allowed here). A sweep is the obvious follow-up and needs a coordinator go-ahead.
+- Lexical paraphrase tolerance is weaker than NLI/embedding similarity and will still reject heavy reordering or synonym substitution (e.g. "bought" vs "purchased"). That is a deliberate floor — a stronger scorer means a weaker bar, and this ticket's metric is that unsupported claims stay rejected.
+- The private stopword list is English-only; cross-language claims fall back to stricter behaviour (they will still pass if verbatim), which is conservative rather than unsafe.
+Next: IDLE — push mandatory.
