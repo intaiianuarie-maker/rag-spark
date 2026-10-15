@@ -1612,3 +1612,16 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I04 — search page workspace scoping
+
+```
+TASK: T-I04
+CHANGE:
+      - apps/web/src/app/search/page.tsx clears state on workspace switch and guards stale in-flight responses
+VERIFY:
+      - npm run typecheck green; 225 tests passed
+SPEND: 0.00
+GIT: handoff only
+```

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Search as SearchIcon } from "lucide-react";
 
 import { useWorkspaces } from "@/components/workspace/workspace-provider";
@@ -29,12 +29,21 @@ export default function SearchPage() {
   const [error, setError] = useState<string | null>(null);
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [selected, setSelected] = useState<SearchResultItem | null>(null);
+  const runIdRef = useRef(0);
+
+  useEffect(() => {
+    setResponse(null);
+    setSelected(null);
+    setError(null);
+  }, [active?.id]);
 
   const dateError = !isValidDateFilter(filters.date);
 
   const runSearch = useCallback(
     async (q: string, m: SearchMode, f: SearchFilters) => {
       if (!active?.id) return;
+      const workspaceId = active.id;
+      const thisRun = ++runIdRef.current;
       if (q.trim().length === 0) {
         setError("Enter a query to search.");
         return;
@@ -44,10 +53,12 @@ export default function SearchPage() {
       setSelected(null);
       try {
         const body = buildSearchBody(q, m, f);
-        const result = await searchDocuments(active.id, body);
+        const result = await searchDocuments(workspaceId, body);
+        if (runIdRef.current !== thisRun) return;
         setResponse(result);
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Search failed.";
+        if (runIdRef.current !== thisRun) return;
         setError(msg);
         setResponse(null);
       } finally {
