@@ -1101,3 +1101,10 @@ RESUME HERE after context loss. Verified at write time:
 - NEXT QUEUED PICKUPS: T-G01 (grounder), T-I01c, T-W01, T-RS01H, T-F08, eval family (EVAL-001/3/4/6/8), T-SMOKE-FORMATS (gated — now UNBLOCKED, eval run done), T-I04/I05 done.
 - STANDING: eval measured (recall/prec PASS, grounded 20.8, validity 45.8); rerank RERANK_ENABLED=false; compose needs 4 WORKFLOW_* exports (I02); AGENT_STORE_DB compose edit pending after T-I01c.
 - RESUME TRIGGER: dev2's T-I01c push or a new flag. Dispatch next QUEUED per lane (dev1: G01; dev2: rest of I01).
+
+## 2026-10-15 — JUDGE STATUS-CHECK CORRECTION (resume point accurate)
+- No run in flight. T-EVAL-INGEST DONE (be6c150 measured full-n); T-EVAL-DX DONE (fd56c11 diagnosis). There is no T-EVAL-RUN ticket; dev1's "run in flight" = already-landed INGEST. Dev1 IDLE (last lands: I03 5bb677e, I04 collab, I05 d04d469).
+- T-I07 board entry was stale IN-PROGRESS: verify CONFIRMED + fix T-I07b DONE (686966b). Board flipped to DONE; now 277 = 249 DONE + 8 CANCELLED + 19 QUEUED + 1 IN-PROGRESS (T-I01 dev2 tail only).
+- T-I01 tail remaining: T-I01c entrypoint wiring (api startup + worker main shared store), cross-process proof, then coordinator compose AGENT_STORE_DB edit.
+- HEAD b5e957c; tree has foreign WIP (modified evals/graph_paired_eval.py, graph_paired_real_results.json, handoffs; untracked bfcl/embedder evals files) — not mine, untouched.
+- HELD: no new dispatch until user approves recalc strategy + budget (pending answer); then G01 first (A/B grounder), rest per lane.
