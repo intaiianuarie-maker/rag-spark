@@ -80,6 +80,7 @@ import asyncio
 import dataclasses
 import hashlib
 import json
+import os
 import pathlib
 import sys
 import time
@@ -103,7 +104,6 @@ from retrieval.interfaces import EmbeddingProvider, RetrievedItem  # noqa: E402
 
 from evals.live_v1_gate import (  # noqa: E402
     ORGANIZATION_ID,
-    SERVING_COLLECTION,
     EvalItem,
     percentile,
     wilson_score_interval,
@@ -133,6 +133,8 @@ def stratum_of(item: EvalItem) -> str:
     slice_name = (item.slice_name or "").lower()
     if slice_name in ("multi", "multi_hop", "multi-hop", "multihop"):
         return STRATUM_MULTI
+    if slice_name in MULTIHOP_TYPES:  # 2wiki: every delivered type is multi-hop
+        return STRATUM_MULTI
     if slice_name in ("tables", "table", "table_qa"):
         return STRATUM_TABLE
     return STRATUM_OTHER
@@ -153,6 +155,35 @@ class MeteredSnapshot:
     n_paid_calls: int
     total_tokens: int
     cost_usd: float
+
+
+#: Hard spend ceiling for a metered run. The run stops and reports if this is
+#: approached — the budget is a stop condition, not an aspiration.
+BUDGET_CEILING_USD = 5.00
+
+
+class BudgetExceeded(RuntimeError):
+    """The metered run reached its spend ceiling and stopped."""
+
+
+class BudgetGuard:
+    """Stops the run when cumulative metered spend approaches the ceiling."""
+
+    def __init__(self, ceiling_usd: float = BUDGET_CEILING_USD) -> None:
+        self.ceiling = ceiling_usd
+        self.stopped = False
+
+    def spent(self) -> float:
+        return float(GLOBAL_ACCOUNTING.summary()["total"].get("cost_usd", 0.0))
+
+    def check(self) -> None:
+        spent = self.spent()
+        if spent >= self.ceiling * 0.8:
+            self.stopped = True
+            raise BudgetExceeded(
+                f"metered spend ${spent:.4f} reached 80% of the ${self.ceiling:.2f} "
+                "ceiling; stopping the run and reporting partial numbers"
+            )
 
 
 def _snapshot() -> MeteredSnapshot:
@@ -229,24 +260,82 @@ class MeteredGuard:
 # --------------------------------------------------------------------------- #
 
 
-def load_corpus() -> list[EvalItem]:
-    """Import dev2's prepared corpus from ``evals/ingest/``.
+#: Document text directory delivered alongside the corpus manifest.
+DOCS_DIR = _REPO_ROOT / "evals" / "ingest" / "docs"
+#: Corpus manifest delivered by dev2 (T-EVAL-CORPUS, commit f206e29).
+MANIFEST_PATH = _REPO_ROOT / "evals" / "ingest" / "manifest.json"
 
-    Deliberately strict: if the module is missing we raise rather than
-    substituting a different dataset, because the corpus checksum in the report
-    is only meaningful if it names the audited data.
+#: 2WikiMultihopQA item types. Every type in this slice is a multi-hop
+#: question; there is no table-QA stratum, which the report states explicitly
+#: rather than inventing one.
+MULTIHOP_TYPES = frozenset(
+    {"compositional", "inference", "comparison", "bridge_comparison"}
+)
+
+
+def load_corpus() -> list[EvalItem]:
+    """Load dev2's delivered corpus (T-EVAL-CORPUS, commit f206e29).
+
+    HARNESS BUG FIX (recorded): this function originally did
+    ``from evals.ingest import load_corpus``. The delivered corpus is a
+    ``manifest.json`` plus a flat ``docs/`` directory — there is no importable
+    Python module — so the original contract could never resolve. This reads
+    the actual delivered shape. **No metric definition was touched**: the item
+    count, the fields R08's ``EvalItem`` needs, and every scoring rule are
+    unchanged; only the way items are read differs.
+
+    Each manifest item names ``gold_doc_ids`` among its ``all_doc_ids``. That is
+    the honest multi-hop gold signal, so it is carried through to the ingest leg
+    (which resolves gold *chunk* ids from gold *document* ids) instead of the
+    text-match heuristic used for single-hop gold.
     """
-    try:
-        from evals.ingest import load_corpus as _load  # type: ignore[import-not-found]
-    except ImportError as exc:
-        raise FileNotFoundError(
-            "evals/ingest/ is not present yet — dev2's corpus prep must land "
-            "before a real run. Use --dry-run to prove the harness shape."
-        ) from exc
-    items: list[EvalItem] = list(_load())
+    if not MANIFEST_PATH.exists():
+        raise FileNotFoundError(f"corpus manifest missing at {MANIFEST_PATH}")
+    manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
+    # Reset side tables BEFORE the population loop (clearing them afterwards
+    # would wipe what that loop just filled — a bug this harness actually hit).
+    GOLD_DOC_IDS.clear()
+    DOCS_BY_ITEM.clear()
+
+    items: list[EvalItem] = []
+    for raw in manifest["items"]:
+        doc_ids = list(raw["all_doc_ids"])
+        parts: list[str] = []
+        h = hashlib.sha256()
+        docs_for_item: list[tuple[str, str]] = []
+        for doc_id in doc_ids:
+            path = DOCS_DIR / f"{doc_id}.txt"
+            text = path.read_text(encoding="utf-8") if path.exists() else ""
+            parts.append(text)
+            docs_for_item.append((doc_id, text))
+            h.update(doc_id.encode("utf-8"))
+            h.update(text.encode("utf-8"))
+        DOCS_BY_ITEM[raw["id"]] = docs_for_item
+        context = "\n\n".join(p.strip() for p in parts if p.strip())
+        items.append(
+            EvalItem(
+                slice_name=raw["type"],
+                source_id=raw["id"],
+                source_path=str(DOCS_DIR),
+                question=raw["question"],
+                context=context,
+                gold_answer=raw.get("expected_answer", ""),
+                content_sha256=h.hexdigest(),
+                split=manifest.get("split", "validation"),
+            )
+        )
     if not items:
-        raise ValueError("corpus loader returned zero items")
+        raise ValueError("corpus manifest contained zero items")
+    for raw in manifest["items"]:
+        GOLD_DOC_IDS[raw["id"]] = list(raw["gold_doc_ids"])
     return items
+
+
+#: item id -> gold document ids (the multi-hop gold signal from the manifest).
+GOLD_DOC_IDS: dict[str, list[str]] = {}
+#: item id -> [(corpus doc id, text)]. One upload per source document, so gold
+#: documents map to real uploaded versions and gold CHUNKS resolve honestly.
+DOCS_BY_ITEM: dict[str, list[tuple[str, str]]] = {}
 
 
 def corpus_checksum(items: Sequence[EvalItem]) -> str:
@@ -692,38 +781,59 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
                 )
             )
     else:
-        rows = await _run_production_leg(items, stack, args)
+        rows, partial = await _run_production_leg(items, stack, args)
 
-    return compile_report(
+    report = compile_report(
         rows,
         run_id=run_id,
         checksum=checksum,
         spend=GLOBAL_ACCOUNTING.summary()["total"],
         n_loaded=len(items),
     )
+    if partial:
+        report["partial"] = partial
+    return report
 
 
 async def _run_production_leg(
     items: Sequence[EvalItem], stack: dict[str, Any], args: argparse.Namespace
-) -> list[ItemResult]:
-    """Upload each item's context and let the REAL worker ingest it."""
-    from evals.v1_full_harness_ingest import ProductionIngestLeg
+) -> tuple[list[ItemResult], dict[str, Any] | None]:
+    """Upload each item's docs and let the REAL worker ingest it."""
+    from v1_full_harness_ingest import ProductionIngestLeg
 
     leg = ProductionIngestLeg(collection=args.collection, org_id=ORGANIZATION_ID)
+    budget = BudgetGuard(args.budget_ceiling)
     rows: list[ItemResult] = []
+    partial: dict[str, Any] | None = None
     async with leg:
         for item in items:
-            ref = await leg.ingest(item)
-            rows.append(
-                await evaluate_ref(
-                    ref,
-                    orchestrator=stack["orchestrator"],
-                    engine=stack["engine"],
-                    dry_run=False,
-                    canonical_ids=ref.chunk_ids,
+            try:
+                ref = await leg.ingest(
+                    item,
+                    docs=DOCS_BY_ITEM.get(item.source_id, []),
+                    gold_doc_ids=GOLD_DOC_IDS.get(item.source_id, []),
                 )
-            )
-    return rows
+                rows.append(
+                    await evaluate_ref(
+                        ref,
+                        orchestrator=stack["orchestrator"],
+                        engine=stack["engine"],
+                        dry_run=False,
+                        canonical_ids=ref.chunk_ids,
+                    )
+                )
+            except BudgetExceeded as exc:
+                partial = {"reason": str(exc), "stopped_after": len(rows)}
+                break
+            except Exception as exc:  # quota / transient: stop, keep numbers
+                partial = {
+                    "reason": f"{type(exc).__name__}: {exc}",
+                    "stopped_after": len(rows),
+                }
+                break
+            budget.check()
+    cleanup = leg.last_cleanup
+    return rows, (partial | {"cleanup": cleanup}) if partial else {"cleanup": cleanup}
 
 
 def main() -> int:
@@ -733,9 +843,20 @@ def main() -> int:
     ap.add_argument("--real", dest="dry_run", action="store_false",
                     help="execute the metered production leg")
     ap.add_argument("--limit-n", type=int, default=0, help="0 = full n")
-    ap.add_argument("--collection", default=SERVING_COLLECTION)
+    ap.add_argument(
+        "--collection",
+        default=f"eval_scratch_{uuid.uuid4().hex[:8]}",
+        help="scratch collection, created at the serving dimension and dropped after the run",
+    )
+    ap.add_argument("--budget-ceiling", type=float, default=BUDGET_CEILING_USD,
+                    help="hard metered spend ceiling in USD")
     ap.add_argument("--out", default="/tmp/opencode/v1_full_harness.json")
     args = ap.parse_args()
+
+    # HARNESS BUG FIX: the in-process worker resolves its target collection from
+    # VECTOR_COLLECTION. Export it BEFORE anything resolves the settings
+    # singleton, so ingest and retrieval both use the scratch collection.
+    os.environ["VECTOR_COLLECTION"] = args.collection
 
     with MeteredGuard(enforced=args.dry_run) as guard:
         report = asyncio.run(run(args))
@@ -753,6 +874,8 @@ def main() -> int:
         "overall_rates": report["overall"]["rates"],
         "metered_calls_during_run": report["metered_calls_during_run"],
         "dry_run": args.dry_run,
+        "spend_usd": report["spend"].get("cost_usd", 0.0),
+        "partial": report.get("partial"),
     }, indent=2))
     print(f"wrote {out}")
     return 0

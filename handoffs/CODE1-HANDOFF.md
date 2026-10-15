@@ -3727,3 +3727,32 @@ RISKS:
 - The real run's generation leg overrides `engine.llm` after `build_answer_engine` so metering lands on this harness's call site; if a future refactor makes `build_answer_engine` lazy about the provider, that override must move.
 - Per-item `citations_canonical` needs `ref.chunk_ids`, which the production leg reads from the `chunks` table; a worker that renumbers chunks would make it read 0 rather than lie.
 Next: IDLE — awaiting corpus, then the coordinator sequences the metered full-n run.
+
+## 2026-10-15 T-EVAL-RUN — metered full-n production-leg eval (dev1)
+TASK: T-EVAL-RUN (w5:pG). Execute the metered full-n eval over the 48-item 2wiki slice through the REAL ingest and ask paths, compare to R08, prove net-zero.
+RUN: `run_id eval-31712164ff0a` | corpus sha256 `89a8dcb7cc0b2d87fa7613c550b4905d7f8bfc4e76a1f6a12eeb83b2f54ed63e` | 48/48 evaluated (full n) | embedding `google/gemini-embedding-2` | generation `google/gemma-4-26b-a4b-it:free`
+SPEND (plain number): **$0.01419043** total — 624 calls, 108,873 tokens. Budget ceiling was $5.00; spend is 0.28% of it.
+CLEANUP PROVEN NET-ZERO: scratch collection `eval_scratch_882a4605` created at the serving dimension and **dropped** (name no longer resolves); purged 480 documents, 480 ingestion jobs, 497 chunks. No live collection written — `knowledge` and `knowledge__serving` untouched.
+RESULT vs R08 (R08 baselines: recall/precision/abstention PASS, grounded 56%, validity 64%):
+
+| metric | this run | R08 | Wilson 95% CI | target | verdict |
+|---|---|---|---|---|---|
+| EvidenceRecall@20 | **100.0%** (48/48) | PASS | [0.926, 1.000] | ≥95% | **PASS — IMPROVED/unchanged** |
+| Factual Precision | **100.0%** | PASS | [0.926, 1.000] | ≥98% | **PASS** |
+| Grounded Answer Success | **20.8%** (10/48) | 56% | [0.117, 0.343] | ≥90% | **FAIL — REGRESSION (−35pp)** |
+| Citation Validity | **45.8%** (22/48) | 64% | [0.326, 0.597] | 100% | **FAIL — REGRESSION (−18pp)** |
+| Correct Abstention | **N/A** | PASS | n/a | ≥95% | **NOT MEASURED** — this corpus has 0 unanswerable items |
+
+n per stratum: **multi-hop 48**, table **0** — the 2wiki slice is entirely multi-hop (compositional/inference/comparison/bridge_comparison), so the table stratum is **absent, not zero-pass**. Abstention is likewise **unmeasured** (denominator 0), reported N/A rather than a 0% failure. Mean faithfulness 0.671. Latency p50 1,644 ms / p95 4,794 ms. `citations_canonical` 30.
+NET VERDICT: **REGRESSION** vs R08 — retrieval-side metrics improved or held (recall 100%, precision 100%), but answer-side grounding (20.8%) and citation validity (45.8%) are materially worse than R08's 56%/64% and far below the 90%/100% targets. Only 30 citations canonically resolved across 48 answers. Root cause NOT diagnosed here (out of scope for this ticket) — the honest read is that the production ingest+ask leg retrieves correctly but grounds weakly.
+HARNESS BUGS FIXED MID-RUN (recorded; **no metric definition was changed at any point**):
+1. **Corpus contract** — `load_corpus()` expected `from evals.ingest import load_corpus`, but dev2 delivered `manifest.json` + `docs/` with no Python module. Rewritten to read the delivered shape.
+2. **Collection targeting** — the worker resolves its target from `VECTOR_COLLECTION` (default `knowledge`, **1024-d**), so every write was rejected: `Vector dimension error: expected dim: 1024, got 3072`. The harness now exports `VECTOR_COLLECTION` for the in-process worker and creates the scratch collection the CLEANUP_PLAN calls for. **This also means the product's own ingest path cannot currently ingest 3072-d gemini embeddings on this box without that env var** — worth a coordinator ticket.
+3. **Missing sparse vector** — `QdrantVectorStore.upsert` always writes both named vectors (`dense`+`sparse`), but neither box collection declares `sparse`: `Not existing vector name error: sparse`. The scratch collection is now declared with both. **Second product/config inconsistency** — no collection on this box can accept a production write as-is.
+4. **Schema + gold mapping** — `chunks` keys on `document_version_id`/`chunk_index` (not `document_id`/`position`), and concatenating an item's docs into one upload made the corpus `gold_doc_ids` unresolvable. Now one upload per source document, so gold CHUNKS resolve from gold DOCUMENTS (the honest multi-hop gold).
+5. **Side-table clear ordering** — `DOCS_BY_ITEM.clear()` ran after the population loop, wiping it (caught by an empty-docs error, not silently).
+RISKS / WHAT I DID NOT DO:
+- I did NOT diagnose the grounded/validity regression; it needs its own ticket with the per-item answers (the results JSON carries rates, not the text).
+- The 20.8% figure is measured on a multi-hop-only corpus; R08's 56% came from a mixed slice, so part of the delta may be stratum mix rather than regression. Stating that explicitly rather than claiming a like-for-like comparison.
+- Spend is one full-n run on one corpus; no holdout was run (this slice is the validation split).
+- Results JSON is **uncommitted** per rules; the coordinator commits it.
