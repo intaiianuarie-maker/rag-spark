@@ -345,3 +345,104 @@ class TestCancelResume:
             plan, revision, {"input": "x"}, run_id="run-N", resume=True
         )
         assert run.status == WorkflowRunStatus.COMPLETED
+
+
+# ---------------------------------------------------------------------------
+# T-A20 / V4-06 — resume identity is bound to the ORIGINAL input
+# ---------------------------------------------------------------------------
+
+
+class TestResumeInputIdentity:
+    """A ``run_id`` stands for one piece of work: the input it first ran with.
+
+    Before T-A20 a resume seeded the idempotency ledger from the *caller's* new
+    input, so the same run id resumed with different input replayed the old
+    settled outputs under a new fingerprint — old results, new work.
+    """
+
+    async def test_same_run_different_input_is_refused_with_zero_dispatches(
+        self,
+    ) -> None:
+        from workflow_engine.checkpoint import ResumeStateError
+
+        plan, revision = _linear()
+        store = InMemoryCheckpointStore()
+        executor, _fake = _cancelling_executor("mid", {})
+        executor.configure_checkpoint_store(store)
+        await executor.execute(plan, revision, {"input": "x"}, run_id="run-BIND")
+
+        checkpoint = await store.latest("run-BIND")
+        assert checkpoint is not None
+        assert set(checkpoint.completed_nodes) == {"start", "mid"}
+        # The checkpoint records the ORIGINAL input the run id was bound to.
+        assert checkpoint.initial_input == {"input": "x"}
+
+        # A fresh worker ("new process") resumes the same run id with DIFFERENT
+        # input. The in-memory binding is empty, so the checkpointed input is
+        # the binding that must be honoured.
+        resume_fake = _CountingExecutor()
+        resume_executor = WorkflowExecutor(resume_fake)
+        resume_executor.configure_checkpoint_store(store)
+
+        with pytest.raises(ResumeStateError, match="resume input mismatch"):
+            await resume_executor.execute(
+                plan, revision, {"input": "TOTALLY-DIFFERENT"},
+                run_id="run-BIND", resume=True,
+            )
+
+        # Zero dispatches: not even the unsettled remainder ran.
+        assert resume_fake.executes == {}
+
+    async def test_same_input_resume_is_unchanged(self) -> None:
+        """The control: same run id + same input resumes exactly as before."""
+        plan, revision = _linear()
+        store = InMemoryCheckpointStore()
+        executor, _fake = _cancelling_executor("mid", {})
+        executor.configure_checkpoint_store(store)
+        await executor.execute(plan, revision, {"input": "x"}, run_id="run-OK")
+
+        resume_fake = _CountingExecutor()
+        resume_executor = WorkflowExecutor(resume_fake)
+        resume_executor.configure_checkpoint_store(store)
+        resumed = await resume_executor.execute(
+            plan, revision, {"input": "x"}, run_id="run-OK", resume=True
+        )
+        # Settled nodes replayed (not re-run); the remainder continued.
+        assert resume_fake.executes.get("start") is None
+        assert resume_fake.executes.get("mid") is None
+        assert resume_fake.executes.get("end") == 1
+        assert resumed.status == WorkflowRunStatus.COMPLETED
+        assert resumed.final_output == "end-out"
+
+    async def test_different_input_refused_even_on_the_same_executor(self) -> None:
+        """The in-process binding is honoured too, not only the checkpoint."""
+        from workflow_engine.checkpoint import ResumeStateError
+
+        plan, revision = _linear()
+        store = InMemoryCheckpointStore()
+        executor, _ = _cancelling_executor("mid", {})
+        executor.configure_checkpoint_store(store)
+        await executor.execute(plan, revision, {"input": "x"}, run_id="run-SAME")
+
+        with pytest.raises(ResumeStateError, match="resume input mismatch"):
+            await executor.execute(
+                plan, revision, {"input": "y"}, run_id="run-SAME", resume=True
+            )
+
+    async def test_equivalent_input_fingerprint_is_accepted(self) -> None:
+        """Key order must not matter: the fingerprint is canonical."""
+        plan, revision = _linear()
+        store = InMemoryCheckpointStore()
+        executor, _ = _cancelling_executor("mid", {})
+        executor.configure_checkpoint_store(store)
+        await executor.execute(
+            plan, revision, {"a": 1, "b": 2}, run_id="run-ORDER"
+        )
+
+        resume_fake = _CountingExecutor()
+        resume_executor = WorkflowExecutor(resume_fake)
+        resume_executor.configure_checkpoint_store(store)
+        resumed = await resume_executor.execute(
+            plan, revision, {"b": 2, "a": 1}, run_id="run-ORDER", resume=True
+        )
+        assert resumed.status == WorkflowRunStatus.COMPLETED

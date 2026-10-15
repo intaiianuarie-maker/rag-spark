@@ -3664,3 +3664,39 @@ The coordinator pre-warned that dev2 lands T-A19 next and that overlap means pau
 - The two areas are thematically adjacent (both concern checkpoints) but disjoint in file and in contract: dev2 changes executor-side failure/resume semantics; dev1 changes the serialization split. No shared file, no shared function (`to_json`/`_redact`/`_enforce_bounds` live only in `checkpoint.py`; the executor neither calls nor redefines them).
 - Re-ran the lane with dev2's change present in the tree: `pytest tests/unit -k 'checkpoint or workflow or draft or v4 or resume'` -> 932 passed, 0 failed. No interference in either direction.
 - Note for the coordinator: `executor.py` and `checkpoint.py` are both in the workflow-engine lane; if a follow-up ticket needs to touch both, they should be sequenced rather than run concurrently.
+
+## 2026-10-15 T-A20 — V4-06 resume identity bound to original input (dev1)
+TASK: T-A20 (w5:pG), first half of A20. Astra CONFIRMED Med: resume seeded the idempotency ledger from the CALLER-SUPPLIED new input, so the same run id resumed with different input replayed the old settled outputs under a new fingerprint — old results for new work.
+CHANGE (allowed files):
+- `packages/workflow_engine/executor.py` (resume path only):
+  - New module-level `_input_fingerprint()` — canonical (sorted keys, `default=str`) sha256 of a run's input.
+  - New `self._run_input_fingerprints` on the executor, bound by `_bind_run_input()` at **first execution** and never rebound (the first input a run id is seen with IS the identity of the work it stands for).
+  - New `_assert_resume_input_matches()` — compares the requested input against BOTH the checkpointed original input and the in-process binding; mismatch raises `ResumeStateError`. Called in the resume block AFTER the workspace/revision checks and BEFORE `ResumableExecutor` construction and `_seed_ledger_from_checkpoint`, so **zero dispatches** and zero ledger mutation.
+  - `hashlib` import; `_bind_run_input` is a no-op on resume (binding already exists).
+- `tests/unit/test_workflow_idempotency.py`: new `TestResumeInputIdentity` with 4 tests.
+WHY: a `run_id` names one piece of work. Reusing it with different input is not a resume — it is a different run wearing the same id, and replaying settled nodes into it silently launders old results as answers to new work.
+REUSED: `ResumeStateError` (same typed refusal as the workspace/revision guards), the existing `_fingerprint` canonicalisation idea, `_cancelling_executor`/`_CountingExecutor` fixtures, and the checkpoint's existing `initial_input` field (checkpoint.py stays read-only — the binding is read from it, not added to it).
+BUILT: the input-identity binding + pre-ledger resume guard.
+VERIFY:
+- `pytest tests/unit/test_workflow_idempotency.py` -> 14 passed.
+- `pytest tests/unit -k 'idempotency or checkpoint or workflow or draft or v4 or resume or w7'` -> 949 passed, 2 failed; both failures (`test_w7_parity_off_rollback.py` probe3 migration-down, SQLite `OperationalError`) are pre-existing on revert and unrelated to this change.
+- ruff + mypy on touched files clean (outputs pasted above).
+Proof table:
+| case | result |
+|---|---|
+| same run id, DIFFERENT input (fresh worker) | `ResumeStateError` "resume input mismatch"; `resume_fake.executes == {}` — zero dispatches |
+| same run id, DIFFERENT input (same executor) | refused via the in-process binding |
+| same run id, same input | unchanged: settled nodes replayed (0 execs), remainder continued, COMPLETED with `end-out` |
+| same input, different key order (`{"a":1,"b":2}` vs `{"b":2,"a":1}`) | accepted — the fingerprint is canonical, order-insensitive |
+- Regression proof: removing the guard call fails 2 of the new tests ("DID NOT RAISE ResumeStateError"); restoring returns 14/14.
+RISKS:
+- The in-process binding is per-executor-instance; across a process restart only the checkpoint's `initial_input` can enforce the guard. That is sufficient for the durable case (the executor always writes `initial_input`), but a checkpoint written with an empty `initial_input` will now refuse a resume that supplies any non-empty input — a deliberate strictness choice, since that is precisely the identity drift being closed.
+- Order of guards matters: workspace and revision mismatches still report as themselves, so existing diagnostics are unchanged; input mismatch is reported only once those pass.
+- No `checkpoint.py` change was needed or made — the binding is read from the existing `initial_input` field, so A18's exact-payload persistence is what makes this guard meaningful across restarts.
+Next: IDLE — push mandatory.
+
+### T-A20 concurrency + failure attribution (no BLOCKED post required)
+
+- **Concurrently-landed dev2 work, disjoint from this ticket.** During T-A20 the tree gained uncommitted changes to `packages/workflow_engine/checkpoint.py` (dev2 T-A21: allocate+insert in ONE transaction so concurrent appenders cannot race sequence allocation) and `packages/workflow_engine/migrations/0001_workflow_draft_revisions.up.sql` (append-only trigger hardening with NULL parent handling). Dev1's T-A20 touched only `packages/workflow_engine/executor.py` + `tests/unit/test_workflow_idempotency.py`. No shared file, no shared function — no pause needed, no BLOCKED post.
+- **w7 failure attribution, checked against true HEAD.** `tests/unit/test_w7_parity_off_rollback.py::test_probe3_migration_down_*` (2 tests, SQLite `OperationalError` at line 533) fail with **all** uncommitted work stashed, i.e. on true HEAD — pre-existing, not caused by T-A20 and not caused by the in-flight dev2 work either. Lane run therefore stands as 949 passed / 2 pre-existing failures.
+- **A18 is committed.** `6440c8d fix(v4): T-A18+A19 checkpoint exactness + failure surfacing (dev1+dev2-verified)` is an ancestor of HEAD; the current `checkpoint.py` delta belongs to dev2's T-A21, not to dev1's already-landed A18.

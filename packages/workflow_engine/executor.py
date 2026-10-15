@@ -29,6 +29,7 @@ concrete ``NodeExecutor`` implementation in a later, reviewed change.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time
 import uuid
@@ -104,6 +105,18 @@ def _fingerprint(node: NodeSpec, node_input: dict[str, Any] | Any) -> str:
         sort_keys=True,
         default=str,
     )
+
+
+def _input_fingerprint(initial_input: dict[str, Any] | Any) -> str:
+    """Canonical fingerprint of a run's ORIGINAL input (T-A20).
+
+    This is what binds a ``run_id`` to the work it stands for. Two requests
+    with the same fingerprint are the same run and may resume; a different
+    fingerprint is a different run wearing the same id, so it is refused
+    rather than replayed against the old results.
+    """
+    canonical = json.dumps(initial_input, sort_keys=True, default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 class IdempotencyLedger:
@@ -433,6 +446,9 @@ class WorkflowExecutor:
         self.last_envelope: _RunEnvelope | None = None
         # T-V4-013: idempotency ledger + checkpoint seam (both injectable).
         self._ledger = IdempotencyLedger()
+        # T-A20: run id -> fingerprint of its original input, bound at first
+        # execution. A resume that presents different input is refused.
+        self._run_input_fingerprints: dict[str, str] = {}
         self._checkpoint_store: CheckpointStore | None = None
         #: Checkpoint writes that failed (observability; a failed checkpoint
         #: must not kill the run, but it must not be silent either).
@@ -441,6 +457,48 @@ class WorkflowExecutor:
     # ------------------------------------------------------------------ #
     # T-V4-013: idempotency + checkpoint seam configuration
     # ------------------------------------------------------------------ #
+    def _bind_run_input(self, run_id: str, initial_input: dict[str, Any]) -> None:
+        """Bind ``run_id`` to the fingerprint of its original input (T-A20).
+
+        Bound at first execution and never rebound: the first input a run id
+        is seen with is the identity of the work that id stands for.
+        """
+        self._run_input_fingerprints.setdefault(
+            run_id, _input_fingerprint(initial_input)
+        )
+
+    def _assert_resume_input_matches(
+        self,
+        run_id: str,
+        checkpoint: WorkflowCheckpoint,
+        initial_input: dict[str, Any],
+    ) -> None:
+        """Refuse a resume whose input is not the one this run id stands for.
+
+        T-A20: before the ledger is seeded or any node runs, the requested
+        input must match BOTH the checkpointed original input and the
+        fingerprint this process bound at first execution. A mismatch is a
+        refusal with **zero dispatches** — never a replay of the old results
+        under a new input.
+        """
+        requested = _input_fingerprint(initial_input)
+        checkpointed = _input_fingerprint(checkpoint.initial_input)
+        if requested != checkpointed:
+            raise ResumeStateError(
+                f"resume input mismatch for run {run_id!r}: the checkpoint was "
+                f"taken with a different original input "
+                f"(checkpointed={checkpointed[:12]}…, requested={requested[:12]}…); "
+                "refusing to replay this run's settled nodes against new work"
+            )
+        bound = self._run_input_fingerprints.get(run_id)
+        if bound is not None and bound != requested:
+            raise ResumeStateError(
+                f"resume input mismatch for run {run_id!r}: this run id was "
+                f"first executed with a different original input "
+                f"(bound={bound[:12]}…, requested={requested[:12]}…); "
+                "refusing to replay this run's settled nodes against new work"
+            )
+
     @staticmethod
     def _seed_ledger_from_checkpoint(
         run_id: str,
@@ -729,6 +787,10 @@ class WorkflowExecutor:
         self._cancel = asyncio.Event()
         checkpoint: WorkflowCheckpoint | None = None
         base_executor = self._executor
+        # T-A20: bind the run id to its original input at first execution.
+        # On resume the binding already exists, so this is a no-op and the
+        # resume guard below does the comparing.
+        self._bind_run_input(run_id, initial_input)
         if resume:
             checkpoint = await self._load_checkpoint(run_id)
             if checkpoint is None and self._checkpoint_store is not None:
@@ -748,6 +810,14 @@ class WorkflowExecutor:
                         f"for revision {checkpoint.revision_hash}, this plan "
                         f"is {plan.revision_hash}"
                     )
+                # T-A20: the run id is bound to its ORIGINAL input. Compare the
+                # requested input against that binding BEFORE the ledger is
+                # seeded or any node runs, so a different input is refused with
+                # zero dispatches instead of replaying settled nodes against
+                # new work under a new fingerprint.
+                self._assert_resume_input_matches(
+                    run_id, checkpoint, initial_input
+                )
                 # The T-V4-016 wrapper replays checkpointed outputs and
                 # delegates the rest — the core loop stays untouched.
                 base_executor = ResumableExecutor(self._executor, checkpoint)
