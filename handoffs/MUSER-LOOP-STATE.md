@@ -1088,3 +1088,16 @@ RESUME HERE after context loss / long outage. Verified at write time:
 ## 2026-10-15 — A17 DONE (9a922eb) incl scoop of seam-tests; overlap owned; A18+A19 out with file split
 
 ## 2026-10-15 — A-WAVE CLOSED (14109f0). Remaining: eval-gated (EVAL-*, INGEST, F02, F07) + small standalone (RS10, RS01H, F08) + parked (V2 turn-on, V1 deploy, K07c).
+
+## 2026-10-15 — Eval wave STARTED (user steer): HARNESS (dev1) + CORPUS (dev2) split, disjoint files
+
+## 2026-10-15 — COMPACTION-SAFE RESUME POINT (build-out wave)
+RESUME HERE after context loss. Verified at write time:
+- HEAD: d04d469 (T-I05 collection fix). I07b 686966b, I03 5bb677e, I04 888873c, I06b 56ad080, eval-run be6c150 + diagnosis fd56c11.
+- BOARD: 277 tickets = 248 DONE + 8 CANCELLED + 19 QUEUED + 2 IN-PROGRESS (board states; judge dial matches).
+- DEV1 DOING: IDLE as of last push (T-EVAL-RUN + T-EVAL-DX + T-I05 + T-I03 all DONE; diagnosis: grounder verbatim gate + unweighted faithfulness = 79.2% of failures; T-G01 paraphrase-tolerant grounder QUEUED, A/B ~0.01).
+- DEV2 DOING: T-I01 tail — sqlite agent stores committed (c6d36ee seam+stores), REMAINING: T-I01c wire entrypoints (api startup + worker main install shared store), then cross-process proof (review's fresh-process repro), then my compose AGENT_STORE_DB edit.
+- I-WAVE (5-finding fix): I01 in tail, I02-I07 DONE. W01 (web siblings) QUEUED.
+- NEXT QUEUED PICKUPS: T-G01 (grounder), T-I01c, T-W01, T-RS01H, T-F08, eval family (EVAL-001/3/4/6/8), T-SMOKE-FORMATS (gated — now UNBLOCKED, eval run done), T-I04/I05 done.
+- STANDING: eval measured (recall/prec PASS, grounded 20.8, validity 45.8); rerank RERANK_ENABLED=false; compose needs 4 WORKFLOW_* exports (I02); AGENT_STORE_DB compose edit pending after T-I01c.
+- RESUME TRIGGER: dev2's T-I01c push or a new flag. Dispatch next QUEUED per lane (dev1: G01; dev2: rest of I01).
