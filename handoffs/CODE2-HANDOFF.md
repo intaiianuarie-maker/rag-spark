@@ -1705,3 +1705,47 @@ VERIFY:
       - NOTE: dev2's rework row never landed in this file (push carried test only); evidence is the test itself
 SPEND: 0.00
 ```
+
+
+## T-B01
+
+```
+TASK: T-B01
+CHANGE:
+      - evals/benchmark_v1/datasets/negative_manifest.json (25 items)
+      - evals/benchmark_v1/datasets/negatives/* snapshots
+      - evals/benchmark_v1/scripts/build_negatives.py
+VERIFY:
+      - 25/25 certified unanswerable by construction
+      - ruff + json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B01 rework2
+
+```
+TASK: T-B01 rework2
+CHANGE:
+      - alternate-chain audit by removing answer-containing paragraphs plus supporting titles; 25 CLEAN
+VERIFY:
+      - count 25/25 certified unanswerable; quarantined 0
+      - ruff + json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B01 rework3
+
+```
+TASK: T-B01 rework3
+CHANGE:
+      - strengthened audit excludes chain terms from retained snapshot
+      - quarantined 5abd7aba, 5ab9812d replaced by clean IDs
+VERIFY:
+      - 25/25 CLEAN; 0 unresolved; ruff + json valid
+SPEND: 0.00
+GIT: handoff only
+```
