@@ -43,6 +43,14 @@ async def run() -> None:
     else:
         logger.warning("worker_redis_unavailable", extra={"event": "worker_redis_unavailable"})
 
+    import os
+
+    from stores.agent_stores import set_agent_store_db
+    agent_db = os.environ.get("AGENT_STORE_DB", "").strip()
+    if agent_db:
+        set_agent_store_db(agent_db)
+        logger.info("agent_store_installed", extra={"event": "agent_store_installed"})
+
     logger.info("ingest jobs registered (M2-001c)")
 
     stop = asyncio.Event()

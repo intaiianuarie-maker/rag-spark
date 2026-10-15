@@ -1680,3 +1680,28 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I01c — entrypoint wiring
+
+```
+TASK: T-I01c
+CHANGE:
+      - apps/api/app/main.py and apps/worker/worker/main.py call set_agent_store_db when AGENT_STORE_DB set
+VERIFY:
+      - ruff/mypy clean; suite unaffected
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-I01c — entrypoint wiring (coordinator verification)
+```
+TASK: T-I01c rework
+CHANGE:
+      - tests/unit/test_t_i01c_xproc.py (dev2; coordinator lint repairs RUF015+E741+E501, semantics untouched)
+VERIFY:
+      - xproc re-run green: WPID 1475450 RPID 1475474, PIDs differ, depth==1 cross-process
+      - ruff clean; 77 store-suite green (prior re-run); wiring ruff+mypy clean
+      - NOTE: dev2's rework row never landed in this file (push carried test only); evidence is the test itself
+SPEND: 0.00
+```

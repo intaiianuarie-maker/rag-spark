@@ -55,6 +55,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 extra={"event": "migrations_failed", "error": f"{type(exc).__name__}: {exc}"},
             )
 
+    import os
+
+    from stores.agent_stores import set_agent_store_db
+    agent_db = os.environ.get("AGENT_STORE_DB", "").strip()
+    if agent_db:
+        set_agent_store_db(agent_db)
+        logger.info("agent_store_installed", extra={"event": "agent_store_installed"})
+
     try:
         yield
     finally:
