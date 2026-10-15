@@ -1086,3 +1086,5 @@ RESUME HERE after context loss / long outage. Verified at write time:
 ## 2026-10-15 — A22-seam DONE (d28fa37) after 3 fixups; rerank chain complete except wave-measured enable
 
 ## 2026-10-15 — A17 DONE (9a922eb) incl scoop of seam-tests; overlap owned; A18+A19 out with file split
+
+## 2026-10-15 — A-WAVE CLOSED (14109f0). Remaining: eval-gated (EVAL-*, INGEST, F02, F07) + small standalone (RS10, RS01H, F08) + parked (V2 turn-on, V1 deploy, K07c).
