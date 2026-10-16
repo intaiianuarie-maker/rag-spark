@@ -1917,3 +1917,19 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I09
+
+```
+TASK: T-I09
+CHANGE:
+      - VectorStoreMissingSparse typed error
+      - ensure_collection checks sparse declaration on existing collections
+      - tests/unit/test_i09_sparse.py
+VERIFY:
+      - 2 passed (missing sparse loud; sparse declared fresh)
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```

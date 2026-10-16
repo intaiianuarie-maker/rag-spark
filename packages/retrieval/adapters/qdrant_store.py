@@ -139,6 +139,15 @@ class VectorStoreDimensionMismatch(VectorStoreError):
         self.collection = collection
 
 
+class VectorStoreMissingSparse(VectorStoreError):
+    """Typed error when collection lacks the declared sparse vector config."""
+
+    def __init__(self, message: str, *, collection: str = "") -> None:
+        super().__init__(message)
+        self.reason = "missing_sparse"
+        self.collection = collection
+
+
 #: Rejection reasons emitted by the storage boundary (T-V1-015). Stable strings:
 #: callers/tests key off them, not off message text.
 REJECT_DIMENSION = "dimension_mismatch"
@@ -602,6 +611,19 @@ class QdrantVectorStore(VectorStore):
                             expected=dimension, actual=int(vec_size), collection=coll,
                         )
                 except (AttributeError, KeyError, TypeError):
+                    pass
+                # sparse declaration check
+                try:
+                    vectors = info.config.params.vectors
+                    sparse = getattr(info.config.params, "sparse_vectors", {})
+                    if not (isinstance(sparse, dict) and SPARSE_NAME in sparse):
+                        raise VectorStoreMissingSparse(
+                            f"collection {coll} is missing sparse vector config for {SPARSE_NAME}",
+                            collection=coll,
+                        )
+                except VectorStoreMissingSparse:
+                    raise
+                except Exception:
                     pass
                 else:
                     self._dimensions[coll] = dimension
