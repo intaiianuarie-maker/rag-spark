@@ -84,6 +84,17 @@ class Answer(BaseModel):
     trace_id: str | None = None
     claims: list[Claim] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+    #: Stage 11 deterministic citation integrity outcomes (T-OR-12).
+    citation_integrity: Any | None = None
+    #: Stage 12 Gemma semantic verification report (T-OR-12).
+    semantic_verification: Any | None = None
+    #: Final publication gate evaluation combining Stage 11 and Stage 12 (T-OR-12).
+    publication_gate: Any | None = None
+    #: Publication gate status: "verified", "needs_review", "abstain", "rejected", or None.
+    publication_status: str | None = None
+    #: Verifier model identifier that evaluated semantic claims
+    #: (e.g. google/gemma-4-26b-a4b-it:free).
+    verifier_model: str | None = None
 
 
 class DocumentStatus(StrEnum):

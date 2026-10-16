@@ -46,6 +46,7 @@ from __future__ import annotations
 import logging
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from typing import Any
 
 from core.auth import ACLScope
 from core.errors import ERROR_REGISTRY, ReasonCode
@@ -66,7 +67,15 @@ from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retriev
 
 from .hydration import CanonicalStoreUnavailable
 from .interfaces import ChunkLookup
-from .models import Answer, AnswerStatus, Claim, Confidence, ConfidenceLevel
+from .models import (
+    Answer,
+    AnswerStatus,
+    CanonicalChunk,
+    Claim,
+    Confidence,
+    ConfidenceLevel,
+    DocumentStatus,
+)
 from .prompts import SYSTEM_PROMPT, build_prompt, parse_model_output
 from .verification import ClaimGrounder, ExtractiveGrounder, verify_claims
 
@@ -172,6 +181,10 @@ class AnswerEngine:
     #: grounded. Pass ``claim_grounder=None`` to restore the legacy
     #: existence+scope-only contract.
     claim_grounder: ClaimGrounder | None = field(default_factory=ExtractiveGrounder)
+    #: Optional Stage 12 Gemma semantic citation verifier (T-OR-12).
+    semantic_verifier: Any | None = None
+    #: Verifier model identifier for Stage 12 semantic checks.
+    verifier_model: str = "google/gemma-4-26b-a4b-it:free"
 
     async def answer(
         self, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
@@ -321,6 +334,44 @@ class AnswerEngine:
         allowed: set[str] | None = set(acl_scope.workspace_ids)
         if acl_scope.include_public:
             allowed = None  # public scope: existence is the only check
+
+        # Stage 11 — server-side deterministic citation integrity validator (T-OR-05 / T-OR-12)
+        stage11_report = None
+        try:
+            from .citation_integrity import validate_citation_integrity
+
+            canonical_from_items = {
+                item.chunk_id: CanonicalChunk(
+                    chunk_id=item.chunk_id,
+                    workspace_id=item.workspace_id,
+                    document_id=item.document_id,
+                    document_version_id=item.document_version_id,
+                    filename=(item.metadata or {}).get("filename"),
+                    page=item.page,
+                    section=item.section,
+                    content=item.content,
+                    status=DocumentStatus.ACTIVE,
+                    metadata=dict(item.metadata or {}),
+                )
+                for item in items
+                if item.chunk_id
+                and not (item.metadata or {}).get("is_graph")
+                and not (item.metadata or {}).get("routing_hint")
+            }
+
+            stage11_report = await validate_citation_integrity(
+                claims=claims,
+                items=items,
+                canonical=canonical_from_items,
+                chunk_lookup=self.chunk_lookup,
+                allowed_workspace_ids=allowed,
+            )
+        except Exception as exc:
+            logger.warning(
+                "stage11_integrity_check_failed",
+                extra={"event": "stage11_integrity_check_failed", "error": str(exc)},
+            )
+
         try:
             verified, citations = await verify_claims(
                 claims,
@@ -333,10 +384,10 @@ class AnswerEngine:
             logger.warning(
                 "canonical_store_unavailable",
                 extra={
-                        "event": "canonical_store_unavailable",
-                        "error_type": type(exc).__name__,
-                        "trace_id": request_id_ctx.get(),
-                    },
+                    "event": "canonical_store_unavailable",
+                    "error_type": type(exc).__name__,
+                    "trace_id": request_id_ctx.get(),
+                },
             )
             return await self._finalize(
                 Answer(
@@ -351,6 +402,7 @@ class AnswerEngine:
                     trace_id=request_id_ctx.get(),
                     claims=[],
                     citations=[],
+                    citation_integrity=stage11_report.model_dump() if stage11_report else None,
                 ),
                 items=items,
                 outcome=outcome if "outcome" in locals() else None,
@@ -384,6 +436,7 @@ class AnswerEngine:
                     trace_id=trace_id,
                     claims=verified,
                     citations=citations,
+                    citation_integrity=stage11_report.model_dump() if stage11_report else None,
                 ),
                 items=items,
                 outcome=outcome,
@@ -407,12 +460,13 @@ class AnswerEngine:
                     trace_id=trace_id,
                     claims=[],
                     citations=[],
+                    citation_integrity=stage11_report.model_dump() if stage11_report else None,
                 ),
                 items=items,
                 outcome=outcome,
             )
 
-        if claims and not verified:
+        if self.semantic_verifier is None and claims and not verified:
             return await self._finalize(
                 Answer(
                     answer="I cannot answer this question based on the provided documents.",
@@ -426,14 +480,142 @@ class AnswerEngine:
                     trace_id=trace_id,
                     claims=[],
                     citations=[],
+                    citation_integrity=stage11_report.model_dump() if stage11_report else None,
                 ),
                 items=items,
                 outcome=outcome,
             )
 
+        # Stage 12 Gemma semantic verifier & publication gate (T-OR-06 / T-OR-12)
+        stage12_report = None
+        gate_result = None
+        if self.semantic_verifier is not None and claims and stage11_report is not None:
+            from .semantic_verification import (
+                PublicationStatus,
+                Verdict,
+                evaluate_publication_gate,
+                verify_semantic_claims,
+            )
+
+            stage12_report = await verify_semantic_claims(
+                claims=claims,
+                integrity_report=stage11_report,
+                verifier=self.semantic_verifier,
+            )
+            verifier_model_id = getattr(self.semantic_verifier, "_model", self.verifier_model)
+            gate_result = await evaluate_publication_gate(
+                claims=claims,
+                integrity_report=stage11_report,
+                semantic_report=stage12_report,
+                chunk_lookup=self.chunk_lookup,
+                verifier_model=verifier_model_id,
+            )
+
+            if gate_result.can_publish:
+                verified = list(claims)
+                citations = list(
+                    stage11_report.accepted_citations
+                    if stage11_report.accepted_citations
+                    else citations
+                )
+
+            if not gate_result.can_publish:
+                gate_reasons = "; ".join(gate_result.reasons)
+                if gate_result.status == PublicationStatus.REJECTED:
+                    return await self._finalize(
+                        Answer(
+                            answer="I cannot answer this question based on the provided documents.",
+                            status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                            reason_code="CITATION_INVALID",
+                            reason=f"Citation integrity verification failed: {gate_reasons}",
+                            confidence=Confidence(
+                                level=ConfidenceLevel.LOW,
+                                basis="Stage 11 integrity check failed",
+                            ),
+                            trace_id=trace_id,
+                            claims=[],
+                            citations=[],
+                            citation_integrity=stage11_report.model_dump(),
+                            semantic_verification=stage12_report.model_dump(),
+                            publication_gate=gate_result.model_dump(),
+                            publication_status=gate_result.status.value,
+                            verifier_model=gate_result.verifier_model,
+                        ),
+                        items=items,
+                        outcome=outcome,
+                    )
+                elif gate_result.status == PublicationStatus.ABSTAIN:
+                    reason_code = (
+                        "CONTRADICTION_FOUND"
+                        if any(
+                            cv.verdict == Verdict.CONTRADICTED
+                            for cv in stage12_report.claim_verdicts
+                        )
+                        else "EVIDENCE_MISSING"
+                    )
+                    return await self._finalize(
+                        Answer(
+                            answer="I cannot answer this question based on the provided documents.",
+                            status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                            reason_code=reason_code,
+                            reason=(
+                                f"Semantic claims contradicted or unsupported: {gate_reasons}"
+                            ),
+                            confidence=Confidence(
+                                level=ConfidenceLevel.LOW,
+                                basis="Semantic verification abstained on candidate claims",
+                            ),
+                            trace_id=trace_id,
+                            claims=[],
+                            citations=[],
+                            citation_integrity=stage11_report.model_dump(),
+                            semantic_verification=stage12_report.model_dump(),
+                            publication_gate=gate_result.model_dump(),
+                            publication_status=gate_result.status.value,
+                            verifier_model=gate_result.verifier_model,
+                        ),
+                        items=items,
+                        outcome=outcome,
+                    )
+                elif gate_result.status == PublicationStatus.NEEDS_REVIEW:
+                    rendered_answer = (
+                        " ".join(claim.text for claim in verified)
+                        if verified
+                        else answer_text
+                    )
+                    return await self._finalize(
+                        Answer(
+                            answer=rendered_answer,
+                            status=AnswerStatus.NEEDS_REVIEW,
+                            reason_code=ReasonCode.NEEDS_REVIEW.value,
+                            reason=(
+                                f"Semantic verification requires human review: {gate_reasons}"
+                            ),
+                            confidence=Confidence(
+                                level=ConfidenceLevel.LOW,
+                                basis="Semantic verification uncertain or partially supported",
+                            ),
+                            trace_id=trace_id,
+                            claims=verified,
+                            citations=citations,
+                            citation_integrity=stage11_report.model_dump(),
+                            semantic_verification=stage12_report.model_dump(),
+                            publication_gate=gate_result.model_dump(),
+                            publication_status=gate_result.status.value,
+                            verifier_model=gate_result.verifier_model,
+                        ),
+                        items=items,
+                        outcome=outcome,
+                    )
+
         if claims and len(verified) < len(claims):
             # Partial verification: render only from the verified claims.
             rendered_answer = " ".join(claim.text for claim in verified)
+            pub_status = (
+                gate_result.status.value
+                if gate_result
+                else ("verified" if verified else None)
+            )
             return await self._finalize(
                 Answer(
                     answer=rendered_answer,
@@ -453,6 +635,11 @@ class AnswerEngine:
                     trace_id=trace_id,
                     claims=verified,
                     citations=citations,
+                    citation_integrity=stage11_report.model_dump() if stage11_report else None,
+                    semantic_verification=stage12_report.model_dump() if stage12_report else None,
+                    publication_gate=gate_result.model_dump() if gate_result else None,
+                    publication_status=pub_status,
+                    verifier_model=gate_result.verifier_model if gate_result else None,
                 ),
                 items=items,
                 outcome=outcome,
@@ -461,6 +648,11 @@ class AnswerEngine:
         has_high_conf = bool(citations) and (len(verified) == len(claims) if claims else False)
         confidence_level = ConfidenceLevel.HIGH if has_high_conf else ConfidenceLevel.MEDIUM
         rendered_answer = " ".join(claim.text for claim in verified)
+        pub_status = (
+            gate_result.status.value
+            if gate_result
+            else ("verified" if citations else None)
+        )
         return await self._finalize(
             Answer(
                 answer=rendered_answer,
@@ -477,6 +669,11 @@ class AnswerEngine:
                 trace_id=trace_id,
                 claims=verified,
                 citations=citations,
+                citation_integrity=stage11_report.model_dump() if stage11_report else None,
+                semantic_verification=stage12_report.model_dump() if stage12_report else None,
+                publication_gate=gate_result.model_dump() if gate_result else None,
+                publication_status=pub_status,
+                verifier_model=gate_result.verifier_model if gate_result else None,
             ),
             items=items,
             outcome=outcome,

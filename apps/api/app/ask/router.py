@@ -249,6 +249,22 @@ async def ask(
         _workspace_config.sensitive if _workspace_config is not None else False
     )
     engine: AnswerEngine = build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)
+    if not _egress_sensitive and getattr(engine, "semantic_verifier", None) is None:
+        try:
+            from answer.adapters.gemma_semantic_verifier import (
+                DEFAULT_GEMMA_MODEL,
+                GemmaSemanticVerifier,
+            )
+
+            engine.semantic_verifier = GemmaSemanticVerifier(
+                engine.llm,
+                model=DEFAULT_GEMMA_MODEL,
+            )
+        except Exception as exc:
+            logger.warning(
+                "semantic_verifier_initialization_failed",
+                extra={"event": "semantic_verifier_initialization_failed", "error": str(exc)},
+            )
 
     try:
         answer = await engine.answer(
