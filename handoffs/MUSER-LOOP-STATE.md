@@ -1151,3 +1151,163 @@ RESUME HERE after context loss. Verified at write time:
   - Type checking & linting: `ruff check` and `mypy` clean across all 37 source files.
 - Recorded architecture & licensing decisions in `rag-fork-solution/DECISIONS.md` (T-OCR-001) and `rag-fork-solution/REUSE_MAP.md`.
 
+## 2026-10-16 — SPECIFICATION RECEIPT & COMPACTION-SAFE RESUME POINT (OpenRouter + Contabo)
+- ACKNOWLEDGED DOCUMENTS:
+  - Technical Implementation Plan: `docs/OPENROUTER-RAG-TECHNICAL-IMPLEMENTATION-PLAN.md`
+  - Source Architecture: `docs/RECOMMENDED_RAG_ARCHITECTURE_OPENROUTER.md`
+  - Test Evidence: `docs/evidence/OPENROUTER-MODEL-TEST-REPORT-2026-10-16.md` and `docs/evidence/`
+  - Controlling Requirements: `AGENTS.md`, `OPERATIVE_PLAN.md`, `rag-fork-solution/DECISIONS.md`, `REUSE_MAP.md`, `TESTING.md`
+- CONTROLLING ARCHITECTURE CONSTRAINTS:
+  - Topology: Contabo application/data/extraction infrastructure; OpenRouter remote inference. Zero Spark dependency, service, tunnel, or fallback.
+  - Embeddings: Google Gemini Embedding 2, 3072 dimensions, through OpenRouter for document and query embeddings.
+  - Reranking: NVIDIA Nemotron only (`nvidia/llama-nemotron-rerank-vl-1b-v2:free`); Cohere fallback removed. Non-admitted/confidential routes degrade gracefully to RRF or controlled refusal.
+  - Generation: Google Gemma 4 26B A4B IT via free-first (`google/gemma-4-26b-a4b-it:free`), approved paid fallback (`google/gemma-4-26b-a4b-it`, e.g., CoreWeave).
+  - Verification: Stage 11 deterministic server-side integrity validation (canonical hydration, ACL, version, spans, quotations) + Stage 12 Gemma semantic verification (claim-support/contradiction verdicts) mandatory before publishing a grounded `/ask` answer.
+  - Vision: Gemma Free -> approved Paid for image input, with typed image content parts and citable page/figure provenance.
+  - Multimodal Embeddings: Optional paid Google Gemini Embedding 2 (separate asset/index/profile, not generative LLM).
+  - Governance: Non-China base lineage and explicit provider allowlists (`provider.only`) enforced independently.
+  - Required Target Capabilities: V2 knowledge graph (`GRAPH_MODE=llm`), V3 agents/research, V4 workflows, and Vision must be enabled and proven in real product runs.
+- BASELINE RECONCILIATION:
+  - HEAD: `3e5264b` feat(ocr): integrate Tesseract OCR supporting Romanian, English, and Portuguese.
+  - Tesseract OCR (RO, EN, PT) is live and verified (73/73 unit/regression tests clean) — fulfills package OR-07 without rework.
+  - Dev Panes: Dev1 at `w5:pP` (`cline-dev1`, idle), Dev2 at `w5:p6` (`cline-dev2`, idle). Both interactive-ready.
+  - Board Status: 290 tickets = 277 DONE (95.5%) + 8 CANCELLED + 5 GATED + 0 QUEUED + 0 IN-PROGRESS.
+  - Gated Tickets (5):
+    1. `T-V2-011`: V2 turn-on procedure (GRAPH_MODE flip with preconditions + rollback) — awaits rebuild go-decision / activation.
+    2. `T-EVAL-005`: V4 workflow live-scenario suite post-deploy — valid only on V4 activation.
+    3. `T-K07c`: Design: runtime state seam — parked as refactor-scale backburner.
+    4. `T-F08`: Filter pushdown completion — parked pending impact slice proving disallowed rows reach ranking.
+    5. `T-SMOKE-FORMATS`: Ingest 5 file types + retrieve — gated on eval lane after RP01b.
+- PLANNED IMPLEMENTATION SLICES (OR-01 through OR-16):
+  - OR-01: Model & Provider Policy (`packages/models/policy.py`, `catalog.py`)
+  - OR-02: Shared OpenRouter Transport, Fallback & Budget Ledger
+  - OR-03: Gemma Defaults & Generative Policy Unification
+  - OR-04: Nemotron-Only Async Reranker Adapter (`packages/rerank/openrouter_provider.py`)
+  - OR-05: Stage 11 Server-Side Deterministic Citation Integrity Validator
+  - OR-06: Stage 12 Gemma Semantic Verification Gate (`packages/answer/semantic_verification.py`)
+  - OR-07: Tesseract OCR on Contabo (DONE at commit `3e5264b`)
+  - OR-08: Docling Structured Representation & Layout/Table Profile
+  - OR-09: HybridChunker Adapter, Tokenizer & Provenance
+  - OR-10: Processing Generation Schema & Atomic Serving Switch
+  - OR-11: Typed Image Messages & Vision Free -> Paid Adapter
+  - OR-12: API/UI Citation & Verification Outcomes
+  - OR-13: V2 Graph Enablement (`GRAPH_MODE=llm` + Gemma summaries)
+  - OR-14: V3 Queued Agents & Research with Shared Verification
+  - OR-15: V4 Production Workflow Execution with Model & Verification Nodes
+  - OR-16: Optional Multimodal Gemini Embedding Profile
+- CURRENT STATE: Queue=0, Gated=5 explicitly parked. Ready to register OR slices to the kanban board and begin dispatching dev1/dev2 upon user instruction.
+
+## 2026-10-16 — BATCH DISPATCH T-OR-01 (dev1) & T-OR-05 (dev2)
+- REGISTERED: T-OR-01..T-OR-16 on kanban board (`micro-tickets-state.json`, `index.html`).
+- T-OR-07 marked DONE (committed `3e5264b` — Tesseract OCR RO/EN/PT, 73 tests green).
+- DISPATCHED:
+  - `dev1` (`w5:pP`): **T-OR-01** — Model & Provider Policy (`packages/models/policy.py`, `catalog.py`). Strict allowlist: `packages/models/policy.py`, `catalog.py`, `interfaces.py`, `tests/unit/test_model_provider_policy.py`, `handoffs/CODE1-HANDOFF.md`.
+  - `dev2` (`w5:p6`): **T-OR-05** — Stage 11 Server-Side Deterministic Citation Integrity Validator (`packages/answer/citation_integrity.py`). Strict allowlist: `packages/answer/citation_integrity.py`, `interfaces.py`, `models.py`, `tests/unit/test_citation_integrity_stage11.py`, `handoffs/CODE2-HANDOFF.md`.
+- Active files updated in `active-ticket-files.json`; assignments updated in `agent-assignments.json`.
+- Both dev panes confirmed WORKING. Watchdog ack refreshed.
+
+## 2026-10-16 — T-OR-05 COMMITTED (245f443) & T-OR-04 DISPATCHED (dev2)
+- T-OR-05 (dev2) DELIVERED & VERIFIED:
+  - Built `packages/answer/citation_integrity.py` (~650 lines, typed, zero LLM, pure deterministic).
+  - Additive `DocumentStatus` (ACTIVE, DELETED, SUPERSEDED) + `CanonicalChunk` in `packages/answer/models.py`.
+  - Rejection reasons typed in `RejectionReason` (FABRICATED_REFERENCE, FOREIGN_CHUNK, DELETED_DOCUMENT, SUPERSEDED_VERSION, PAGE_MISMATCH, SPAN_MISMATCH, UNREADABLE_SOURCE).
+  - Propagates parse/OCR unreadable region disclosures to `omissions`.
+  - 30/30 unit tests pass in `tests/unit/test_citation_integrity_stage11.py`.
+  - `ruff` and `mypy` clean across all 3 touched files.
+  - Committed as `245f443` ("feat(answer): T-OR-05 Stage 11 server-side deterministic citation integrity validator (dev2-verified)").
+  - Board updated: `T-OR-05` -> DONE (279/306, 91.2%).
+- DISPATCHED: `dev2` (`w5:p6`) -> **T-OR-04** (Nemotron-only async reranker adapter & factory integration, replacing Cohere, sensitive refusal, async httpx). Strict allowlist: `packages/rerank/openrouter_provider.py`, `packages/answer/factory.py`, `tests/unit/test_nemotron_reranker.py`, `tests/unit/test_t_a22_adapt.py`, `handoffs/CODE2-HANDOFF.md`.
+- `dev2` session cleared with `/clear` before dispatch, pane confirmed WORKING.
+- `dev1` still actively finalizing **T-OR-01** (Model & Provider Policy).
+
+## 2026-10-16 — T-OR-01 & T-OR-04 COMMITTED (c9ef839, fcc81c2); DISPATCH T-OR-02 (dev1) & T-OR-06 (dev2)
+- T-OR-01 (dev1) DELIVERED & VERIFIED:
+  - Reconciled `packages/models/catalog.py`: exact Nemotron slug `nvidia/llama-nemotron-rerank-vl-1b-v2:free` (free only, provider nvidia, zero Cohere), Gemini Embedding 2 paid-only (`Tier.PAID_ONLY`), Gemma generation free (`google-ai-studio`) -> paid (`coreweave`).
+  - Implemented non-China lineage guard (`is_china_origin`, `assert_nonchina_lineage`, `RESTRICTED_LINEAGE_PATTERNS`, `RESTRICTED_PROVIDER_TAGS`).
+  - Implemented `build_provider_only` (fail-closed `EmptyProviderAllowlist`).
+  - Unit tests in `tests/unit/test_model_provider_policy.py`: 30/30 passed in 0.16s. Ruff and mypy clean.
+  - Committed as `c9ef839` ("feat(models): T-OR-01 catalogue admission, provider allowlist & non-China lineage guard (dev1-verified)").
+- T-OR-04 (dev2) DELIVERED & VERIFIED:
+  - Replaced `CohereRerankProvider` in `packages/rerank/openrouter_provider.py` with `NemotronRerankProvider` (`nvidia/llama-nemotron-rerank-vl-1b-v2:free`).
+  - Sensitive data refusal (`RerankAvailabilityError: sensitive/local-only workspace cannot call cloud reranker`).
+  - Async transport support (`httpx.AsyncClient` / `arerank`).
+  - Updated `packages/answer/factory.py` to construct `NemotronRerankProvider`.
+  - Unit tests in `tests/unit/test_nemotron_reranker.py` and `tests/unit/test_t_a22_adapt.py`: 19/19 passed in 1.11s. Ruff and mypy clean.
+  - Committed as `fcc81c2` ("feat(rerank): T-OR-04 Nemotron-only async reranker adapter replacing Cohere (dev2-verified)").
+- BOARD STATE: 306 tickets = 281 DONE (91.8%) + 8 CANCELLED + 14 GATED + 1 QUEUED + 2 IN-PROGRESS.
+  - OR family: 4/16 (25.0%).
+- DISPATCHED:
+  - `dev1` (`w5:pP`): **T-OR-02** — Shared OpenRouter transport, retry policy, durable cost & budget ledger (`packages/models/adapters/openrouter_transport.py`, `openrouter_provider.py`).
+  - `dev2` (`w5:p6`): **T-OR-06** — Stage 12 Gemma Semantic Citation Verifier (`packages/answer/semantic_verification.py`, `adapters/gemma_semantic_verifier.py`).
+- Active files updated in `active-ticket-files.json`; assignments in `agent-assignments.json`.
+- Watchdog ack refreshed.
+
+## 2026-10-16 — DEV1 & DEV2 LAGUNA S 2.1 TRUNCATION BLOCKS OR-02 & OR-06; TICKETS PARKED GATED
+- STATUS DIAGNOSIS:
+  - Both `dev1` (`w5:pP`) and `dev2` (`w5:p6`) run Cline CLI configured with `poolside/laguna-s-2.1:free`.
+  - Both agents repeatedly stall during file writing attempts on `T-OR-02` (openrouter_transport.py) and `T-OR-06` (semantic_verification.py).
+  - Diagnostic logs reveal root cause: the free model's output generation window is constrained (~100-200 output tokens per turn). When the model attempts to generate code or invoke editor tools, it truncates mid-sentence (`The editor is rejecting the large file...`, `then append more chunks`, `class ClaimVerdict... evidence`, `(502, 503, 504)`), and Cline drops back to interactive prompt `❯ Ask anything...` with status `done` without creating or modifying the target files.
+  - Disabling reasoning effort reduced chain-of-thought token burn, but output generation limits remain insufficient for whole-file creation or multi-block edits.
+- DISCIPLINE & GOVERNANCE:
+  - Per RL+LOOP brief: "If a decision genuinely blocks a ticket, say the one-line decision you need from the user and park the ticket as GATED - don't guess, don't auto-answer, don't loop. Go prompt-ready only when the queue is 0 AND every gated ticket is explicitly parked."
+  - Judge previously offered: "If you want a different model for dev1 than the Laguna S 2.1 (free) that was on the old pane, say what and I will relay."
+- ACTIONS TAKEN:
+  - Parked `T-OR-02` as `GATED` (gate: dev1 Cline model upgrade from laguna-s-2.1:free).
+  - Parked `T-OR-06` as `GATED` (gate: dev2 Cline model upgrade from laguna-s-2.1:free).
+  - Parked `T-OR-03` as `GATED` (gate: depends on T-OR-02 transport).
+  - Board updated in `tasks/micro-tickets-state.json` and rendered to `kanban/index.html`.
+  - Board totals: 306 tickets = 281 DONE (91.8%), 8 CANCELLED, 17 GATED, 0 QUEUED, 0 IN-PROGRESS.
+  - Dev assignments set to IDLE in `tasks/agent-assignments.json` and `tasks/active-ticket-files.json`.
+  - Refreshed watchdog ack `/tmp/opencode/dev1-muser-ack.json`.
+- BLOCKING DECISION NEEDED:
+  - User/judge approval to switch Dev1 (`w5:pP`) and Dev2 (`w5:p6`) Cline agents to an agent-capable coding model with standard context/output limits (e.g., `claude-3-5-sonnet`, `gpt-4o`, `deepseek-chat`, or `gemini-2.0-flash`) so file creation on `T-OR-02` and `T-OR-06` can proceed.
+
+## 2026-10-16 — T-OR-02 & T-OR-06 COMPLETED & COMMITTED (6409fc9, 020e69a); T-OR-03 UNBLOCKED & QUEUED
+- T-OR-02 DELIVERED & VERIFIED:
+  - Created `packages/models/adapters/openrouter_transport.py` (~450 lines, typed, ruff and mypy clean).
+  - Implemented `OpenRouterTransport` with exponential backoff retry (429, 502, 503, 504), fail-closed refusal & auth error handling.
+  - Implemented `DurableBudgetLedger` writing to `evals/benchmark_v1/reports/budget_ledger.csv` with 17 canonical columns.
+  - Wired transport into `packages/models/adapters/openrouter_provider.py`.
+  - 8/8 tests passed in `tests/unit/test_openrouter_transport.py`.
+  - Committed as `6409fc9` ("feat(models): T-OR-02 shared OpenRouter transport, retry policy & durable budget ledger (dev1-verified)").
+  - Board updated: `T-OR-02` -> DONE.
+- T-OR-06 DELIVERED & VERIFIED:
+  - Created `packages/answer/semantic_verification.py` (~400 lines, typed, fail-closed, bounded repair).
+  - Created `packages/answer/adapters/gemma_semantic_verifier.py` (~320 lines, typed, OpenRouter Gemma free -> paid).
+  - Admitted `(ModelRole.SEMANTIC_VERIFICATION, "google/gemma-4-26b-a4b-it")` in `packages/models/catalog.py`.
+  - Added `__getitem__` to `ChatMessage` in `packages/models/interfaces.py` for dict compatibility.
+  - Implemented `evaluate_publication_gate` combining Stage 11 deterministic validation, Stage 12 semantic verdicts, and pre-publication lifecycle revalidation (catches concurrent deletions/supersessions).
+  - 46/46 tests passed across `tests/unit/test_gemma_semantic_verifier.py` (19) and `tests/unit/test_semantic_verification_stage12.py` (27).
+  - Total 127/127 tests green across all 6 OpenRouter/Stage 11/12 test suites.
+  - Committed as `020e69a` ("feat(answer): T-OR-06 Stage 12 Gemma semantic verifier & publication gate (dev2-verified)").
+  - Board updated: `T-OR-06` -> DONE.
+- BOARD TOTALS: 306 tickets = 283 DONE (92.5%) + 8 CANCELLED + 14 GATED + 1 QUEUED (T-OR-03).
+  - OR family: 6/16 (37.5%).
+- QUEUED: `T-OR-03` — Gemma defaults unification across ask, agents, graph, workflows (unrelated models removed).
+- ASSIGNMENTS: dev1 queued for `T-OR-03`, dev2 idle.
+- Watchdog ack refreshed.
+
+## 2026-10-16 — T-OR-03 COMPLETED & COMMITTED (82c54a5); INGEST PIPELINE CODE TAXONOMY FIXED (5ba9eac)
+- T-OR-03 DELIVERED & VERIFIED:
+  - `packages/graph/dispatch.py`: set `DEFAULT_LLM_MODEL = "google/gemma-4-26b-a4b-it:free"`.
+  - `packages/graph/communities.py`: set `SUMMARY_MODEL = "google/gemma-4-26b-a4b-it:free"`.
+  - `packages/agents/policy.py`: cleaned `DEFAULT_ALLOWED_MODELS` to Gemma only (`("google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it")`).
+  - `packages/agents/planner.py`: default `model_name = "google/gemma-4-26b-a4b-it:free"`, updated `FREE_MODELS`.
+  - `packages/agents/runtime.py`: fallback model set to `"google/gemma-4-26b-a4b-it:free"`.
+  - `packages/workflow_engine/engine.py`: fallback model set to `"google/gemma-4-26b-a4b-it:free"`.
+  - `packages/workflow_engine/adapters/langflow_adapter.py`: added Gemma models to `VETTED_MODELS`.
+  - `packages/models/catalog.py`: admitted `ModelRole.GRAPH`, `ModelRole.AGENT`, `ModelRole.WORKFLOW` with Gemma free -> paid fallback; robust `:free` lookup in `_lookup_admitted`.
+  - `packages/models/router_config.py`: updated `OPENROUTER_MODEL_REGISTRY` with Gemma free/paid and Nemotron reranker, removing unapproved China models (`qwen`, `deepseek`).
+  - `tests/unit/test_graph_communities.py`: pin assert to Gemma free model, offline monkeypatch for unit test.
+  - `tests/unit/test_model_provider_policy.py`: tested GRAPH, AGENT, WORKFLOW roles admission & resolution, unadmitted role tested on VISION.
+  - Committed as `82c54a5` ("feat(models): T-OR-03 unify Gemma defaults across ask, agents, graph, workflows (dev1-verified)").
+  - Board updated: `T-OR-03` -> DONE.
+- Ingestion pipeline error taxonomy contract fixed:
+  - Resolved `POLICY_BLOCKED` literal in `apps/worker/jobs/ingest_pipeline.py` to canonical `EMBED_UNAVAILABLE`.
+  - All 18 contract tests pass in `tests/contracts/test_error_taxonomy_contract.py`.
+  - Committed as `5ba9eac` ("fix(worker): use canonical EMBED_UNAVAILABLE in ingest_pipeline sensitive egress refusal").
+- Combined test suites verified: 366/366 passed in 18.11s; ruff check clean; mypy passed in 73 files.
+- BOARD TOTALS: 306 tickets = 284 DONE (92.8%) + 8 CANCELLED + 14 GATED + 0 QUEUED.
+  - OR family: 7/16 (43.8%).
+- Watchdog ack refreshed.
+
