@@ -1994,3 +1994,63 @@ VERIFY:
         subsystem (GRAPH_MODE off; turn-on T-V2-011 GATED) — folded there
 SPEND: 0.00
 ```
+
+
+## T-F08
+
+```
+TASK: T-F08
+STATUS: PARKED (filter pushdown scope not located)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-F08
+
+```
+TASK: T-F08
+STATUS: PARKED (pushdown not implemented due complexity; deferring)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-SMOKE-FORMATS
+
+```
+TASK: T-SMOKE-FORMATS
+STATUS: BLOCKED-UNPRICED/BLOCKED (no managed scratch Qdrant reachable for real 5-file ingest without paid embeddings / compose restart)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-SMOKE-FORMATS retry
+
+```
+TASK: T-SMOKE-FORMATS retry
+STATUS: BLOCKED (full ingest pipeline requires API/worker orchestration + embeds; not run)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-RS01H
+
+```
+TASK: T-RS01H
+STATUS: PARKED (no untyped veto path located beyond already-typed Approval errors)
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-RS01H — typed policy error (coordinator verify-and-close)
+```
+TASK: T-RS01H (dev2 PARKED: "already-typed Approval errors" — premise CORRECT)
+FINDING: PolicyViolationError (policy key + values) + ApprovalBindingError
+family (binding/target/authority/stale/mismatch) already typed; denial
+raises carry context (research_pipeline.py:141-143). Fail-louder satisfied.
+VERIFY: class + raise-site grep (above); no generic veto path found
+SPEND: 0.00
+```
