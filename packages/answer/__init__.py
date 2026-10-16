@@ -15,19 +15,55 @@ are product-specific (provenance, ACL, citation UX).
 
 from __future__ import annotations
 
+from .citation_integrity import (
+    CitationIntegrityError,
+    CitationIntegrityReport,
+    RejectedCitation,
+    RejectionReason,
+    validate_citation_integrity,
+)
 from .engine import AnswerEngine, AnswerEngineError
 from .interfaces import ChunkLookup
 from .models import Answer, Citation, Claim
+from .semantic_verification import (
+    CanonicalEvidence,
+    ClaimVerdict,
+    PublicationGateResult,
+    PublicationStatus,
+    SemanticClaimVerifier,
+    SemanticVerificationError,
+    SemanticVerificationReport,
+    SupportSpan,
+    Verdict,
+    evaluate_publication_gate,
+    verify_semantic_claims,
+)
 from .verification import CrossLanguageGrounder, ExtractiveGrounder
 
 __all__ = [
     "Answer",
     "AnswerEngine",
     "AnswerEngineError",
+    "CanonicalEvidence",
     "ChunkLookup",
     "Citation",
+    "CitationIntegrityError",
+    "CitationIntegrityReport",
     "Claim",
+    "ClaimVerdict",
     "CrossLanguageGrounder",
     "ExtractiveGrounder",
+    "PublicationGateResult",
+    "PublicationStatus",
+    "RejectedCitation",
+    "RejectionReason",
+    "SemanticClaimVerifier",
+    "SemanticVerificationError",
+    "SemanticVerificationReport",
+    "SupportSpan",
+    "Verdict",
+    "evaluate_publication_gate",
+    "validate_citation_integrity",
+    "verify_semantic_claims",
 ]
 

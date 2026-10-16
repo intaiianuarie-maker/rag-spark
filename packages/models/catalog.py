@@ -303,6 +303,28 @@ ADMITTED_MODELS: dict[tuple[ModelRole, str], AdmittedRoute] = {
             confidential_ok=True,
         ),
     ),
+    # Semantic Verification (Stage 12) -------------------------------------
+    # ``google/gemma-4-26b-a4b-it``: free ``:free`` slug via Google AI Studio
+    # first, paid fallback on exhaustion (free-first) via CoreWeave.
+    (ModelRole.SEMANTIC_VERIFICATION, "google/gemma-4-26b-a4b-it"): admit_model_route(
+        ModelRoute(
+            model="google/gemma-4-26b-a4b-it",
+            role=ModelRole.SEMANTIC_VERIFICATION,
+            permitted_tiers=(Tier.FREE_FIRST,),
+            capability=Capability(modalities=(Modality.TEXT,), tools=False),
+            lineage=Lineage(base_model="gemma-4-26b-a4b-it", publisher="google"),
+        ),
+        free=_tier(
+            "google/gemma-4-26b-a4b-it:free",
+            ("google-ai-studio",),
+            confidential_ok=True,
+        ),
+        paid=_tier(
+            "google/gemma-4-26b-a4b-it",
+            ("coreweave",),
+            confidential_ok=True,
+        ),
+    ),
     # Rerank ---------------------------------------------------------------
     # ``nvidia/llama-nemotron-rerank-vl-1b-v2:free``: the *free* NVIDIA reranker
     # advertises public-data-only (``confidential_ok=False``). It is the only

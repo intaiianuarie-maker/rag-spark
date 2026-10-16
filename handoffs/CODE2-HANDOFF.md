@@ -2230,3 +2230,59 @@ SPEND: 0.00
 GIT: handoff only
 ```
 
+
+## T-OR-06 — Stage 12 Gemma Semantic Citation Verifier & Final Publication Gate
+
+```text
+TASK: T-OR-06
+CHANGE:
+       - NEW packages/answer/semantic_verification.py: Stage 12 orchestrator and data models.
+         Typed Verdict enum (SUPPORTED, PARTIALLY_SUPPORTED, UNSUPPORTED, CONTRADICTED, UNCERTAIN),
+         SupportSpan model with evidence_id, start, end bounds, ClaimVerdict, CanonicalEvidence,
+         SemanticVerificationReport with abstain_recommended and aggregate contradictions.
+         Fail-closed mapping on verifier outages, timeouts, and transport errors. Bounded repair
+         for partially_supported claims (at most one narrowed recheck). Final publication gate
+         (evaluate_publication_gate) integrating Stage 11 structural integrity, Stage 12 semantic
+         verdicts, and pre-publication lifecycle revalidation (catches document deletions/supersessions
+         during verification).
+       - NEW packages/answer/adapters/gemma_semantic_verifier.py: Adapter implementing SemanticClaimVerifier
+         using Google Gemma 4 26B A4B IT (Free -> paid fallback). Strict JSON prompt requiring verdict,
+         reason_code, support_spans, and contradictions. Fail-closed mapping on 429 exhaustion, timeouts,
+         refusals, malformed JSON, and unexpected errors. Local validation of evidence IDs and span offsets
+         against canonical evidence length.
+       - MOD packages/models/interfaces.py: added __getitem__ to ChatMessage for dict-like subscripting
+         compatibility across legacy and new verifier callers.
+       - MOD packages/models/catalog.py: admitted (ModelRole.SEMANTIC_VERIFICATION, "google/gemma-4-26b-a4b-it")
+         with free ("google/gemma-4-26b-a4b-it:free") -> paid ("google/gemma-4-26b-a4b-it") route.
+       - NEW tests/unit/test_gemma_semantic_verifier.py (19 tests): supported claims (EN and RO with diacritics),
+         unsupported claims, contradicted claims (negation, entities, numbers, dates), bounded repair (recheck
+         moves to supported or stays partial), fail-closed error handling (429, timeout, refusal, malformed JSON,
+         crashes), local span bounds validation, publication gate evaluations (verified pass, Stage 11 rejection,
+         Stage 12 abstention, verifier outage, concurrent lifecycle deletion).
+       - NEW tests/unit/test_semantic_verification_stage12.py (27 tests): comprehensive orchestrator and adapter
+         boundary tests, hermeticity guard ensuring no network/LLM dependencies in core orchestrator.
+WHY:   Mandatory verification layer for grounded /ask answers per OpenRouter RAG Technical Implementation Plan
+       Section 11. Requires server-side Stage 11 deterministic validation and Stage 12 semantic verification
+       before any grounded answer can be published.
+REUSED: packages/answer/citation_integrity.py (Stage 11 contracts), packages/models/interfaces.py (LLMProvider,
+        ChatMessage, GenerationRequest), packages/answer/interfaces.py (ChunkLookup).
+ALLOWED FILES self-check: packages/answer/semantic_verification.py,
+        packages/answer/adapters/gemma_semantic_verifier.py, packages/models/interfaces.py,
+        packages/models/catalog.py, tests/unit/test_gemma_semantic_verifier.py,
+        tests/unit/test_semantic_verification_stage12.py, handoffs/CODE2-HANDOFF.md.
+VERIFY:
+       - pytest tests/unit/test_gemma_semantic_verifier.py tests/unit/test_semantic_verification_stage12.py -q
+         -> 46 passed.
+       - pytest tests/unit/test_gemma_semantic_verifier.py tests/unit/test_semantic_verification_stage12.py \
+                tests/unit/test_citation_integrity_stage11.py tests/unit/test_model_provider_policy.py \
+                tests/unit/test_nemotron_reranker.py tests/unit/test_openrouter_transport.py -q
+         -> 127 passed.
+       - ruff check packages/answer/ packages/models/ tests/unit/test_gemma_semantic_verifier.py tests/unit/test_semantic_verification_stage12.py
+         -> All checks passed.
+       - mypy packages/answer/semantic_verification.py packages/answer/adapters/gemma_semantic_verifier.py \
+              packages/models/interfaces.py packages/models/catalog.py tests/unit/test_gemma_semantic_verifier.py \
+              tests/unit/test_semantic_verification_stage12.py
+         -> Success: no issues found in 6 source files.
+SPEND: 0.00 (offline hermetic tests)
+GIT: handoff only
+```
