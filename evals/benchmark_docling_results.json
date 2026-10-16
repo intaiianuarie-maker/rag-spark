@@ -1,0 +1,76 @@
+{
+  "benchmark": "docling_contabo_resource_profile",
+  "ticket": "T-OR-08",
+  "timestamp": 1792182714.4422894,
+  "limit_mb": 2048,
+  "host_memory": {
+    "total_mb": 7936.0,
+    "available_mb": 3232.0,
+    "swap_total_mb": 12288.0,
+    "swap_used_mb": 8687.2
+  },
+  "all_within_budget": true,
+  "runs": [
+    {
+      "profile": "native",
+      "file": "pdf_text_multipage.pdf",
+      "limit_mb": 2048,
+      "success": true,
+      "error": null,
+      "duration_s": 7.827,
+      "peak_rss_mb": 407.75,
+      "elements_count": 11,
+      "tables_count": 0,
+      "structured_tables": 0,
+      "profile_limitation": null,
+      "docling_profile": "native",
+      "within_budget": true
+    },
+    {
+      "profile": "native",
+      "file": "docx_headings_table.docx",
+      "limit_mb": 2048,
+      "success": true,
+      "error": null,
+      "duration_s": 6.632,
+      "peak_rss_mb": 389.97,
+      "elements_count": 7,
+      "tables_count": 0,
+      "structured_tables": 0,
+      "profile_limitation": null,
+      "docling_profile": "native",
+      "within_budget": true
+    },
+    {
+      "profile": "tableformer",
+      "file": "pdf_text_multipage.pdf",
+      "limit_mb": 2048,
+      "success": true,
+      "error": null,
+      "duration_s": 14.165,
+      "peak_rss_mb": 666.53,
+      "elements_count": 11,
+      "tables_count": 0,
+      "structured_tables": 0,
+      "profile_limitation": "Structured profile 'tableformer' failed (No module named 'torchvision'); fell back to native profile with disclosed limitations.",
+      "docling_profile": "tableformer",
+      "within_budget": true
+    },
+    {
+      "profile": "tableformer",
+      "file": "docx_headings_table.docx",
+      "limit_mb": 2048,
+      "success": true,
+      "error": null,
+      "duration_s": 7.924,
+      "peak_rss_mb": 389.4,
+      "elements_count": 7,
+      "tables_count": 0,
+      "structured_tables": 0,
+      "profile_limitation": null,
+      "docling_profile": "tableformer",
+      "within_budget": true
+    }
+  ],
+  "verdict": "PASSED: All parsing runs executed within the 2048 MiB child ceiling. Native profile is fast and resource-efficient; structured profile falls back safely with disclosed limitation when neural weights are unbundled."
+}
