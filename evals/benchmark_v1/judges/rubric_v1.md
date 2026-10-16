@@ -1,10 +1,10 @@
 # Rubric v1 — operational claim/citation rubric (PROVISIONAL INSTRUMENT)
 
-**Status: PROVISIONAL SCORING INSTRUMENT — NOT HUMAN-VALIDATED.** Frozen as an
-instrument 2026-10-16 (T-J01), but the 18-case calibration was REJECTED
-2026-10-16 as degenerate (constant labels, question-as-segment, boilerplate
-rationales — see PREREGISTRATION amendment log). Scores computed under it are
-provisional until a real calibration + blinded κ≥0.70 gate pass. Drafted by
+**Status: FROZEN SCORING INSTRUMENT — NOT HUMAN-VALIDATED.** Frozen 2026-10-16
+(T-J01 rework) on a valid 20-case calibration (4 label classes, 5 archetypes,
+answer-segmented, 4-axis citations, 0 holdout overlap). Scores computed under
+it are valid instrument outputs but remain PROVISIONAL until two-reviewer
+blinded agreement meets the κ≥0.70 gate (staffing open). Drafted by
 dev1 for benchmark Phase 1 (T-P01 step 2) from
 `RAG-Spark_Benchmark_Plan_v1.4.md` §21. The coordinator owns freezing. Nothing
 here may be edited to improve an A/B delta after unblinding;

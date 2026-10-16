@@ -1,3 +1,3 @@
-# Rubric Freeze Proposal — RUBRIC-FROZEN
+# Rubric Freeze Proposal v2 — PROVISIONAL (precedes annotation revision)
 
-Calibration set: worked_examples_calibration.jsonl (18 cases). All cases reviewed with rubric_v1 rules; disagreements: 0. Freeze granted. No rule changes applied to frozen holdout.
+Calibration set: 20 non-degenerate calibrated cases. Labels vary across supported, unsupported, cannot_determine, contradiction. GSR-fail-elaboration cases: 3; citation-resolves-not-supports: 2+. RUBRIC remains PROVISIONAL pending coordinator revision.

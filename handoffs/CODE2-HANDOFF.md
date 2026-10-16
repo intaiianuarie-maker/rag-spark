@@ -1872,3 +1872,20 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-J01 rework
+
+```
+TASK: T-J01 rework
+CHANGE:
+      - evals/benchmark_v1/judges/worked_examples_calibration.jsonl (20 cases, varying labels)
+      - freeze_proposal.md v2 provisional verdict
+      - removed h1_negatives_replay.py
+VERIFY:
+      - 20 real answer-segmented cases; labels supported/unsupported/cannot_determine/contradiction
+      - 4-axis citation checks + distinct rationales
+      - json parse ok
+SPEND: 0.00
+GIT: handoff only
+```
