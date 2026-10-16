@@ -1,0 +1,17 @@
+loading dataset
+unique paragraphs 66635
+checkpoint 5000 spent_est 0.1195
+checkpoint 10000 spent_est 0.239
+checkpoint 15000 spent_est 0.3585
+checkpoint 20000 spent_est 0.478
+checkpoint 25000 spent_est 0.5975
+checkpoint 30000 spent_est 0.717
+checkpoint 35000 spent_est 0.8365
+checkpoint 40000 spent_est 0.956
+checkpoint 45000 spent_est 1.0755
+checkpoint 50000 spent_est 1.195
+checkpoint 55000 spent_est 1.3145
+checkpoint 60000 spent_est 1.434
+checkpoint 65000 spent_est 1.5535
+checkpoint 66635 spent_est 1.5926
+DONE (66635, 3072)
