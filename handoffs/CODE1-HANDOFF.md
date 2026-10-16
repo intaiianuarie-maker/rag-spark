@@ -4599,3 +4599,25 @@ VERIFY:
 - ruff check evals/benchmark_v1/runners/h2_corpus.py evals/benchmark_v1/runners/h2_run.py -> clean
 - mypy evals/benchmark_v1/runners/h2_corpus.py evals/benchmark_v1/runners/h2_run.py -> clean
 SPEND: $0.00043901 (metered in budget_ledger.csv)
+
+## 2026-10-16 T-OR-01 — Catalogue admission & policy enforcement (spec reconciliation + tests)
+
+TASK: T-OR-01 — Reconcile `packages/models/catalog.py` with the controlling specification, lock the fail-closed data-class resolution rules, and add the dedicated policy unit tests `tests/unit/test_model_provider_policy.py`.
+
+CHANGE:
+- `packages/models/catalog.py` (M — registry only): RERANK now uses the exact slug `nvidia/llama-nemotron-rerank-vl-1b-v2:free`, free-only via provider `("nvidia",)`, `confidential_ok=False`, `paid=None` — the Cohere/paid fallback is REMOVED, so sensitive rerank requests have no confidentiality-approved endpoint and raise `SensitiveRouteUnavailable`. EMBEDDING is paid-only (no free tier exists on OpenRouter): providers `("google-ai-studio", "google-vertex")`, `permitted_tiers=(Tier.PAID_ONLY,)`. GENERATION free tier `google/gemma-4-26b-a4b-it:free` via `("google-ai-studio",)` with paid fallback `google/gemma-4-26b-a4b-it` via `("coreweave",)`. All guard/contract logic unchanged.
+- `tests/unit/test_model_provider_policy.py` (NEW): 30 collected cases covering admitted-route shapes (paid-only embedding, free->paid Gemma generation, free-only NVIDIA Nemotron reranker with no Cohere), the non-China lineage/provider guard (`is_china_origin` + admit-time `ChinaOriginRejected`), fail-closed `EmptyProviderAllowlist` via `build_provider_only` and `admit_model_route` (empty allowlist + no-tier), `local_only` -> `EgressPolicyViolation`, sensitive rerank -> `SensitiveRouteUnavailable`, the public/sensitive resolution matrix (`provider.only` + `allow_fallbacks` + `data_collection`), stamped authn headers, and unknown-model / unadmitted-role `PolicyError`.
+
+WHY: The review cut a divergent registry (`nv-rerank-1` with a Cohere fallback, a free embedding tier, `google`/`nvidia` providers). The controlling spec requires the exact Nemotron slug, zero Cohere, paid-only embedding, and `google-ai-studio -> coreweave` generation. The new test module pins every data-class path so the catalogue cannot silently mis-build at import time.
+
+REUSED: `packages/models/policy.py` contracts (ModelRole/Tier/DataClass/Modality/DataCollectionPolicy enums, Lineage, ModelRoute, ProviderPolicy, RouteTier, AdmittedRoute, ResolvedInferenceRequest, and the PolicyError/AdmissionError taxonomy). No new dependencies. Toolchain via `/root/ko-venv` (Python 3.14.4).
+
+BUILT: `tests/unit/test_model_provider_policy.py` (hand-built pytest module, no scaffolding). No new production code — catalog.py was edited in place, not rewritten.
+
+VERIFY (exact, re-run after the final edit):
+- `/root/ko-venv/bin/pytest tests/unit/test_model_provider_policy.py -q` -> `30 passed in 0.22s`
+- `/root/ko-venv/bin/ruff check packages/models/ tests/unit/test_model_provider_policy.py` -> `All checks passed!`
+- `/root/ko-venv/bin/mypy packages/models/ tests/unit/test_model_provider_policy.py` -> `Success: no issues found in 9 source files`
+- `/root/ko-venv/bin/ruff format --check packages/models/catalog.py tests/unit/test_model_provider_policy.py packages/models/policy.py` -> `3 files already formatted`
+
+RISKS: `/root/ko-venv` is Python 3.14.4 (pyenv system venv) and is the interpreter used for the T-OR-01 verification commands; `.venv-test` is NOT used here. The pre-existing `tests/unit/test_rerank_sidecar.py` collection timeout (it imports `apps/rerank` app -> `import torch`, not installed) is environmental and unrelated to this module; this file is deliberately not pulled into that path. The `herdr` completion ping (w5:p4) is emitted only after this row is appended and the three green checks above are confirmed by re-run.
