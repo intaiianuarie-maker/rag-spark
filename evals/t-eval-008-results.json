@@ -1,0 +1,233 @@
+{
+  "embedders": [
+    {
+      "name": "google/gemini-embedding-2",
+      "dimension": 3072,
+      "priced": true
+    },
+    {
+      "name": "BAAI/bge-m3",
+      "dimension": 1024,
+      "priced": true
+    }
+  ],
+  "separation": [
+    {
+      "pair_set": "related_en_ro",
+      "embedder": "google/gemini-embedding-2",
+      "n_pairs": 40,
+      "mean_cosine": 0.8825,
+      "stdev": 0.0276,
+      "min": 0.8436,
+      "max": 0.9363
+    },
+    {
+      "pair_set": "unrelated_en_ro",
+      "embedder": "google/gemini-embedding-2",
+      "n_pairs": 40,
+      "mean_cosine": 0.5331,
+      "stdev": 0.0323,
+      "min": 0.4706,
+      "max": 0.6307
+    },
+    {
+      "pair_set": "related_monolingual_en",
+      "embedder": "google/gemini-embedding-2",
+      "n_pairs": 20,
+      "mean_cosine": 0.9557,
+      "stdev": 0.0239,
+      "min": 0.8985,
+      "max": 0.9865
+    },
+    {
+      "pair_set": "unrelated_monolingual_en",
+      "embedder": "google/gemini-embedding-2",
+      "n_pairs": 20,
+      "mean_cosine": 0.5737,
+      "stdev": 0.0303,
+      "min": 0.5213,
+      "max": 0.6354
+    },
+    {
+      "pair_set": "related_en_ro",
+      "embedder": "BAAI/bge-m3",
+      "n_pairs": 40,
+      "mean_cosine": 0.878,
+      "stdev": 0.0536,
+      "min": 0.7452,
+      "max": 0.9534
+    },
+    {
+      "pair_set": "unrelated_en_ro",
+      "embedder": "BAAI/bge-m3",
+      "n_pairs": 40,
+      "mean_cosine": 0.368,
+      "stdev": 0.0671,
+      "min": 0.2399,
+      "max": 0.5414
+    },
+    {
+      "pair_set": "related_monolingual_en",
+      "embedder": "BAAI/bge-m3",
+      "n_pairs": 20,
+      "mean_cosine": 0.9358,
+      "stdev": 0.0517,
+      "min": 0.8034,
+      "max": 0.9885
+    },
+    {
+      "pair_set": "unrelated_monolingual_en",
+      "embedder": "BAAI/bge-m3",
+      "n_pairs": 20,
+      "mean_cosine": 0.3811,
+      "stdev": 0.0709,
+      "min": 0.2436,
+      "max": 0.5179
+    }
+  ],
+  "retrieval": [
+    {
+      "probe": "hotpotqa_distractor_validation",
+      "embedder": "google/gemini-embedding-2",
+      "k": 1,
+      "n_cases": 1,
+      "evidence_recall": 0.5
+    },
+    {
+      "probe": "hotpotqa_distractor_validation",
+      "embedder": "google/gemini-embedding-2",
+      "k": 3,
+      "n_cases": 1,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "hotpotqa_distractor_validation",
+      "embedder": "google/gemini-embedding-2",
+      "k": 5,
+      "n_cases": 1,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "synthetic_ro",
+      "embedder": "google/gemini-embedding-2",
+      "k": 1,
+      "n_cases": 10,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "synthetic_ro",
+      "embedder": "google/gemini-embedding-2",
+      "k": 3,
+      "n_cases": 10,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "synthetic_ro",
+      "embedder": "google/gemini-embedding-2",
+      "k": 5,
+      "n_cases": 10,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "hotpotqa_distractor_validation",
+      "embedder": "BAAI/bge-m3",
+      "k": 1,
+      "n_cases": 1,
+      "evidence_recall": 0.5
+    },
+    {
+      "probe": "hotpotqa_distractor_validation",
+      "embedder": "BAAI/bge-m3",
+      "k": 3,
+      "n_cases": 1,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "hotpotqa_distractor_validation",
+      "embedder": "BAAI/bge-m3",
+      "k": 5,
+      "n_cases": 1,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "synthetic_ro",
+      "embedder": "BAAI/bge-m3",
+      "k": 1,
+      "n_cases": 10,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "synthetic_ro",
+      "embedder": "BAAI/bge-m3",
+      "k": 3,
+      "n_cases": 10,
+      "evidence_recall": 1.0
+    },
+    {
+      "probe": "synthetic_ro",
+      "embedder": "BAAI/bge-m3",
+      "k": 5,
+      "n_cases": 10,
+      "evidence_recall": 1.0
+    }
+  ],
+  "margins": [
+    {
+      "embedder": "google/gemini-embedding-2",
+      "related_crosslingual": 0.3494,
+      "related_monolingual": 0.382
+    },
+    {
+      "embedder": "BAAI/bge-m3",
+      "related_crosslingual": 0.51,
+      "related_monolingual": 0.5547
+    }
+  ],
+  "cost": [
+    {
+      "endpoint": "google/gemini-embedding-2",
+      "calls": 38,
+      "failed_calls": 0,
+      "retries": 0,
+      "vectors": 281,
+      "prompt_tokens": 4904,
+      "cost_usd": 0.00098104,
+      "cost_is_metered": true,
+      "failure_rate": 0.0
+    },
+    {
+      "endpoint": "BAAI/bge-m3",
+      "calls": 38,
+      "failed_calls": 0,
+      "retries": 0,
+      "vectors": 281,
+      "prompt_tokens": 5171,
+      "cost_usd": 5.171e-05,
+      "cost_is_metered": true,
+      "failure_rate": 0.0
+    }
+  ],
+  "legs_not_run": [],
+  "full_run": true,
+  "failure_rates": [
+    {
+      "endpoint": "google/gemini-embedding-2",
+      "calls": 38,
+      "failed_calls": 0,
+      "retries": 0,
+      "failure_rate": 0.0
+    },
+    {
+      "endpoint": "BAAI/bge-m3",
+      "calls": 38,
+      "failed_calls": 0,
+      "retries": 0,
+      "failure_rate": 0.0
+    }
+  ],
+  "hotpot_cases_skipped": 0,
+  "coordinator_bound_bge_m3": {
+    "related": 0.8,
+    "unrelated": 0.44
+  }
+}
