@@ -7,6 +7,25 @@
 ## Next
 - review1 re-review of F2/F3/F5/F6; coordinator owns F1 (infinity recreate) + F4 (:4000 topology).
 
+## 2026-10-16 T-OR-03 — Gemma defaults across ask, agents, graph, workflows (unrelated models removed)
+TASK: T-OR-03 — Unify Gemma defaults across /ask, agents, graph, workflows; remove active unapproved models (qwen, deepseek) and admit ModelRole.GRAPH, ModelRole.AGENT, ModelRole.WORKFLOW in catalog.py.
+CHANGES:
+- `packages/graph/dispatch.py`: set `DEFAULT_LLM_MODEL = "google/gemma-4-26b-a4b-it:free"`.
+- `packages/graph/communities.py`: set `SUMMARY_MODEL = "google/gemma-4-26b-a4b-it:free"`.
+- `packages/agents/policy.py`: cleaned `DEFAULT_ALLOWED_MODELS` to Gemma only (`("google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it")`).
+- `packages/agents/planner.py`: default `model_name = "google/gemma-4-26b-a4b-it:free"`, updated `FREE_MODELS`.
+- `packages/agents/runtime.py`: fallback model set to `"google/gemma-4-26b-a4b-it:free"`.
+- `packages/workflow_engine/engine.py`: fallback model set to `"google/gemma-4-26b-a4b-it:free"`.
+- `packages/workflow_engine/adapters/langflow_adapter.py`: added Gemma models to `VETTED_MODELS`.
+- `packages/models/catalog.py`: admitted `ModelRole.GRAPH`, `ModelRole.AGENT`, `ModelRole.WORKFLOW` with Gemma free -> paid fallback; robust `:free` lookup in `_lookup_admitted`.
+- `packages/models/router_config.py`: updated `OPENROUTER_MODEL_REGISTRY` with Gemma free/paid and Nemotron reranker, removing unapproved China models (`qwen`, `deepseek`).
+- `tests/unit/test_graph_communities.py`: pin assert to Gemma free model, offline monkeypatch for unit test.
+- `tests/unit/test_model_provider_policy.py`: tested GRAPH, AGENT, WORKFLOW roles admission & resolution, unadmitted role tested on VISION.
+VERIFY:
+- Combined test suite (366 tests) passed: `test_model_provider_policy.py`, `test_graph_communities.py`, `test_graph_extraction_modes.py`, `test_workflows.py`, `test_workflow_agent_seam.py`, `test_workflow_langflow_adapter.py`, `test_v3_factories_policy_budget.py`, `test_router_config.py`, `test_router_precedence_lock.py`, `test_agent_lifecycle.py`, `test_v3_surface_wiring.py`.
+- `ruff check`: 0 errors.
+- `mypy`: Success (no issues found in 73 source files).
+
 ## 2026-10-12 round3-STOP — museR STOP ORDER (subagent cancellation + tree state report)
 TASK: STOP-ORDER (museR, coordinator) — cancel the 2 parallel subagents (TASK-Q0, TASK-Q1), make zero further product-code edits, report exactly which files changed under me, append outcome here, go idle pending microticket dispatch.
 CHANGE (this entry only — docs): `handoffs/CODE1-HANDOFF.md` (this append). **No product-code edits after the STOP order.**

@@ -45,7 +45,7 @@ MODE_IMPLEMENTATIONS: dict[str, str] = {
 
 #: Model used by ``llm`` mode. Overridable per deployment; defaults to the same
 #: answer model the rest of the system uses so there is one obvious knob.
-DEFAULT_LLM_MODEL = "nvidia/nemotron-3.5-lightning:free"
+DEFAULT_LLM_MODEL = "google/gemma-4-26b-a4b-it:free"
 #: Env keys consulted for the llm-mode model name, in order.
 LLM_MODEL_ENV_KEYS: tuple[str, ...] = ("GRAPH_LLM_MODEL", "ANSWER_MODEL")
 

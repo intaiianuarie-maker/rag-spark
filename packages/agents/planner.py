@@ -55,8 +55,9 @@ MIN_MAX_TOKENS = 1000
 
 PLANNER_VERSION = "v1.0.0-2026-10-13"
 FREE_MODELS: frozenset[str] = frozenset({
-    "nvidia/nemotron-3.5-lightning:free",
     "google/gemma-4-26b-a4b-it:free",
+    "google/gemma-4-26b-a4b-it",
+    "nvidia/nemotron-3.5-lightning:free",
 })
 
 # ---------------------------------------------------------------------------
@@ -248,7 +249,7 @@ class StormPlanner:
         llm: LLMProvider,
         plan_store: PlanStore | None = None,
         *,
-        model_name: str = "nvidia/nemotron-3.5-lightning:free",
+        model_name: str = "google/gemma-4-26b-a4b-it:free",
         max_output_tokens: int = 4096,
     ) -> None:
         self.llm = llm

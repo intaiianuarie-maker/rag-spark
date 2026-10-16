@@ -48,8 +48,9 @@ def test_detect_communities_connected_components() -> None:
 
 
 @pytest.mark.unit
-async def test_summaries_bounded_and_provenance_complete(tmp_path) -> None:
+async def test_summaries_bounded_and_provenance_complete(tmp_path, monkeypatch) -> None:
     """Summaries bounded (all under cap) and provenance complete."""
+    monkeypatch.setenv("OPENROUTER_API_KEY", "")
     ws = "ws-test"
     db = tmp_path / "graph.db"
     store = SQLiteGraphStore(db)
@@ -133,4 +134,4 @@ def test_summary_model_is_free_and_bounded() -> None:
     assert "free" in SUMMARY_MODEL, "must be free model per standing rule"
     assert SUMMARY_MAX_TOKENS >= 1000, "reasoning models need max_tokens>=1000"
     assert SUMMARY_MAX_CHARS == 500
-    assert SUMMARY_MODEL == "nvidia/nemotron-3.5-lightning:free"
+    assert SUMMARY_MODEL == "google/gemma-4-26b-a4b-it:free"

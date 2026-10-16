@@ -778,7 +778,7 @@ class AgentRuntime:
             usage = Usage()
         if _existing_run is not None and RunState.is_terminal(state.status):
             return _existing_run
-        model = context.model_policy.default_model or "gpt-4o-mini"
+        model = context.model_policy.default_model or "google/gemma-4-26b-a4b-it:free"
         if _existing_run is not None:
             agent_run = _existing_run
         elif "_ckpt" in locals() and locals().get("_ckpt") is not None and locals()["_ckpt"].get("agent_run") is not None:  # noqa: E501

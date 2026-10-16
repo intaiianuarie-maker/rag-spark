@@ -52,7 +52,15 @@ def _tier(model: str, providers: tuple[str, ...], confidential_ok: bool = True) 
 
 @pytest.mark.parametrize(
     "role,slug",
-    [(ModelRole.EMBEDDING, EMB), (ModelRole.GENERATION, GEN), (ModelRole.RERANK, RER)],
+    [
+        (ModelRole.EMBEDDING, EMB),
+        (ModelRole.GENERATION, GEN),
+        (ModelRole.SEMANTIC_VERIFICATION, GEN),
+        (ModelRole.RERANK, RER),
+        (ModelRole.GRAPH, GEN),
+        (ModelRole.AGENT, GEN),
+        (ModelRole.WORKFLOW, GEN),
+    ],
 )
 def test_routes_admitted(role: ModelRole, slug: str) -> None:
     route = ADMITTED_MODELS[(role, slug)]
@@ -222,4 +230,25 @@ def test_unknown_model_policy_error() -> None:
 
 def test_unadmitted_role_policy_error() -> None:
     with pytest.raises(PolicyError):
-        resolve_inference_request(role=ModelRole.WORKFLOW, data_class=DataClass.PUBLIC)
+        resolve_inference_request(role=ModelRole.VISION, data_class=DataClass.PUBLIC)
+
+
+@pytest.mark.parametrize(
+    "role",
+    [ModelRole.GRAPH, ModelRole.AGENT, ModelRole.WORKFLOW],
+)
+def test_generative_roles_resolve_gemma_free_to_paid(role: ModelRole) -> None:
+    r = resolve_inference_request(role=role, data_class=DataClass.PUBLIC)
+    assert r.model == f"{GEN}:free"
+    assert r.provider == "google-ai-studio"
+    assert r.params["provider"]["only"] == ["google-ai-studio", "coreweave"]
+    assert r.params["allow_fallbacks"] is True
+
+    # Matching with :free slug explicitly
+    r2 = resolve_inference_request(role=role, model=f"{GEN}:free", data_class=DataClass.PUBLIC)
+    assert r2.model == f"{GEN}:free"
+
+    # Matching with base slug explicitly
+    r3 = resolve_inference_request(role=role, model=GEN, data_class=DataClass.PUBLIC)
+    assert r3.model == f"{GEN}:free"
+

@@ -138,31 +138,33 @@ MODEL_REGISTRY: dict[str, ModelProfile] = {
 # OpenRouter cloud model registry (zero-RAM cloud execution)
 OPENROUTER_MODEL_REGISTRY: dict[str, ModelProfile] = {
     # Free tier model on OpenRouter
+    "google/gemma-4-26b-a4b-it:free": ModelProfile(
+        name="google/gemma-4-26b-a4b-it:free",
+        capabilities=("chat", "reasoning", "multilingual"),
+        cost="low",
+        local=False,
+        languages=("multilingual",),
+    ),
+    # Approved paid model
+    "google/gemma-4-26b-a4b-it": ModelProfile(
+        name="google/gemma-4-26b-a4b-it",
+        capabilities=("chat", "reasoning", "multilingual"),
+        cost="low",
+        local=False,
+        languages=("multilingual",),
+    ),
+    # Free Nemotron reranker
+    "nvidia/llama-nemotron-rerank-vl-1b-v2:free": ModelProfile(
+        name="nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+        capabilities=("rerank", "multilingual"),
+        cost="low",
+        local=False,
+        languages=("multilingual",),
+    ),
+    # Legacy free reasoning model (non-China)
     "nvidia/nemotron-3.5-lightning:free": ModelProfile(
         name="nvidia/nemotron-3.5-lightning:free",
         capabilities=("chat", "reasoning"),
-        cost="low",
-        local=False,
-        languages=("multilingual",),
-    ),
-    # Ultra-cheap and reliable paid models ($0.03 - $0.15 / M tokens)
-    "qwen/qwen3.7-flash": ModelProfile(
-        name="qwen/qwen3.7-flash",
-        capabilities=("chat", "code", "multilingual"),
-        cost="low",
-        local=False,
-        languages=("multilingual",),
-    ),
-    "openai/gpt-4o-mini": ModelProfile(
-        name="openai/gpt-4o-mini",
-        capabilities=("chat", "multilingual", "reasoning"),
-        cost="low",
-        local=False,
-        languages=("multilingual",),
-    ),
-    "deepseek/deepseek-chat": ModelProfile(
-        name="deepseek/deepseek-chat",
-        capabilities=("chat", "code", "reasoning", "multilingual"),
         cost="low",
         local=False,
         languages=("multilingual",),

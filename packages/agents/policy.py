@@ -17,8 +17,6 @@ from pydantic import BaseModel, ConfigDict
 DEFAULT_ALLOWED_MODELS = (
     "google/gemma-4-26b-a4b-it:free",
     "google/gemma-4-26b-a4b-it",
-    "openai/gpt-4o-mini",
-    "gpt-4o-mini",
 )
 DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 

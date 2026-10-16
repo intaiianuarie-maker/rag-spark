@@ -65,7 +65,7 @@ class WorkflowEngine:
         if ntype == NodeType.LLM:
             if not self.llm:
                 return f"[Mock LLM Output for: {input_data}]"
-            model = node.config.get("model", "gpt-4o-mini")
+            model = node.config.get("model", "google/gemma-4-26b-a4b-it:free")
             system_prompt = node.config.get("system_prompt", "You are a workflow assistant.")
             user_content = str(input_data)
 

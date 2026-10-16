@@ -345,6 +345,66 @@ ADMITTED_MODELS: dict[tuple[ModelRole, str], AdmittedRoute] = {
             confidential_ok=False,
         ),
     ),
+    # Graph Extraction & Community Summarization (V2) ---------------------
+    (ModelRole.GRAPH, "google/gemma-4-26b-a4b-it"): admit_model_route(
+        ModelRoute(
+            model="google/gemma-4-26b-a4b-it",
+            role=ModelRole.GRAPH,
+            permitted_tiers=(Tier.FREE_FIRST,),
+            capability=Capability(modalities=(Modality.TEXT,), tools=False),
+            lineage=Lineage(base_model="gemma-4-26b-a4b-it", publisher="google"),
+        ),
+        free=_tier(
+            "google/gemma-4-26b-a4b-it:free",
+            ("google-ai-studio",),
+            confidential_ok=True,
+        ),
+        paid=_tier(
+            "google/gemma-4-26b-a4b-it",
+            ("coreweave",),
+            confidential_ok=True,
+        ),
+    ),
+    # Autonomous Agents & STORM Planning (V3) -----------------------------
+    (ModelRole.AGENT, "google/gemma-4-26b-a4b-it"): admit_model_route(
+        ModelRoute(
+            model="google/gemma-4-26b-a4b-it",
+            role=ModelRole.AGENT,
+            permitted_tiers=(Tier.FREE_FIRST,),
+            capability=Capability(modalities=(Modality.TEXT,), tools=True),
+            lineage=Lineage(base_model="gemma-4-26b-a4b-it", publisher="google"),
+        ),
+        free=_tier(
+            "google/gemma-4-26b-a4b-it:free",
+            ("google-ai-studio",),
+            confidential_ok=True,
+        ),
+        paid=_tier(
+            "google/gemma-4-26b-a4b-it",
+            ("coreweave",),
+            confidential_ok=True,
+        ),
+    ),
+    # Workflows (V4) -------------------------------------------------------
+    (ModelRole.WORKFLOW, "google/gemma-4-26b-a4b-it"): admit_model_route(
+        ModelRoute(
+            model="google/gemma-4-26b-a4b-it",
+            role=ModelRole.WORKFLOW,
+            permitted_tiers=(Tier.FREE_FIRST,),
+            capability=Capability(modalities=(Modality.TEXT,), tools=False),
+            lineage=Lineage(base_model="gemma-4-26b-a4b-it", publisher="google"),
+        ),
+        free=_tier(
+            "google/gemma-4-26b-a4b-it:free",
+            ("google-ai-studio",),
+            confidential_ok=True,
+        ),
+        paid=_tier(
+            "google/gemma-4-26b-a4b-it",
+            ("coreweave",),
+            confidential_ok=True,
+        ),
+    ),
 }
 
 
@@ -392,10 +452,19 @@ def _lookup_admitted(role: ModelRole, model: str | None) -> AdmittedRoute:
             if key[0] is role:
                 return route
         raise PolicyError(f"no admitted route for role={role}")
-    try:
+    if (role, model) in ADMITTED_MODELS:
         return ADMITTED_MODELS[(role, model)]
-    except KeyError as exc:
-        raise PolicyError(f"model {model!r} is not admitted for role={role}") from exc
+    if model.endswith(":free"):
+        base_model = model[:-5]
+        if (role, base_model) in ADMITTED_MODELS:
+            return ADMITTED_MODELS[(role, base_model)]
+    for (r, _m), route in ADMITTED_MODELS.items():
+        if r is role:
+            if (route.free and route.free.model == model) or (
+                route.paid and route.paid.model == model
+            ):
+                return route
+    raise PolicyError(f"model {model!r} is not admitted for role={role}")
 
 
 def _choose_tier(

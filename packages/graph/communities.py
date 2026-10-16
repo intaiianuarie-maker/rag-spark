@@ -24,7 +24,7 @@ SUMMARY_MAX_CHARS = 500
 SUMMARY_MAX_TOKENS = 200  # soft, model will be instructed
 
 # Free model for summarization (standing user rule)
-SUMMARY_MODEL = "nvidia/nemotron-3.5-lightning:free"
+SUMMARY_MODEL = "google/gemma-4-26b-a4b-it:free"
 SUMMARY_MAX_TOKENS = 1000  # reasoning models need >=1000 or empty
 
 
