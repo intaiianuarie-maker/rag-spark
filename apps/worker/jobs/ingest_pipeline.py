@@ -1042,7 +1042,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         _ws_cfg = load_workspace_config(str(job.workspace_id))
         if _ws_cfg is not None and bool(getattr(_ws_cfg, "sensitive", False)):
             raise IngestPipelineError(
-                "POLICY_BLOCKED",
+                "EMBED_UNAVAILABLE",
                 "sensitive workspace refuses cloud embedding egress",
                 retryable=False,
             )
