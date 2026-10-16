@@ -3945,3 +3945,179 @@ RISKS / LIMITATIONS — stated rather than papered over:
 - 319 completion tokens across 16 drafts (~20/draft) is very low; the model answered tersely. Real drafts with repair loops may produce more completion tokens, which the worst-case projection covers but the mean may understate.
 Spend this ticket: **$0.00089134** of $2.00. No judge, no scoring, no holdout id, no product code, no flag default touched.
 Next: IDLE — push mandatory.
+
+---
+
+## 2026-10-16 T-E01 — Phase 2 H1 closed-context reader A/B, metered (dev1)
+
+**TASK** — Execute Phase 2 H1: for each frozen id, context = its own gold
+distractor paragraphs (no index), ONE shared first draft per (question, repeat),
+then OFF-arm vs ON-arm through grounder + repair/fallback. Capture replayable
+per-attempt traces (fixes T-P01's TRACE-GAP). Score DETERMINISTIC parts only.
+
+**PRE-CALL ARITHMETIC (computed and gated BEFORE the first paid call; persisted to
+`evals/benchmark_v1/reports/h1_pre_call_arithmetic.json`)** — worst case charges the
+PAID rate on every unit, because free-first served 0/16 in preflight and 0/348 here:
+
+| line | units | worst cost |
+|---|---|---|
+| 348 shared first drafts | 348 | $0.03862 |
+| repairs, ≤1 per arm, 2 arms | ≤696 | $0.07723 |
+| **worst case total** | **≤1044** | **$0.115853** |
+| remaining cap at entry | | $1.999109 |
+| verdict | | **PROCEED** (5.8% of remaining cap) |
+
+**CHANGE**
+- `evals/benchmark_v1/runners/h1_corpus.py` — closed-context corpus assembly: the 150
+  frozen HotpotQA items with their 10 gold distractor paragraphs read straight from the
+  local distractor parquet, the 48 2wiki items from local doc files, the 25 certified
+  negatives from their snapshot files. No index, no retrieval.
+- `evals/benchmark_v1/runners/h1_run.py` — execution. Generates ONE shared draft per
+  (question, repeat), then forks: OFF = `ExtractiveGrounder` (threshold 1.0),
+  ON = `ParaphraseTolerantGrounder(0.85)`; per-arm accept / 1 repair / fallback.
+  `pre_call_arithmetic()` gates before any metered call; every call appends to the ledger.
+- `evals/benchmark_v1/runners/h1_score.py` — deterministic scoring only.
+- `evals/benchmark_v1/runners/h1_replay.py` — offline replay verification.
+- `evals/benchmark_v1/runners/test_official_scorer.py` — fixture test for the vendored
+  official scorer (run BEFORE scoring).
+- `evals/benchmark_v1/scripts/normalize_ledger.py` — ledger schema repair (below).
+- `evals/benchmark_v1/runs/h1/{traces,predictions}.jsonl`, `scorecard.json`,
+  `run_summary.json`, `replay_verification.json`, `trace_inventory_h1.json`.
+- `budget_ledger.csv` normalised; raw pre-repair copy kept at
+  `budget_ledger.raw_mixed_schema.csv`.
+
+**WHY** — Plan §3.2/§4.2/§12: isolate the grounder's decision logic from LLM variance by
+holding generation fixed and forking only at the verification step. The shared draft is
+the mechanism that makes the A/B a real A/B rather than two noisy generations compared.
+
+**REUSED**
+- `evals/vendor/hotpot_evaluate_v1.py` (official HotpotQA scorer, already vendored) — used
+  unmodified for `answer_em`/`answer_f1`; fixture-tested rather than reimplemented.
+- `packages/answer/verification.py::ExtractiveGrounder` — OFF arm, unmodified.
+- `packages/agents/verifier.py::ParaphraseTolerantGrounder` — ON arm, unmodified, still
+  default OFF (`AGENT_PARAPHRASE_GROUNDER`). **No flag default was changed.**
+- `packages/models/adapters/openrouter_provider.py` + its `GLOBAL_ACCOUNTING` — metered
+  legs and cost accounting, unmodified.
+
+**BUILT** — only the harness: corpus assembly, the shared-draft fork, trace capture, the
+budget gate, and the deterministic scorer. Reuse did not fit because no existing harness
+emits per-attempt passage text + claims + citations (that absence *was* TRACE-GAP).
+
+### RESULTS — deterministic only, n=348 attempts, 0 errors
+
+| metric | OFF arm | ON arm | Δ (ON−OFF) |
+|---|---|---|---|
+| answer EM | 0.0086 | 0.0201 | **+0.0115** |
+| answer F1 | 0.0702 | 0.2157 | **+0.1455** |
+| citation validity | 0.3132 | 0.8075 | **+0.4943** |
+| paragraph-level support F1 | 0.2284 | 0.7174 | **+0.4890** |
+| abstention rate (answerable) | 0.1839 | 0.1839 | 0.0000 |
+| answers with zero citations | 239 | 67 | −172 |
+
+Effect holds on **both** slices independently, so it is not carried by one set:
+
+| slice | attempts | F1 OFF→ON | citation validity OFF→ON |
+|---|---|---|---|
+| hotpotqa-distractor | 300 | 0.0685 → 0.2129 | 0.3267 → 0.8233 |
+| 2wikimultihopqa | 48 | 0.0809 → 0.2337 | 0.2292 → 0.7083 |
+
+**T-G01's hypothesised effect is confirmed on real data and it is large**: the ON arm
+roughly triples answer F1 and moves citation validity from ~1-in-3 to ~4-in-5, at **zero**
+difference in abstention and with generation held byte-identical. The mechanism is the
+predicted one — the OFF arm's exact-match grounder discards correct paraphrases, so 239
+attempts ended with an answer and no citation at all.
+
+**NOT SCORED — left EMPTY, never approximated**: `strict_gsr`,
+`supporting_fact_em/f1_official`, `joint_em/f1_official`. Strict GSR still needs the
+rubric; T-J01 has since frozen `rubric_v1.md` on dev2's 18-case calibration, but freezing
+it was not in my scope, so I did not score against it and did not retro-fit it.
+
+**SENTENCE-ID RULE — applied as NOT-EMITTED.** The pipeline emits `(title, paragraph)`,
+a real citation to a real paragraph, but **not** `(title, sentence_id)`. So the official
+supporting-fact and joint cells are marked NOT-EMITTED and I report **paragraph-level
+support F1** from the cited paragraph titles instead. Sentence hits were never inferred
+from paragraph overlap.
+
+### METRICS ACCOUNTING
+- **348 of 373 attempts ran. 25 did NOT — reported, not faked.** The ticket's
+  `150×2 + 48 + 25` assumes the 25 certified negatives are runnable. They are not, from
+  this box: `negative_manifest.json` carries **no question text**, and none of the 25 ids
+  appear in any local 2wiki split (validation/test/train-0/train-1 all **0/25 matched**), so
+  the questions are unrecoverable locally. Their snapshot FILES load fine (8 paragraphs
+  each) but a snapshot without its question cannot exercise abstention. **I did not
+  fabricate questions**, so abstention is scored only over the 348 answerable attempts.
+- Shared-draft identity: 348/348 attempts have exactly one draft hash; 348 distinct
+  (item, repeat) pairs; **0** pairs with more than one distinct draft hash; **0** arms with
+  a differing input claim count. Provenance: one `shared_draft_hash` per attempt, forked
+  post-generation (`fork_point: post_generation`).
+- Ledger: **618 metered H1 calls, 0 failed, every one a row in `budget_ledger.csv`** under
+  `run_tag=h1_reader_ab` (351 draft + 267 repair). 612 unique call sites; the 6 duplicates
+  are my own 3-attempt smoke test re-running the first 3 items ($0.00095379) — real double
+  spend, left in the ledger rather than swept up.
+
+### TRACE-GAP: CLOSED, WITH EVIDENCE
+`h1_replay.py` re-runs **both grounders offline** against the stored paragraph text and
+stored claims, with no model calls: 348/348 traces carry passage text, 564 arm records and
+1260 claims replayed, **0 score mismatches**. The vendored T-P01 screener
+(`judges/trace_inventory.py`, which I did **not** modify) now reports
+`REPLAYABLE: 1 — evals/benchmark_v1/runs/h1/trace_inventory_h1.json` and **exits 0** where
+it previously exited 1. Experiment A replay is now possible; the blocker is no longer
+capture, it is that nobody has run the replay itself.
+
+**VERIFY**
+- `ruff check evals/benchmark_v1/runners/ evals/benchmark_v1/scripts/normalize_ledger.py`
+  → `All checks passed!`
+- `MYPYPATH=packages mypy --ignore-missing-imports evals/benchmark_v1/runners/h1_corpus.py h1_score.py h1_replay.py` → clean, no output.
+- `PYTHONPATH=evals/vendor pytest -q evals/benchmark_v1/runners/test_official_scorer.py -p no:randomly` → `7 passed`.
+- `python evals/benchmark_v1/runners/h1_replay.py` → `replayable: true`, exit 0.
+- `python evals/benchmark_v1/judges/trace_inventory.py` → `REPLAYABLE: 1`, exit 0.
+
+One fixture assertion was **my error, not the scorer's**: I first asserted a wrong-title
+supporting fact scores 0.0; the official scorer correctly returns 0.5 (the exact match
+keeps its half of the credit). The test now pins the true 0.5.
+
+### SPEND
+| run tag | metered | ledgered |
+|---|---|---|
+| p02_preflight (T-P02) | 16 calls | $0.00089134 |
+| **h1_reader_ab (this ticket)** | **618 calls** | **$0.04992233** |
+| **total against the $2.00 cap** | | **$0.05081367** |
+
+This ticket: **$0.04992233** — 43% of its own $0.115853 worst case, **2.5% of the $2.00
+cap**. Free tier again served **0 of 348**; every call fell back to paid. No judge, no
+paid scoring, no holdout-id edit, no negative-manifest edit, no flag-default change, no
+corpus indexing, no commit, no deploy.
+
+**RISKS / FLAGS FOR THE COORDINATOR**
+1. **~$1.59 of dev2's H2 index spend is NOT in the ledger as metered calls.**
+   `evals/benchmark_v1/index/build_index.py` performs real
+   `provider.embed_documents(...)` calls at `call_site='h2-index'` for 66,635 paragraphs,
+   but the only `h2-index` rows in `budget_ledger.csv` are the 14 **projection** rows.
+   dev2's own handoff states `SPEND: 1.5926 (estimated)`. Real cap consumed is therefore
+   ≈ $0.0508 + ~$1.59 ≈ **$1.64 of $2.00**, leaving ≈ **$0.36**, not the $1.95 the
+   amendment implies. Not my lane; not touched; needs a ruling before more metered work.
+2. **I repaired `budget_ledger.csv`.** Three writers had appended three different schemas
+   (P02 20 cols, H1 15 cols, h2-index 4 cols) under one 20-column header, which made the
+   file invalid CSV and unsummable. `normalize_ledger.py` maps all three into one superset
+   schema and adds `row_type` so `cost_projection` rows can never be mistaken for spend.
+   648/648 rows preserved, values verbatim, extras kept in `detail`; the untouched original
+   is at `budget_ledger.raw_mixed_schema.csv`. A projection table does not belong in a spend
+   ledger at all — recommend the coordinator relocate it and require one writer per run tag.
+3. **My T-P02 row was factually wrong** where it said no HotpotQA parquet exists on disk. It
+   does: `/root/code/Super Rag/datasets/hotpotqa-full/raw/distractor/` (all 150 frozen ids
+   present, with gold paragraphs and `supporting_facts`). That is why T-E01 ran. Correcting
+   the record here so nobody repeats the "corpus unavailable" conclusion.
+4. **Absolute EM/F1 are not comparable to published HotpotQA numbers.** The draft prompt
+   elicits a sentence-form answer while gold answers are short spans, so EM is structurally
+   near zero and F1 is depressed. The OFF/ON contrast is valid (identical shared drafts);
+   the absolutes are harness-shaped. Recorded in `scorecard.json` as
+   `comparability_caveat`.
+5. **18.4% abstention on answerable items** in both arms — the reader refuses roughly 1 in
+   5 answerable questions *with the gold paragraphs in context*. That is a real over-refusal
+   finding, and it is identical across arms, so it is a reader-prompt issue, not a grounder one.
+6. Foreign WIP observed and left untouched: `apps/api/app/main.py`, `apps/worker/worker/main.py`,
+   untracked `evals/bfcl_*`, `evals/embedder_*`, `evals/test_*`,
+   `evals/benchmark_v1/scripts/preflight*.py` (mine, from T-P02), and many untracked
+   `handoffs/*` and `reviews/*` files.
+
+Next: IDLE — push mandatory.
