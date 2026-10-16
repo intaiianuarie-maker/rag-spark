@@ -4121,3 +4121,155 @@ corpus indexing, no commit, no deploy.
    `handoffs/*` and `reviews/*` files.
 
 Next: IDLE — push mandatory.
+
+---
+
+## 2026-10-16 T-G02 — strict-GSR scoring of H1, frozen rubric, PROVISIONAL (dev1)
+
+**TASK** — Populate `strict_gsr` per arm and by slice from the frozen rubric into a NEW
+`scorecard_gsr.json` (never rewriting `scorecard.json`), with the primary contrast plus a
+stratified question-clustered paired bootstrap, and a complete promotion-gate checklist.
+Rubric-rule scoring and validators only, **no paid judge**.
+
+**CHANGE** — `evals/benchmark_v1/runners/h1_gsr.py` (scorer);
+`evals/benchmark_v1/runs/h1/scorecard_gsr.json` (new artifact). Nothing else touched:
+`scorecard.json`, `predictions.jsonl` and `traces.jsonl` are read-only and unmodified;
+no manifest, no rubric edit, no flag change.
+
+**WHY** — T-E01 deliberately left the GSR cells EMPTY because the rubric was unfrozen. It
+froze on 2026-10-16 (7a01084), so the cells can now be filled by rule, deterministically
+and offline. Authority chain used: `PREREGISTRATION.md` 2026-10-16 amendment +
+`judges/freeze_proposal.md` + the `rubric_v1.md` body rules.
+
+**REUSED**
+- `judges/rubric_v1.md` — the frozen rules (§1 unit, §3 labels, §4 four-axis citations,
+  §5 four-gate pass rule, §6 refusals, §7 closed-book, §12 prohibitions). Read only.
+- `evals/vendor/hotpot_evaluate_v1.py::answer_em` — gate 1 reference-correctness, so gate 1
+  uses the official scorer rather than a homegrown match.
+- `h1_gsr` consumes the T-E01 traces and the frozen corpus loader; nothing re-generated.
+
+**BUILT** — only the rule-based adjudicator, because §12 forbids the obvious shortcut:
+**the ON arm IS the modified production grounder, so scoring with it would be judging the
+judge.** Both arms are therefore adjudicated by an independent lexical rule
+(content-token recall of the claim against its cited paragraph), never by either grounder.
+`supports_claim` at recall ≥ 0.80 and `points_to_claim` at ≥ 0.40 are fixed **a priori**
+from §4's distinction between "points at the claim" and "supports the claim", before any
+arm delta was inspected. `contradicted` is deliberately **not** derived — deterministic
+rules cannot certify incompatibility — and a contradiction surfaces as
+`unsupported`/`cannot_determine`, all of which fail §5 anyway, so pass/fail is unchanged.
+
+### PRIMARY CONTRAST — strict GSR, n=348, 0 errors, PROVISIONAL
+
+| | OFF arm | ON arm | Δ |
+|---|---|---|---|
+| **strict GSR** | **0.0086** (3/348) | **0.0201** (7/348) | **+0.0115** |
+| 95% CI (paired clustered bootstrap) | | | **[0.0000, 0.0259]** |
+| P(Δ ≤ 0) | | | **0.0515** |
+
+Bootstrap: 10,000 resamples, **seed 20261016**, stratified by (dataset, question_type),
+clustered by `question_id` (not by attempt — HotpotQA contributes R=2 repeats, so
+attempt-level resampling would understate their correlation and narrow the CI), and
+**paired**: both arms are scored on the same drawn clusters, preserving the shared-draft
+coupling. Two consecutive runs are **byte-identical**.
+
+**This contrast is NOT significant at 95%** — the CI's lower bound is exactly 0.0 and
+P(Δ≤0)=0.0515 sits on the boundary. I am reporting that as it is rather than rounding it
+into a win.
+
+### WHY THE HEADLINE IS NEAR ZERO — gate attribution
+
+Per-gate pass rates make the cause unambiguous:
+
+| §5 gate | OFF | ON |
+|---|---|---|
+| g1 core answer reference-correct | **0.0086** | **0.0201** |
+| g2 every proposition `supported` | 0.3132 | 0.8017 |
+| g3 citations resolve **and** support | 0.3132 | 0.8017 |
+| g4 attempt completed | 1.0000 | 1.0000 |
+| **conjunction = strict GSR** | **0.0086** | **0.0201** |
+
+Strict GSR is a four-gate conjunction, so it collapses onto gate 1 (0.0086/0.0201). Gate 1
+is near zero for a **harness-shape** reason, not a model reason: the T-E01 draft prompt
+elicits a sentence-form answer while HotpotQA gold answers are short spans, so official EM
+cannot fire. The ON arm's large grounding advantage at gates 2–3 is therefore **invisible
+in the headline metric**. Reported alongside, explicitly **not** as strict GSR:
+
+> **Grounding-contract diagnostic (gates 2+3 conjunction): 0.3132 → 0.8017, Δ = +0.4885.**
+
+Consistent with T-E01: my independent lexical adjudicator reproduced that run's citation
+validity **exactly** (OFF 0.3132, ON 0.8075) from a rule that never touches either
+grounder — an incidental but real check that the rule is behaving sensibly.
+
+**Threshold disclosure (against any suspicion of tuning):** the a-priori 0.80 threshold
+happens to be the **most favourable** point in the sensitivity grid — delta is 0.0115 at
+0.60/0.70/0.80 but falls to 0.0086 at 0.90 and **0.0029 at 1.00**. It was fixed before
+inspection and not tuned, but the headline should be read as the **upper end** of the grid,
+not a threshold-independent estimate. Full grid is in the artifact.
+
+### PROMOTION GATE CHECKLIST — 7 PASS / 2 FAIL / 1 NOT_RUN / 1 NOT_COMPUTABLE
+
+| status | gate |
+|---|---|
+| PASS | rubric frozen by dated pre-scoring amendment |
+| PASS | no rubric edits after unblinding (`rubric_v1.md` has exactly one commit ever: `dad81b9`, my own T-P01 proposal) |
+| PASS | scoring deterministic / no paid judge (0 calls, $0.00) |
+| PASS | traces replayable for offline adjudication (T-E01: 348/348, 0 mismatches) |
+| PASS | ≥2 distinct slices (hotpotqa 300 + 2wiki 48) |
+| **FAIL** | calibration uses real dev-set gold evidence **and reviewer rationales** |
+| **FAIL** | two independent blinded human reviewers (0 exist) |
+| NOT_COMPUTABLE | Cohen's κ ≥ 0.70 (needs two independent human passes) |
+| NOT_RUN | concordant screen, 30 seeded concordant traces |
+| NOT_RUN | certified-negative abstention denominator |
+
+**Everything is labelled PROVISIONAL**, exactly as the prereg's own LIMIT requires. Strict
+GSR is **not promotable** to a headline claim until the two FAILs and the κ gate clear.
+
+### RISKS / FLAGS FOR THE COORDINATOR
+
+1. **The 18-case calibration the freeze rests on is degenerate, and "0 disagreements" is
+   vacuous.** I checked all 18 cases in `worked_examples_calibration.jsonl`:
+   - every case's `claim_segments[0]` is the **QUESTION**, not the answer — but §1 makes
+     the final answer the unit of annotation, so the calibration never exercised the rubric's
+     own unit;
+   - all 18 carry the **identical constant** labels `["supported","supported"]`;
+   - all 18 carry `citation_check="pass"` with **no four-axis breakdown** (§4 never exercised);
+   - all 18 have `len(segments)=1` against `len(labels)=2` — a length mismatch in every case;
+   - the rationale is the single boilerplate string "Machine labels: supported titles match
+     Hotpot supporting facts." in every case.
+
+   With constant labels, zero disagreements is arithmetically guaranteed and carries no
+   information about rubric quality. I could **not** validate my rule-based scorer against
+   this set, so my thresholds rest on §4's wording alone. This does not block PROVISIONAL
+   reporting, but it should block any promotion.
+2. **CORRECTION to my own T-E01 row — I was wrong that the negatives were unrecoverable.**
+   T-E01 reported the 25 certified negatives as BLOCKED because the manifest has no question
+   text and 0/25 ids matched any local **2wiki** split. That search was too narrow: the
+   negative ids are **HotpotQA** ids. All **25/25** are present in
+   `datasets/hotpotqa-full/raw/distractor/validation-*.parquet` with usable questions, and in
+   25/25 cases `removed_supporting_titles` equals the gold supporting titles exactly, so the
+   certified snapshot genuinely lacks sufficient evidence per §6. **The slice was runnable
+   all along.** It still has not been run, so 348/373 stands and no abstention denominator
+   exists — but the blocker is a generation run, not missing data.
+3. **Concurrent edits in my directory.** `evals/benchmark_v1/runners/h1_negatives_run.py`
+   appeared at 09:34 during this ticket and was replaced by `h1_negatives_replay.py` while I
+   worked, and `runs/h1_negatives/` appeared and vanished. **Not mine; not touched.** Flagging
+   because another agent is writing into `runners/` while I lint and type-check it, and my
+   `ruff` runs are scoped to my own files to avoid reporting its errors as mine.
+4. `rubric_v1.md` still opens with **"PROPOSAL, NOT FROZEN / DO NOT FREEZE"** in its own body
+   even though the prereg and `freeze_proposal.md` record the freeze. The prereg is
+   authoritative and I scored against the body rules, but the stale header invites a future
+   agent to (correctly) refuse to score. A one-line header correction would fix it — I did not
+   make it, as rubric edits are forbidden to me.
+
+**VERIFY**
+- `ruff check` on all seven of my files → `All checks passed!`
+- `MYPYPATH=packages mypy --ignore-missing-imports evals/benchmark_v1/runners/h1_gsr.py` → clean, no output.
+- Two consecutive scorer runs → `scorecard_gsr.json` **byte-identical** (seed 20261016).
+- `git status --short evals/benchmark_v1/runs/h1/` → only `?? scorecard_gsr.json`; `scorecard.json`,
+  `traces.jsonl`, `predictions.jsonl` unmodified.
+- Denominators are **348 in both arms**, identical to unblinding. Nothing excluded,
+  quarantined or re-labelled after seeing the delta.
+
+**SPEND: $0.00 — 0 model calls, 0 metered legs.** No judge, no rescore, no regeneration.
+
+Next: IDLE — push mandatory.

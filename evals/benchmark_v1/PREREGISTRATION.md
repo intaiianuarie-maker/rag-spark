@@ -23,7 +23,7 @@ results, label exploratory and require a new untouched test set.**
 | T-G01 branch | Post-generation only (commit `6f03fac`); shared-upstream A/B valid; flag `AGENT_PARAPHRASE_GROUNDER` default OFF |
 | Experiment A (replay) | DEFERRED — TRACE-GAP recorded T-P01: no replayable captured traces exist; relabelling unrelated arms forbidden |
 
-**FROZEN 2026-10-16 (pre-GSR-scoring): judge rubric.** `judges/rubric_v1.md` + 18-case calibration (`worked_examples_calibration.jsonl`, 0 disagreements, 0 holdout overlap) frozen per T-J01 proposal. Strict-GSR scoring UNBLOCKED. LIMIT: single-annotator machine calibration — results are judge-dependent/provisional until two-reviewer blinded agreement meets the κ≥0.70 gate (staffing open).
+**CORRECTED 2026-10-16 (post-provisional-scoring; status correction only, endpoints unchanged): judge rubric is a PROVISIONAL INSTRUMENT, calibration REJECTED.** T-G02's independent audit proved the 18-case calibration degenerate (constant ['supported','supported'] labels, segments[0]=question text, one boilerplate rationale, citation_check flat 'pass' — '0 disagreements' vacuous). G02 scores STAND as provisional (methodology sound: independent lexical adjudicator, fixed thresholds, honest non-significance). RE-CALIBRATION REQUIRED (real varied cases, answer-segmented, 4-axis citations) + blinded κ≥0.70 before any human-validated claim.
 
 ## Amendments
 

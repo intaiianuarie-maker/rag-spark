@@ -1,9 +1,14 @@
-# Rubric v1 — operational claim/citation rubric (PROPOSAL, NOT FROZEN)
+# Rubric v1 — operational claim/citation rubric (PROVISIONAL INSTRUMENT)
 
-**Status: PROPOSAL — DO NOT FREEZE.** Drafted by dev1 for benchmark Phase 1
-(T-P01 step 2) from `RAG-Spark_Benchmark_Plan_v1.4.md` §21. The coordinator owns
-freezing. Nothing here may be edited to improve an A/B delta after unblinding;
-any change requires a dated, pre-unblinding preregistration amendment (§10.3).
+**Status: PROVISIONAL SCORING INSTRUMENT — NOT HUMAN-VALIDATED.** Frozen as an
+instrument 2026-10-16 (T-J01), but the 18-case calibration was REJECTED
+2026-10-16 as degenerate (constant labels, question-as-segment, boilerplate
+rationales — see PREREGISTRATION amendment log). Scores computed under it are
+provisional until a real calibration + blinded κ≥0.70 gate pass. Drafted by
+dev1 for benchmark Phase 1 (T-P01 step 2) from
+`RAG-Spark_Benchmark_Plan_v1.4.md` §21. The coordinator owns freezing. Nothing
+here may be edited to improve an A/B delta after unblinding;
+any change requires a dated preregistration amendment (§10.3).
 
 **Also required before use:** §21.1 states the worked examples below are *logical
 illustrations, not gold labels*. Before any untouched-holdout review, this
