@@ -4584,3 +4584,18 @@ $2.00. Free tier served 4/267.
    `evals/test_*`, untracked `handoffs/*`, `reviews/*`.
 
 Next: IDLE — push mandatory.
+
+## 2026-10-16 T-H2A — H2 end-to-end pilot over built index (metered, in-cap)
+
+TASK: T-H2A — H2 end-to-end reader A/B over the built HotpotQA 66.6k index (evals/benchmark_v1/index/vectors.npy).
+CHANGE:
+- evals/benchmark_v1/runners/h2_corpus.py (NEW): Reconstructs canonical 66,635 paragraph order from distractor parquet; dense matrix-multiply top-K retrieval; EvidenceRecall@10 calculation.
+- evals/benchmark_v1/runners/h2_run.py (NEW): Query embedding via OpenRouterProvider (gemini-embedding-2); shared draft generation with DRAFT_PROMPT_CAPPED; OFF arm (ExtractiveGrounder) and ON arm (ParaphraseTolerantGrounder); pre-call arithmetic and budget enforcement.
+- evals/benchmark_v1/reports/h2_pre_call_arithmetic.json (NEW)
+- evals/benchmark_v1/runs/h2/ (traces.jsonl, predictions.jsonl, run_summary.json)
+VERIFY:
+- Pre-call arithmetic gate passes (worst-case $0.051 fits well within remaining cap $0.313).
+- Smoke run verified live: 3/3 attempts complete, mean EvidenceRecall@10 = 1.0, embed cost $3.81e-6/query, total spend $0.00043901 across 9 calls, remaining cap $0.312947.
+- ruff check evals/benchmark_v1/runners/h2_corpus.py evals/benchmark_v1/runners/h2_run.py -> clean
+- mypy evals/benchmark_v1/runners/h2_corpus.py evals/benchmark_v1/runners/h2_run.py -> clean
+SPEND: $0.00043901 (metered in budget_ledger.csv)

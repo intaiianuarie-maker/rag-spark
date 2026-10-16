@@ -1216,3 +1216,12 @@ timestamp_utc,run_tag,row_type,call_site,model_requested,model_used,calls,free_c
 2026-10-16T08:10:42.778981+00:00,h1_rp01b,metered_call,h1_rp01b_5ac46bb05542991943173983_r1_repair_off,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1354,11,5.928e-05,1394,,
 2026-10-16T08:10:44.724610+00:00,h1_rp01b,metered_call,h1_rp01b_5a8141cc55429938b6142316_r1_draft,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1243,81,7.003e-05,1939,,
 2026-10-16T08:10:45.988114+00:00,h1_rp01b,metered_call,h1_rp01b_5a8141cc55429938b6142316_r1_repair_off,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1171,11,5.16e-05,1259,,
+2026-10-16T12:12:46.601534+00:00,h2_retrieval_ab,metered_call,h2_query_embed,google/gemini-embedding-2,google/gemini-embedding-2,1,0,1,0,0,18,0,3.96e-06,12251,,dim=3072
+2026-10-16T12:12:48.830002+00:00,h2_retrieval_ab,metered_call,h2_retrieval_ab_5ae48c4e55429913cc204498_r1_draft,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1491,74,7.89e-05,2065,,
+2026-10-16T12:12:51.230368+00:00,h2_retrieval_ab,metered_call,h2_retrieval_ab_5ae48c4e55429913cc204498_r1_repair_off,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1420,57,7.218e-05,2399,,
+2026-10-16T12:12:51.503533+00:00,h2_retrieval_ab,metered_call,h2_query_embed,google/gemini-embedding-2,google/gemini-embedding-2,1,0,1,0,0,22,0,4.84e-06,263,,dim=3072
+2026-10-16T12:12:53.752009+00:00,h2_retrieval_ab,metered_call,h2_retrieval_ab_5add596f5542990dbb2f7e4d_r1_draft,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1284,85,7.263e-05,2106,,
+2026-10-16T12:12:56.495960+00:00,h2_retrieval_ab,metered_call,h2_retrieval_ab_5add596f5542990dbb2f7e4d_r1_repair_off,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1217,95,7.201e-05,2742,,
+2026-10-16T12:12:56.944156+00:00,h2_retrieval_ab,metered_call,h2_query_embed,google/gemini-embedding-2,google/gemini-embedding-2,1,0,1,0,0,12,0,2.64e-06,444,,dim=3072
+2026-10-16T12:12:59.494776+00:00,h2_retrieval_ab,metered_call,h2_retrieval_ab_5aba6f3e55429955dce3ee21_r1_draft,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1392,70,7.387e-05,2288,,
+2026-10-16T12:13:00.465943+00:00,h2_retrieval_ab,metered_call,h2_retrieval_ab_5aba6f3e55429955dce3ee21_r1_repair_off,google/gemma-4-26b-a4b-it:free,google/gemma-4-26b-a4b-it,1,0,1,1,0,1323,11,5.798e-05,968,,

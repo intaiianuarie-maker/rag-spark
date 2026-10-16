@@ -1,0 +1,19 @@
+{
+  "run_tag": "h2_retrieval_ab",
+  "n_attempts": 3,
+  "k": 10,
+  "metered_calls": 9,
+  "free_calls": 0,
+  "paid_calls": 9,
+  "fallbacks": 6,
+  "failed_calls": 0,
+  "prompt_tokens": 8179,
+  "completion_tokens": 392,
+  "spent_usd": 0.00043901,
+  "remaining_cap_usd": 0.312947,
+  "retrieval": {
+    "mean_evidence_recall_at_10": 1.0,
+    "n_items": 3,
+    "mean_embed_cost_usd": 3.81e-06
+  }
+}

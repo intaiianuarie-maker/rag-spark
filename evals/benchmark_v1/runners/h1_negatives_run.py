@@ -1,12 +1,24 @@
-import asyncio,json,sys
+import asyncio
+import json
+import sys
 from pathlib import Path
+
 import pandas as pd
-ROOT=Path('/root/code/Super Rag/knowledge-os')
+
+ROOT = Path("/root/code/Super Rag/knowledge-os")
 sys.path.insert(0,str(ROOT/'packages'))
 sys.path.insert(0,str(ROOT/'apps/api'))
 sys.path.insert(0,str(ROOT/'evals/benchmark_v1/runners'))
-from h1_run import Harness, DRAFT_PROMPT
-dataset=Path('/root/code/Super Rag')/'datasets'/'hotpotqa-full'/'raw'/'distractor'/'validation-00000-of-00001.parquet'
+from h1_run import DRAFT_PROMPT, Harness  # noqa: E402
+
+dataset = (
+    Path("/root/code/Super Rag")
+    / "datasets"
+    / "hotpotqa-full"
+    / "raw"
+    / "distractor"
+    / "validation-00000-of-00001.parquet"
+)
 df=pd.read_parquet(dataset).set_index('id')
 neg=json.load(open(ROOT/'evals/benchmark_v1/datasets/negative_manifest.json'))
 OUT=ROOT/'evals/benchmark_v1/runs/h1_negatives'
