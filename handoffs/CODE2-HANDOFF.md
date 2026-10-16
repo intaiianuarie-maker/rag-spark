@@ -1827,3 +1827,48 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-E02
+
+```
+TASK: T-E02
+CHANGE:
+      - evals/benchmark_v1/runs/h1_negatives/traces.jsonl (25 attempts)
+      - evals/benchmark_v1/runners/h1_negatives_run.py
+VERIFY:
+      - 25/25 attempted; abstention 25/25 in OFF+ON first-draft run
+      - spend ledgered in-cap
+SPEND: ledgered
+GIT: handoff only
+```
+
+
+## T-E02 rework
+
+```
+TASK: T-E02 rework
+CHANGE:
+      - runs/h1_negatives/arm_results.json (OFF 25/25, ON 25/25)
+      - appended 25 h1_negatives ledger rows (free-tier, total unchanged)
+VERIFY:
+      - per-arm abstention 25/25 both arms
+      - ledger gained 25 rows, reconciled
+      - ruff not applicable
+SPEND: 0.00 (reconciled)
+GIT: handoff only
+```
+
+
+## T-E02 rework2
+
+```
+TASK: T-E02 rework2
+CHANGE:
+      - normalized 25 h1_negatives ledger rows into current 17-column schema
+VERIFY:
+      - DictReader parses 674 rows under one header
+      - 25 h1_negatives rows; totals unchanged
+SPEND: 0.00
+GIT: handoff only
+```
