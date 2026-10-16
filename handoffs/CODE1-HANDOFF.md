@@ -4621,3 +4621,33 @@ VERIFY (exact, re-run after the final edit):
 - `/root/ko-venv/bin/ruff format --check packages/models/catalog.py tests/unit/test_model_provider_policy.py packages/models/policy.py` -> `3 files already formatted`
 
 RISKS: `/root/ko-venv` is Python 3.14.4 (pyenv system venv) and is the interpreter used for the T-OR-01 verification commands; `.venv-test` is NOT used here. The pre-existing `tests/unit/test_rerank_sidecar.py` collection timeout (it imports `apps/rerank` app -> `import torch`, not installed) is environmental and unrelated to this module; this file is deliberately not pulled into that path. The `herdr` completion ping (w5:p4) is emitted only after this row is appended and the three green checks above are confirmed by re-run.
+
+## 2026-10-16 T-OR-02 — Shared OpenRouter transport, retry policy, durable budget ledger
+
+TASK: T-OR-02 — Implement shared OpenRouter transport, retry policy with error taxonomy, and durable cost/budget ledger (`packages/models/adapters/openrouter_transport.py`, `packages/models/adapters/openrouter_provider.py`).
+
+CHANGE:
+- `packages/models/adapters/openrouter_transport.py` (NEW):
+  - Error taxonomy: `TransportError`, `RetryableError` (502, 503, 504, 429, network timeouts), `NonRetryableError` (400, 404, bad schema), `AuthenticationError` (401, 403; never triggers paid fallback), `RefusalError` (model/provider refusal; never triggers paid fallback), `BudgetExceededError` (402, balance/quota exhaustion).
+  - `AttemptRecord`: per-call attempt metrics (model_requested, model_used, call_site, status_code, latency_ms, tokens, cost_usd, error, detail, run_tag).
+  - `DurableBudgetLedger`: thread-safe CSV writer for canonical 17-column budget ledger (`evals/benchmark_v1/reports/budget_ledger.csv`).
+  - `OpenRouterTransport`: async (`apost_json`) and sync (`post_json`) request methods with exponential backoff and bounded retries; status code classification; headers building (`HTTP-Referer`, `X-Title`, `authorization`).
+- `packages/models/adapters/openrouter_provider.py` (M):
+  - Imported and exposed `OpenRouterTransport` and error taxonomy.
+  - Initialized `self.transport` in `OpenRouterProvider.__init__`.
+- `tests/unit/test_openrouter_transport.py` (NEW):
+  - 8 test cases verifying error taxonomy hierarchy, status code classification, fast non-retry of auth/refusal failures, bounded retries on 503/504, durable budget ledger 17-column formatting, and sync execution.
+
+WHY: Controlling spec requires central transport abstraction preventing refusal/auth errors from escalating to paid tiers, with bounded retries and persistent, audit-safe spend tracking in canonical 17-column budget ledger format.
+
+REUSED: `packages/models/policy.py`, `packages/models/catalog.py`, `httpx`. No new external dependencies.
+
+BUILT: `packages/models/adapters/openrouter_transport.py`, `tests/unit/test_openrouter_transport.py`.
+
+VERIFY:
+- `/root/ko-venv/bin/pytest tests/unit/test_openrouter_transport.py -q` -> `8 passed in 0.48s`
+- `/root/ko-venv/bin/pytest tests/unit/test_openrouter_provider.py tests/unit/test_openrouter_transport.py -q` -> `19 passed in 2.71s`
+- `/root/ko-venv/bin/ruff check packages/models/adapters/ tests/unit/test_openrouter_transport.py` -> `All checks passed!`
+- `/root/ko-venv/bin/mypy packages/models/adapters/ tests/unit/test_openrouter_transport.py` -> `Success: no issues found in 4 source files`
+
+RISKS: None. Existing `OpenRouterProvider` interface remains completely backward-compatible with 11/11 tests passing unmodified.

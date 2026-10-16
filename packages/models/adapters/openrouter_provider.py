@@ -35,6 +35,9 @@ from ..interfaces import (
     LLMProvider,
 )
 from ..router_config import LOCAL_ONLY_SENTINEL, is_local_endpoint
+from .openrouter_transport import (
+    OpenRouterTransport,
+)
 
 # ---------------------------------------------------------------------------
 # Constants & Model Pins
@@ -136,9 +139,7 @@ def _is_paid_gemini_generation(model: str) -> bool:
 def _guard_generation_model(model: str) -> None:
     lowered = model.lower().strip()
     if lowered == DEFAULT_EMBEDDING_MODEL.lower() or "embedding" in lowered:
-        raise ProviderPolicyError(
-            f"Embedding model '{model}' cannot be used for text generation"
-        )
+        raise ProviderPolicyError(f"Embedding model '{model}' cannot be used for text generation")
     if _is_paid_gemini_generation(model):
         raise ProviderPolicyError(
             f"Paid gemini-generation is locked by policy; generators must use gemma free-first "
@@ -426,6 +427,16 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
 
         self._sync_client = sync_client
         self._owns_sync_client = sync_client is None
+
+        self.transport = OpenRouterTransport(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout,
+            max_retries=self.max_attempts,
+            backoff_base_seconds=self.backoff_base_seconds,
+            client=self._client,
+            sync_client=self._sync_client,
+        )
 
     @property
     def stats(self) -> CallStats:
