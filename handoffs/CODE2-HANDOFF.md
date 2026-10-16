@@ -2054,3 +2054,23 @@ raises carry context (research_pipeline.py:141-143). Fail-louder satisfied.
 VERIFY: class + raise-site grep (above); no generic veto path found
 SPEND: 0.00
 ```
+
+
+## T-F02
+
+```
+TASK: T-F02
+CHANGE:
+      - tests/unit/test_f02_entailment.py (8 adversarial cases)
+      - rescue-leg design in-row: trigger = claim abstained AND entailment
+        scored in [0.5, threshold) on a SINGLE supporting sentence; input =
+        (claim, sentence); audit = sample 100 rescue decisions/query, log
+        precision + cost; cost bound = 1 call/claim, hard cap 20 calls/query,
+        est < $0.001/query
+VERIFY:
+      - 2 passed / 8 cases (all SAFE: no HIGH off denial/attribution/conditional/qualified)
+      - plain assertion still grounded
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
