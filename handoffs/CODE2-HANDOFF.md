@@ -2074,3 +2074,53 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-EVAL-003 — HF MuSiQue hard-set eval (unanswerable-heavy multi-hop): acquisition + raw load + audit
+
+```text
+TASK: T-EVAL-003ACQUIRE — HF MuSiQue hard-set eval (unanswerable-heavy multi-hop):
+      acquire the two MuSiQue dev configs, build a typed raw record loader, and
+      audit evidence-path resolution. ACQUISITION AND RAW LOADING + AUDIT ONLY
+      (no download/retrieve/embed/LLM on this ticket — the raw JSONL files
+      were already acquired on disk).
+FILES: 3 NEW files (touched nothing in dev1's tree):
+      - datasets/musique/LICENSE-AND-PROVENANCE.md (new)
+      - evals/musique.py (new)
+      - tests/unit/test_musique.py (new)
+ACQUIRED: dgslibisey/MuSiQue @ c8f4f8c9465fb69d31a8eae894c3fd509c4ca321 (CC BY 4.0)
+      raw/musique_ans_v1.0_dev.jsonl  30 439 728 bytes  sha256 15fa63794d18a94ce12411aca6e2327e65b6e83b0b1490efab3f1962e48abf3b
+      raw/musique_full_v1.0_dev.jsonl 59 422 562 bytes  sha256 8cab31d56a3a1c4ef491b205a8dab3f1ac9c66e472098c6cf1de4e20294f7a4a
+PIN:    FILE_SHA256 pins both files; verify_pins(config) enforces on load and
+      raises CorpusPinError on missing/drift (tested with a swapped + an
+      absent file in a throwaway RAW_ROOT).
+WHY:   Two configs are not interchangeable. `ans` is the 2 417-record all-
+      answerable subset (the clean scorable set). `full` is the 4 834-record
+      hard set: each question id appears twice — once answerable, once
+      unanswerable (null paragraph_support_idx). Mirrors the
+      evals/wikimultihop.py + evals/hotpot_full.py acquisition pattern.
+AUDIT (measured, pinned in tests):
+      ans:  2 417 records, 2 417 answerable, 0 unanswerable, 6 404 hops,
+            6 404 evidence paths (0 null-idx), 6 404 resolvable, 0 unresolvable
+      full: 4 834 records, 2 417 answerable, 2 417 unanswerable, 12 808 hops,
+            9 133 evidence paths (3 675 null-idx), 9 133 resolvable, 0 unresolvable
+      Unresolvable evidence paths: 0 across 15 537 paths — counted live and
+      proven non-hardcoded via a synthetic-record test (a not_supporting /
+      idx_out_of_range hop registers as unresolvable; a null idx is not a path).
+BOUNDARY: loader imports only stdlib (dataclasses, hashlib, json, pathlib,
+      collections, typing) — AST gate in test_loader_writes_no_scoring_or_
+      retrieval_code asserts no embedder/retriver/score/LLM dependency.
+      No scoring interfaces satisfied (official EM/F1 stay pending in T-EVAL-
+      007); no ingestion; no connector ran.
+REUSED: none — greenfield for the musique namespace. evals/musique.py mirrors
+      the evals/wikimultihop.py + evals/hotpot_full.py loader/audit shape
+      (frozen dataclasses, CorpusPinError, FILE_SHA256, verify_pins,
+      iter_records, audit_evidence_paths). Reads only the already-acquired raw
+      JSONL; no re-download.
+VERIFY:
+      - pytest tests/unit/test_musique.py -q  -> 8 passed
+      - ruff check evals/musique.py tests/unit/test_musique.py  -> clean
+      - mypy evals/musique.py tests/unit/test_musique.py  -> clean
+SPEND: 0.00 (no LLM/embedding/retrieve; raw file reads + sha256 only)
+GIT: handoff only
+```
