@@ -1889,3 +1889,31 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-I08
+
+```
+TASK: T-I08
+CHANGE:
+      - VectorStoreDimensionMismatch typed error in qdrant_store.py ensure_collection mismatch branch
+VERIFY:
+      - ruff + mypy clean
+      - 3072-d ingest uses embed provider dimension; wrong-dim write fails typed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I08 rework
+
+```
+TASK: T-I08 rework
+CHANGE:
+      - tests/unit/test_i08_dim_mismatch.py proof test (typed error + attrs)
+VERIFY:
+      - pytest test_i08_dim_mismatch: 1 passed
+      - mismatch raises VectorStoreDimensionMismatch with expected/actual/collection
+SPEND: 0.00
+GIT: handoff only
+```

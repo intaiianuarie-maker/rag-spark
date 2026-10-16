@@ -128,6 +128,17 @@ class VectorStoreError(RuntimeError):
     """Typed error for Qdrant failures; wraps vendor exceptions with cause."""
 
 
+class VectorStoreDimensionMismatch(VectorStoreError):
+    """Typed error when collection dimension does not match write/ensure dimension."""
+
+    def __init__(self, message: str, *, expected: int, actual: int, collection: str = "") -> None:
+        super().__init__(message)
+        self.reason = REJECT_DIMENSION
+        self.expected = expected
+        self.actual = actual
+        self.collection = collection
+
+
 #: Rejection reasons emitted by the storage boundary (T-V1-015). Stable strings:
 #: callers/tests key off them, not off message text.
 REJECT_DIMENSION = "dimension_mismatch"
@@ -586,8 +597,9 @@ class QdrantVectorStore(VectorStore):
                     else:
                         vec_size = vectors.size  # type: ignore[union-attr]
                     if vec_size != dimension:
-                        raise VectorStoreError(
-                            f"collection {coll} dimension mismatch: {vec_size} != {dimension}"
+                        raise VectorStoreDimensionMismatch(
+                            f"collection {coll} dimension mismatch: {vec_size} != {dimension}",
+                            expected=dimension, actual=int(vec_size), collection=coll,
                         )
                 except (AttributeError, KeyError, TypeError):
                     pass
