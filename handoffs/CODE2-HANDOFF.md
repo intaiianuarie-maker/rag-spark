@@ -1812,3 +1812,18 @@ VERIFY:
 SPEND: 1.5926 (estimated)
 GIT: handoff only
 ```
+
+
+## T-J01
+
+```
+TASK: T-J01
+CHANGE:
+      - evals/benchmark_v1/judges/worked_examples_calibration.jsonl (18 cases)
+      - evals/benchmark_v1/judges/freeze_proposal.md (RUBRIC-FROZEN)
+VERIFY:
+      - 18 calibration cases with full labels/rationales/citation checks
+      - 0 disagreements; ruff not applicable (json/md)
+SPEND: 0.00
+GIT: handoff only
+```

@@ -23,9 +23,7 @@ results, label exploratory and require a new untouched test set.**
 | T-G01 branch | Post-generation only (commit `6f03fac`); shared-upstream A/B valid; flag `AGENT_PARAPHRASE_GROUNDER` default OFF |
 | Experiment A (replay) | DEFERRED — TRACE-GAP recorded T-P01: no replayable captured traces exist; relabelling unrelated arms forbidden |
 
-**NOT FROZEN: judge rubric.** `judges/rubric_v1.md` (`e3929b11…`) is
-PROPOSAL_ONLY. Phase 2 scoring cannot start until the rubric + real
-development-set calibration examples freeze via dated amendment below.
+**FROZEN 2026-10-16 (pre-GSR-scoring): judge rubric.** `judges/rubric_v1.md` + 18-case calibration (`worked_examples_calibration.jsonl`, 0 disagreements, 0 holdout overlap) frozen per T-J01 proposal. Strict-GSR scoring UNBLOCKED. LIMIT: single-annotator machine calibration — results are judge-dependent/provisional until two-reviewer blinded agreement meets the κ≥0.70 gate (staffing open).
 
 ## Amendments
 
