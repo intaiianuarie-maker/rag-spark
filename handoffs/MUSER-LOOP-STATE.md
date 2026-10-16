@@ -1114,3 +1114,40 @@ RESUME HERE after context loss. Verified at write time:
 - Board: 278 tickets; IN-PROGRESS: T-I01 (dev2, parked tail), T-G01 (dev1), T-B00 (dev2, disjoint files).
 - Pre-verified: distractor validation 7405 rows exact; T-G01 unimplemented; benchmark_v1 absent (as planned).
 - Next: preregistration freeze after B00; Phase 1 replay ($0) after G01; Phase 2 live only on preflight math + re-authorization.
+
+## 2026-10-16 — EVAL & BENCHMARK PROGRESS (coordinator cycles, T-EVAL-008 & T-EVAL-004 LANDED)
+- T-EVAL-008 (dev2): committed 2eaf65b. Head-to-head embedder separation test (gemini-embedding-2 3072-d vs bge-m3 1024-d). 41/41 tests pass; fixed int-vs-float typing in embedder_clients.py:317; ruff/mypy clean. Results in evals/t-eval-008-results.json.
+- T-EVAL-004 (dev1): committed 9c019e9. Multilingual retrieval eval (RO/PT/EN) on scratch collection eval_scratch_teval004_01 with gemma-4-26b-a4b-it generator and gemini-embedding-2. 6/6 tests pass in evals/test_live_v1_gate.py; ruff/mypy clean; acceptance flows 5/5 PASS; spend bash.0022872 across 33 calls. assert_knowledge__serving_not_accessed=True. Results in evals/t004_multilingual.results.json.
+- Dispatched: dev2 T-EVAL-003 (HF MuSiQue hard-set raw loader + evidence audit, bash spend); dev1 T-H2A (H2 pilot over built 66.6k index, metered, in-cap).
+- Board: 275 DONE, 8 CANCELLED, 5 GATED, 2 IN-PROGRESS (T-EVAL-003, T-H2A).
+- Active files updated in active-ticket-files.json; assignments updated in agent-assignments.json.
+
+## 2026-10-16 — CYCLE COMPLETE (T-EVAL-003 & T-H2A LANDED, QUEUE=0)
+- T-EVAL-003 (dev2): committed 1e87501. HF MuSiQue hard-set raw loader + evidence audit over raw/musique_ans_v1.0_dev.jsonl (2,417 items) and raw/musique_full_v1.0_dev.jsonl (4,834 items). 8/8 unit tests pass in tests/unit/test_musique.py; 0 unresolvable evidence paths across 15,537 paths; provenance doc in datasets/musique/LICENSE-AND-PROVENANCE.md; ruff/mypy clean; spend $0.00.
+- T-H2A (dev1): committed c3281f5. H2 end-to-end reader A/B runner over built 66.6k HotpotQA index. Pre-call arithmetic passed (worst-case $0.051 against $0.313 cap); live smoke run verified (3/3 attempts, mean EvidenceRecall@10=1.0, embed cost $3.81e-6/query, spend $0.00043901, remaining cap $0.312947); ruff/mypy clean.
+- BOARD: 290 tickets = 277 DONE (95.5%) + 8 CANCELLED + 5 GATED + 0 QUEUED + 0 IN-PROGRESS.
+- GATED REMAINING (5):
+  1. T-V2-011: V2 turn-on procedure (GRAPH_MODE flip with preconditions + rollback)
+  2. T-EVAL-005: V4 workflow live-scenario suite post-deploy (validator/executor/W3-W7 end-to-end)
+  3. T-K07c: Design: runtime state seam (refactor-scale)
+  4. T-F08: Filter pushdown completion (disclosure holds)
+  5. T-SMOKE-FORMATS: Ingest 5 file types + retrieve (user smoke)
+- Dev1: IDLE (w5:pG). Dev2: IDLE (w5:p6). Queue empty. Loop is at a clean, prompt-ready resting state awaiting user gate release.
+
+## 2026-10-16 — TESSERACT OCR INTEGRATION COMPLETE (RO, EN, PT)
+- Installed system binaries and language packs: `tesseract-ocr`, `tesseract-ocr-eng`, `tesseract-ocr-ron`, `tesseract-ocr-por` (Tesseract 5.5.0).
+- Updated worker environment: `apps/worker/Dockerfile` and `apps/worker/requirements.txt` (`pypdfium2==5.14.0`, `pillow==12.3.0`).
+- OCR contracts implemented in `packages/ingestion/interfaces.py`: `PageClassification`, `OcrWord`, `OcrPageRequest`, `OcrPageResult`, `ExtractionReport`.
+- Built adapters:
+  - `packages/ingestion/adapters/pdfium_render.py`: 300 DPI page rasterization and pixel-to-PDF-point coordinate transforms.
+  - `packages/ingestion/adapters/tesseract.py`: Subprocess execution with thread caps (`OMP_THREAD_LIMIT=2`), TSV parsing, word geometry, confidence calculation, and `DocumentElement` grouping.
+  - `packages/ingestion/ocr.py`: Page classification (`native_text`, `ocr_required`, `blank`, `uncertain`), conditional routing, native + OCR reading-order merging, and structured `ExtractionReport`.
+- Pipeline & Chunker integration:
+  - `packages/ingestion/chunk.py`: Enforced page boundary isolation for OCR elements; propagated extraction provenance to chunks.
+  - `apps/worker/jobs/ingest_pipeline.py`: Wired conditional OCR before native parse; honest parking for empty scans (`needs_review`), disclosure of unreadable pages, and `READY` publication with full provenance for successful OCR extractions.
+- Test verification:
+  - `tests/unit/test_ocr_adapters.py`: 9/9 unit tests pass (PDFium rendering, budget guards, coordinate inversion, TSV parsing, diacritic preservation for Romanian `ă î ș ț` and Portuguese `ã õ ç é`, page classification, synthetic mixed-scan OCR, chunk page isolation, empty scan handling).
+  - Regression: 73/73 unit tests pass across `test_ocr_adapters`, `test_ingestion_parsers`, `test_ingestion_chunking`, `test_format_matrix`, `test_ingest_pipeline`.
+  - Type checking & linting: `ruff check` and `mypy` clean across all 37 source files.
+- Recorded architecture & licensing decisions in `rag-fork-solution/DECISIONS.md` (T-OCR-001) and `rag-fork-solution/REUSE_MAP.md`.
+
