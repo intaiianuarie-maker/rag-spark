@@ -1971,3 +1971,26 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-F07
+
+```
+TASK: T-F07
+STATUS: PARKED (no identifiable per-mode graph routing file under allowed scope)
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-F07 — per-mode graph routing (coordinator verify-and-close)
+```
+TASK: T-F07 (dev2 PARKED: "no identifiable file" — premise wrong)
+FINDING: seam exists: packages/graph/dispatch.py (normalize/describe/create,
+EXTRACTION_MODES, MODE_IMPLEMENTATIONS, no-silent-fallback) + factory/consumer
+VERIFY:
+      - tests/unit/test_graph_extraction_modes.py 51 passed (coordinator re-run)
+      - routing-correctness half CLOSED by R12/R12b + this pin
+      - evidence-driven per-query mode choice is enhancement on a parked
+        subsystem (GRAPH_MODE off; turn-on T-V2-011 GATED) — folded there
+SPEND: 0.00
+```
