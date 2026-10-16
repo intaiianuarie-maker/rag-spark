@@ -139,9 +139,12 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
         import os
 
         if os.environ.get("RERANK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
-            from rerank.openrouter_provider import CohereRerankProvider, OpenRouterReranker
+            from rerank.openrouter_provider import (
+                NemotronRerankProvider,
+                OpenRouterReranker,
+            )
 
-            reranker = OpenRouterReranker(CohereRerankProvider(sensitive=False))
+            reranker = OpenRouterReranker(NemotronRerankProvider(sensitive=False))
             rerank_enabled = True
     return HybridRetrievalOrchestrator(
         dense=dense,

@@ -2180,3 +2180,53 @@ VERIFY:
 SPEND: 0.00 (no LLM/embedding/retrieve; pure deterministic string+offset checks)
 GIT: handoff only
 ```
+
+## T-OR-04 — Nemotron-only Async Reranker Adapter & Factory Integration
+
+```text
+TASK: T-OR-04
+CHANGE:
+       - MOD packages/rerank/openrouter_provider.py: replaced Cohere rerank with
+         NemotronRerankProvider (model slug nvidia/llama-nemotron-rerank-vl-1b-v2:free;
+         base_url https://openrouter.ai/api/v1/rerank). Removed Cohere provider/fallback
+         from the active path; CohereRerankProvider is now a deprecated alias of
+         NemotronRerankProvider (retained for legacy imports/seam tests). Sensitive/local-
+         only workspaces are refused at construction with RerankAvailabilityError before
+         any network call. Added async rerank via httpx.AsyncClient (or injectable
+         async_transport). Validate returned indices are in-range unique integers and
+         scores are finite floats; min-max normalize scores to [0,1], sort by relevance
+         desc, top_k truncation; preserve chunk objects + metadata (deep copy) while
+         updating score. OpenRouterReranker now async-delegates to provider.arerank.
+       - MOD packages/rerank/__init__.py: exports NemotronRerankProvider + constants;
+         CohereRerankProvider retained as a deprecated alias.
+       - MOD packages/answer/factory.py: constructs NemotronRerankProvider behind
+         OpenRouterReranker when RERANK_ENABLED=true and workspace is not sensitive.
+       - NEW tests/unit/test_nemotron_reranker.py (8 tests): correct ranking + object/meta
+         preservation, top_k truncation, score normalization, sensitive refusal,
+         HTTP 429 -> RerankAvailabilityError, malformed response -> RerankAvailabilityError
+         (non-integer / non-finite / out-of-range / duplicate index, missing results key),
+         empty-results fall-back, zero Cohere calls (Nemotron slug only; alias == provider).
+       - MOD tests/unit/test_t_a22_adapt.py: CohereRerankProvider -> NemotronRerankProvider
+         (sensitive refusal, missing-key refusal, 429 availability failure, offline fields,
+         top_k truncation, async arerank).
+WHY:    Cohere rerank is discontinued as the OpenRouter rerank path; switch to NVIDIA
+        free Nemotron rerank, keep it local-friendly (sensitive refusal), and provide an
+        async transport for the orchestrator reranker contract.
+REUSED: packages/rerank/__init__.py (exports), retrieval.interfaces.{Reranker ABC,
+        RetrievedItem}, hybrid orchestrator reranker seam (unchanged).
+ALLOWED FILES self-check: packages/rerank/openrouter_provider.py, packages/rerank/__init__.py,
+        packages/answer/factory.py, tests/unit/test_nemotron_reranker.py,
+        tests/unit/test_t_a22_adapt.py, handoffs/CODE2-HANDOFF.md.
+VERIFY:
+       - pytest tests/unit/test_nemotron_reranker.py tests/unit/test_t_a22_adapt.py -q
+         -> 19 passed.
+       - pytest tests/unit/test_t_a22_seam_flag.py tests/unit/test_rerank_cut.py -q
+         -> 8 passed (no regression; legacy alias + flag still resolve).
+       - ruff check packages/rerank/ packages/answer/factory.py tests/unit/test_nemotron_reranker.py
+         tests/unit/test_t_a22_adapt.py -> All checks passed.
+       - mypy packages/rerank/ packages/answer/factory.py tests/unit/test_nemotron_reranker.py
+         tests/unit/test_t_a22_adapt.py -> Success: no issues found in 5 source files.
+SPEND: 0.00
+GIT: handoff only
+```
+
