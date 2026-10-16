@@ -2124,3 +2124,59 @@ VERIFY:
 SPEND: 0.00 (no LLM/embedding/retrieve; raw file reads + sha256 only)
 GIT: handoff only
 ```
+
+
+## T-OR-05 — Stage 11 Server-Side Deterministic Citation Integrity Validator
+
+```text
+TASK: T-OR-05 — Stage 11 server-side deterministic citation integrity validator.
+      Validate candidate answer/claims+citation provenance against canonical
+      hydrated evidence (CanonicalChunk / ChunkLookup / RetrievedItem) using NO
+      LLM and NO remote network calls. Typed reasons for every failure; propagate
+      parse/OCR disclosure to affected citations.
+CHANGE: 3 files (2 NEW, 1 additive):
+      NEW packages/answer/citation_integrity.py (~470 lines, typed + ruff+mypy clean)
+      MOD packages/answer/models.py (+DocumentStatus StrEnum + CanonicalChunk model;
+            additive, backward compatible — existing Answer/Citation/Claim unchanged)
+      NEW tests/unit/test_citation_integrity_stage11.py (30 tests, hermetic)
+      interfaces.py reviewed: no change needed — ChunkLookup already is the
+      canonical evidence boundary (strict allowlist self-check PASS).
+WHY:    Citation integrity is the honesty-first gate BEFORE semantic grounding:
+      a chunk_id must be a real, in-scope, live-source chunk whose asserted
+      page/section/quotation match the canonical record. Today verify_claims
+      only grounds (does the text support the claim); it cannot surface a
+      typed rejection for a deleted/superseded doc, a foreign workspace, a
+      fabricated page, a wrong quotation, or an unreadable cited region.
+      Stage 11 owns those deterministic checks so the answer layer can refuse
+      fabrication and disclose OCR/parsability gaps rather than look confident.
+WHY (design): canonical evidence is accepted as an in-memory Mapping[str,
+      CanonicalChunk] (status + disclosure aware) and/or via the existing
+      ChunkLookup seam; RetrievedItem is used only to recognize graph/summary
+      routing hints as hints, never as grounding text. valid = no rejections
+      and no unverified claims; accepted citations are rebuilt as Citation with
+      canonical provenance; omissions carry the disclosure strings. Pure
+      re.search for span location — zero LLM / zero network / zero DB on the
+      hermetic path (chunk_lookup=None).
+REJECT REASONS (typed RejectionReason):
+      FABRICATED_REFERENCE  — chunk_id absent from canonical store (incl. hint-only)
+      FOREIGN_CHUNK         — chunk resolves but outside caller's workspace scope
+      DELETED_DOCUMENT      — document tombstoned (deleted_at)
+      SUPERSEDED_VERSION    — document version retired (superseded_at)
+      PAGE_MISMATCH         — asserted page/section disagrees with canonical provenance
+      SPAN_MISMATCH         — asserted quotation/span deviates from canonical source text
+      UNREADABLE_SOURCE     — cited page/region flagged unreadable by parse/OCR disclosure
+REPORT:   CitationIntegrityReport(valid, accepted_citations, rejected_citations,
+            omissions, unverified_claims)
+REUSED:   answer.models (Citation, Claim, +new CanonicalChunk/DocumentStatus),
+      answer.interfaces.ChunkLookup, models.postgres_lookup.MemoryChunkLookup,
+      retrieval.interfaces.RetrievedItem, core.auth.ACLScope scope semantics.
+VERIFY:
+      - pytest tests/unit/test_citation_integrity_stage11.py -q  -> 30 passed
+      - ruff check packages/answer/citation_integrity.py packages/answer/models.py tests/unit/test_citation_integrity_stage11.py -> All checks passed
+      - mypy packages/answer/citation_integrity.py packages/answer/models.py tests/unit/test_citation_integrity_stage11.py -> Success: no issues
+      - no regression: existing answer unit suite green
+        (test_bulk_hydration, test_graph_citation_hydration,
+         test_answer_lost_region_disclosure, test_answer_engine: 161 passed)
+SPEND: 0.00 (no LLM/embedding/retrieve; pure deterministic string+offset checks)
+GIT: handoff only
+```
