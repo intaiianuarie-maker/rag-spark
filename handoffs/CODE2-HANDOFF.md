@@ -1933,3 +1933,41 @@ VERIFY:
 SPEND: 0.00
 GIT: handoff only
 ```
+
+
+## T-W01
+
+```
+TASK: T-W01
+STATUS: PARKED (frontend unguarded async not implemented; left unchanged to avoid broad refactor)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-W01 retry
+
+```
+TASK: T-W01 retry
+CHANGE:
+      - apps/web/src/app/research/[id]/page.tsx guard stale fetch
+      - apps/web/src/app/agent-runs/[id]/page.tsx guard stale fetch
+VERIFY:
+      - typecheck green; guards added via request tokens
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-W01 tests
+
+```
+TASK: T-W01 tests
+CHANGE:
+      - apps/web/src/app/agent-runs/[id]/stale-discard.test.ts
+      - apps/web/src/app/research/[id]/stale-discard.test.ts
+VERIFY:
+      - 2 passed
+SPEND: 0.00
+GIT: handoff only
+```

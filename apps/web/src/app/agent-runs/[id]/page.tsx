@@ -2,7 +2,7 @@
 
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import { auth } from "@/lib/auth-client";
 import { Badge } from "@/components/ui/badge";
@@ -307,6 +307,7 @@ export default function AgentRunDetailPage() {
   // run B from empty instead of showing run A's observed states, status chip
   // and 404 alert. Polling the SAME run keeps its history (same key).
   const key = runStateKey(workspaceId, runId);
+  const reqRef = useRef(0);
   const [loadedKey, setLoadedKey] = useState<string | null>(null);
   if (key !== loadedKey) {
     setLoadedKey(key);
@@ -320,6 +321,7 @@ export default function AgentRunDetailPage() {
 
   const load = useCallback(async () => {
     if (workspaceId === null || runId === null) return;
+    const tok = ++reqRef.current;
     try {
       const [next, hist] = await Promise.all([
         auth.authFetch<RunSnapshot>(
@@ -331,6 +333,7 @@ export default function AgentRunDetailPage() {
           )
           .catch(() => null),
       ]);
+      if (reqRef.current !== tok) return;
       setSnapshot(next);
       if (hist && Array.isArray(hist.steps)) {
         setSteps(hist.steps);
@@ -340,6 +343,7 @@ export default function AgentRunDetailPage() {
       setRecord(loadRecord(workspaceId, runId));
       setHistory((current) => appendTransition(current, next));
     } catch (fetchError: unknown) {
+      if (reqRef.current !== tok) return;
       const status =
         typeof fetchError === "object" && fetchError !== null && "status" in fetchError
           ? Number((fetchError as { status: unknown }).status)
