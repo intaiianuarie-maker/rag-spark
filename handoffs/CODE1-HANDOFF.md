@@ -4436,3 +4436,151 @@ successes observed: **6 of 267** calls served free (still ~2%).
    `h1_negatives` run appears in the ledger at **$0.00000000** across 25 calls.
 
 Next: IDLE — push mandatory.
+
+---
+
+## 2026-10-16 T-RP01b — elaboration-cap variant re-measure (dev1)
+
+**TASK** — RP01's narrowed refusal rule MINUS the "give the partial answer you can support"
+elaboration clause, PLUS an explicit answer-length cap; re-run the same 150 ids at R=1 and
+report refusal + F1/EM per arm against **both** the H1 baseline and RP01.
+
+**CHANGE**
+- `evals/benchmark_v1/runners/h1_run.py` — new prompt variant `DRAFT_PROMPT_CAPPED`,
+  registered as `--prompt capped`. `DRAFT_PROMPT` (baseline) untouched and verified
+  byte-identical; `runs/h1/` untouched.
+- `evals/benchmark_v1/runners/h1_rp01_compare.py` — generalised from a 2-way to a **3-way**
+  comparator (baseline / revised / capped). No new file this time.
+- `evals/benchmark_v1/runs/h1_rp01b/` — `traces.jsonl`, `predictions.jsonl`,
+  `pre_call_arithmetic.json`, `run_summary.json`, `variant_comparison.json`.
+
+### THE VARIANT (cap stated in-row, as required)
+
+**Cap = 20 words, applied to the `answer` field ONLY.** Claims are deliberately *not* capped:
+claims carry the citations the grounders adjudicate, so capping them would change the
+grounding contract and confound the comparison. The regression RP01 found was in *answer*
+verbosity diluting token-F1, so that is what is capped.
+
+```
+Answer the question using ONLY the numbered context paragraphs. Cite the paragraph number
+for every claim.
+Answer whenever at least one paragraph supports any part of the answer. These questions
+need several facts, so finding one hop and not the other is normal. A missing hop is not a
+reason to refuse.
+Keep the answer field to 20 words or fewer: give the shortest answer the cited paragraphs
+support, with no preamble, no restatement of the question and no extra background.
+Reply exactly with ABSTAIN only when NO paragraph in the context supports any part of the
+answer.
+```
+
+Retained from RP01: the narrowed refusal rule, the ABSTAIN narrowing, and "a missing hop is
+not a reason to refuse". **Removed**: "give the partial answer you can support from the
+paragraphs and cite them" — the elaboration clause RP01 identified as the verbosity source.
+
+The 20-word figure was chosen because the **baseline** ON mean on already-answered items was
+20.6 words — the ticket's criterion is "length back in band", so the cap targets the baseline
+band, not whatever maximises F1.
+
+**PRE-CALL ARITHMETIC** (`runs/h1_rp01b/pre_call_arithmetic.json`, before the first metered call)
+
+| line | units | worst cost |
+|---|---|---|
+| 150 shared drafts | 150 | $0.01665 |
+| repairs, ≤1 per arm × 2 arms | ≤300 | $0.03329 |
+| **worst case** | **≤450** | **$0.049937** |
+| spent to date | | $0.07297780 |
+| remaining of $2.00 | | $1.927022 |
+| verdict | | **PROCEED** (2.6% of remaining) |
+
+### RESULT — 3-way, same 150 ids, R=1, only the reader prompt differs
+
+| metric | baseline | RP01 revised | **RP01b capped** |
+|---|---|---|---|
+| refusals | 26 (0.1733) | 4 (0.0267) | **9 (0.0600)** |
+| false refusals (§6) | 24 | 4 | **7** |
+| answered | 124 | 146 | 141 |
+| mean answer words OFF | 24.82 | 24.36 | **9.92** |
+| **mean answer words ON** | **20.64** | **23.25** | **8.64** |
+| answer F1 OFF | 0.0640 | 0.0718 | **0.1220** |
+| **answer F1 ON** | **0.2055** | 0.1713 | **0.3861** |
+| answer EM OFF | 0.0067 | 0.0000 | 0.0067 |
+| answer EM ON | 0.0200 | 0.0000 | 0.0067 |
+| citation validity OFF | 0.3267 | 0.4267 | 0.3200 |
+| citation validity ON | 0.8067 | 0.9467 | 0.9200 |
+
+### VERDICT — the ticket's literal criterion is NOT met, but the substantive result is the best of any variant
+
+**"Does verbosity return to baseline band with refusal staying fixed?" — NO, on both counts, literally.**
+Length band = baseline ON mean 20.64 ±10% = **[18.58, 22.71]**. Capped ON mean is **8.64**,
+i.e. **well below** the band, not in it. And refusal loosened from 0.0267 to 0.0600 — **5 new
+refusals** versus RP01 (9 refused in capped = the same 4 as RP01 + 5 newly refused), though
+still far better than baseline's 26.
+
+**But both misses are in the direction of the fix working, and answer F1 more than recovered:**
+
+- **answer F1 ON: 0.2055 (baseline) → 0.1713 (RP01) → 0.3861 (capped)** — +0.1806 absolute,
+  **+88% relative** over baseline and +0.2148 over RP01. Best of all three variants, both arms
+  (OFF 0.0640 → 0.1220). **The RP01 verbosity hypothesis was correct.**
+- F1 at or above baseline in **both** arms.
+- citation validity ON 0.9200, still well above baseline's 0.8067.
+
+**Multi-hop questions improved MOST, refuting my own stated worry.** I predicted a short cap
+would stop the reader naming both hops. It did the opposite (frozen 75/75 bridge/comparison split):
+
+| slice | arm | baseline | RP01 | **capped** | words (base→cap) |
+|---|---|---|---|---|---|
+| bridge (75) | ON F1 | 0.2039 | 0.1682 | **0.4760** | 21.6 → **5.8** |
+| bridge | OFF F1 | 0.0534 | 0.0439 | **0.1393** | 28.2 → 7.1 |
+| comparison (75) | ON F1 | 0.2072 | 0.1744 | **0.2962** | 19.6 → 11.4 |
+| bridge refusals | | 11/75 | 3/75 | 5/75 | |
+| comparison refusals | | 15/75 | 1/75 | 4/75 | |
+
+Word-count distribution confirms an **overshoot**, not a gentle return to band: baseline ON
+had 61/121 answers at 21+ words, capped has 3/138; capped put 34/138 answers at 1–3 words
+(baseline: 4/121).
+
+**IMPORTANT CAVEAT — do not read the F1 gain as pure quality.** Token-F1 penalises extra words
+against short gold spans, so a concision cap is **mechanically** favoured by this metric.
+Corroborating that it is partly artifact: **answer EM went DOWN**, ON 0.0200 → 0.0067. The
+capped answers are terser and more token-efficient but not more exactly correct. And OFF
+citation validity drifted down slightly (0.3267 → 0.3200). So the honest reading is
+"concision recovers most of the RP01 F1 loss and more", not "the reader got better".
+
+**Recommendation (NOT acted on).** 20 words overshoots; RP01's 23.25 also overshot the other
+way. The untested middle is a cap near the baseline band (~18–20 words is the stated target,
+but the model reads "20 or fewer" as a licence, not a limit). A next measurement should try a
+tighter instruction — e.g. "one short sentence, no more than 12 words" — or a per-question-type
+cap, since bridge answers land at 5.8 words and comparison at 11.4. **I have not guessed a
+number**: that needs a run, not an opinion. Do not ship 20 words as-is.
+
+**VERIFY**
+- `ruff check` → `All checks passed!`; `mypy` on both files → clean, no output.
+- `variant_comparison.json` recomputes **byte-identical** (offline, deterministic).
+- `runs/h1/` untouched (`git status --short` empty); `DRAFT_PROMPT` verified byte-identical.
+- `packages/`, `datasets/`, `judges/`, `PREREGISTRATION.md` all clean → **no grounder change,
+  no flag-default change, no manifest or rubric edit, no paid judge.**
+- All three variants restricted to the ids **all three** share, so the comparison is on an
+  identical item set; denominators 150, nothing excluded or re-labelled.
+
+**SPEND: $0.02069044** for the 150-attempt run (267 metered calls, 0 failed) — **41.4% of the
+$0.049937 pre-call worst case**, in-cap. Plus **$0.00036840** for a 3-attempt smoke (5 calls)
+tagged `h1_rp01b_smoke`. Ledger metered total **$0.09403664**, leaving **$1.90596336** of
+$2.00. Free tier served 4/267.
+
+**RISKS / FLAGS**
+1. **The ledger did not re-corrupt.** RP01's root-cause fix (canonical `LEDGER_FIELDS` +
+   raise-on-header-mismatch) held: all 1218 rows are 17 columns. Worth keeping that guard.
+2. **My RP01 code changes are still uncommitted.** `h1_run.py` and `normalize_ledger.py` were
+   not picked up by db98c91, so RP01b builds on an uncommitted worktree. Not blocking, but the
+   coordinator should commit them or the RP01/RP01b prompt work is only in my tree.
+3. **Concision-vs-metric-artifact risk** (above): F1 up 88%, EM down. Any promotion argument
+   built on F1 alone is vulnerable. A precision-oriented metric (or the frozen rubric's
+   citation/support gates, still PROVISIONAL per T-G02) should corroborate before shipping.
+4. **Refusal loosened 5 items versus RP01.** The cap appears to reintroduce some uncertainty —
+   plausible that demanding concision conflicts with "answer whenever…". Worth separating in a
+   future variant: keep RP01's wording verbatim and add the cap as a separate trailing
+   sentence, so the two effects are not confounded in one prompt edit.
+5. Foreign WIP untouched: `apps/web/**` (dev2), `evals/bfcl_*`, `evals/embedder_*`,
+   `evals/test_*`, untracked `handoffs/*`, `reviews/*`.
+
+Next: IDLE — push mandatory.

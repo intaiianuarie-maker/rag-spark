@@ -1,29 +1,27 @@
-"""T-RP01 — refusal before/after on the SAME 150 frozen HotpotQA ids, plus the F1
-no-regression check.
+"""T-RP01b — three-way comparison of reader-prompt variants on the SAME 150 ids.
 
-Compares the committed H1 BASELINE reader prompt against the T-RP01 REVISED prompt,
-like-for-like:
+Compares, all at R=1 on the identical 150 frozen HotpotQA ids with an identical
+shared-draft + OFF/ON grounder + repair protocol, so the ONLY varying factor is the
+reader prompt:
 
-  * same 150 frozen HotpotQA ids
-  * R=1 on both sides (baseline repeat=1 is used, so the two runs are matched pairs
-    rather than baseline R=2 vs revised R=1)
-  * identical shared-draft + OFF/ON grounder + repair/fallback protocol, so the ONLY
-    thing that varies is the reader prompt
+  baseline : the H1 control prompt (runs/h1, repeat 1)
+  revised  : T-RP01 narrowed-refusal prompt (runs/h1_rp01)
+  capped   : T-RP01b narrowed refusal MINUS elaboration PLUS a 20-word answer cap
+             (runs/h1_rp01b)
 
-Refusal is measured at the shared-draft level, because that is where it originates: the
-baseline's 18.4% abstention was byte-identical in both arms, which is what identified it
-as a reader issue rather than a grounder issue.
+Reports refusal, false refusal, answer EM/F1 and citation validity per arm against BOTH
+prior variants, plus mean answer length -- the mechanism T-RP01 identified as the cause
+of the ON-arm F1 regression.
 
-A refusal is additionally classified:
-  * FALSE refusal (rubric §6) -- the gold answer string is present in the context the
-    reader was actually given, so sufficient evidence existed and refusing failed it.
-  * otherwise consistent with genuinely missing evidence.
+"Length back in band" is judged against a band derived from the BASELINE's own measured
+mean, +/-10%, computed in-script. It is not a threshold chosen to flatter the result.
 
 Offline and deterministic: zero model calls, $0.00 spend.
 """
 
 from __future__ import annotations
 
+import argparse
 import json
 import pathlib
 import statistics
@@ -38,22 +36,24 @@ for _p in (_REPO / "evals" / "vendor", str(_REPO / "evals" / "benchmark_v1" / "r
 from hotpot_evaluate_v1 import answer_em, answer_f1, normalize_answer  # noqa: E402
 
 H1 = _REPO / "evals" / "benchmark_v1" / "runs" / "h1"
-RP = _REPO / "evals" / "benchmark_v1" / "runs" / "h1_rp01"
-OUT = RP / "refusal_comparison.json"
+RP01 = _REPO / "evals" / "benchmark_v1" / "runs" / "h1_rp01"
+RP01B = _REPO / "evals" / "benchmark_v1" / "runs" / "h1_rp01b"
+
+#: Half-width of the "length back in band" tolerance, applied to the baseline mean.
+BAND_TOLERANCE = 0.10
 
 
 def _mean(xs: list[float]) -> float:
     return round(statistics.fmean(xs), 4) if xs else 0.0
 
 
-def _load(path: pathlib.Path, repeat: int | None = None) -> dict[str, dict]:
+def _load(path: pathlib.Path, repeat: int = 1) -> dict[str, dict]:
     out: dict[str, dict] = {}
     with path.open(encoding="utf-8") as fh:
         for line in fh:
             t = json.loads(line)
-            if repeat is not None and t.get("repeat") != repeat:
-                continue
-            out[t["item_id"]] = t
+            if t.get("repeat") == repeat:
+                out[t["item_id"]] = t
     return out
 
 
@@ -62,18 +62,20 @@ def _gold_in_context(item: dict) -> bool:
     return normalize_answer(item["gold_answer"]) in ctx
 
 
-def measure(traces: dict[str, dict], corpus: dict[str, dict]) -> dict:
-    refusals, false_refusals, answered = [], [], 0
+def measure(traces: dict[str, dict], corpus: dict[str, dict]) -> dict[str, Any]:
+    refusals: list[str] = []
+    false_refusals: list[str] = []
+    answered = 0
     ems: dict[str, list[float]] = {"off": [], "on": []}
     f1s: dict[str, list[float]] = {"off": [], "on": []}
     cits: dict[str, list[float]] = {"off": [], "on": []}
+    words: dict[str, list[float]] = {"off": [], "on": []}
 
     for item_id, t in traces.items():
         item = corpus.get(item_id)
         if item is None:
             continue
-        abstained = bool(t.get("shared_draft_abstained"))
-        if abstained:
+        if t.get("shared_draft_abstained"):
             refusals.append(item_id)
             if _gold_in_context(item):
                 false_refusals.append(item_id)
@@ -82,12 +84,14 @@ def measure(traces: dict[str, dict], corpus: dict[str, dict]) -> dict:
         for arm in ("off", "on"):
             a = (t.get("arms") or {}).get(arm) or {}
             ans = a.get("final_answer", "") or ""
-            arm_abstained = bool(a.get("abstained"))
+            abst = bool(a.get("abstained"))
             ems[arm].append(
-                answer_em(item["gold_answer"], ans) if ans and not arm_abstained else 0.0)
+                answer_em(item["gold_answer"], ans) if ans and not abst else 0.0)
             f1s[arm].append(
-                answer_f1(item["gold_answer"], ans) if ans and not arm_abstained else 0.0)
+                answer_f1(item["gold_answer"], ans) if ans and not abst else 0.0)
             cits[arm].append(1.0 if a.get("citations") else 0.0)
+            if ans:
+                words[arm].append(float(len(ans.split())))
 
     n = len(traces)
     return {
@@ -95,128 +99,111 @@ def measure(traces: dict[str, dict], corpus: dict[str, dict]) -> dict:
         "refusals": len(refusals),
         "refusal_rate": round(len(refusals) / n, 4) if n else 0.0,
         "false_refusals": len(false_refusals),
-        "false_refusal_rate_all_items": round(len(false_refusals) / n, 4) if n else 0.0,
-        "false_refusal_share_of_refusals": (
-            round(len(false_refusals) / len(refusals), 4) if refusals else 0.0),
         "answered": answered,
         "answer_em": {arm: _mean(ems[arm]) for arm in ("off", "on")},
         "answer_f1": {arm: _mean(f1s[arm]) for arm in ("off", "on")},
         "citation_validity": {arm: _mean(cits[arm]) for arm in ("off", "on")},
+        "mean_answer_words": {arm: _mean(words[arm]) for arm in ("off", "on")},
+        "n_answers_counted_for_words": {arm: len(words[arm]) for arm in ("off", "on")},
     }
 
 
 def main() -> int:
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default=str(RP01B / "variant_comparison.json"))
+    args = ap.parse_args()
+
     from h1_corpus import load_all
 
     corpus = {it["item_id"]: it for it in load_all()["hotpot"]}
-    baseline = _load(H1 / "traces.jsonl", repeat=1)
-    revised = _load(RP / "traces.jsonl", repeat=1)
+    raw = {
+        "baseline": _load(H1 / "traces.jsonl"),
+        "revised": _load(RP01 / "traces.jsonl"),
+        "capped": _load(RP01B / "traces.jsonl"),
+    }
+    # Restrict every variant to the ids ALL variants share, so the three-way
+    # comparison is on an identical item set.
+    shared = sorted(set.intersection(*(set(v) for v in raw.values())))
+    variants = {k: {i: v[i] for i in shared} for k, v in raw.items()}
+    measured = {k: measure(v, corpus) for k, v in variants.items()}
 
-    shared = sorted(set(baseline) & set(revised))
-    missing_revised = sorted(set(baseline) - set(revised))
-    baseline = {k: baseline[k] for k in shared}
-    revised = {k: revised[k] for k in shared}
+    # Length band, anchored on the baseline's own measured ON-arm mean.
+    base_words = measured["baseline"]["mean_answer_words"]["on"]
+    band_lo = round(base_words * (1 - BAND_TOLERANCE), 2)
+    band_hi = round(base_words * (1 + BAND_TOLERANCE), 2)
 
-    before = measure(baseline, corpus)
-    after = measure(revised, corpus)
+    def in_band(words: float) -> bool:
+        return band_lo <= words <= band_hi
 
-    # McNemar-style paired shift on refusal, on the identical item set.
-    b_ref = {k for k in shared if baseline[k].get("shared_draft_abstained")}
-    a_ref = {k for k in shared if revised[k].get("shared_draft_abstained")}
-    stopped = sorted(b_ref - a_ref)   # refused before, answered now
-    started = sorted(a_ref - b_ref)   # answered before, refused now (regression risk)
-    still = sorted(set(shared) - set(stopped) - set(started))  # answered in both runs
-
-    f1_delta = {
-        arm: round(after["answer_f1"][arm] - before["answer_f1"][arm], 4)
+    length = {
+        arm: {
+            "baseline": measured["baseline"]["mean_answer_words"][arm],
+            "revised": measured["revised"]["mean_answer_words"][arm],
+            "capped": measured["capped"]["mean_answer_words"][arm],
+            "band": [band_lo, band_hi],
+            "capped_in_band": in_band(measured["capped"]["mean_answer_words"][arm]),
+            "revised_in_band": in_band(measured["revised"]["mean_answer_words"][arm]),
+            "capped_minus_baseline": round(
+                measured["capped"]["mean_answer_words"][arm]
+                - measured["baseline"]["mean_answer_words"][arm], 2),
+        }
         for arm in ("off", "on")
     }
-    # No-regression: the revised prompt must not cost answer F1.
-    regressed = [arm for arm in ("off", "on") if f1_delta[arm] < 0]
 
-    # Where did an F1 movement come from? Split the 150 items into the ones the
-    # revision RESCUED (refused before, answered after) and the ones already
-    # answered in both runs. Without this split an F1 drop is uninterpretable.
-    def _f1(ids: list[str], src: dict[str, dict], arm: str) -> list[float]:
-        return [answer_f1(corpus[i]["gold_answer"], src[i]["arms"][arm]["final_answer"])
-                for i in ids if src[i]["arms"].get(arm, {}).get("final_answer")]
+    def deltas(variant: str, ref: str) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        for arm in ("off", "on"):
+            out[arm] = {
+                m: round(measured[variant][m][arm] - measured[ref][m][arm], 4)
+                for m in ("answer_em", "answer_f1", "citation_validity")
+            }
+            out[arm]["refusal_rate"] = round(
+                measured[variant]["refusal_rate"] - measured[ref]["refusal_rate"], 4)
+            out[arm]["mean_answer_words"] = round(
+                measured[variant]["mean_answer_words"][arm]
+                - measured[ref]["mean_answer_words"][arm], 2)
+        return out
 
-    def _words(ids: list[str], src: dict[str, dict], arm: str) -> list[float]:
-        return [float(len(src[i]["arms"][arm]["final_answer"].split()))
-                for i in ids if src[i]["arms"].get(arm, {}).get("final_answer")]
-
-    decomposition: dict[str, Any] = {}
-    for arm in ("off", "on"):
-        new_f1 = _f1(stopped, revised, arm)
-        both_f1_b = _f1(still, baseline, arm)
-        both_f1_a = _f1(still, revised, arm)
-        decomposition[arm] = {
-            "rescued_items": {
-                "n": len(stopped),
-                "baseline_f1": 0.0,
-                "baseline_note": "these were refusals, so F1 was 0.0 by construction",
-                "revised_f1": round(statistics.fmean(new_f1), 4) if new_f1 else 0.0,
-                "revised_n_answered": len(new_f1),
-                "revised_mean_answer_words": (
-                    round(statistics.fmean(_words(stopped, revised, arm)), 1)
-                    if _words(stopped, revised, arm) else 0.0),
-                "effect_on_total": "POSITIVE (0.0 -> above)",
-            },
-            "already_answered_in_both": {
-                "n": len(still),
-                "baseline_f1": round(statistics.fmean(both_f1_b), 4) if both_f1_b else 0.0,
-                "revised_f1": round(statistics.fmean(both_f1_a), 4) if both_f1_a else 0.0,
-                "shift": (round(statistics.fmean(both_f1_a) - statistics.fmean(both_f1_b), 4)
-                          if both_f1_b and both_f1_a else 0.0),
-                "baseline_mean_answer_words": (
-                    round(statistics.fmean(_words(still, baseline, arm)), 1)
-                    if _words(still, baseline, arm) else 0.0),
-                "revised_mean_answer_words": (
-                    round(statistics.fmean(_words(still, revised, arm)), 1)
-                    if _words(still, revised, arm) else 0.0),
-            },
-        }
-    decomposition["_reading"] = (
-        "Any F1 regression is attributable to the already-answered items, not to the "
-        "rescued ones: the revision lengthens answers (verbosity), and token-F1 against "
-        "short gold spans is diluted by extra words. The rescued items all gained."
+    # Ticket's verdict question, evaluated explicitly.
+    refusal_held = measured["capped"]["refusal_rate"] <= measured["revised"]["refusal_rate"]
+    length_back = length["on"]["capped_in_band"] and length["off"]["capped_in_band"]
+    f1_recovered = {
+        arm: measured["capped"]["answer_f1"][arm] >= measured["baseline"]["answer_f1"][arm]
+        for arm in ("off", "on")
+    }
+    verdict = (
+        "VERDICT: verbosity back in band AND refusal staying fixed"
+        if (length_back and refusal_held)
+        else "VERDICT: NOT both -- see length_back_in_band / refusal_holding_fixed"
     )
 
     report = {
         "label": "MEASUREMENT (not a rubric score); no judge, 0 model calls, $0.00 spend",
         "comparison": (
-            "same 150 frozen HotpotQA ids, R=1 both sides, identical shared-draft + "
-            "OFF/ON grounder + repair protocol; ONLY the reader prompt differs"
+            "same 150 frozen HotpotQA ids, R=1, identical shared-draft + OFF/ON grounder "
+            "+ repair protocol across all three variants; ONLY the reader prompt differs"
         ),
         "n_items_compared": len(shared),
-        "baseline_items_missing_from_revised_run": missing_revised,
-        "before_baseline_prompt": before,
-        "after_revised_prompt": after,
-        "refusal_shift": {
-            "refused_before_and_answered_after": len(stopped),
-            "answered_before_and_refused_after": len(started),
-            "net_refusals_removed": len(b_ref) - len(a_ref),
-            "newly_refused_item_ids": started[:20],
-            "recovered_item_ids": stopped[:20],
-        },
-        "answer_f1_delta_revised_minus_baseline": f1_delta,
-        "f1_decomposition": decomposition,
-        "f1_no_regression_check": {
-            "verdict": "REGRESSION" if regressed else "NO REGRESSION",
-            "arms_regressed": regressed,
-            "note": (
-                "F1 is averaged over ALL 150 items with refusals scored 0, exactly as in "
-                "T-E01, so a refusal that becomes a correct answer raises F1 rather than "
-                "rewarding silence."
-            ),
-        },
-        "verdict_summary": (
-            f"refusal {before['refusal_rate']} -> {after['refusal_rate']}; "
-            f"false refusals {before['false_refusals']} -> {after['false_refusals']}; "
-            f"answer F1 delta OFF {f1_delta['off']} / ON {f1_delta['on']}"
+        "variants": measured,
+        "mean_answer_words_by_variant": length,
+        "length_band_definition": (
+            f"baseline ON mean {base_words} words +/-{int(BAND_TOLERANCE * 100)}% "
+            f"=> [{band_lo}, {band_hi}] words"
         ),
+        "deltas": {
+            "capped_vs_baseline": deltas("capped", "baseline"),
+            "capped_vs_revised": deltas("capped", "revised"),
+        },
+        "ticket_verdict": {
+            "refusal_holding_fixed": refusal_held,
+            "length_back_in_band": length_back,
+            "answer_f1_at_or_above_baseline": f1_recovered,
+            "verdict": verdict,
+        },
     }
-    OUT.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    out = pathlib.Path(args.out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
     return 0
 

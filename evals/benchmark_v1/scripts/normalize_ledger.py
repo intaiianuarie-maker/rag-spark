@@ -49,6 +49,13 @@ def _row(r: list[str], n: int) -> dict[str, str]:
     def at(i: int) -> str:
         return r[i] if i < len(r) else ""
 
+    if n == len(FIELDS):
+        # Already canonical: pass through untouched. Handling this case matters --
+        # without it, re-running this script DESTROYS every row a previous run had
+        # already normalised (they are demoted to "unrecognised"), which is exactly
+        # the bug that lost the p02/h1_reader_ab/h2-index rows once already.
+        return {f: at(i) for i, f in enumerate(FIELDS)}
+
     if n == 20:  # P02 metered call
         out["timestamp_utc"] = at(0)
         out["call_site"] = at(1)

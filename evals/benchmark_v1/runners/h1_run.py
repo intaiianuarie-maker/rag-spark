@@ -50,13 +50,17 @@ LEDGER = _REPO / "evals" / "benchmark_v1" / "reports" / "budget_ledger.csv"
 ARITH = _REPO / "evals" / "benchmark_v1" / "reports" / "h1_pre_call_arithmetic.json"
 RUN_TAG = "h1_reader_ab"
 
-#: Remaining preregistered cap at H1 entry (P02 spent $0.00089134 of $2.00).
+#: Preregistered total cap for the whole benchmark.
+TOTAL_CAP_USD = 2.00
+#: Fallback remaining cap if the ledger cannot be read (H1 entry value).
 REMAINING_CAP_USD = 1.999109
 #: P02-measured worst case for ONE (1 embed + 1 generate) unit.
 WORST_UNIT_USD = 0.00011097
 #: Max repair attempts per arm (repair is the only extra metered leg).
 MAX_REPAIRS_PER_ARM = 1
 
+#: The H1 BASELINE reader prompt, preserved verbatim so the committed H1 run stays
+#: reproducible byte-for-byte. Do not edit this string: it IS the T-RP01 control.
 DRAFT_PROMPT = (
     "Answer the question using ONLY the numbered context paragraphs. "
     "Cite the paragraph number for every claim. If the context does not support "
@@ -65,6 +69,80 @@ DRAFT_PROMPT = (
     'Reply with JSON only: {{"answer": "...", "abstained": false, '
     '"claims": [{{"text": "...", "paragraph": 1}}]}}'
 )
+
+#: T-RP01 REVISED reader prompt -- the minimal change that narrows refusal to
+#: genuinely-missing-evidence cases.
+#:
+#: Diagnosis of the 18.4% baseline abstention (all at the shared-draft level, identical
+#: in both arms, so it is a READER issue and not a grounder issue):
+#:
+#:   1. "If the context does not support AN ANSWER, reply exactly with ABSTAIN."
+#:      All-or-nothing bar. HotpotQA/2wiki are multi-hop, so partial evidence -- one hop
+#:      found, second hop missing -- fails "supports an answer". Measured: 60 of 64
+#:      baseline refusals occurred on items whose gold answer string WAS present in the
+#:      context, i.e. 93.75% were false refusals under rubric §6.
+#:   2. "reply exactly with ABSTAIN" is a zero-cost escape hatch with no stated downside
+#:      and no instruction to prefer attempting.
+#:   3. The JSON contract offers only a boolean `abstained` flag -- no way to express
+#:      "here is the part I can support, and this is what is missing", so partial
+#:      competence had no representation and full refusal was the cheaper reply.
+#:
+#: The revision keeps the escape hatch for the genuine case (no paragraph supports ANY
+#: part of the answer) and makes partial-but-cited answering the instructed default.
+DRAFT_PROMPT_REVISED = (
+    "Answer the question using ONLY the numbered context paragraphs. "
+    "Cite the paragraph number for every claim.\n"
+    "Answer whenever at least one paragraph supports any part of the answer. These "
+    "questions need several facts, so finding one hop and not the other is normal: give "
+    "the partial answer you can support from the paragraphs and cite them. A missing "
+    "hop is not a reason to refuse.\n"
+    "Reply exactly with ABSTAIN only when NO paragraph in the context supports any part "
+    "of the answer.\n\n"
+    "{ctx}\n\nQuestion: {q}\n\n"
+    'Reply with JSON only: {{"answer": "...", "abstained": false, '
+    '"claims": [{{"text": "...", "paragraph": 1}}]}}'
+)
+
+#: T-RP01b REVISED+CAP variant -- RP01's narrowed refusal rule with the elaboration
+#: clause REMOVED and an explicit answer-length cap ADDED.
+#:
+#: T-RP01 measured the narrowed refusal rule and found it works (refusal 17.33% ->
+#: 2.67%) but that it also inflated answers on items the reader was ALREADY answering
+#: (ON arm 20.6 -> 22.9 mean words, F1 0.2548 -> 0.1891). The decomposition showed the
+#: regression came entirely from that verbosity, not from the rescued items (which all
+#: gained). So this variant keeps the refusal half and removes the verbosity half.
+#:
+#: Two deliberate choices:
+#:   * The cap applies to the ANSWER FIELD ONLY, not to the claims. Claims carry the
+#:     citations the grounders adjudicate; capping them would change the grounding
+#:     contract and confound the comparison. The regression was in answer verbosity
+#:     diluting token-F1 against short gold spans, and that is what is capped here.
+#:   * The cap is 20 words because the BASELINE mean on already-answered items was
+#:     20.6 words. The ticket's success criterion is "length means back in band", so the
+#:     cap is set to the baseline band rather than to whatever maximises F1.
+DRAFT_PROMPT_CAPPED = (
+    "Answer the question using ONLY the numbered context paragraphs. "
+    "Cite the paragraph number for every claim.\n"
+    "Answer whenever at least one paragraph supports any part of the answer. These "
+    "questions need several facts, so finding one hop and not the other is normal. "
+    "A missing hop is not a reason to refuse.\n"
+    "Keep the answer field to 20 words or fewer: give the shortest answer the cited "
+    "paragraphs support, with no preamble, no restatement of the question and no extra "
+    "background.\n"
+    "Reply exactly with ABSTAIN only when NO paragraph in the context supports any part "
+    "of the answer.\n\n"
+    "{ctx}\n\nQuestion: {q}\n\n"
+    'Reply with JSON only: {{"answer": "...", "abstained": false, '
+    '"claims": [{{"text": "...", "paragraph": 1}}]}}'
+)
+
+#: Reader-prompt variants selectable by the runner.
+PROMPTS = {
+    "baseline": DRAFT_PROMPT,
+    "revised": DRAFT_PROMPT_REVISED,
+    "capped": DRAFT_PROMPT_CAPPED,
+}
+
 REPAIR_PROMPT = (
     "The following claims were NOT supported verbatim by the cited paragraph. "
     "Rewrite them so each is directly supported by that paragraph's text, or drop "
@@ -76,6 +154,26 @@ REPAIR_PROMPT = (
 
 class BudgetGate(RuntimeError):
     """Worst case breaches the remaining cap — spend nothing."""
+
+
+def spent_to_date() -> float:
+    """Actual metered spend recorded in the ledger (projections excluded)."""
+    if not LEDGER.exists():
+        return 0.0
+    total = 0.0
+    with LEDGER.open(encoding="utf-8") as fh:
+        for row in csv.DictReader(fh):
+            if row.get("row_type") != "metered_call":
+                continue
+            try:
+                total += float(row.get("cost_usd") or 0)
+            except ValueError:
+                continue
+    return total
+
+
+def remaining_cap() -> float:
+    return round(TOTAL_CAP_USD - spent_to_date(), 6)
 
 
 def pre_call_arithmetic(n_attempts: int) -> dict[str, object]:
@@ -94,17 +192,19 @@ def pre_call_arithmetic(n_attempts: int) -> dict[str, object]:
         "worst_unit_usd": WORST_UNIT_USD,
         "worst_per_attempt_usd": round(worst_per_attempt, 8),
         "worst_total_usd": round(worst_total, 6),
-        "remaining_cap_usd": REMAINING_CAP_USD,
+        "total_cap_usd": TOTAL_CAP_USD,
+        "spent_to_date_usd": round(spent_to_date(), 8),
+        "remaining_cap_usd": remaining_cap(),
         "note": (
             "Generation is free-first with paid fallback, so the worst case "
             "charges the PAID rate for every unit. P02 measured 16/16 fallbacks, "
             "so the free tier is not assumed to save anything."
         ),
     }
-    if worst_total >= REMAINING_CAP_USD:
+    if worst_total >= remaining_cap():
         out["verdict"] = "BUDGET-GATE"
         raise BudgetGate(
-            f"H1 worst case ${worst_total:.4f} >= remaining ${REMAINING_CAP_USD:.4f}; "
+            f"worst case ${worst_total:.4f} >= remaining ${remaining_cap():.4f}; "
             "not starting"
         )
     out["verdict"] = "PROCEED"
@@ -141,8 +241,9 @@ def _parse_json(text: str) -> dict:
 
 
 class Harness:
-    def __init__(self) -> None:
-        self.provider = OpenRouterProvider(default_call_site=RUN_TAG)
+    def __init__(self, run_tag: str = RUN_TAG) -> None:
+        self.run_tag = run_tag
+        self.provider = OpenRouterProvider(default_call_site=run_tag)
         self.grounder_off = ExtractiveGrounder()
         self.grounder_on = ParaphraseTolerantGrounder(threshold=0.85)
         self.ledger_rows: list[dict] = []
@@ -174,7 +275,10 @@ class Harness:
         d = _delta(before, _snapshot())
         self.ledger_rows.append({
             "timestamp_utc": datetime.datetime.now(datetime.UTC).isoformat(),
-            "run_tag": RUN_TAG,
+            "run_tag": self.run_tag,
+            # Real metered spend, not a projection. Required so spend_to_date()
+            # counts this row and projection rows stay excluded.
+            "row_type": "metered_call",
             "call_site": site,
             "model_requested": DEFAULT_CHAT_FREE_MODEL,
             "model_used": model_used or (DEFAULT_CHAT_PAID_MODEL if d["fallbacks"] else ""),
@@ -225,7 +329,8 @@ class Harness:
             REPAIR_PROMPT.format(ctx=ctx, claims=listing), site)
         return payload.get("claims", []) or [], err, cost
 
-async def run_attempt(h: Harness, item: dict, repeat: int) -> dict:
+async def run_attempt(h: Harness, item: dict, repeat: int,
+                      prompt: str = DRAFT_PROMPT, run_tag: str = RUN_TAG) -> dict:
     """One (question, repeat): ONE shared draft, then both arms.
 
     The shared draft is generated once and both arms ground the SAME string; the
@@ -233,16 +338,16 @@ async def run_attempt(h: Harness, item: dict, repeat: int) -> dict:
     """
     item_id = item["item_id"]
     ctx = h.context_block(item["paragraphs"])
-    site = f"{RUN_TAG}_{item_id}_r{repeat}"
+    site = f"{run_tag}_{item_id}_r{repeat}"
 
     draft, draft_err, draft_cost = await h.generate(
-        DRAFT_PROMPT.format(ctx=ctx, q=item["question"]), site + "_draft")
+        prompt.format(ctx=ctx, q=item["question"]), site + "_draft")
     draft_text = str(draft.get("answer", "") or "")
     draft_hash = _sha(json.dumps(draft, sort_keys=True))
     claims = [c for c in (draft.get("claims") or []) if isinstance(c, dict)]
 
     record: dict = {
-        "run_tag": RUN_TAG,
+        "run_tag": run_tag,
         "item_id": item_id,
         "dataset": item["dataset"],
         "repeat": repeat,
@@ -298,37 +403,75 @@ async def run_attempt(h: Harness, item: dict, repeat: int) -> dict:
     return record
 
 
+#: The canonical ledger schema. `row_type` is what stops a projection row from being
+#: read as metered spend. This MUST stay identical to FIELDS in
+#: scripts/normalize_ledger.py -- appending with a different field list is what made
+#: the ledger invalid CSV twice (T-E01, then again here), so the schema is now written
+#: out in full on every append and never inferred from the existing header.
+LEDGER_FIELDS = [
+    "timestamp_utc", "run_tag", "row_type", "call_site",
+    "model_requested", "model_used",
+    "calls", "free_calls", "paid_calls", "fallbacks", "failed_calls",
+    "prompt_tokens", "completion_tokens", "cost_usd", "latency_ms", "error",
+    "detail",
+]
+
+
 def write_ledger(rows: list[dict]) -> None:
     LEDGER.parent.mkdir(parents=True, exist_ok=True)
-    fields = ["timestamp_utc", "run_tag", "call_site", "model_requested", "model_used",
-              "calls", "free_calls", "paid_calls", "fallbacks", "failed_calls",
-              "prompt_tokens", "completion_tokens", "cost_usd", "latency_ms", "error"]
     exists = LEDGER.exists()
+    header = LEDGER.read_text(encoding="utf-8").splitlines()[0] if exists else ""
+    canonical = ",".join(LEDGER_FIELDS)
+    if exists and header != canonical:
+        # Appending under a mismatched header is what corrupted this file before.
+        # Refuse loudly rather than silently producing another unreadable ledger.
+        raise RuntimeError(
+            "budget_ledger.csv header does not match the canonical schema; run "
+            "scripts/normalize_ledger.py first (do not append blind)"
+        )
     with LEDGER.open("a", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=fields)
+        w = csv.DictWriter(fh, fieldnames=LEDGER_FIELDS)
         if not exists:
             w.writeheader()
         for r in rows:
-            w.writerow(r)
+            w.writerow({k: r.get(k, "") for k in LEDGER_FIELDS})
 
 
 async def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--limit", type=int, default=0, help="0 = all runnable attempts")
     ap.add_argument("--dry-plan", action="store_true")
+    ap.add_argument("--prompt", choices=sorted(PROMPTS), default="baseline",
+                    help="reader prompt variant: baseline (H1 control) or revised (T-RP01)")
+    ap.add_argument("--out-dir", default="", help="override the run output directory")
+    ap.add_argument("--run-tag", default="", help="override the ledger/run tag")
+    ap.add_argument("--datasets", default="hotpot",
+                    help="comma-separated slices to run (default: hotpot only)")
+    ap.add_argument("--repeats", type=int, default=0,
+                    help="override R per item (0 = the slice's frozen R)")
     args = ap.parse_args()
 
     from h1_corpus import load_all
 
     slices = load_all()
-    attempts = [(it, r) for it in slices["hotpot"] for r in range(1, it["repeats"] + 1)]
-    attempts += [(it, r) for it in slices["twowiki"] for r in range(1, it["repeats"] + 1)]
+    run_tag = args.run_tag or RUN_TAG
+    out_dir = pathlib.Path(args.out_dir) if args.out_dir else RUNS
+    arith_path = (out_dir / "pre_call_arithmetic.json") if args.out_dir else ARITH
+
+    attempts = []
+    for name in [d.strip() for d in args.datasets.split(",") if d.strip()]:
+        for it in slices.get(name, []):
+            reps = args.repeats or it["repeats"]
+            attempts += [(it, r) for r in range(1, reps + 1)]
     if args.limit:
         attempts = attempts[: args.limit]
 
     arithmetic = pre_call_arithmetic(len(attempts))
-    ARITH.parent.mkdir(parents=True, exist_ok=True)
-    ARITH.write_text(json.dumps(arithmetic, indent=2), encoding="utf-8")
+    arithmetic["run_tag"] = run_tag
+    arithmetic["reader_prompt_variant"] = args.prompt
+    arithmetic["slices"] = args.datasets
+    arith_path.parent.mkdir(parents=True, exist_ok=True)
+    arith_path.write_text(json.dumps(arithmetic, indent=2), encoding="utf-8")
     print("=== PRE-CALL ARITHMETIC (before any metered call) ===")
     print(json.dumps(arithmetic, indent=2))
     if args.dry_plan:
@@ -337,17 +480,18 @@ async def main() -> int:
     if arithmetic.get("verdict") == "BUDGET-GATE":
         return 3
 
-    RUNS.mkdir(parents=True, exist_ok=True)
-    h = Harness()
-    traces_f = (RUNS / "traces.jsonl").open("w", encoding="utf-8")
-    preds_f = (RUNS / "predictions.jsonl").open("w", encoding="utf-8")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    prompt_text = PROMPTS[args.prompt]
+    h = Harness(run_tag)
+    traces_f = (out_dir / "traces.jsonl").open("w", encoding="utf-8")
+    preds_f = (out_dir / "predictions.jsonl").open("w", encoding="utf-8")
     try:
         for n, (item, rep) in enumerate(attempts, 1):
             try:
-                rec = await run_attempt(h, item, rep)
+                rec = await run_attempt(h, item, rep, prompt_text, run_tag)
             except Exception as exc:
                 rec = {
-                    "run_tag": RUN_TAG, "item_id": item["item_id"],
+                    "run_tag": run_tag, "item_id": item["item_id"],
                     "dataset": item["dataset"], "repeat": rep,
                     "question": item["question"],
                     "question_sha256": item["question_sha256"],
@@ -360,7 +504,7 @@ async def main() -> int:
             for arm in ("off", "on"):
                 a = rec.get("arms", {}).get(arm, {})
                 preds_f.write(json.dumps({
-                    "run_tag": RUN_TAG, "item_id": rec["item_id"],
+                    "run_tag": run_tag, "item_id": rec["item_id"],
                     "dataset": rec["dataset"], "repeat": rep,
                     "shared_draft_hash": rec.get("shared_draft_hash", ""),
                     "arm": arm,
@@ -381,7 +525,8 @@ async def main() -> int:
 
     spent = round(sum(r["cost_usd"] for r in h.ledger_rows), 8)
     summary = {
-        "run_tag": RUN_TAG,
+        "run_tag": run_tag,
+        "reader_prompt_variant": args.prompt,
         "n_attempts": len(attempts),
         "metered_calls": len(h.ledger_rows),
         "free_calls": sum(r["free_calls"] for r in h.ledger_rows),
@@ -391,9 +536,9 @@ async def main() -> int:
         "prompt_tokens": sum(r["prompt_tokens"] for r in h.ledger_rows),
         "completion_tokens": sum(r["completion_tokens"] for r in h.ledger_rows),
         "spent_usd": spent,
-        "remaining_cap_usd": round(REMAINING_CAP_USD - spent, 6),
+        "remaining_cap_usd": round(remaining_cap(), 6),
     }
-    (RUNS / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    (out_dir / "run_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
     return 0
 
