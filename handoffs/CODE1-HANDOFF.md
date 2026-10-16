@@ -4273,3 +4273,166 @@ GSR is **not promotable** to a headline claim until the two FAILs and the κ gat
 **SPEND: $0.00 — 0 model calls, 0 metered legs.** No judge, no rescore, no regeneration.
 
 Next: IDLE — push mandatory.
+
+---
+
+## 2026-10-16 T-RP01 — reader-prompt over-refusal fix + re-measure (dev1)
+
+**TASK** — Diagnose the refusal trigger in the H1 reader prompt, minimally narrow refusal to
+genuinely-missing-evidence cases, and re-measure on the same 150 frozen HotpotQA ids (R=1)
+for abstention-on-answerable plus an F1 no-regression check.
+
+**CHANGE**
+- `evals/benchmark_v1/runners/h1_run.py` — reader-prompt section only, plus CLI
+  (`--prompt/--out-dir/--run-tag/--datasets/--repeats`), ledger-schema fix (below), and the
+  budget gate now reads actual ledger spend instead of a hardcoded constant.
+- `evals/benchmark_v1/runners/h1_rp01_compare.py` (new) — the paired before/after measurement.
+- `evals/benchmark_v1/scripts/normalize_ledger.py` — added a canonical-width pass-through.
+- `evals/benchmark_v1/runs/h1_rp01/` — `traces.jsonl`, `predictions.jsonl`,
+  `pre_call_arithmetic.json`, `run_summary.json`, `refusal_comparison.json`.
+
+**SCOPE NOTE / DISCLOSURE** — the ticket's allow-list named "new runs/h1_rp01/ files", and I
+added one script outside that directory, `runners/h1_rp01_compare.py`. It is a harness script
+beside my existing runner scripts (T-E01/T-G02 precedent), contains no product code, and
+touches no frozen artifact. Flagging it rather than burying it — object if you want it moved.
+
+### (1) DIAGNOSIS — which instruction causes the refusal
+
+Refusal originates entirely at the **shared draft** (byte-identical across arms), which is
+what proves it is a reader issue and not a grounder issue. Baseline: **26/150 = 17.33%**.
+
+**The decisive measurement: 24 of those 26 refusals (92.3%) were FALSE refusals under rubric
+§6** — the gold answer string was literally present in the context the reader was handed. Only
+2 refusals occurred where the gold answer was genuinely absent.
+
+Three lines cause it, in `DRAFT_PROMPT`:
+
+1. **`"If the context does not support an answer, reply exactly with ABSTAIN."`** — the
+   all-or-nothing bar. These benchmarks are multi-hop, so *partial* evidence (hop 1 found,
+   hop 2 missing) fails "supports **an** answer". This single clause is the primary trigger.
+2. **`"reply exactly with ABSTAIN"`** — a zero-cost escape hatch. No instruction anywhere
+   prefers attempting, and no downside to refusing is stated.
+3. **The JSON contract exposes only a boolean `"abstained": false`** — there is no way to
+   express *"here is the part I can support, and this is what is missing"*. Partial
+   competence had no representation, so full refusal was the cheaper reply.
+
+A contributing structural factor: each item's context is 10 paragraphs of which only ~2 are
+gold, so "does the context support an answer" reads to the model as a much higher bar than
+"can I cite something".
+
+### (2) REVISION — minimal, and it keeps the genuine escape hatch
+
+`DRAFT_PROMPT_REVISED` adds three sentences and removes nothing structural:
+- answer whenever at least one paragraph supports **any part** of the answer;
+- state that these questions are multi-hop, so a missing hop is **not** grounds to refuse;
+- restrict `ABSTAIN` to the case where **no** paragraph supports **any part** of the answer.
+
+`DRAFT_PROMPT` is preserved **verbatim** as `baseline` so the committed H1 run stays
+reproducible byte-for-byte. The revision is selected by `--prompt revised`; it is a harness
+prompt, not product code, and no product reader prompt was altered.
+
+### PRE-CALL ARITHMETIC (before the first metered call; `runs/h1_rp01/pre_call_arithmetic.json`)
+
+| line | units | worst cost |
+|---|---|---|
+| 150 shared drafts | 150 | $0.01665 |
+| repairs, ≤1 per arm × 2 arms | ≤300 | $0.03329 |
+| **worst case** | **≤450** | **$0.049937** |
+| spent to date | | $0.05081367 |
+| remaining of $2.00 | | $1.949186 |
+| verdict | | **PROCEED** (2.6% of remaining) |
+
+### (3) RESULT — refusal collapses, but F1 regresses on the ON arm
+
+Same 150 ids, R=1 both sides, identical shared-draft + OFF/ON grounder + repair protocol;
+**only the reader prompt differs**.
+
+| metric | baseline | revised | Δ |
+|---|---|---|---|
+| **refusal rate (answerable)** | **0.1733** (26) | **0.0267** (4) | **−0.1466 (−85% rel.)** |
+| **false refusals** (§6) | **24** | **4** | **−20** |
+| answered | 124 | 146 | +22 |
+| newly refused | — | **0** | — |
+| citation validity OFF | 0.3267 | 0.4267 | +0.1000 |
+| citation validity ON | 0.8067 | 0.9467 | +0.1400 |
+| answer F1 OFF | 0.0640 | 0.0718 | **+0.0078** |
+| **answer F1 ON** | **0.2055** | **0.1713** | **−0.0342 REGRESSION** |
+| answer EM OFF / ON | 0.0067 / 0.0200 | 0.0000 / 0.0000 | −0.0067 / −0.0200 |
+
+**Answer to the ticket's question — "does refusal drop without F1 regression?" — is NO.**
+Refusal drops decisively (85% relative, 22 items recovered, **zero** newly refused) and
+citation validity rises in both arms, but the **ON arm's answer F1 regressed by −0.0342**, so
+the no-regression check **FAILS**. I am not presenting this as a clean win.
+
+**Where the F1 regression comes from** (`f1_decomposition`, so this is reproducible):
+
+| ON arm | rescued items (22) | already-answered-in-both (128) |
+|---|---|---|
+| baseline F1 | 0.0 (they were refusals) | 0.2548 |
+| revised F1 | **0.1251** (18/22 produced an answer) | **0.1891** |
+| shift | **POSITIVE** | **−0.0657** |
+| mean answer words | 25.4 | 20.6 → **22.9** |
+
+The rescued items all **gained**. The entire regression comes from items the reader was
+*already* answering: mean answer length inflated 20.6 → 22.9 words, and token-F1 against short
+gold spans is diluted by extra words. The mechanism is the revision's own "give the partial
+answer you can support" instruction encouraging elaboration. So this is a **genuine
+verbosity/precision trade-off**, not a broken fix.
+
+Two further honest notes:
+- **OFF arm rescued only 6/22 vs ON 18/22.** The revised prompt alone is not enough — the ON
+  grounder is what turns a recovered draft into a usable cited answer, which is independent
+  corroboration of T-G01 from a completely different direction.
+- **Answer EM went to 0.0000 in both arms** (ON 3/150 → 0/150). Small counts, but it moved
+  the wrong way and I am not hiding it behind the F1 numbers.
+
+**Recommendation:** the fix is right for its target (refusal, citation validity) but should not
+ship as-is for answer quality. The next revision should keep the narrowed refusal rule and
+drop the "partial answer" elaboration clause, or explicitly cap answer length. That is a
+prompt change I have **not** made — it needs a fresh measurement, not a guess.
+
+**VERIFY**
+- `ruff check` on all eight of my files → `All checks passed!`
+- `MYPYPATH=packages mypy --ignore-missing-imports h1_run.py h1_rp01_compare.py` → clean.
+- `refusal_comparison.json` recomputes **byte-identical** (offline, deterministic).
+- `git status --short packages/ evals/benchmark_v1/datasets/ judges/ PREREGISTRATION.md` → clean:
+  **no grounder change, no flag-default change, no frozen-manifest or rubric edit.**
+- `runs/h1/` untouched — the committed H1 baseline is intact and still reproducible.
+- Denominators are 150 on both sides; nothing excluded, quarantined or re-labelled.
+
+**SPEND: $0.02175966** for the 150-attempt run (267 metered calls, 0 failed) — **43.6% of the
+$0.049937 pre-call worst case**, in-cap. Plus **$0.00040447** for a 3-attempt smoke test
+(5 calls), tagged `h1_rp01_smoke` rather than swept into the main tag. Ledger total metered
+spend now **$0.07297780**, leaving **$1.92702220** of the $2.00 cap. First free-tier
+successes observed: **6 of 267** calls served free (still ~2%).
+
+**RISKS / FLAGS FOR THE COORDINATOR**
+1. **I broke the shared ledger a second time, then fixed the root cause.** `write_ledger` in
+   `h1_run.py` still appended its own 15-column layout into the 17-column normalized file,
+   re-corrupting the CSV exactly as in T-E01. I fixed it properly this time: `LEDGER_FIELDS`
+   is now the single canonical schema written on every append, it is documented as identical
+   to `normalize_ledger.py`'s `FIELDS`, and `write_ledger` now **raises** rather than
+   appending blind when the header does not match. Related: the new rows initially had no
+   `row_type`, which would have made `spent_to_date()` silently skip them — caught and fixed
+   before the numbers were reported. **Recommend the coordinator adopt the same guard for any
+   other writer of this file.**
+2. **My own normalizer had a latent data-destroying bug.** `normalize_ledger.py` only
+   understood widths 20/15/4, so re-running it on an already-normalized file demoted every
+   canonical row to `unrecognised` — it destroyed the p02/h1_reader_ab/h2-index rows once
+   before I noticed. Fixed by adding a canonical-width pass-through, and I restored from the
+   pre-normalization backup. **All 945 rows verified present and correctly tagged afterwards**
+   (p02 16, h1_reader_ab 618, h1_negatives 25, h1_rp01 267, h1_rp01_smoke 5, h2-index 14
+   projections). Originals kept: `budget_ledger.raw_mixed_schema.t-e01.csv` (T-E01 original)
+   and `budget_ledger.raw_mixed_schema.csv` (pre-this-repair state).
+3. **The F1 regression is unresolved and I am not hand-waving it.** ON-arm answer F1 −0.0342,
+   EM −0.0200. My recommendation above is a hypothesis about the cause (verbosity), supported
+   by the length measurement, not a validated fix. Do not treat the refusal win as
+   quality-neutral.
+4. **Harness shape still caps absolute quality.** Sentence-form answers against short gold
+   spans keep EM at ~0 in both arms and both prompt variants. This revision did not change
+   that, and it remains the reason T-G02's strict GSR had no power.
+5. Foreign WIP observed and untouched: the untracked `evals/bfcl_*`, `evals/embedder_*`,
+   `evals/test_*` files, and the many untracked `handoffs/*` and `reviews/*`. dev2's
+   `h1_negatives` run appears in the ledger at **$0.00000000** across 25 calls.
+
+Next: IDLE — push mandatory.
