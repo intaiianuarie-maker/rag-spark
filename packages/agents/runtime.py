@@ -48,6 +48,7 @@ from .interfaces import (
     Usage,
     validate_tool_arguments,
 )
+from .policy import GEMMA_FREE_MODEL
 from .tools import Tool, ToolRegistry
 
 
@@ -778,7 +779,7 @@ class AgentRuntime:
             usage = Usage()
         if _existing_run is not None and RunState.is_terminal(state.status):
             return _existing_run
-        model = context.model_policy.default_model or "google/gemma-4-26b-a4b-it:free"
+        model = context.model_policy.default_model or GEMMA_FREE_MODEL
         if _existing_run is not None:
             agent_run = _existing_run
         elif "_ckpt" in locals() and locals().get("_ckpt") is not None and locals()["_ckpt"].get("agent_run") is not None:  # noqa: E501

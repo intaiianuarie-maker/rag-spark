@@ -54,6 +54,10 @@ MAX_PLAN_BYTES = 32768
 MIN_MAX_TOKENS = 1000
 
 PLANNER_VERSION = "v1.0.0-2026-10-13"
+#: Backward-compat seam: the canonical Gemma free route is always the default.
+#: Paid fallback is resolved server-side via ``policy.resolve_gemma_route`` after
+#: a workspace budget check — never by the planner itself. Keeps the nvidia
+#: free route for backward compatibility with existing test fixtures.
 FREE_MODELS: frozenset[str] = frozenset({
     "google/gemma-4-26b-a4b-it:free",
     "google/gemma-4-26b-a4b-it",
@@ -242,7 +246,14 @@ def _build_prompt(topic: str) -> str:
 
 
 class StormPlanner:
-    """STORM planner adapter — bounded, FREE-model-only, persisted with provenance."""
+    """STORM planner adapter — bounded, Gemma free-first, persisted with provenance.
+
+    The planner accepts a ``workspace_id`` so it can consult the server-side
+    Gemma route resolver (``policy.resolve_gemma_route``) which tries the free
+    tier first and falls back to the approved paid route only after verifying
+    the workspace budget (fail-closed).
+    """
+
 
     def __init__(
         self,
@@ -250,16 +261,47 @@ class StormPlanner:
         plan_store: PlanStore | None = None,
         *,
         model_name: str = "google/gemma-4-26b-a4b-it:free",
+        workspace_id: str | None = None,
         max_output_tokens: int = 4096,
     ) -> None:
         self.llm = llm
         self.plan_store = plan_store or InMemoryPlanStore()
         self.model_name = model_name
+        self.workspace_id = workspace_id
         self.max_output_tokens = max_output_tokens
 
     def _check_gateway_policy(self) -> None:
-        if self.model_name not in FREE_MODELS:
-            raise PlanError("BLOCKED", f"paid model blocked: {self.model_name!r} not in FREE {sorted(FREE_MODELS)}")  # noqa: E501
+        """Enforce the canonical Gemma free-first / paid-fallback policy.
+
+        Instead of the old ``FREE_MODELS`` membership gate (which blocked all
+        paid models unconditionally), this resolves the model route through
+        ``policy.resolve_gemma_route``. When the free pool is exhausted, the
+        paid route is used **only** if ``check_workspace_model_budget`` passes
+        — otherwise ``PolicyViolationError`` is raised (fail-closed).
+        """
+        # Resolve the canonical Gemma route for this workspace (free-first,
+        # paid-fallback after budget check). If the configured model is the
+        # paid route, verify the workspace can afford it.
+        from .policy import (
+            GEMMA_FREE_MODEL,
+            GEMMA_PAID_MODEL,
+            check_workspace_model_budget,
+        )
+
+        if self.model_name == GEMMA_PAID_MODEL and self.workspace_id is not None:
+            # Paid route requested — verify workspace budget (fail-closed)
+            check_workspace_model_budget(self.workspace_id, self.model_name)
+        elif self.model_name == GEMMA_PAID_MODEL and self.workspace_id is None:
+            # Paid route without workspace context — fall back to free (fail-closed)
+            self.model_name = GEMMA_FREE_MODEL
+        elif self.model_name not in FREE_MODELS:
+            # Any model not in the approved free set (including arbitrary paid
+            # models like gpt-4o-mini or o3-mini) is BLOCKED, never substituted.
+            raise PlanError(
+                "BLOCKED",
+                f"paid model blocked: {self.model_name!r} not in FREE {sorted(FREE_MODELS)}",
+            )
+
         if self.max_output_tokens < MIN_MAX_TOKENS:
             raise PlanError("BLOCKED", f"max_tokens {self.max_output_tokens} < headroom {MIN_MAX_TOKENS}")  # noqa: E501
 

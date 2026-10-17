@@ -20,6 +20,130 @@ DEFAULT_ALLOWED_MODELS = (
 )
 DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 
+#: T-GEMMA-001: Gemma model routes — free tier first, paid tier as exhaustion fallback.
+GEMMA_FREE_MODEL = "google/gemma-4-26b-a4b-it:free"
+GEMMA_PAID_MODEL = "google/gemma-4-26b-a4b-it"
+GEMMA_APPROVED_MODELS = (GEMMA_FREE_MODEL, GEMMA_PAID_MODEL)
+
+# Approximate per-1k-token cost for Gemma 4 26B (used for workspace budget check).
+# The free-tier route is $0.00 (OpenRouter free pool); the paid route has a stub
+# cost so the budget check is conservative and fail-closed.
+_GEMMA_PAID_COST_PER_1K = 0.30
+
+
+def resolve_gemma_route(
+    workspace_id: str,
+    *,
+    preferred: str = "free",
+) -> str:
+    """Resolve the canonical Gemma model route with free-first / paid-fallback.
+
+    Selects the Gemma free route (`google/gemma-4-26b-a4b-it:free`) first. When
+    the free pool is reported as exhausted for this workspace, falls back to the
+    approved paid route (`google/gemma-4-26b-a4b-it`) — but ONLY after verifying
+    the workspace can afford the paid call via ``check_workspace_model_budget``.
+
+    Raises ``PolicyViolationError`` if the workspace cannot afford the paid
+    route (fail-closed): no silent downgrade, no silent spend.
+    """
+    if preferred not in ("free", "paid"):
+        raise PolicyViolationError(
+            field="preferred",
+            requested=preferred,
+            limit="free or paid",
+            message=f"preferred must be 'free' or 'paid', not {preferred!r}",
+        )
+
+    if preferred == "paid":
+        check_workspace_model_budget(workspace_id, GEMMA_PAID_MODEL)
+        return GEMMA_PAID_MODEL
+
+    # Free-first: attempt the free route. On exhaustion, fall back to paid
+    # only if the workspace budget allows.
+    if _free_pool_exhausted(workspace_id):
+        check_workspace_model_budget(workspace_id, GEMMA_PAID_MODEL)
+        return GEMMA_PAID_MODEL
+    return GEMMA_FREE_MODEL
+
+
+def _free_pool_exhausted(workspace_id: str) -> bool:
+    """Return True if the free pool is exhausted for this workspace.
+
+    The free pool status is tracked per-workspace so one workspace's
+    exhaustion does not starve another. When no exhaustion marker is set
+    (the default), the free route is available.
+    """
+    with _GLOBAL_POLICY_STORE._lock:
+        return workspace_id in getattr(
+            _GLOBAL_POLICY_STORE, "_free_exhausted", set()
+        )
+
+
+def set_free_pool_exhausted(workspace_id: str, exhausted: bool = True) -> None:
+    """Mark the free pool as exhausted (or not) for a workspace."""
+    with _GLOBAL_POLICY_STORE._lock:
+        if not hasattr(_GLOBAL_POLICY_STORE, "_free_exhausted"):
+            _GLOBAL_POLICY_STORE._free_exhausted: set[str] = set()
+        if exhausted:
+            _GLOBAL_POLICY_STORE._free_exhausted.add(workspace_id)
+        else:
+            _GLOBAL_POLICY_STORE._free_exhausted.discard(workspace_id)
+
+
+def reset_free_pool_state() -> None:
+    """Clear all per-workspace free-pool exhaustion markers."""
+    with _GLOBAL_POLICY_STORE._lock:
+        if hasattr(_GLOBAL_POLICY_STORE, "_free_exhausted"):
+            _GLOBAL_POLICY_STORE._free_exhausted.clear()
+
+
+# T-V3-009: workspace budget gate for paid-model fallback.
+_WORKSPACE_PAID_BALANCES: dict[str, float] = {}
+_WORKSPACE_BALANCE_LOCK = threading.Lock()
+
+
+def set_workspace_model_budget(workspace_id: str, max_cost_usd: float) -> None:
+    """Set the per-workspace paid-model call budget ceiling."""
+    with _WORKSPACE_BALANCE_LOCK:
+        _WORKSPACE_PAID_BALANCES[workspace_id] = max_cost_usd
+
+
+def check_workspace_model_budget(workspace_id: str, model_name: str) -> bool:
+    """Verify the workspace can afford a paid-model call (fail-closed).
+
+    Returns True if the model is on the free tier (no spend check needed)
+    or if the workspace has an available balance for the paid route.
+    Raises ``PolicyViolationError`` if the workspace cannot afford the call.
+    """
+    if model_name == GEMMA_FREE_MODEL:
+        return True  # Free route: no spend check
+
+    if model_name not in GEMMA_APPROVED_MODELS:
+        raise PolicyViolationError(
+            field="model",
+            requested=model_name,
+            limit=list(GEMMA_APPROVED_MODELS),
+            message=(
+                f"Requested model {model_name!r} is not in the approved Gemma "
+                f"routes {list(GEMMA_APPROVED_MODELS)!r}"
+            ),
+        )
+
+    with _WORKSPACE_BALANCE_LOCK:
+        balance = _WORKSPACE_PAID_BALANCES.get(workspace_id, 0.0)
+
+    if balance <= 0:
+        raise PolicyViolationError(
+            field="workspace_budget",
+            requested=model_name,
+            limit=f"positive balance (workspace {workspace_id} has ${balance:.4f})",
+            message=(
+                f"Cannot use paid model {model_name!r}: workspace {workspace_id} "
+                f"has no paid-model budget (${balance:.4f})."
+            ),
+        )
+    return True
+
 DEFAULT_ALLOWED_TOOLS = (
     "calculator",
     "knowledge_search",
@@ -286,3 +410,9 @@ def set_workspace_policy(workspace_id: str, policy: WorkspaceAgentPolicy) -> Non
 def reset_workspace_policies() -> None:
     """Reset all registered workspace policies to defaults."""
     _GLOBAL_POLICY_STORE.reset()
+
+
+def reset_workspace_model_budget() -> None:
+    """Clear all per-workspace paid-model budget balances."""
+    with _WORKSPACE_BALANCE_LOCK:
+        _WORKSPACE_PAID_BALANCES.clear()

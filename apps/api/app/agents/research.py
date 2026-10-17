@@ -2,8 +2,8 @@
 
 Stages: planning -> fan-out -> verify -> gaps -> contradictions -> synthesis.
 Every stage gated identically to T-021 (budget/approval/workspace via same
-get_principal + require + FREE-model-only). Report returns FULL honesty
-package (grounded sentences with citations, named unknowns, contradiction
+get_principal + require + Gemma free-first route resolver). Report returns FULL
+honesty package (grounded sentences with citations, named unknowns, contradiction
 sides, abstention with disclosure). No content lost vs in-process.
 
 Seam: create_research_pipeline() is the factory tests patch (like T-021's
@@ -134,8 +134,8 @@ async def submit_research(
     _require_workspace(principal, workspace_id)
 
     # Free-model-only gate (standing rule) — body does not carry model, but
-    # if pipeline were to use a model, it must be FREE; skeleton checks the
-    # planner's FREE_MODELS seam so tests can prove paid -> BLOCKED.
+    # the pipeline resolves the Gemma route via policy.resolve_gemma_route
+    # (free-first, paid-fallback after workspace budget check, fail-closed).
     # For the skeleton we accept the topic and stage a minimal report with fakes.
     research_id = str(uuid.uuid4())
     created = datetime.now(UTC).isoformat()
