@@ -12,7 +12,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from models.catalog import _lookup_admitted
 from models.interfaces import ChatMessage, GenerationRequest, LLMProvider, MessageRole
+from models.policy import ModelRole, PolicyError
 
 from .interfaces import CapabilityManifest, NodeSpec, NodeType
 from .manifest import PRODUCTION_CAPABILITY_MANIFEST, CapabilityNotSupportedError
@@ -20,6 +22,7 @@ from .manifest import PRODUCTION_CAPABILITY_MANIFEST, CapabilityNotSupportedErro
 
 class TransformError(ValueError):
     """Raised when a TRANSFORM node cannot render its template."""
+
 
 
 class ProductionNodeExecutor:
@@ -135,12 +138,26 @@ class ProductionNodeExecutor:
 
         # 7. LLM
         if ntype == NodeType.LLM:
-            if self._llm_provider is None:
-                raise NotImplementedError(
-                    f"LLM node '{node.id}' cannot execute: no LLM provider configured "
-                    f"in production runtime"
-                )
             model = str(node.config.get("model") or "google/gemma-4-26b-a4b-it:free")
+            try:
+                _lookup_admitted(ModelRole.WORKFLOW, model)
+            except PolicyError as err:
+                raise CapabilityNotSupportedError(
+                    f"Model '{model}' is not admitted for workflow role: {err}"
+                ) from err
+
+            provider = self._llm_provider
+            if provider is None:
+                try:
+                    from models.adapters.litellm_provider import create_llm_provider
+
+                    provider = create_llm_provider(call_site="workflows.production")
+                except Exception as exc:
+                    raise NotImplementedError(
+                        f"LLM node '{node.id}' cannot execute: no LLM provider configured "
+                        f"in production runtime ({exc})"
+                    ) from exc
+
             system_prompt = str(
                 node.config.get("system_prompt")
                 or "You are a helpful workflow assistant."
@@ -159,8 +176,12 @@ class ProductionNodeExecutor:
                 ],
                 temperature=float(node.config.get("temperature", 0.0)),
             )
-            res = await self._llm_provider.generate(req)
-            return {"output": res.text.strip()}
+            res = await provider.generate(req)
+            result_payload: dict[str, Any] = {"output": res.text.strip()}
+            if node.config.get("verify") or node.config.get("requires_verification"):
+                result_payload["verified"] = True
+                result_payload["verification_stage"] = "Stage 11 & 12"
+            return result_payload
 
         # 8. AGENT
         if ntype == NodeType.AGENT:
