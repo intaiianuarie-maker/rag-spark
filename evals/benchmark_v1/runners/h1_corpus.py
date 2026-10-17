@@ -152,13 +152,21 @@ def load_negatives() -> list[dict[str, Any]]:
 def load_all() -> dict[str, list[dict[str, Any]]]:
     """The three H1 slices, keyed for the runner."""
     hotpot = load_hotpot()
+    twowiki = load_two_wiki()
     negatives = load_negatives()
-    # The negative manifest carries no question text; take it from the 2wiki corpus.
-    questions = {i["item_id"]: i["question"] for i in load_two_wiki()}
+    # The negative manifest IDs originate from HotpotQA distractor validation parquet.
+    import pyarrow.parquet as pq
+    hp_table = pq.read_table(HOTPOT_PARQUET, columns=["id", "question"])
+    hp_questions = {
+        r["id"]: r["question"]
+        for r in hp_table.to_pylist()
+        if r["id"] in {n["item_id"] for n in negatives}
+    }
+    twowiki_questions = {i["item_id"]: i["question"] for i in twowiki}
     for n in negatives:
-        n["question"] = questions.get(n["item_id"], "")
+        n["question"] = hp_questions.get(n["item_id"], twowiki_questions.get(n["item_id"], ""))
         n["question_sha256"] = _sha(n["question"])
-    return {"hotpot": hotpot, "twowiki": load_two_wiki(), "negatives": negatives}
+    return {"hotpot": hotpot, "twowiki": twowiki, "negatives": negatives}
 
 
 def expected_attempts() -> dict[str, int]:

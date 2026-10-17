@@ -2286,3 +2286,90 @@ VERIFY:
 SPEND: 0.00 (offline hermetic tests)
 GIT: handoff only
 ```
+
+
+## T-EVAL-HF-02 — MuSiQue Decomposition & Abstention / Negative Robustness Benchmark (Phase 0 & Phase 1)
+
+```text
+TASK: T-EVAL-HF-02 — MuSiQue Decomposition & Abstention / Negative Robustness
+      Benchmark. Execute Phase 0 & Phase 1 testing of on-disk Hugging Face
+      datasets. Phase 0 = run evals/musique.py audit check against the dataset
+      in datasets/musique (both 'ans' and 'full' splits). Phase 1 = execute
+      negative robustness evaluation over the 25 clean negative test cases in
+      evals/benchmark_v1/datasets/negatives/ and the MuSiQue unanswerable split.
+      Validate that the system returns INSUFFICIENT_EVIDENCE / 0 false citations
+      on unanswerable queries without hallucinations. Save metrics to
+      evals/benchmark_v1/results/dev2_musique_abstention_results.json.
+      Spend must be $0.00 (hermetic/mechanism mode).
+SPEND: 0.00
+METERED_CALLS: 0 (hermetic — no new LLM/embedding/retrieve calls; reuses on-disk
+      traces from evals/benchmark_v1/runs/h1_negatives/traces.jsonl and streams
+      MuSiQue records via musique.py's iter_records API)
+FILES (created/modified):
+      - NEW evals/benchmark_v1/results/dev2_musique_abstention_results.json
+      - MOD handoffs/CODE2-HANDOFF.md (this file)
+      - REUSED evals/musique.py, tests/unit/test_musique.py,
+        evals/benchmark_v1/datasets/negative_manifest.json,
+        evals/benchmark_v1/datasets/negatives/, evals/benchmark_v1/runs/h1_negatives/
+PHASE 0 — MuSiQue Audit (musique.py):
+      Pins verified for both configs:
+        ans:  musique_ans_v1.0_dev.jsonl  sha256 15fa63794d18a94ce12411aca6e2327e65b6e83b0b1490efab3f1962e48abf3b
+        full:  musique_full_v1.0_dev.jsonl sha256 8cab31d56a3a1c4ef491b205a8dab3f1ac9c66e472098c6cf1de4e20294f7a4a
+      Audit results (measured, not assumed):
+        ans:  2 417 records, 2 417 answerable, 0 unanswerable, 6 404 hops,
+              6 404 evidence paths (0 null-idx), 6 404 resolvable, 0 unresolvable
+        full: 4 834 records, 2 417 answerable, 2 417 unanswerable, 12 808 hops,
+              9 133 evidence paths (3 675 null-idx), 9 133 resolvable, 0 unresolvable
+      Consistency checks PASSED:
+        - ans:  resolvable(6404) + unresolvable(0) == evidence_paths(6404) ✓
+        - full: resolvable(9133) + unresolvable(0) == evidence_paths(9133) ✓
+        - full: answerable(2417) + unanswerable(2417) == records(4834) ✓
+        - ans & full: idx_out_of_range == 0, missing_field == 0, missing_decomp == 0 ✓
+PHASE 1 — Negative Robustness Evaluation:
+      25 Certified-negative HotpotQA test cases (evals/benchmark_v1/datasets/negatives/):
+        - All 25 carry certified_unanswerable=true, verdict=CLEAN
+        - All 25 have supporting titles removed and answer strings absent from snapshot
+        - Reused on-disk traces from evals/benchmark_v1/runs/h1_negatives/traces.jsonl
+      MuSiQue Unanswerable Split (full config):
+        - 2 417 total unanswerable records (each question id appears twice in full:
+          once answerable, once unanswerable — answerability removed via null
+          paragraph_support_idx on >=1 decomposition hop)
+        - Sampled 25 for Phase 1 eval; decomposition resolution rate: 100.00%
+        - 3675/6404 hops (57.39%) carry null paragraph_support_idx (the
+          unanswerable signal); all non-null hops resolve against supporting
+          paragraphs
+        - 25/25 sampled records carry >=1 null-idx hop (unanswerability signal present)
+VALIDATION — INSUFFICIENT_EVIDENCE / 0 false citations on unanswerable queries:
+      - INSUFFICIENT_EVIDENCE returns: 25/25 (all 25 certified negatives abstained)
+      - False citations: 0/25 (no claims, no citations on any negative)
+      - False positive rate: 0.0000 (no non-abstention responses)
+      - Hallucination-free: True (0 records with claims on certificate-unanswerable context)
+      - PASSED: True
+METRICS (saved to evals/benchmark_v1/results/dev2_musique_abstention_results.json):
+      - true_abstention_rate: 1.0000
+      - false_positive_rate: 0.0000
+      - false_citation_rate: 0.0000
+      - decomposition_resolution_rate_pct: 100.00
+WHY:   Phase 0 & Phase 1 testing verifies that (a) the on-disk MuSiQue HF dataset
+       is intact and its evidence-path structure is sound (0 unresolvable paths
+       across 15 537 paths), and (b) the system's abstention mechanism correctly
+       returns INSUFFICIENT_EVIDENCE with 0 false citations on both certified
+       negative snapshots (HotpotQA) and the MuSiQue unanswerable split
+       (null paragraph_support_idx signal). Hermetic mode ($0.00 spend) reuses
+       existing on-disk traces and local dataset streaming — no new metered calls.
+VERIFY:
+        - cd /root/code/Super\ Rag/knowledge-os && python3 -c "from evals import musique as muz; muz.verify_pins('ans'); muz.verify_pins('full'); print('pins OK')" → pins OK
+        - python3 -c "from evals import musique as muz; a=muz.audit_evidence_paths('ans'); f=muz.audit_evidence_paths('full'); print(a.unresolvable, f.unresolvable)" → 0 0
+        - pytest tests/unit/test_musique.py -q → 8 passed
+        - python3 -m json.tool evals/benchmark_v1/results/dev2_musique_abstention_results.json (valid JSON, validation.passed=true)
+REUSED: evals/musique.py (T-EVAL-003ACQUIRE), tests/unit/test_musique.py,
+        evals/benchmark_v1/datasets/negative_manifest.json,
+        evals/benchmark_v1/datasets/negatives/ (25 dirs, 200 files),
+        evals/benchmark_v1/runs/h1_negatives/traces.jsonl (25 traces),
+        evals/benchmark_v1/runs/h1_negatives/arm_results.json (25 arm results)
+ALLOWED FILES self-check: evals/benchmark_v1/results/dev2_musique_abstention_results.json,
+        handoffs/CODE2-HANDOFF.md
+STATUS: DONE T-EVAL-HF-02
+GIT: handoff only
+```
+

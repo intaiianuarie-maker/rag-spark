@@ -4670,3 +4670,46 @@ VERIFY:
 - `/root/ko-venv/bin/mypy packages/models/adapters/ tests/unit/test_openrouter_transport.py` -> `Success: no issues found in 4 source files`
 
 RISKS: None. Existing `OpenRouterProvider` interface remains completely backward-compatible with 11/11 tests passing unmodified.
+
+
+## 2026-10-17 T-EVAL-HF-01 — Multi-Hop Retrieval & Paired Graph Benchmark on HotpotQA & 2Wiki
+
+TASK: T-EVAL-HF-01 — Multi-Hop Retrieval & Paired Graph Benchmark on HotpotQA & 2Wiki. Execute Phase 0 & Phase 1 testing on acquired Hugging Face datasets. Phase 0 = run evals/test_hotpot_full.py (26 tests) and tests/unit/test_wikimultihop.py (14 tests), verifying sha256 checksums, contract invariance, and evidence-path integrity. Phase 1 = execute paired graph evaluation comparing V1 Hybrid dense baseline against V2 Hybrid+Graph neighborhood expansion under equal arms (K=20). Save metrics to evals/benchmark_v1/results/dev1_multihop_benchmark_results.json. Spend must be $0.00 (hermetic/mechanism mode).
+
+SPEND: 0.00
+METERED_CALLS: 0 (hermetic mode — deterministic graph extraction and in-process cosine similarity over pinned records)
+
+FILES (created/modified):
+- NEW evals/benchmark_v1/results/dev1_multihop_benchmark_results.json
+- MOD handoffs/CODE1-HANDOFF.md (this file)
+- REUSED evals/hotpot_full.py, evals/wikimultihop.py, evals/graph_paired_eval.py, tests/fixtures/graph_paired_eval.py
+
+PHASE 0 AUDIT & INTEGRITY:
+- HotpotQA Full (hotpotqa/hotpot_qa, revision a575aeb651c6eeb4ad17698cb0ad4bf5a882d2c1, CC BY-SA 4.0):
+  - 26 unit tests passed in 124.11s.
+  - All LFS file sha256 checksums matched exactly.
+  - Record counts verified: fullwiki_train=90,447, fullwiki_validation=7,405, fullwiki_test=7,405, distractor_validation=7,405.
+  - Distractor audit: 7,405 records, 0 missing gold titles, 0 duplicate titles.
+- 2WikiMultihopQA (xwhan/2wikimultihop, revision 6b8893fa95c0d57577884d5930e4479e4be78822, CC BY 4.0):
+  - 14 unit tests passed, 1 skipped (full 330MB train audit opt-in).
+  - All parquet LFS sha256 pins verified.
+  - Record counts verified: train=167,454, validation=12,576, test=12,576.
+  - Validation evidence audit: 30,687 evidence paths, 30,687 resolvable, 0 unresolvable, 0 conflicting.
+
+PHASE 1 PAIRED GRAPH RETRIEVAL BENCHMARK:
+- Pinned corpus: HotpotQA distractor validation.
+- Equal arms enforced: K=20 in both dense baseline and graph-expanded neighborhood.
+- Metrics:
+  - Dense baseline Recall@20: 1.000
+  - Graph-augmented Recall@20: 1.000
+  - Delta Recall@20: 0.000 (saturated on clean distractor candidates)
+  - Refusals as signal: 0
+  - Unequal arms violations: 0
+
+VERIFY:
+- PYTHONPATH=packages:apps/api:apps/worker:evals:. pytest evals/test_hotpot_full.py tests/unit/test_wikimultihop.py -q -> 40 passed, 1 skipped
+- python3 -m json.tool evals/benchmark_v1/results/dev1_multihop_benchmark_results.json -> Valid JSON
+- spend_usd == 0.00
+
+STATUS: DONE T-EVAL-HF-01
+GIT: handoff only

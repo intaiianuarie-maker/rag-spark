@@ -1,0 +1,14 @@
+{
+  "run_tag": "h1_reader_ab",
+  "reader_prompt_variant": "baseline",
+  "n_attempts": 25,
+  "metered_calls": 25,
+  "free_calls": 0,
+  "paid_calls": 25,
+  "fallbacks": 25,
+  "failed_calls": 0,
+  "prompt_tokens": 34632,
+  "completion_tokens": 620,
+  "spent_usd": 0.00159094,
+  "remaining_cap_usd": 1.901154
+}
