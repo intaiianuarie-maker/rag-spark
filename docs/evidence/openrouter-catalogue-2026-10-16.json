@@ -1,0 +1,490 @@
+{
+  "checked_at_utc": "2026-10-16T12:27:16.953116+00:00",
+  "models": [
+    {
+      "model": "google/gemma-4-26b-a4b-it:free",
+      "source": "https://openrouter.ai/api/v1/models/google/gemma-4-26b-a4b-it:free/endpoints",
+      "endpoint_count": 1,
+      "endpoints": [
+        {
+          "provider_name": "Google AI Studio",
+          "tag": "google-ai-studio",
+          "status": 0,
+          "pricing": {
+            "prompt": "0",
+            "completion": "0",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "seed",
+            "response_format",
+            "tools",
+            "tool_choice"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "google/gemma-4-26b-a4b-it",
+      "source": "https://openrouter.ai/api/v1/models/google/gemma-4-26b-a4b-it/endpoints",
+      "endpoint_count": 13,
+      "endpoints": [
+        {
+          "provider_name": "Darkbloom",
+          "tag": "darkbloom",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.000000042",
+            "completion": "0.00000022",
+            "input_cache_read": "0.000000021",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "temperature",
+            "top_p",
+            "top_k",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "stop",
+            "seed",
+            "max_tokens",
+            "response_format",
+            "structured_outputs",
+            "logprobs",
+            "top_logprobs",
+            "tools",
+            "tool_choice"
+          ]
+        },
+        {
+          "provider_name": "DekaLLM",
+          "tag": "dekallm/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000006",
+            "completion": "0.00000033",
+            "input_cache_read": "0.00000004",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "frequency_penalty",
+            "logit_bias",
+            "max_tokens",
+            "presence_penalty",
+            "seed",
+            "stop",
+            "temperature",
+            "top_p",
+            "tools",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs",
+            "response_format"
+          ]
+        },
+        {
+          "provider_name": "DeepInfra",
+          "tag": "deepinfra/fp8",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000007",
+            "completion": "0.00000034",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "top_k",
+            "seed",
+            "min_p",
+            "tool_choice",
+            "tools",
+            "structured_outputs",
+            "response_format",
+            "logit_bias"
+          ]
+        },
+        {
+          "provider_name": "NextBit",
+          "tag": "nextbit/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000009",
+            "completion": "0.0000003",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+            "response_format",
+            "structured_outputs",
+            "repetition_penalty",
+            "seed",
+            "logprobs",
+            "top_logprobs",
+            "tools",
+            "tool_choice"
+          ]
+        },
+        {
+          "provider_name": "Io Net",
+          "tag": "io-net/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000009",
+            "completion": "0.00000031",
+            "input_cache_read": "0.000000041",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "tools",
+            "logprobs",
+            "top_logprobs",
+            "tool_choice"
+          ]
+        },
+        {
+          "provider_name": "Makora",
+          "tag": "makora",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.0000001",
+            "completion": "0.00000028",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "temperature",
+            "top_p",
+            "top_k",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "stop",
+            "max_tokens",
+            "seed",
+            "response_format",
+            "tools",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs"
+          ]
+        },
+        {
+          "provider_name": "CoreWeave",
+          "tag": "coreweave/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.0000001",
+            "completion": "0.0000003",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "top_k",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+            "seed",
+            "response_format",
+            "structured_outputs",
+            "logprobs",
+            "top_logprobs"
+          ]
+        },
+        {
+          "provider_name": "Cloudflare",
+          "tag": "cloudflare",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.0000001",
+            "completion": "0.0000003",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "top_k",
+            "seed",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "min_p",
+            "stop",
+            "logit_bias",
+            "response_format",
+            "tools",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs"
+          ]
+        },
+        {
+          "provider_name": "Venice",
+          "tag": "venice/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000013",
+            "completion": "0.0000004",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+            "top_k",
+            "response_format",
+            "structured_outputs",
+            "tools",
+            "tool_choice",
+            "logprobs",
+            "top_logprobs"
+          ]
+        },
+        {
+          "provider_name": "Parasail",
+          "tag": "parasail/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000013",
+            "completion": "0.0000004",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "frequency_penalty",
+            "presence_penalty",
+            "repetition_penalty",
+            "seed",
+            "stop",
+            "top_k",
+            "logit_bias",
+            "structured_outputs",
+            "response_format",
+            "logprobs",
+            "top_logprobs"
+          ]
+        },
+        {
+          "provider_name": "Novita",
+          "tag": "novita/bf16",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000013",
+            "completion": "0.0000004",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "stop",
+            "frequency_penalty",
+            "presence_penalty",
+            "seed",
+            "top_k",
+            "repetition_penalty",
+            "tools",
+            "tool_choice",
+            "response_format",
+            "logprobs",
+            "top_logprobs"
+          ]
+        },
+        {
+          "provider_name": "SiliconFlow",
+          "tag": "siliconflow/fp8",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000014",
+            "completion": "0.0000004",
+            "input_cache_read": "0.00000005",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "temperature",
+            "top_p",
+            "top_k",
+            "frequency_penalty",
+            "max_tokens",
+            "response_format",
+            "structured_outputs"
+          ]
+        },
+        {
+          "provider_name": "Google",
+          "tag": "google-vertex/global",
+          "status": -2,
+          "pricing": {
+            "prompt": "0.00000015",
+            "completion": "0.0000006",
+            "discount": 0
+          },
+          "supported_parameters": [
+            "reasoning",
+            "include_reasoning",
+            "max_tokens",
+            "temperature",
+            "top_p",
+            "seed",
+            "response_format",
+            "top_k",
+            "repetition_penalty",
+            "frequency_penalty",
+            "presence_penalty",
+            "stop",
+            "tools",
+            "tool_choice",
+            "structured_outputs",
+            "logprobs",
+            "top_logprobs"
+          ]
+        }
+      ]
+    },
+    {
+      "model": "google/gemini-embedding-2",
+      "source": "https://openrouter.ai/api/v1/models/google/gemini-embedding-2/endpoints",
+      "endpoint_count": 4,
+      "endpoints": [
+        {
+          "provider_name": "Google",
+          "tag": "google-vertex/us",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.0000002",
+            "completion": "0",
+            "image": "0.00000045",
+            "audio": "0.0000065",
+            "discount": 0
+          },
+          "supported_parameters": []
+        },
+        {
+          "provider_name": "Google",
+          "tag": "google-vertex/global",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.0000002",
+            "completion": "0",
+            "image": "0.00000045",
+            "audio": "0.0000065",
+            "discount": 0
+          },
+          "supported_parameters": []
+        },
+        {
+          "provider_name": "Google AI Studio",
+          "tag": "google-ai-studio",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.0000002",
+            "completion": "0",
+            "image": "0.00000045",
+            "audio": "0.0000065",
+            "discount": 0
+          },
+          "supported_parameters": []
+        },
+        {
+          "provider_name": "Google",
+          "tag": "google-vertex/eu",
+          "status": 0,
+          "pricing": {
+            "prompt": "0.00000022",
+            "completion": "0",
+            "image": "0.000000495",
+            "audio": "0.00000715",
+            "discount": 0
+          },
+          "supported_parameters": []
+        }
+      ]
+    },
+    {
+      "model": "google/gemini-embedding-2:free",
+      "source": "https://openrouter.ai/api/v1/models/google/gemini-embedding-2:free/endpoints",
+      "endpoint_count": 0,
+      "endpoints": []
+    },
+    {
+      "model": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+      "source": "https://openrouter.ai/api/v1/models/nvidia/llama-nemotron-rerank-vl-1b-v2:free/endpoints",
+      "endpoint_count": 1,
+      "endpoints": [
+        {
+          "provider_name": "Nvidia",
+          "tag": "nvidia",
+          "status": 0,
+          "pricing": {
+            "prompt": "0",
+            "completion": "0",
+            "discount": 0
+          },
+          "supported_parameters": []
+        }
+      ]
+    },
+    {
+      "model": "nvidia/llama-nemotron-rerank-vl-1b-v2",
+      "source": "https://openrouter.ai/api/v1/models/nvidia/llama-nemotron-rerank-vl-1b-v2/endpoints",
+      "endpoint_count": 0,
+      "endpoints": []
+    }
+  ]
+}

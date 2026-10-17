@@ -1,0 +1,634 @@
+{
+  "review_date": "2026-10-14",
+  "timezone": "Europe/Bucharest",
+  "host": "vmi3584180",
+  "repository": "/root/code/Super Rag/knowledge-os",
+  "source_snapshot_head": "acf7655e236dc2b0908827480d7adb56b7529e5f",
+  "later_observed_head": "daf9f5114f133ec19c4a05f17c48260959dd17c6",
+  "snapshot_sha256": "3bc2878539e722e96ade633d3a72f27d69589794845bc8bf20e9a7910e6acc89",
+  "observations": [
+    {
+      "check": "timestamp_utc",
+      "result": "2026-10-14T08:27:26.296164+00:00",
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "head",
+      "result": "acf7655e236dc2b0908827480d7adb56b7529e5f",
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "disk",
+      "result": "Filesystem      Size  Used Avail Use% Mounted on\n/dev/sda1       193G  152G   42G  79% /",
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "memory",
+      "result": "total        used        free      shared  buff/cache   available\nMem:           7.7Gi       4.8Gi       1.2Gi       246Mi       2.2Gi       2.9Gi\nSwap:           11Gi       4.2Gi       7.8Gi",
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "knowledge-os-api-1",
+      "result": {
+        "started": "2026-10-13T05:45:27.232555604Z",
+        "image_id": "sha256:e2e9bbecdb938af4d3cbbacc18ed3317a6d60959b5572d8772305b6fac5f53e6",
+        "image_created_label": null,
+        "command": [
+          "uvicorn",
+          "app.main:app",
+          "--host",
+          "0.0.0.0",
+          "--port",
+          "8000",
+          "--reload"
+        ],
+        "mounts": [
+          {
+            "source": "/root/code/Super Rag/knowledge-os/apps/api",
+            "destination": "/app/apps/api",
+            "rw": true
+          },
+          {
+            "source": "/root/code/Super Rag/knowledge-os/packages",
+            "destination": "/app/packages",
+            "rw": true
+          }
+        ],
+        "safe_settings": {
+          "APP_ENV": "local",
+          "ALLOW_DIMENSION_ADAPTATION": "false",
+          "ANSWER_MODEL": "nvidia/nemotron-3.5-lightning:free"
+        },
+        "jwt_is_known_default": true
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "knowledge-os-worker-1",
+      "result": {
+        "started": "2026-10-13T21:35:54.239192686Z",
+        "image_id": "sha256:60cbb9f42bbd70b48524c9db781a27aae8ca1fcd5596c436c25c1bf70aac3ebe",
+        "image_created_label": null,
+        "command": [
+          "python",
+          "-m",
+          "worker.main"
+        ],
+        "mounts": [
+          {
+            "source": "/root/code/Super Rag/knowledge-os/apps/worker",
+            "destination": "/app/apps/worker",
+            "rw": true
+          },
+          {
+            "source": "/root/code/Super Rag/knowledge-os/packages",
+            "destination": "/app/packages",
+            "rw": true
+          }
+        ],
+        "safe_settings": {
+          "APP_ENV": "local",
+          "ALLOW_DIMENSION_ADAPTATION": "false",
+          "ANSWER_MODEL": "nvidia/nemotron-3.5-lightning:free"
+        },
+        "jwt_is_known_default": true
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "knowledge-os-web-1",
+      "result": {
+        "started": "2026-10-12T15:00:29.620823194Z",
+        "image_id": "sha256:2dce58dfb5ecd724eedbb338d0b1dc46b6a281f2fbea0b755a0d49f7a9ac25e2",
+        "image_created_label": null,
+        "command": [
+          "node",
+          "server.js"
+        ],
+        "mounts": [],
+        "safe_settings": {
+          "COOKIE_SECURE": "false"
+        },
+        "jwt_is_known_default": null
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "http/health",
+      "result": {
+        "status": "ok",
+        "service": "knowledge-os-api",
+        "version": "0.1.0",
+        "env": "local"
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "http/ready",
+      "result": {
+        "status": "degraded",
+        "ready": false,
+        "service": "knowledge-os-api",
+        "version": "0.1.0",
+        "dependencies": {
+          "postgres": {
+            "name": "postgres",
+            "reachable": false,
+            "latency_ms": 2208.36,
+            "detail": null,
+            "error": "TimeoutError: "
+          },
+          "redis": {
+            "name": "redis",
+            "reachable": true,
+            "latency_ms": 1989.92,
+            "detail": "PING -> True",
+            "error": null
+          },
+          "qdrant": {
+            "name": "qdrant",
+            "reachable": true,
+            "latency_ms": 1625.8,
+            "detail": "GET /readyz -> 200",
+            "error": null
+          },
+          "minio": {
+            "name": "minio",
+            "reachable": true,
+            "latency_ms": 1066.04,
+            "detail": "GET / -> 200",
+            "error": null
+          },
+          "infinity": {
+            "name": "infinity",
+            "reachable": false,
+            "latency_ms": 445.46,
+            "detail": null,
+            "error": "ConnectError: All connection attempts failed"
+          },
+          "llm_gateway": {
+            "name": "llm_gateway",
+            "reachable": true,
+            "latency_ms": 826.93,
+            "detail": "GET /health/liveliness -> 404",
+            "error": null
+          },
+          "worker": {
+            "name": "worker",
+            "reachable": true,
+            "latency_ms": 459.8,
+            "detail": "worker heartbeat renewed 0.9s ago",
+            "error": null
+          }
+        }
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "http/version",
+      "result": {
+        "service": "knowledge-os-api",
+        "version": "0.1.0",
+        "git_sha": "unknown",
+        "env": "local"
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "http/openapi.json",
+      "result": {
+        "/v1/workspaces/{workspace_id}/agent/runs": [
+          "post"
+        ],
+        "/v1/workspaces/{workspace_id}/agent/runs/{run_id}": [
+          "get"
+        ],
+        "/v1/workspaces/{workspace_id}/agent/runs/{run_id}/cancel": [
+          "post"
+        ],
+        "/v1/workspaces/{workspace_id}/agent/research": [
+          "post"
+        ],
+        "/v1/workspaces/{workspace_id}/agent/research/{research_id}": [
+          "get"
+        ],
+        "/v1/workspaces/{workspace_id}/agent/research/{research_id}/report": [
+          "get"
+        ]
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "knowledge_collection",
+      "result": {
+        "status": "green",
+        "points_count": 2041,
+        "indexed_vectors_count": 2330,
+        "config": {
+          "params": {
+            "vectors": {
+              "dense": {
+                "size": 1024,
+                "distance": "Cosine"
+              }
+            },
+            "shard_number": 1,
+            "replication_factor": 1,
+            "write_consistency_factor": 1,
+            "on_disk_payload": true,
+            "sparse_vectors": {
+              "sparse": {
+                "index": {
+                  "on_disk": false
+                }
+              }
+            }
+          },
+          "hnsw_config": {
+            "m": 16,
+            "ef_construct": 100,
+            "full_scan_threshold": 10000,
+            "max_indexing_threads": 0,
+            "on_disk": false
+          },
+          "optimizer_config": {
+            "deleted_threshold": 0.2,
+            "vacuum_min_vector_number": 1000,
+            "default_segment_number": 0,
+            "max_segment_size": null,
+            "memmap_threshold": null,
+            "indexing_threshold": 10000,
+            "flush_interval_sec": 5,
+            "max_optimization_threads": null,
+            "prevent_unoptimized": null
+          },
+          "wal_config": {
+            "wal_capacity_mb": 32,
+            "wal_segments_ahead": 0,
+            "wal_retain_closed": 1
+          },
+          "quantization_config": null
+        }
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "source_vs_container:apps/api/app/agents/router.py",
+      "result": {
+        "sha256": "328dade996a15de6c2de9eaa57e36126caa1420861d1a48219a50e1f32cd5b57",
+        "container_sha256": "328dade996a15de6c2de9eaa57e36126caa1420861d1a48219a50e1f32cd5b57",
+        "equal": true
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "source_vs_container:apps/api/app/agents/research.py",
+      "result": {
+        "sha256": "cf712fb8f3d010e69d549c65d3f9f36a2d39031d581359feff7f4bc94b4da36f",
+        "container_sha256": "cf712fb8f3d010e69d549c65d3f9f36a2d39031d581359feff7f4bc94b4da36f",
+        "equal": true
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "source_vs_container:apps/worker/worker/main.py",
+      "result": {
+        "sha256": "eb252b497c5d57e4ad2dc38bed452ecc885a2171056d6e4d364375d29f500339",
+        "container_sha256": "eb252b497c5d57e4ad2dc38bed452ecc885a2171056d6e4d364375d29f500339",
+        "equal": true
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "source_vs_container:packages/answer/verification.py",
+      "result": {
+        "sha256": "b2767d5db6da9d2da9300371b97a48f67cbbbb95679069aa919168f9043bc1c5",
+        "container_sha256": "b2767d5db6da9d2da9300371b97a48f67cbbbb95679069aa919168f9043bc1c5",
+        "equal": true
+      },
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "relevant_processes",
+      "result": [
+        " 738826 python          python -m worker.main"
+      ],
+      "capture_file": "live-inspection.jsonl"
+    },
+    {
+      "check": "default_agent_handler",
+      "result": {
+        "status": "completed",
+        "output": "done",
+        "runtime_provider": "noop"
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "default_research_handler",
+      "result": {
+        "research_id": "0d502bdf-3c2e-47c5-a17e-5b804a44dfe1",
+        "workspace_id": "23ab9358-c37f-4601-9df8-1a0b7b573d7b",
+        "status": "completed",
+        "topic": "REVIEW_ONLY_ASSERTION: The office budget is 999999.",
+        "grounded_sentences": [
+          {
+            "sentence": "REVIEW_ONLY_ASSERTION: The office budget is 999999.",
+            "chunk_ids": [
+              "chk-1"
+            ],
+            "evidence_ids": [
+              "ev-1"
+            ],
+            "citations": [
+              "chk-1"
+            ]
+          }
+        ],
+        "unknowns": [],
+        "contradictions": [],
+        "contradiction_outline": [],
+        "citations": [
+          "chk-1"
+        ],
+        "abstained": false,
+        "abstention_reason": "",
+        "searched": [
+          "REVIEW_ONLY_ASSERTION: The office budget is 999999."
+        ],
+        "limitations": []
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "agent_status_after_route_store_reset",
+      "result": {
+        "http_status": 404
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "graph_enqueue_failure",
+      "result": {
+        "returned": null,
+        "raised": false
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "cross_language_grounding",
+      "result": {
+        "source": "The capital of France is Paris.",
+        "claim": "Capitala Frantei este Paris.",
+        "score": 0.0,
+        "threshold": 1.0
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "production_accepts_compose_default_jwt",
+      "result": true,
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "subject_session_binding",
+      "result": {
+        "victim_subject_with_other_active_session_accepted": true
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "promotion_alias_failure",
+      "result": {
+        "error_type": "VectorStoreError",
+        "old_collection_survives": false,
+        "live_alias_exists": false,
+        "replacement_survives": true
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "workflow_draft_schema_in_memory",
+      "result": {
+        "existing_revision_updated": true,
+        "out_of_order_revision_inserted": true,
+        "existing_revision_deleted": true
+      },
+      "capture_file": "isolated-probes.jsonl"
+    },
+    {
+      "check": "ruff",
+      "result": {
+        "exit_code": 1,
+        "count": 1,
+        "codes": {
+          "E501": 1
+        },
+        "examples": [
+          {
+            "file": "tests/unit/test_ingest_pipeline.py",
+            "line": 159,
+            "code": "E501"
+          }
+        ]
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "mypy",
+      "result": {
+        "exit_code": 0,
+        "output": "Success: no issues found in 195 source files\n",
+        "stderr": ""
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "ci_vendor_guard",
+      "result": {
+        "would_fail": true,
+        "matches": [
+          "apps/worker/jobs/ingest_pipeline.py:461:        import llama_index.core  # noqa: F401  - availability probe only",
+          "packages/graph/queue.py:32:import redis.asyncio as redis_asyncio",
+          "packages/graph/queue.py:34:from redis.exceptions import RedisError"
+        ]
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "live_vector_census",
+      "result": {
+        "count": 2041,
+        "identities": [
+          {
+            "model": "unrecorded",
+            "revision": "unrecorded",
+            "dimension": "unrecorded",
+            "count": 2041
+          }
+        ],
+        "shape_counts": {
+          "constant_vector": 1651,
+          "zero_tail_after_384": 276,
+          "other_dense_vector": 114
+        }
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "reconciliation_read_only",
+      "result": {
+        "points": 2041,
+        "matched": 1927,
+        "orphans": 114,
+        "by_category": {
+          "superseded-version": 67,
+          "tombstoned-doc": 7,
+          "no-PG-row": 0,
+          "other": 40
+        },
+        "chunks_without_points": 1855
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "live_recheck:http://127.0.0.1:8000/ready",
+      "result": {
+        "status": "degraded",
+        "ready": false,
+        "service": "knowledge-os-api",
+        "version": "0.1.0",
+        "dependencies": {
+          "postgres": {
+            "name": "postgres",
+            "reachable": false,
+            "latency_ms": 2309.25,
+            "detail": null,
+            "error": "TimeoutError: "
+          },
+          "redis": {
+            "name": "redis",
+            "reachable": true,
+            "latency_ms": 2302.96,
+            "detail": "PING -> True",
+            "error": null
+          },
+          "qdrant": {
+            "name": "qdrant",
+            "reachable": true,
+            "latency_ms": 1525.81,
+            "detail": "GET /readyz -> 200",
+            "error": null
+          },
+          "minio": {
+            "name": "minio",
+            "reachable": true,
+            "latency_ms": 893.57,
+            "detail": "GET / -> 200",
+            "error": null
+          },
+          "infinity": {
+            "name": "infinity",
+            "reachable": false,
+            "latency_ms": 432.29,
+            "detail": null,
+            "error": "ConnectError: All connection attempts failed"
+          },
+          "llm_gateway": {
+            "name": "llm_gateway",
+            "reachable": true,
+            "latency_ms": 838.22,
+            "detail": "GET /health/liveliness -> 404",
+            "error": null
+          },
+          "worker": {
+            "name": "worker",
+            "reachable": true,
+            "latency_ms": 420.62,
+            "detail": "worker heartbeat renewed 0.7s ago",
+            "error": null
+          }
+        }
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "live_recheck:http://127.0.0.1:7997/models",
+      "result": "ConnectionResetError",
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "embedding_container",
+      "result": {
+        "state": "running",
+        "started": "2026-10-14T08:27:05.038558715Z",
+        "restarts": 0,
+        "oom_killed": false
+      },
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "built_web_version_routes",
+      "result": [],
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "ending_head",
+      "result": "daf9f5114f133ec19c4a05f17c48260959dd17c6",
+      "capture_file": "checks.jsonl"
+    },
+    {
+      "check": "final_readiness_and_source_recheck",
+      "result": {
+        "head": "daf9f5114f133ec19c4a05f17c48260959dd17c6",
+        "product_diff_since_initial_snapshot": [],
+        "status": "ok",
+        "ready": true,
+        "reachable_dependencies": [
+          "postgres",
+          "redis",
+          "qdrant",
+          "minio",
+          "infinity",
+          "llm_gateway",
+          "worker"
+        ],
+        "note": "Final read-only /ready request recovered; earlier degraded samples were transient. No services were restarted by this review."
+      }
+    }
+  ],
+  "test_runs": [
+    {
+      "command": "PYTHONDONTWRITEBYTECODE=1 /root/ko-venv/bin/python -m pytest tests/unit tests/contracts -q -p no:cacheprovider",
+      "passed": 2264,
+      "failed": 1,
+      "skipped": 1,
+      "duration_seconds": 327.7,
+      "failure": "tests/contracts/test_error_taxonomy_contract.py::test_worker_pipeline_literals_resolve_and_wire_is_canonical: GRAPH_ENQUEUE_FAILED not in the taxonomy",
+      "skip": "tests/unit/test_wikimultihop.py:122: optional full 330 MB audit"
+    },
+    {
+      "command": "npm test -- --reporter=dot",
+      "passed": 216,
+      "files_passed": 21,
+      "failed": 0,
+      "duration_seconds": 22.24
+    },
+    {
+      "command": "./node_modules/.bin/tsc --noEmit --incremental false",
+      "exit_code": 0
+    }
+  ],
+  "saved_g5_artifact_summary": {
+    "rows": 20,
+    "off_nulls": 7,
+    "on_nulls": 8,
+    "off_refusals": 13,
+    "on_refusals": 12,
+    "off_valid_sum": 0.0,
+    "on_valid_sum": 0.0,
+    "off_mean_lexical": 0.16,
+    "on_mean_lexical": 0.145,
+    "note": "Existing artifact analyzed locally, not a new live benchmark."
+  }
+}

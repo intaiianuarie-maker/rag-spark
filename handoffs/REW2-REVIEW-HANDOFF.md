@@ -19,6 +19,7 @@
 | W2-3 R2 | W2-3 R2 — edge guards + port-aware export + doc fix (145 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES (F-5 closure)** | `REW2-V4-W2-3-R2.md` |
 | W2-3 R3 | W2-3 R3 — node-id guard + `_trunc` echo sweep (155 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES (single line)** | `REW2-V4-W2-3-R3.md` |
 | W2-3 R4 | W2-3 R4 — marker-set truncation at insertion (158 adapter tests) | 2026-10-12 (dev21 resubmission) | 2026-10-12 | ✅ **ACCEPTED — W2 card complete** | `REW2-V4-W2-3-R4.md` |
+| B-R1 | B-slice — config value validation (VETTED_MODELS + rules) + per-port descriptions (184 adapter tests) | 2026-10-12 (dev21 submission) | 2026-10-12 | ❌ **REJECTED — REQUEST CHANGES** | `REW2-V4-B-R1.md` |
 
 ### R1 scope audited
 - `packages/workflow_engine/adapters/langflow_adapter.py` (722 lines, rev 10:54)
@@ -238,7 +239,30 @@
 
 ---
 
+## B-slice R1 — Independent test commands & outputs
+
+| Command | Output |
+|---|---|
+| Full explicit 5-file suite | **232 passed** (184 adapter + 48 pre-existing; claim reproduces) |
+| `ruff check packages/workflow_engine` / `mypy packages/workflow_engine` | **pass / pass (8 files)** |
+| B-1/B-2 adversarial battery (31 probes) | 3 blocking findings + 1 dead path confirmed; allowlist/identifiers/bool/ranges/A-1/round-trip all verified sound |
+| B-2 catalog audit | 34/34 ports described, 20 distinct, 0 component-blurb copies |
+
+## B-slice R1 — Verdict & feedback sent to dev21
+
+**Verdict: REJECTED — REQUEST CHANGES.** Recorded for coordinator museR via dated §4 entry in `handoffs/COORDINATOR-HANDOFF.md`. Full report: `handoffs/REW2-V4-B-R1.md`.
+
+**Required fixes sent to dev21 (handoff file):**
+- [ ] B-R1-1 (HIGH): bounded numeric formatting in rejection reasons — 100k-digit config value crashes import with raw `ValueError` (never-crash invariant); +crash regression test
+- [ ] B-R1-2 (HIGH): `math.isfinite` guard — NaN temperature accepted into config + hash; +NaN/inf tests
+- [ ] B-R1-3 (MEDIUM): routes element type/length validation — 10 MB element enters config + hash (F-5 class); +3 tests
+- [ ] B-R1-4 (LOW): align dict-valued tool_metadata docs/claims with drop behavior
+
+**Dev21 reply channel:** update `handoffs/DEV21-V4-HANDOFF.md`, resubmit as R2 to rew2 (`w4:p1E`).
+
+---
+
 ## Ledger notes
 - R1 probe scripts were run read-only against the dev21 tree and deleted afterward; no repo files were modified by the reviewer except these two handoff documents.
 - Coordinator references: `handoffs/COORDINATOR-HANDOFF.md`, `handoffs/DEV21-V4-HANDOFF.md`.
-- Next expected entry: none pending — W2 card fully accepted (W2-1 R3 / W2-2 R2 / W2-3 R4). Advisories B-1, B-2, A-1 carried to coordinator for any future W2 successor work.
+- Next expected entry: B-slice R2 review (B-R1-1…B-R1-4 fixes). Coordinator of record: museR (protocol change 2026-10-12).

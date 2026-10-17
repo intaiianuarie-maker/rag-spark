@@ -1,0 +1,453 @@
+{
+  "summary": {
+    "label": "OURS-PENDING-OFFICIAL",
+    "model": "gemma-4-26b-a4b-it",
+    "n_items": 11,
+    "n_call_items": 8,
+    "n_irrelevance_items": 3,
+    "ours_ast_accuracy": {
+      "total": 8,
+      "correct": 6,
+      "ast_accuracy": 0.75
+    },
+    "n_correct": 9,
+    "buckets": {
+      "ast_match": 6,
+      "invalid_arguments": 0,
+      "ast_mismatch": 2,
+      "wrong_function": 0,
+      "no_call": 0,
+      "correct_abstain": 3,
+      "false_call": 0,
+      "transport_error": 0
+    },
+    "unparseable_as_non_call": 0,
+    "by_category": {
+      "simple": {
+        "n": 5,
+        "n_correct": 5
+      },
+      "multiple": {
+        "n": 2,
+        "n_correct": 0
+      },
+      "parallel": {
+        "n": 1,
+        "n_correct": 1
+      },
+      "irrelevance": {
+        "n": 3,
+        "n_correct": 3
+      }
+    },
+    "models_used": [
+      "google/gemma-4-26b-a4b-it",
+      "google/gemma-4-26b-a4b-it:free"
+    ],
+    "fallbacks": [
+      {
+        "item_id": "simple-calc-sum",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "simple-calc-parens",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "simple-search-query",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "simple-search-topk",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "simple-read-triple",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "multiple-search-then-calc",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "parallel-two-tools",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "irrelevance-general-knowledge",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "irrelevance-explicit-refusal",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      },
+      {
+        "item_id": "irrelevance-names-the-tool",
+        "reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+      }
+    ],
+    "spend": {
+      "prompt_tokens": 4734,
+      "completion_tokens": 339,
+      "usd": 0.000479,
+      "paid_items": 10
+    }
+  },
+  "results": [
+    {
+      "item_id": "simple-calc-sum",
+      "category": "simple",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_match",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 1,
+      "ast_match": true,
+      "errors": [],
+      "predicted_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "45 * 12 + 10"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "45 * 12 + 10"
+          }
+        }
+      ],
+      "prompt_tokens": 409,
+      "completion_tokens": 22,
+      "cost_usd": 4.3e-05,
+      "latency_ms": 1320,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "simple-calc-parens",
+      "category": "simple",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_match",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 1,
+      "ast_match": true,
+      "errors": [],
+      "predicted_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "(128 - 46) * 3"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "(128 - 46) * 3"
+          }
+        }
+      ],
+      "prompt_tokens": 410,
+      "completion_tokens": 24,
+      "cost_usd": 4.4e-05,
+      "latency_ms": 817,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "simple-search-query",
+      "category": "simple",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_match",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 1,
+      "ast_match": true,
+      "errors": [],
+      "predicted_calls": [
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "termination notice period"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "termination notice period"
+          }
+        }
+      ],
+      "prompt_tokens": 405,
+      "completion_tokens": 17,
+      "cost_usd": 4.2e-05,
+      "latency_ms": 663,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "simple-search-topk",
+      "category": "simple",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_match",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 1,
+      "ast_match": true,
+      "errors": [],
+      "predicted_calls": [
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "SLA penalty clause",
+            "top_k": 3
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "SLA penalty clause",
+            "top_k": 3
+          }
+        }
+      ],
+      "prompt_tokens": 415,
+      "completion_tokens": 24,
+      "cost_usd": 4.5e-05,
+      "latency_ms": 946,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "simple-read-triple",
+      "category": "simple",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_match",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 1,
+      "ast_match": true,
+      "errors": [],
+      "predicted_calls": [
+        {
+          "name": "knowledge_read",
+          "arguments": {
+            "chunk_id": "33333333-3333-4333-8333-333333333333",
+            "document_id": "11111111-1111-4111-8111-111111111111",
+            "document_version_id": "22222222-2222-4222-8222-222222222222"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "knowledge_read",
+          "arguments": {
+            "document_id": "11111111-1111-4111-8111-111111111111",
+            "document_version_id": "22222222-2222-4222-8222-222222222222",
+            "chunk_id": "33333333-3333-4333-8333-333333333333"
+          }
+        }
+      ],
+      "prompt_tokens": 517,
+      "completion_tokens": 140,
+      "cost_usd": 8.9e-05,
+      "latency_ms": 2582,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "multiple-calc-then-search",
+      "category": "multiple",
+      "model_used": "google/gemma-4-26b-a4b-it:free",
+      "bucket": "ast_mismatch",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 2,
+      "ast_match": false,
+      "errors": [
+        "knowledge_search: 0 predicted vs 1 in gold"
+      ],
+      "predicted_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "6 * 7"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "6 * 7"
+          }
+        },
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "onboarding checklist"
+          }
+        }
+      ],
+      "prompt_tokens": 491,
+      "completion_tokens": 17,
+      "cost_usd": 0.0,
+      "latency_ms": 1214,
+      "fallback_reason": ""
+    },
+    {
+      "item_id": "multiple-search-then-calc",
+      "category": "multiple",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_mismatch",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 1,
+      "n_gold_calls": 2,
+      "ast_match": false,
+      "errors": [
+        "calculator: 0 predicted vs 1 in gold"
+      ],
+      "predicted_calls": [
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "retention policy"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "retention policy"
+          }
+        },
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "365 - 30"
+          }
+        }
+      ],
+      "prompt_tokens": 430,
+      "completion_tokens": 17,
+      "cost_usd": 4.4e-05,
+      "latency_ms": 1041,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "parallel-two-tools",
+      "category": "parallel",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "ast_match",
+      "emitted": true,
+      "mode": "native",
+      "n_predicted_calls": 2,
+      "n_gold_calls": 2,
+      "ast_match": true,
+      "errors": [],
+      "predicted_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "1024 / 8"
+          }
+        },
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "incident postmortem"
+          }
+        }
+      ],
+      "gold_calls": [
+        {
+          "name": "calculator",
+          "arguments": {
+            "expression": "1024 / 8"
+          }
+        },
+        {
+          "name": "knowledge_search",
+          "arguments": {
+            "query": "incident postmortem"
+          }
+        }
+      ],
+      "prompt_tokens": 427,
+      "completion_tokens": 35,
+      "cost_usd": 4.9e-05,
+      "latency_ms": 758,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "irrelevance-general-knowledge",
+      "category": "irrelevance",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "correct_abstain",
+      "emitted": false,
+      "mode": "prose_only",
+      "n_predicted_calls": 0,
+      "n_gold_calls": 0,
+      "ast_match": false,
+      "errors": [],
+      "predicted_calls": [],
+      "gold_calls": [],
+      "prompt_tokens": 416,
+      "completion_tokens": 23,
+      "cost_usd": 4.4e-05,
+      "latency_ms": 1111,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "irrelevance-explicit-refusal",
+      "category": "irrelevance",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "correct_abstain",
+      "emitted": false,
+      "mode": "prose_only",
+      "n_predicted_calls": 0,
+      "n_gold_calls": 0,
+      "ast_match": false,
+      "errors": [],
+      "predicted_calls": [],
+      "gold_calls": [],
+      "prompt_tokens": 403,
+      "completion_tokens": 2,
+      "cost_usd": 3.7e-05,
+      "latency_ms": 1164,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    },
+    {
+      "item_id": "irrelevance-names-the-tool",
+      "category": "irrelevance",
+      "model_used": "google/gemma-4-26b-a4b-it",
+      "bucket": "correct_abstain",
+      "emitted": false,
+      "mode": "prose_only",
+      "n_predicted_calls": 0,
+      "n_gold_calls": 0,
+      "ast_match": false,
+      "errors": [],
+      "predicted_calls": [],
+      "gold_calls": [],
+      "prompt_tokens": 411,
+      "completion_tokens": 18,
+      "cost_usd": 4.2e-05,
+      "latency_ms": 1291,
+      "fallback_reason": "free pool exhausted: HTTP 429 {\"error\":{\"message\":\"Provider returned error\",\"code\":429,\"metadata\":{\"raw\":\"google/gemma-4-26b-a4b-it:free is t"
+    }
+  ]
+}

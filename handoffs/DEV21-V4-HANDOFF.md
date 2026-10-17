@@ -481,3 +481,78 @@ hash-identically through export→import and validates clean against a real
 - B-1 is intentionally strict: it rejects rather than coerces, so an import
   that previously succeeded with `temperature: "high"` now fails closed with
   `INVALID_CONFIG_VALUE`. That is the intended behaviour change.
+
+---
+
+## B-slice R1 remediation — IMPLEMENTED, resubmitting as R2 to rew2
+
+**Date:** 2026-10-13 (post-restart continuation by dev21)
+**Trigger:** `handoffs/REW2-V4-B-R1.md` — verdict REQUEST CHANGES (1 HIGH crash,
+1 HIGH fail-closed, 1 MEDIUM resource, 1 LOW claim-alignment).
+
+### Findings and what changed
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| B-R1-1 | HIGH | `temperature: 10**100000` crashed `import_definition` with a raw `ValueError` (CPython int→str limit) because rejection reasons echoed `{value!r}` unbounded. | New `_format_number()` echo helper: floats formatted `.10g`, non-finite by name, integers at/beyond a 32-digit ceiling reported as an approximate digit count computed via `bit_length()` (never converts the value). Integer kinds are also pre-rejected past `_INT_MAGNITUDE_CEILING = 10**32`, which also keeps the huge int away from `json.dumps` in the content hash. |
+| B-R1-2 | HIGH | `temperature: NaN` was **accepted** into `NodeSpec.config` and the revision hash (`json.dumps` emits non-standard `NaN`); both range comparisons are False for NaN. | `math.isfinite()` check for number/integer kinds **before** range checks; NaN/±inf rejected with a bounded "must be a finite number" reason. |
+| B-R1-3 | MEDIUM | `conditions: ["x"*10_000_000]` and `conditions: [NaN]` were accepted into config/hash — the list rule checked container type/count only. | List elements validated: each must be a `str` capped at `_MAX_STRING_CHARS` (256, the shared per-string cap), with the element index in the reason. |
+| B-R1-4 | LOW | The `kind="dict"` rule for `tool_metadata` is unreachable from the import path (`_template_value` drops mapping payloads) while the code implied it was exercised. | Chose **document-and-test** over speculative extraction: `_template_value`, `_check_config_values` and the `_CONFIG_RULES` entry now state explicitly that dict-valued config fields are dropped from Langflow templates, the rule is kept as declared defence-in-depth for non-template paths, and a regression test pins the drop (including hash-neutrality). |
+
+### Changed files
+
+- `packages/workflow_engine/adapters/langflow_adapter.py` — `_format_number()`, `_INT_DIGIT_CEILING`/`_INT_MAGNITUDE_CEILING`, `math` import, rewritten number/integer branch, list-element validation, dict-drop documentation.
+- `tests/unit/test_workflow_langflow_adapter.py` — 28 new tests across 4 classes (`TestBR1HugeIntegerNeverCrashes`, `TestBR1NonFiniteRejected`, `TestBR1RoutesElementValidation`, `TestBR1DictValuedFieldDropped`); plus 4 pre-existing lint defects fixed in the same file (unsorted import block, 3 unused unpacked variables, 2 stale `noqa: ANN001`).
+- `tests/fixtures/workflows/langflow_restricted_roundtrip.json` — **new**: the W2 restricted round-trip fixture (trigger → LLM → conditional router → two outputs).
+- `tests/unit/test_workflow_langflow_fixture.py` — **new**: 27 tests over that fixture (hygiene, security pass, W0/W1 validate+compile determinism, round-trip purity, out-of-subset rejection).
+- `rag-fork-solution/V4-W2-SPIKE.md` — **new**: spike evidence, controls, scope honesty, verification commands, W3 handoff.
+- `rag-fork-solution/NOTICES.md`, `rag-fork-solution/REUSE_MAP.md` — Langflow attribution/reuse rows (schema reference only, no dependency, no source copied).
+
+### Test commands & results (exact)
+
+```bash
+cd "/root/code/Super Rag/knowledge-os"
+PYTHONPATH=packages:apps/api:apps/worker:.:tests:tests/fixtures \
+  /root/ko-venv/bin/python3 -m pytest \
+  tests/unit/test_workflow_langflow_adapter.py \
+  tests/unit/test_workflow_langflow_fixture.py \
+  tests/unit/test_workflow_validator.py \
+  tests/unit/test_workflow_compiler.py \
+  tests/unit/test_workflow_fake_runtime.py \
+  tests/unit/test_workflows.py -q
+# → 287 passed   (212 adapter + 27 fixture + 48 pre-existing)
+
+/root/ko-venv/bin/ruff check packages/workflow_engine \
+  tests/unit/test_workflow_langflow_adapter.py \
+  tests/unit/test_workflow_langflow_fixture.py
+# → All checks passed!
+
+/root/ko-venv/bin/python3 -m mypy packages/workflow_engine
+# → Success: no issues found in 8 source files
+
+PYTHONPATH=packages:apps/api:apps/worker:.:tests:tests/fixtures \
+  /root/ko-venv/bin/python3 -m pytest tests/unit -q
+# → 1039 passed  (whole suite, unrelated streams green)
+```
+
+### Reviewer probes this version answers
+
+- `temperature: 10**100000` → structured `INVALID_CONFIG_VALUE` rejection, no exception, bounded payload (≤300 chars).
+- `temperature: NaN` / `±inf` → rejected before any range check; never in config, never in `content_hash`.
+- `conditions: ["x"*10_000_000]` / `[NaN]` / `["ok", 42]` → rejected with element index.
+- `tool_metadata` dict payload → dropped (documented, hash-neutral, test-pinned).
+
+### Notes / caveats for the reviewer
+
+- `_INT_DIGIT_CEILING = 32` is a conversion-safety ceiling, not a product
+  semantic: integers inside it are still range-checked as before, so
+  `max_tokens: 10**31` still fails on range (verified by a dedicated test).
+- B-R1-4 chose the "document" branch; if the coordinator prefers checked dict
+  extraction, that is a follow-up card (it needs a definition of which nested
+  keys are data vs. template metadata).
+- No dependency, import or execution of Langflow was introduced anywhere.
+
+### Submission status
+
+Resubmitting to rew2 (`w4:p1E`) as **B-slice R2**: B-R1-1 … B-R1-4 closed,
+28 adapter tests + 27 fixture tests + the four pre-existing lint defects.
