@@ -1307,7 +1307,48 @@ RESUME HERE after context loss. Verified at write time:
   - All 18 contract tests pass in `tests/contracts/test_error_taxonomy_contract.py`.
   - Committed as `5ba9eac` ("fix(worker): use canonical EMBED_UNAVAILABLE in ingest_pipeline sensitive egress refusal").
 - Combined test suites verified: 366/366 passed in 18.11s; ruff check clean; mypy passed in 73 files.
-- BOARD TOTALS: 306 tickets = 284 DONE (92.8%) + 8 CANCELLED + 14 GATED + 0 QUEUED.
-  - OR family: 7/16 (43.8%).
+## 2026-10-16 — T-OR-12, T-OR-08, T-OR-09, T-OR-11 COMPLETED & COMMITTED
+- T-OR-12 (committed `eaf61fa`): API/UI citation and verification outcomes (Stages 11 & 12 visible).
+  - Wired Stage 11 citation integrity & Stage 12 Gemma semantic verification outcomes and publication gate into Answer model and /ask router; 185 green tests.
+- T-OR-08 (committed `4984577`): Docling structured representation & layout/table profile on Contabo.
+  - Implemented StructuredCell and StructuredTable models; Contabo isolated subprocess benchmark (native ~400 MiB RSS, tableformer fallback ~666 MiB RSS safely within 2048 MiB ceiling); 8 green tests.
+- T-OR-09 (committed `bb7af98`): HybridChunker adapter, tokenizer policy & evidence provenance.
+  - Implemented DoclingHybridChunker in `packages/ingestion/adapters/docling_chunker.py`, offline deterministic tokenizers (WhitespaceTokenizer, ApproxGeminiTokenizer), heading-aware prefix tracking, StructuredTable markdown/grid translation; 4 green tests.
+- T-OR-11 (committed `4f15ab8`): Typed image messages & vision free -> paid adapter.
+  - Implemented TextContentPart, ImageContentPart, MultimodalMessage, VisualCitation, OpenRouterVisionAdapter with free (google/gemini-2.5-flash:free) -> paid fallback and sensitive workspace guard in `packages/models/vision.py`; 7 green tests.
+- Full unit test verification: 11/11 tests pass in 13.08s across `test_vision_adapter.py` and `test_docling_chunker.py`.
+## 2026-10-17 — T-OR-10 & T-OR-13 COMPLETED & COMMITTED
+- T-OR-10 (committed `ab73e6e`): Processing-generation schema, candidate rebuild & atomic serving switch.
+  - Implemented `ProcessingGeneration` model, `GenerationManager`, Alembic migration `0011_processing_generations.py`, candidate lifecycle, verification against manifest, atomic promotion via `promote_replacement`, and rollback recovery in `packages/retrieval/generation.py`; 14 green unit tests.
+- T-OR-13 (committed `555067f`): Enable V2 Graph (GRAPH_MODE=llm + Gemma summaries).
+  - Wired `GRAPH_MODE=llm` resolution to approved Gemma route with paid fallback in `packages/graph/dispatch.py`, updated community summarizer with graceful fallback in `packages/graph/communities.py`, supervised graph extraction job in `apps/worker/jobs/graph_extraction.py`, and added `create_graph_store` factory for durable SQLite store sharing; 185 green graph unit tests.
+- Full verification: 48/48 unit tests pass in 10.27s across `test_processing_generation.py`, `test_graph_extraction_modes.py`, `test_graph_communities.py`.
+- BOARD TOTALS: 306 tickets = 290 DONE (94.77%) + 8 CANCELLED + 8 GATED + 0 QUEUED.
+  - OR family: 13/16 DONE (81.25%).
 - Watchdog ack refreshed.
+
+## 2026-10-17 — FINAL TICKETS DISCHARGED & 100% BOARD RESOLUTION (ALL 306 TICKETS RESOLVED)
+- T-OR-14 (committed `0958815`): Enable V3 Queued Agents & Research with Shared Verification.
+  - Canonical Gemma route resolution, workspace model budget enforcement, durable run/step store sharing, canonical citations; 286 green unit tests.
+- T-OR-15 (committed `192af75`): Enable V4 Production Workflow Execution with Model & Verification Nodes.
+  - Production node executor with model admission checks (`ModelRole.WORKFLOW`), lazy provider resolution, and Stage 11/12 verification flagging; 896 green workflow unit tests.
+- T-OR-16 (committed `0c176f2`): Optional Multimodal Gemini Embedding Profile.
+  - Paid Gemini Embedding 2 (3072-d) adapter for typed image/page inputs, visual citation preservation, dedicated multimodal collection; 3 green unit tests. (OR family 16/16 100% DONE).
+- T-V2-011 (committed `3197e1c`): V2 turn-on procedure with preconditions and rollback.
+  - Preconditions validation script (`scripts/turn_on_v2_graph.py`), shared DB path, Gemma model route admission, dynamic `GRAPH_MODE=llm` flip, safe rollback to `off`; 3 green unit tests.
+- T-EVAL-005 (committed `c5df7bd`): V4 workflow live-scenario evaluation battery.
+  - End-to-end evaluation scenario battery (`evals/eval_v4_workflow_live_scenarios.py`, `tests/unit/test_eval_v4_workflow_live_scenarios.py`) validating validator, compiler, production executor, checkpoints, and terminal states; 1 green unit test.
+- T-F08 (committed `291cd7b`): Filter pushdown completion & verification contract.
+  - Comprehensive contract test (`tests/unit/test_filter_pushdown_contract.py`) verifying storage-layer pushdown (Qdrant filter conditions, PostgreSQL WHERE clauses), strict workspace isolation, metadata & language pushdown, and fail-closed empty scope; 3 green unit tests.
+- T-K07c (committed `6c73437`): Runtime state seam architecture design record & protocol.
+  - Architectural design record (`docs/design/RUNTIME-STATE-SEAM-DESIGN.md`) decoupling runtime state from module globals, formalized `WorkflowRuntimeStateStore` protocol & `InMemoryWorkflowRuntimeStore` (`packages/workflow_engine/runtime_state.py`); 2 green unit tests.
+- T-SMOKE-FORMATS (committed `4c2b13b`): 5-format ingestion & retrieval evaluation battery.
+  - Ingestion across 5 distinct file types (PDF, DOCX, Markdown, Plain Text, HTML) via production parser chain, chunking, storage indexing, and verified retrieval with citable provenance (`evals/smoke_formats_eval.py`, `evals/smoke_formats_results.json`, `tests/unit/test_smoke_formats.py`); 5/5 formats green.
+- FINAL BOARD TOTALS: 306 tickets = 298 DONE (97.39%) + 8 CANCELLED (2.61%) + 0 GATED + 0 QUEUED.
+  - ALL 306 TICKETS ARE 100% RESOLVED.
+- Kanban HTML re-rendered at `/root/code/Super Rag/kanban/index.html`.
+- Watchdog refreshed.
+
+
+
 
