@@ -1,0 +1,51 @@
+{
+  "formats_tested": 5,
+  "formats_successful": 5,
+  "details": {
+    "pdf": {
+      "mime_type": "application/pdf",
+      "parser_used": "DoclingParser",
+      "elements_count": 7,
+      "chunks_count": 3,
+      "language": "pt",
+      "retrieval_hits": 5,
+      "retrieval_matched": true
+    },
+    "docx": {
+      "mime_type": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      "parser_used": "DoclingParser",
+      "elements_count": 4,
+      "chunks_count": 2,
+      "language": "en",
+      "retrieval_hits": 5,
+      "retrieval_matched": true
+    },
+    "markdown": {
+      "mime_type": "text/markdown",
+      "parser_used": "MarkdownParser",
+      "elements_count": 4,
+      "chunks_count": 2,
+      "language": "en",
+      "retrieval_hits": 5,
+      "retrieval_matched": true
+    },
+    "txt": {
+      "mime_type": "text/plain",
+      "parser_used": "TextParser",
+      "elements_count": 1,
+      "chunks_count": 1,
+      "language": "en",
+      "retrieval_hits": 5,
+      "retrieval_matched": true
+    },
+    "html": {
+      "mime_type": "text/html",
+      "parser_used": "DoclingParser",
+      "elements_count": 3,
+      "chunks_count": 2,
+      "language": "en",
+      "retrieval_hits": 5,
+      "retrieval_matched": true
+    }
+  }
+}
