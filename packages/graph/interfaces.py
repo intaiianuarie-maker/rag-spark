@@ -172,6 +172,16 @@ class GraphStore(ABC):
         raise NotImplementedError
 
     @abstractmethod
+    async def is_document_tombstoned(self, workspace_id: str, document_id: str) -> bool:
+        """Check whether a document is currently tombstoned (deleted/superseded).
+
+        T-IMP-005: Used as a re-entrancy fence by the graph extraction worker
+        before publishing a completed extraction to prevent resurrection of
+        deleted/superseded document graph rows.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
     async def delete_workspace(self, workspace_id: str) -> int:
         """Delete all entities, relationships, and communities for a workspace."""
         raise NotImplementedError

@@ -2373,3 +2373,71 @@ STATUS: DONE T-EVAL-HF-02
 GIT: handoff only
 ```
 
+---
+
+## T-IMP-005 — Graph extraction document lifecycle fence & resurrection prevention
+
+```text
+TASK: T-IMP-005 — Graph extraction document lifecycle fence & resurrection
+       prevention (Finding 2 in reviews/2026-10-17-super-rag-followup.md).
+LOCATIONS: apps/worker/jobs/graph_extraction.py, packages/graph/sqlite_store.py
+
+PROBLEM:
+  The worker loads a document version's chunks once, releases its database
+  session, and then performs extraction and community summarization. Before
+  publishing, it does not recheck document deletion or current version.
+  Meanwhile, packages/graph/sqlite_store.py upsert_extraction explicitly
+  resets tombstoned=0. If a document is deleted/superseded after the worker
+  reads chunks but before its upsert, the completed stale job resurrects
+  those graph entries!
+
+CHANGES:
+  1. apps/worker/jobs/graph_extraction.py (process_graph_job):
+     - BEFORE upserting, calls store.is_document_tombstoned(workspace_id, document_id)
+     - If tombstoned → aborts publication (returns skipped=True, skip_reason=
+       "document_tombstoned_during_extraction"), no entities written back.
+     - Also passes document_id= to upsert_extraction as defense-in-depth.
+
+  2. packages/graph/sqlite_store.py (upsert_extraction):
+     - Added document_id parameter (optional). When provided, checks
+       graph_tombstones table BEFORE the write — if the document is tombstoned,
+       refuses the entire upsert (returns 0 counts, no writes).
+     - Changed ON CONFLICT DO UPDATE ... tombstoned=0 to
+       tombstoned=graph_entities.tombstoned (and same for relationships and
+       communities) — a previously-tombstoned row is never silently
+       resurrected by an upsert.
+     - Added is_document_tombstoned(workspace_id, document_id) -> bool method.
+     - Added graph_tombstones table to _SCHEMA for document-level tombstone
+       tracking.
+     - tombstone_document now also records the document in graph_tombstones
+       (ON CONFLICT DO UPDATE to update tombstoned_at on repeat calls).
+     - Added logger for the refusal event.
+
+  3. packages/graph/interfaces.py:
+     - Added abstract is_document_tombstoned to GraphStore interface.
+
+  4. tests/unit/test_graph_store_concurrency.py:
+     - test_inflight_extraction_cannot_resurrect_deleted_document: full
+       reproduction of the bug — tombstone document, then attempt stale
+       upsert with document_id (refused) and without document_id (tombstone
+       preserved).
+     - test_upsert_extraction_without_document_id_preserves_tombstone:
+       legacy path must not reset tombstoned=0 on conflict.
+     - test_document_not_tombstoned_allows_upsert: live document still
+       receives upsert normally.
+
+VALIDATION:
+  - PYTHONPATH=packages:apps/api:apps/worker:. pytest tests/unit/test_graph_store_sqlite.py tests/unit/test_graph_store_concurrency.py tests/unit/test_graph_extraction_modes.py
+  - 45 passed
+
+METRICS:
+  - true_abstention_fencing: 3/3 test cases pass (tombstoned doc_id refused,
+    legacy tombstone preserved, live doc allowed)
+  - false_resurrection_rate: 0/3
+
+HERMETICITY:
+  - Spend: $0.00 (0 metered calls, all in-process SQLite)
+
+GIT: handoff only
+```
+

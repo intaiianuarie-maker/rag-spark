@@ -12430,3 +12430,139 @@
 - V4: 31.2% (prev 31.2% delta +0.0)
 - detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
 - gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T22:54:07 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T22:59:07 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:04:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:09:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:14:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:19:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:24:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/306 (97.4%) ungated:298/306 (97.4%) IP:0 Q:0 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:29:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:34:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:39:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:44:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:49:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:54:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-17T23:59:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-18T00:04:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-18T00:09:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance
+
+## 2026-10-18T00:14:08 (coordinator reporter v2)
+- V1: 52.3% (prev 52.3% delta +0.0)
+- V2: 55.0% (prev 55.0% delta +0.0)
+- V3: 22.2% (prev 22.2% delta +0.0)
+- V4: 31.2% (prev 31.2% delta +0.0)
+- detail: PLAN M:17/17 Q-done:0/11 Q-prog:1/11 | MICRO done:298/313 (95.2%) ungated:298/313 (95.2%) IP:2 Q:5 GATED:0
+- gates: jury 2026-10-12 REQUEST CHANGES (QF-01..17 open, remediation RP-01..17); V1 live Q9 BLOCKED; V2 G4/G5 pending; V3/V4 scheduled after V1+V2 acceptance

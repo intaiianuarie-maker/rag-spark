@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from graph.extractor import GraphChunk, RuleBasedGraphExtractor
+from graph.interfaces import Entity, EntityType
 from graph.sqlite_store import SQLiteGraphStore
 
 
@@ -184,3 +185,143 @@ async def test_single_writer_lock_does_not_deadlock_with_claim_lease(tmp_path: P
     store.close()
     # Document the invariant
     assert 5.0 < 120.0  # busy_timeout < default lease
+
+
+@pytest.mark.unit
+async def test_inflight_extraction_cannot_resurrect_deleted_document(tmp_path: Path) -> None:
+    """T-IMP-005: an in-flight extraction cannot resurrect a deleted document's graph rows.
+
+    Reproduction of Finding 2 in reviews/2026-10-17-super-rag-followup.md:
+
+    The worker loads a document version's chunks once, releases its DB session,
+    and then performs extraction + community summarization. If the document is
+    deleted/superseded after the worker reads chunks but before its upsert,
+    a stale completed job would resurrect the graph entries.
+
+    This test verifies the fence:
+    1. upsert_extraction with a tombstoned document_id is refused (0 writes)
+    2. upsert_extraction without document_id still preserves tombstoned=1 on
+       conflict (no blind resurrection via tombstoned=0 reset)
+    """
+    db = tmp_path / "graph.db"
+    store = SQLiteGraphStore(db)
+    ws = "ws-resurrection"
+    doc_id = "doc-delete-me"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+
+    e1 = Entity(id="e1", name="Alice Smith", type=EntityType.PERSON,
+                workspace_id=ws, document_ids=[doc_id])
+    e2 = Entity(id="e2", name="Acme Corp", type=EntityType.ORGANIZATION,
+                workspace_id=ws, document_ids=[doc_id])
+
+    # Initial extraction writes entities
+    result = await store.upsert_extraction(
+        ws, [e1, e2], [], [], document_id=doc_id
+    )
+    assert result["entities"] == 2
+
+    # Verify entities are present
+    assert await store.get_entity(ws, "e1") is not None
+    assert await store.get_entity(ws, "e2") is not None
+
+    # TOMBSTONE the document (simulates deletion/supersession during extraction)
+    removed = await store.tombstone_document(ws, doc_id)
+    assert removed == 2  # both entities tombstoned
+
+    # Entities are now invisible
+    assert await store.get_entity(ws, "e1") is None
+    assert await store.get_entity(ws, "e2") is None
+
+    # is_document_tombstoned should report True
+    assert await store.is_document_tombstoned(ws, doc_id) is True
+
+    # Simulate in-flight extraction finishing AFTER deletion — tries to upsert
+    # with same document_id. Fence must refuse it.
+    stale_entities = [
+        Entity(id="e1", name="Alice Smith", type=EntityType.PERSON,
+               workspace_id=ws, document_ids=[doc_id]),
+        Entity(id="e2", name="Acme Corp", type=EntityType.ORGANIZATION,
+               workspace_id=ws, document_ids=[doc_id]),
+        Entity(id="e3", name="New Entity", type=EntityType.CONCEPT,
+               workspace_id=ws, document_ids=[doc_id]),
+    ]
+    result = await store.upsert_extraction(
+        ws, stale_entities, [], [], document_id=doc_id
+    )
+    assert result["entities"] == 0, "upsert must be refused for tombstoned document"
+
+    # No entities should have been written
+    assert await store.get_entity(ws, "e1") is None
+    assert await store.get_entity(ws, "e2") is None
+    assert await store.get_entity(ws, "e3") is None
+
+    # Defense-in-depth: even without document_id, tombstoned=1 is preserved
+    # on conflict (no blind tombstoned=0 reset)
+    stale_entity_no_doc = Entity(
+        id="e1", name="Alice Smith", type=EntityType.PERSON,
+        workspace_id=ws, document_ids=[doc_id],
+    )
+    result = await store.upsert_extraction(ws, [stale_entity_no_doc], [], [])
+    assert result["entities"] == 1  # row was touched
+        # But entity must STILL be invisible — tombstone preserved
+    assert await store.get_entity(ws, "e1") is None, (
+        "upsert without document_id must NOT resurrect a tombstoned entity"
+    )
+
+    store.close()
+    # Verify tombstones table was populated
+    store2 = SQLiteGraphStore(db)
+    await store2.ensure_graph(ws)
+    assert await store2.is_document_tombstoned(ws, doc_id) is True
+    store2.close()
+
+
+@pytest.mark.unit
+async def test_upsert_extraction_without_document_id_preserves_tombstone(
+    tmp_path: Path,
+) -> None:
+    """T-IMP-005: legacy upsert path must not reset tombstoned=0 on conflict."""
+    db = tmp_path / "graph.db"
+    store = SQLiteGraphStore(db)
+    ws = "ws-nodoc"
+    doc_id = "doc-legacy"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+
+    e1 = Entity(id="e1", name="Ghost", type=EntityType.PERSON,
+                workspace_id=ws, document_ids=[doc_id])
+    await store.upsert_extraction(ws, [e1], [], [])
+    assert await store.get_entity(ws, "e1") is not None
+
+    # Tombstone the entity directly
+    await store.tombstone_entity(ws, "e1")
+    assert await store.get_entity(ws, "e1") is None
+
+    # Legacy upsert without document_id — must NOT resurrect
+    await store.upsert_extraction(ws, [e1], [], [])
+    assert await store.get_entity(ws, "e1") is None, (
+        "legacy upsert must preserve tombstoned=1, not reset to 0"
+    )
+    store.close()
+
+
+@pytest.mark.unit
+async def test_document_not_tombstoned_allows_upsert(tmp_path: Path) -> None:
+    """T-IMP-005: a live (non-tombstoned) document must still allow upsert."""
+    db = tmp_path / "graph.db"
+    store = SQLiteGraphStore(db)
+    ws = "ws-live"
+    doc_id = "doc-alive"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+
+    # Document is NOT tombstoned
+    assert await store.is_document_tombstoned(ws, doc_id) is False
+
+    e1 = Entity(id="e1", name="Live Entity", type=EntityType.PERSON,
+                workspace_id=ws, document_ids=[doc_id])
+    result = await store.upsert_extraction(ws, [e1], [], [], document_id=doc_id)
+    assert result["entities"] == 1
+    assert await store.get_entity(ws, "e1") is not None
+    store.close()

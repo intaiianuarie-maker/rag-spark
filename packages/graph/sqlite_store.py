@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import sqlite3
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -17,6 +18,8 @@ from typing import ClassVar, TypeVar
 from .interfaces import Entity, GraphCommunity, GraphStore, Relationship
 
 T = TypeVar("T")
+
+logger = logging.getLogger("knowledge_os.graph")
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS graph_entities (
@@ -62,6 +65,13 @@ CREATE INDEX IF NOT EXISTS idx_grel_src ON graph_relationships(workspace_id, sou
 CREATE INDEX IF NOT EXISTS idx_grel_tgt ON graph_relationships(workspace_id, target_id);
 CREATE INDEX IF NOT EXISTS idx_gattr_trace ON graph_attributions(trace_id);
 CREATE INDEX IF NOT EXISTS idx_gattr_workspace ON graph_attributions(workspace_id);
+CREATE TABLE IF NOT EXISTS graph_tombstones (
+  workspace_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  tombstoned INTEGER NOT NULL DEFAULT 1,
+  tombstoned_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, document_id)
+);
 """
 
 
@@ -498,6 +508,7 @@ class SQLiteGraphStore(GraphStore):
         entities: Sequence[Entity],
         relationships: Sequence[Relationship],
         communities: Sequence[GraphCommunity],
+        document_id: str | None = None,
     ) -> dict[str, int]:
         """Atomically upsert one extraction's entities/relationships/communities.
 
@@ -505,6 +516,17 @@ class SQLiteGraphStore(GraphStore):
         updated in a single transaction. If the worker dies mid-write, the
         transaction rolls back and no partial entities are visible (crash-
         durability via WAL + transaction atomicity).
+
+        **T-IMP-005 — Resurrection fence:** when ``document_id`` is provided,
+        the upsert checks whether the document has been tombstoned (deleted or
+        superseded) since this extraction began. If the document is currently
+        tombstoned, the upsert is **refused** — no entities/relationships/
+        communities are written, preventing a stale in-flight extraction from
+        resurrecting graph rows that the lifecycle tombstone correctly retired.
+
+        The ``tombstoned=0`` on conflict updates is replaced with
+        ``tombstoned=tombstoned`` so a previously tombstoned row is not
+        silently resurrected by an upsert.
 
         Returns counts {entities, relationships, communities}.
         """
@@ -519,6 +541,29 @@ class SQLiteGraphStore(GraphStore):
                 row = cur.fetchone()
                 if row is not None and not row[0]:
                     return counts
+
+                # T-IMP-005: Re-entrancy / resurrection fence. If a document_id
+                # is supplied, verify the document is NOT tombstoned before
+                # writing. This check runs inside the same BEGIN IMMEDIATE
+                # transaction as the upsert, so it is atomic with respect to
+                # concurrent tombstone_document calls.
+                if document_id is not None:
+                    tomb_row = conn.execute(
+                        "SELECT tombstoned FROM graph_tombstones"
+                        " WHERE workspace_id=? AND document_id=?",
+                        (workspace_id, document_id),
+                    ).fetchone()
+                    if tomb_row is not None and tomb_row[0]:
+                        logger.warning(
+                            "graph_extraction_upsert_refused_tombstoned_document",
+                            extra={
+                                "event": "graph_extraction_upsert_refused_tombstoned_document",
+                                "workspace_id": workspace_id,
+                                "document_id": document_id,
+                            },
+                        )
+                        return counts
+
                 # BEGIN IMMEDIATE acquires the write lock up front so the
                 # busy_timeout (5s) applies to the whole transaction, not per
                 # statement, and readers see either all or none.
@@ -537,7 +582,7 @@ class SQLiteGraphStore(GraphStore):
                                 " VALUES (?, ?, ?, 0)"
                                 " ON CONFLICT(workspace_id, entity_id)"
                                 " DO UPDATE SET payload=excluded.payload,"
-                                " tombstoned=0",
+                                " tombstoned=graph_entities.tombstoned",
                                 rows,
                             )
                             counts["entities"] = len(rows)
@@ -562,7 +607,8 @@ class SQLiteGraphStore(GraphStore):
                                 " ON CONFLICT(workspace_id, relationship_id)"
                                 " DO UPDATE SET payload=excluded.payload,"
                                 " source_id=excluded.source_id,"
-                                " target_id=excluded.target_id, tombstoned=0",
+                                " target_id=excluded.target_id,"
+                                " tombstoned=graph_relationships.tombstoned",
                                 rel_rows,
                             )
                             counts["relationships"] = len(rel_rows)
@@ -575,11 +621,11 @@ class SQLiteGraphStore(GraphStore):
                         if comm_rows:
                             conn.executemany(
                                 "INSERT INTO graph_communities"
-                                "(workspace_id, community_id, payload)"
-                                " VALUES (?, ?, ?)"
+                                "(workspace_id, community_id, payload, tombstoned)"
+                                " VALUES (?, ?, ?, 0)"
                                 " ON CONFLICT(workspace_id, community_id)"
                                 " DO UPDATE SET payload=excluded.payload,"
-                                " tombstoned=0",
+                                " tombstoned=graph_communities.tombstoned",
                                 comm_rows,
                             )
                             counts["communities"] = len(comm_rows)
@@ -591,6 +637,29 @@ class SQLiteGraphStore(GraphStore):
 
         res = await self._run(_op)
         return res
+
+    async def is_document_tombstoned(
+        self, workspace_id: str, document_id: str
+    ) -> bool:
+        """Check whether a document is currently tombstoned (deleted/superseded).
+
+        T-IMP-005: Used by the graph extraction worker as a re-entrancy fence
+        before publishing a completed extraction. Reads the
+        ``graph_tombstones`` table (populated by ``tombstone_document``) so the
+        check is consistent with the store's own tombstone state.
+        """
+
+        def _op() -> bool:
+            with self._connect() as conn:
+                cur = conn.execute(
+                    "SELECT tombstoned FROM graph_tombstones"
+                    " WHERE workspace_id=? AND document_id=?",
+                    (workspace_id, document_id),
+                )
+                row = cur.fetchone()
+                return bool(row is not None and row[0])
+
+        return await self._run(_op)
 
     def _prune_communities(
         self,
@@ -727,6 +796,11 @@ class SQLiteGraphStore(GraphStore):
         entities remain, so global search never surfaces a summary whose
         supporting provenance was deleted. Multi-document communities keep
         their surviving (still-valid) provenance.
+
+        T-IMP-005: also records the document in ``graph_tombstones`` so that
+        in-flight extraction jobs can detect that a document was deleted or
+        superseded during extraction and refuse to upsert (resurrection
+        prevention fence).
         """
 
         def _op() -> int:
@@ -760,6 +834,22 @@ class SQLiteGraphStore(GraphStore):
                         count += len(targets)
                 self._prune_communities(
                     conn, workspace_id, tombstoned_ent_ids, tombstoned_rel_ids
+                )
+                # T-IMP-005: Record document-level tombstone so upsert_extraction
+                # can refuse to resurrect deleted/superseded document graph rows.
+                conn.execute(
+                    "INSERT INTO graph_tombstones"
+                    " (workspace_id, document_id, tombstoned, tombstoned_at)"
+                    " VALUES (?, ?, 1, ?)"
+                    " ON CONFLICT(workspace_id, document_id)"
+                    " DO UPDATE SET tombstoned=1, tombstoned_at=excluded.tombstoned_at",
+                    (
+                        workspace_id,
+                        document_id,
+                        __import__("datetime").datetime.now(
+                            __import__("datetime").timezone.utc
+                        ).isoformat(),
+                    ),
                 )
                 conn.commit()
             return count

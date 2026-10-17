@@ -251,16 +251,51 @@ async def process_graph_job(job_id: str) -> dict:
         )
         communities = list(extraction_result.communities)
 
-    # Idempotent, atomically visible upsert (T-V2-002): single transaction
+        # Idempotent, atomically visible upsert (T-V2-002): single transaction
     # so a concurrent reader never sees a half-written extraction.
     # Communities now include detected + summarized, with provenance.
+    #
+    # T-IMP-005: Lifecycle fence — before publishing, re-check that the document
+    # has not been deleted or superseded during the (potentially slow) extraction
+    # + LLM summarization phase. The worker loaded chunks in one DB session,
+    # released it, and extraction/community summarization may take seconds. If the
+    # document was tombstoned in the meantime, we must NOT write the entities
+    # back — that would resurrect deleted graph rows.
+    # upsert_extraction also carries its own tombstone check on the document_id
+    # parameter as a defense-in-depth barrier against resurrection, but the
+    # early check here avoids wasted computation and logs the event explicitly.
     store = create_graph_store()
     try:
+        if await store.is_document_tombstoned(workspace_id, document_id):
+            logger.warning(
+                "graph_extraction_skipped_tombstoned_document",
+                extra={
+                    "event": "graph_extraction_skipped_tombstoned_document",
+                    "job_id": job_id,
+                    "workspace_id": workspace_id,
+                    "document_id": document_id,
+                    "entities": len(extraction_result.entities),
+                    "relationships": len(extraction_result.relationships),
+                    "communities": len(communities),
+                    "reason": "document tombstoned (deleted/superseded) while extraction was in-flight",
+                },
+            )
+            return {
+                "entities": 0,
+                "relationships": 0,
+                "communities": 0,
+                "failed_chunks": failed_chunks,
+                "partial": False,
+                "skipped": True,
+                "skip_reason": "document_tombstoned_during_extraction",
+            }
+
         await store.upsert_extraction(
             workspace_id,
             extraction_result.entities,
             extraction_result.relationships,
             communities,
+            document_id=document_id,  # T-IMP-005: tombstone fence on upsert too
         )
     finally:
         store.close()

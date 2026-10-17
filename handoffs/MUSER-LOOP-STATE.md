@@ -1349,6 +1349,21 @@ RESUME HERE after context loss. Verified at write time:
 - Kanban HTML re-rendered at `/root/code/Super Rag/kanban/index.html`.
 - Watchdog refreshed.
 
+## 2026-10-17 — KNOWLEDGE OS IMPROVEMENT PLAN (PHASE 1 TICKETS OPENED)
+- Plan: `docs/KNOWLEDGE-OS-IMPROVEMENT-PLAN-2026-10-17.md` & `reviews/2026-10-17-super-rag-review.md` / `reviews/2026-10-17-super-rag-followup.md`.
+- 7 new micro-tickets added to Kanban board (`tasks/micro-tickets-state.json`, total tickets: 313):
+  - `T-IMP-001` (Coordinator, QUEUED): Durable agent store admission & API/worker shared path contract (`docker-compose.yml`, `apps/api`, `apps/worker`).
+  - `T-IMP-002` (Dev1, IN-PROGRESS): Atomic SQLite queue claim & consumer lease serialization (`packages/stores/agent_stores.py`).
+  - `T-IMP-003` (Dev2, QUEUED): Search workspace switch request invalidation & loading guard (`apps/web/src/app/search/page.tsx`).
+  - `T-IMP-004` (Dev1, QUEUED): Workflow node verification pipeline execution (Stage 11/12 honesty) (`packages/workflow_engine/production_executor.py`).
+  - `T-IMP-005` (Dev2, IN-PROGRESS): Graph extraction document lifecycle fence & resurrection prevention (`apps/worker/jobs/graph_extraction.py`).
+  - `T-IMP-006` (Dev2, QUEUED): Graph shared entity multi-document provenance & granular tombstoning (`packages/graph/sqlite_store.py`).
+  - `T-IMP-007` (Coordinator, QUEUED): Engineering gates restoration (Ruff, Mypy, ESLint, model origin guard).
+- Active parallel dispatch:
+  - Dev1 (`w5:pP`): Assigned `T-IMP-002` (Atomic SQLite queue claim & consumer lease serialization).
+  - Dev2 (`w5:p6`): Assigned `T-IMP-005` (Graph extraction document lifecycle fence & resurrection prevention).
+- Board re-rendered at `/root/code/Super Rag/kanban/index.html`.
+
 
 
 
