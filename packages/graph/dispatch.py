@@ -43,9 +43,13 @@ MODE_IMPLEMENTATIONS: dict[str, str] = {
     "llm": "graph.adapters.lightrag_extractor.LLMBasedGraphExtractor",
 }
 
-#: Model used by ``llm`` mode. Overridable per deployment; defaults to the same
-#: answer model the rest of the system uses so there is one obvious knob.
+#: Primary model used by ``llm`` mode — the Gemma free route the rest of the
+#: system is pinned to (T-OR-03 unified Gemma defaults wave).
 DEFAULT_LLM_MODEL = "google/gemma-4-26b-a4b-it:free"
+#: Paid route the Gemma family falls back to on free-pool exhaustion. Mirrors
+#: ``models.adapters.openrouter_provider.DEFAULT_CHAT_PAID_MODEL`` so the graph
+#: leg and the rest of the fleet share one obvious paid knob.
+DEFAULT_LLM_PAID_MODEL = "google/gemma-4-26b-a4b-it"
 #: Env keys consulted for the llm-mode model name, in order.
 LLM_MODEL_ENV_KEYS: tuple[str, ...] = ("GRAPH_LLM_MODEL", "ANSWER_MODEL")
 
@@ -93,6 +97,13 @@ def llm_model_name(env: dict[str, str] | None = None) -> str:
 def build_llm_provider(env: dict[str, str] | None = None) -> object:
     """Build the injected LLM provider for ``llm`` mode via the model router.
 
+    Resolves ``GRAPH_MODE=llm`` to the Gemma route (T-OR-03 unified Gemma
+    defaults): the ``google/gemma-4-26b-a4b-it:free`` endpoint FIRST, with
+    automatic paid fallback to ``google/gemma-4-26b-a4b-it`` on free-pool
+    exhaustion — the OpenRouter provider's built-in, pre-authorised policy. The
+    graph leg therefore shares one obvious paid knob with the rest of the fleet
+    and never names a paid model directly.
+
     Raises rather than returning ``None``: a caller must never receive a
     half-built llm-mode extractor, and must certainly not receive the rule one.
     """
@@ -110,6 +121,22 @@ def build_llm_provider(env: dict[str, str] | None = None) -> object:
     from models.adapters.litellm_provider import create_llm_provider
 
     return create_llm_provider()
+
+
+def gemma_provider() -> tuple[object, str, str]:
+    """Return ``(provider, free_model, paid_model)`` for the approved Gemma route.
+
+    Wires ``GRAPH_MODE=llm`` resolution to the Gemma route with its paid fallback
+    policy (T-OR-03): free first (``google/gemma-4-26b-a4b-it:free``), paid on
+    pool exhaustion (``google/gemma-4-26b-a4b-it``). The provider is built via
+    :func:`build_llm_provider` so the OpenRouter transport applies the fallback
+    at the network layer — call sites must never assemble a paid route by hand.
+
+    Centralises the constants here so the graph dispatcher, the community
+    summariser and the worker job all share one source of truth for the route
+    and its paid counterpart.
+    """
+    return build_llm_provider(), DEFAULT_LLM_MODEL, DEFAULT_LLM_PAID_MODEL
 
 
 def create_graph_extractor(

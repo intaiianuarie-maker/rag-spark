@@ -1,30 +1,11 @@
-"""Graph wiring factory — V2 work package G4 (in-seam, additive).
+"""Factory seams for the V2 graph leg (G2).
 
-This is the *only* place the optional graph leg is constructed from settings.
-It lives inside ``packages/graph`` (Stream B's seam) so the protected
-``answer.factory.create_orchestrator()`` can adopt it as a one-line change once
-v1 Q9 is green and the coordinator dispatches (see
-``docs/graph/G4-INTEGRATION-CONTRACT.md``). Until then nothing in
-``packages/answer`` or ``packages/core`` imports this module — the flag-off path
-never touches ``packages/graph`` and stays byte-identical to v1.
+Wires the durable shared graph store (single source of truth for the DB path)
+and the optional graph retriever behind the same ``GRAPH_MODE`` / ``GRAPH_DB_PATH``
+settings so api and worker see the same rows.
 
-Contract (pinned by ``tests/unit/test_graph_factory.py``):
-
-- ``GRAPH_MODE=off`` (the default) → :func:`create_graph_retriever` returns
-  ``None``. The orchestrator's ``graph`` seam then no-ops and the flag-off path
-  is byte-identical to v1 (guarded by ``test_graph_off_is_byte_identical_v1``).
-- ``GRAPH_MODE`` in ``{rule, llm}`` → a :class:`~graph.retriever.GraphRetriever`
-  backed by the embedded :class:`~graph.sqlite_store.SQLiteGraphStore` at
-  ``GRAPH_DB_PATH``. No new dependency (stdlib ``sqlite3``), no service.
-- The *retrieval* seam is independent of the *extraction* mode: ``rule`` vs
-  ``llm`` selects the worker-side extractor (G1), not the retriever built here.
-  Both retrieval modes read the same persisted graph.
-- An unknown ``GRAPH_MODE`` value is a configuration error and raises
-  ``ValueError`` rather than silently disabling the feature (fail loud, never
-  silent passthrough on a product path).
-
-Nothing here opens a network socket, loads model weights, or touches product
-tables. It only constructs in-process objects.
+This factory performs no network and no heavier imports at call time beyond
+``packages.graph`` itself — retrieval is built lazily only when the leg is ON.
 """
 
 from __future__ import annotations
@@ -56,7 +37,7 @@ def graph_db_path(env: dict[str, str] | None = None) -> str:
     """Return ``GRAPH_DB_PATH`` or the embedded default.
 
     T-R11: a RELATIVE default is a trap in a container. Each service resolves
-    "./.graph/graph.db" inside its own filesystem, so api and worker silently
+    `"./.graph/graph.db"`` inside its own filesystem, so api and worker silently
     end up with two private graph databases and neither can see the other's
     rows. The compose file now pins an absolute path on a shared volume for
     both; this default stays relative only for local single-process use.
@@ -106,3 +87,26 @@ def create_graph_retriever(
     resolved_path = db_path if db_path is not None else graph_db_path(env)
     store = SQLiteGraphStore(resolved_path)
     return GraphRetriever(store)
+
+
+def create_graph_store(
+    *,
+    db_path: str | Path | None = None,
+    env: dict[str, str] | None = None,
+) -> SQLiteGraphStore:
+    """Build the durable graph store connected to the shared SQLite database.
+
+    This is the single factory the worker job (and any other write path) must use
+    to obtain a store so the shared graph database is wired cleanly — never a
+    hard-coded path or an ad-hoc ``SQLiteGraphStore(...)`` in call sites.
+
+    T-R11: a relative path is a trap in containers. The compose file pins an
+    absolute ``GRAPH_DB_PATH`` on a shared volume for api + worker; this factory
+    honours it (or the embedded default for local single-process use). The
+    parent directory is created on demand by :func:`graph_db_path`.
+
+    Parameters mirror :func:`create_graph_retriever` so callers switching between
+    a read seam (retriever) and a write seam (store) pass identical arguments.
+    """
+    resolved_path = db_path if db_path is not None else graph_db_path(env)
+    return SQLiteGraphStore(resolved_path)

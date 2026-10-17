@@ -23,9 +23,9 @@ import logging
 import os
 import uuid
 
-from graph.dispatch import create_graph_extractor
+from graph.dispatch import create_graph_extractor, llm_model_name
 from graph.extractor import GraphChunk
-from graph.factory import graph_db_path, graph_mode
+from graph.factory import create_graph_store, graph_mode
 from graph.queue import (
     Claim,
     GraphQueueUnavailable,
@@ -37,7 +37,6 @@ from graph.queue import (
     renew,
     schedule_retry,
 )
-from graph.sqlite_store import SQLiteGraphStore
 from ingestion.persistence import ChunkRow, get_session_factory
 from sqlalchemy import select
 
@@ -163,7 +162,21 @@ async def process_graph_job(job_id: str) -> dict:
     # (T-R12b). Previously this hardcoded RuleBasedGraphExtractor, so
     # GRAPH_MODE=llm silently ran the rule extractor and reported success.
     # The dispatch refuses an unknown mode and refuses llm mode with no
-    # provider rather than degrading to rule.
+    # provider rather than degrading to rule. Under GRAPH_MODE=llm the
+    # dispatch resolves to the Gemma LLM extractor (free-first with paid
+    # fallback handled by the transport); log the resolved route for
+    # observability.
+    if graph_mode() == "llm":
+        logger.info(
+            "graph_extraction_llm_route",
+            extra={
+                "event": "graph_extraction_llm_route",
+                "job_id": job_id,
+                "graph_mode": "llm",
+                "model": llm_model_name(),
+                "route": "gemma-4-26b-a4b-it:free (paid fallback on exhaustion)",
+            },
+        )
     extractor = create_graph_extractor()
     try:
         extraction_result = await extractor.extract(graph_chunks)
@@ -241,7 +254,7 @@ async def process_graph_job(job_id: str) -> dict:
     # Idempotent, atomically visible upsert (T-V2-002): single transaction
     # so a concurrent reader never sees a half-written extraction.
     # Communities now include detected + summarized, with provenance.
-    store = SQLiteGraphStore(graph_db_path())
+    store = create_graph_store()
     try:
         await store.upsert_extraction(
             workspace_id,
