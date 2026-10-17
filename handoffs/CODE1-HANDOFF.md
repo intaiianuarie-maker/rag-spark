@@ -4713,3 +4713,37 @@ VERIFY:
 
 STATUS: DONE T-EVAL-HF-01
 GIT: handoff only
+
+---
+
+TASK: T-IMP-002 — Atomic SQLite queue claim & consumer lease serialization
+
+Problem:
+packages/stores/agent_stores.py — SqliteAgentRunQueue.claim() selected a ready row before its write transaction, then deleted it and used INSERT OR REPLACE to install a claim. Two independent workers (separate connections, separate `threading.Lock` instances) could both select the same row; the second's DELETE affected zero rows but was unchecked, and its INSERT OR REPLACE overwrote the first consumer's lease token. Both callers received a successful claim for the same run.
+
+Root cause: `self._lock` is a per-instance `threading.Lock()` — it provides no cross-process or cross-connection serialization. The SELECT → DELETE → INSERT sequence was not atomic within the SQLite transaction.
+
+Fix applied:
+1. `claim()` — now opens `BEGIN IMMEDIATE` write transaction before SELECT; verifies DELETE rowcount == 1 as a guard; uses explicit `COMMIT`/`ROLLBACK` instead of context-manager `con.commit()`.
+2. `enqueue()` — changed from implicit `con.commit()` to explicit `BEGIN IMMEDIATE` + `COMMIT` for the SELECT-then-INSERT race window.
+3. `ack()`, `renew()`, `park()` — all now use `BEGIN IMMEDIATE` + token-check + `ROLLBACK` on failure, `COMMIT` on success, eliminating check-then-write race windows.
+4. `recover_expired()` — wrapped SELECT + DELETE + INSERT loop in a single `BEGIN IMMEDIATE` + `COMMIT` transaction.
+
+Files modified:
+- packages/stores/agent_stores.py (30 insertions, 8 deletions)
+
+Files created:
+- tests/unit/test_agent_queue_concurrency.py — 5 concurrency tests:
+  - test_concurrent_claims_distinct: 2 workers, 1 run — exactly one claim
+  - test_concurrent_claims_many_workers: 10 workers, 5 runs — exactly 5 claims, no duplicates, no losses
+  - test_concurrent_claims_single_worker_gets_all: 3 workers, 1 run — exactly one succeeds
+  - test_claim_after_expired_recover: lease expiry → recover_expired → new claim with different token
+  - test_double_claim_same_worker_returns_none: destructive claim semantics
+
+VERIFY:
+- PYTHONPATH=packages:apps/api:apps/worker:. pytest tests/unit/test_t_i01b_sqlite_agent.py tests/unit/test_agent_lifecycle.py tests/unit/test_agent_queue_concurrency.py -> 22 passed in 7.30s
+- python3 -c "import ast; ast.parse(open('packages/stores/agent_stores.py').read()); print('Syntax OK')" -> Syntax OK
+
+STATUS: DONE T-IMP-002
+GIT: handoff only
+

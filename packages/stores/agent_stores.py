@@ -554,6 +554,7 @@ class SqliteAgentRunQueue:
     async def enqueue(self, run_id: str) -> None:
         with self._lock:
             with self._sqlite3.connect(self.path) as con:
+                con.execute("BEGIN IMMEDIATE")
                 exists = con.execute(
                     "SELECT 1 FROM agent_ready WHERE run_id=? "
                     "UNION SELECT 1 FROM agent_claims WHERE run_id=? "
@@ -562,7 +563,7 @@ class SqliteAgentRunQueue:
                 ).fetchone()
                 if exists is None:
                     con.execute("INSERT OR IGNORE INTO agent_ready(run_id) VALUES (?)", (run_id,))
-                con.commit()
+                con.execute("COMMIT")
 
     async def claim(self, lease_seconds: float | None = None) -> Any:
         from agents.queue import Claim
@@ -573,18 +574,32 @@ class SqliteAgentRunQueue:
 
         with self._lock:
             with self._sqlite3.connect(self.path) as con:
-                row = con.execute("SELECT run_id FROM agent_ready LIMIT 1").fetchone()
+                # Atomically claim a row: begin an immediate write transaction
+                # so the SELECT + DELETE cannot be interleaved by another
+                # connection.  This eliminates the race where two workers both
+                # select the same row and both install a claim.
+                con.execute("BEGIN IMMEDIATE")
+                row = con.execute(
+                    "SELECT run_id FROM agent_ready LIMIT 1"
+                ).fetchone()
                 if row is None:
+                    con.execute("ROLLBACK")
                     return None
                 run_id = row[0]
-                con.execute("DELETE FROM agent_ready WHERE run_id=?", (run_id,))
+                deleted = con.execute(
+                    "DELETE FROM agent_ready WHERE run_id=?", (run_id,)
+                )
+                # Guard: the row should have been deleted exactly once.
+                if deleted.rowcount != 1:
+                    con.execute("ROLLBACK")
+                    return None
                 token = _uuid.uuid4().hex
                 deadline = _time.time() + ls
                 con.execute(
                     "INSERT OR REPLACE INTO agent_claims(run_id, deadline, token) VALUES (?, ?, ?)",
                     (run_id, deadline, token),
                 )
-                con.commit()
+                con.execute("COMMIT")
                 return Claim(run_id, token)
 
     async def ack(self, claim: Any) -> bool:
@@ -592,13 +607,15 @@ class SqliteAgentRunQueue:
         token = getattr(claim, "token", None)
         with self._lock:
             with self._sqlite3.connect(self.path) as con:
+                con.execute("BEGIN IMMEDIATE")
                 row = con.execute(
                     "SELECT token FROM agent_claims WHERE run_id=?", (run_id,)
                 ).fetchone()
                 if row is None or row[0] != token:
+                    con.execute("ROLLBACK")
                     return False
                 con.execute("DELETE FROM agent_claims WHERE run_id=?", (run_id,))
-                con.commit()
+                con.execute("COMMIT")
                 return True
 
     async def renew(self, claim: Any, lease_seconds: float | None = None) -> bool:
@@ -609,16 +626,18 @@ class SqliteAgentRunQueue:
         token = getattr(claim, "token", None)
         with self._lock:
             with self._sqlite3.connect(self.path) as con:
+                con.execute("BEGIN IMMEDIATE")
                 row = con.execute(
                     "SELECT token FROM agent_claims WHERE run_id=?", (run_id,)
                 ).fetchone()
                 if row is None or row[0] != token:
+                    con.execute("ROLLBACK")
                     return False
                 con.execute(
                     "UPDATE agent_claims SET deadline=? WHERE run_id=?",
                     (_time.time() + ls, run_id),
                 )
-                con.commit()
+                con.execute("COMMIT")
                 return True
 
     async def recover_expired(self) -> int:
@@ -628,6 +647,7 @@ class SqliteAgentRunQueue:
         n = 0
         with self._lock:
             with self._sqlite3.connect(self.path) as con:
+                con.execute("BEGIN IMMEDIATE")
                 expired = [r[0] for r in con.execute(
                     "SELECT run_id FROM agent_claims WHERE deadline <= ?", (now,)
                 ).fetchall()]
@@ -642,7 +662,7 @@ class SqliteAgentRunQueue:
                     if exists is None and parked is None:
                         con.execute("INSERT OR IGNORE INTO agent_ready(run_id) VALUES (?)", (rid,))
                         n += 1
-                con.commit()
+                con.execute("COMMIT")
         return n
 
     async def depth(self) -> int:
@@ -664,15 +684,17 @@ class SqliteAgentRunQueue:
         token = getattr(claim, "token", None)
         with self._lock:
             with self._sqlite3.connect(self.path) as con:
+                con.execute("BEGIN IMMEDIATE")
                 row = con.execute(
                     "SELECT token FROM agent_claims WHERE run_id=?", (run_id,)
                 ).fetchone()
                 if row is None or row[0] != token:
+                    con.execute("ROLLBACK")
                     return False
                 con.execute("DELETE FROM agent_claims WHERE run_id=?", (run_id,))
                 con.execute(
                     "INSERT OR REPLACE INTO agent_parked(run_id, code, ts) VALUES (?, ?, ?)",
                     (run_id, code, _time.time()),
                 )
-                con.commit()
+                con.execute("COMMIT")
                 return True
