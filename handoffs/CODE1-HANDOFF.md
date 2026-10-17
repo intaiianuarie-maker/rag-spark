@@ -4747,3 +4747,37 @@ VERIFY:
 STATUS: DONE T-IMP-002
 GIT: handoff only
 
+## 2026-10-17 T-IMP-004 — Workflow node verification pipeline execution (Stage 11/12 honesty)
+
+TASK: Fix `packages/workflow_engine/production_executor.py:179-184` which set `verified=True` and `verification_stage="Stage 11 & 12"` unconditionally when a node's config contained `verify` or `requires_verification` — never resolving canonical evidence, validating citations, or invoking the semantic verifier.
+
+ROOT CAUSE: The LLM node branch in `execute_node` skipped all verification steps; it just checked a config flag and emitted the verified badge regardless of whether evidence existed.
+
+CHANGES:
+- `packages/workflow_engine/production_executor.py`:
+  - Replaced the unconditional `verified=True` assignment with `await self._evaluate_verification(node, output)`.
+  - Added async `_evaluate_verification()` method implementing the full publication-gate pipeline:
+    1. Extracts evidence config (`evidence` dict or flat `claims`/`citations`/`canonical_chunks` keys) from `node.config`.
+    2. If no evidence/citations/claims provided → `verified=False`, `verification_stage="insufficient_evidence"`.
+    3. Normalizes plain dict inputs to `Claim`, `CandidateCitation`, and `CanonicalChunk` model objects.
+    4. Stage 11: invokes `answer.citation_integrity.validate_citation_integrity()` — deterministic, offline citation integrity check (existence, scope, lifecycle, page/section, quotation/span). On failure → `verified=False`, `verification_stage="Stage 11 rejected"`.
+    5. Stage 12 (only if a `verifier` is injected): invokes `answer.semantic_verification.verify_semantic_claims()` + `evaluate_publication_gate()` — Gemma semantic claim verification with fail-closed mapping. On any non-SUPPORTED verdict → `verified=False` with the gate status.
+    6. Only emits `verified=True` + `verification_stage="Stage 11 & 12"` when all stages pass.
+  - Added `_extract_node_evidence()` static helper to pull evidence config from node config.
+  - Stage 11 and Stage 12 invocations are lazy imports inside the method (avoids importing LLM/semantic modules at module load).
+
+- `tests/unit/test_workflow_production_executor.py`:
+  - Replaced `test_production_executor_evidence_verification_flagging` (which asserted the fake badge) with `test_production_executor_verification_no_evidence_returns_unverified` — verifies `verified=False` + `insufficient_evidence` when no evidence is supplied.
+  - Added `test_production_executor_verification_invalid_citations` — fake chunk_id → `verified=False`, `Stage 11 rejected`.
+  - Added `test_production_executor_verification_valid_claims_no_verifier` — valid canonical evidence passing Stage 11 → `verified=True`.
+  - Added `test_production_executor_verification_valid_with_semantic_pass` — valid evidence + passing Stage 12 verifier → `verified=True`.
+  - Added `test_production_executor_verification_contradicted_by_semantic` — valid Stage 11 but Stage 12 contradiction → `verified=False`, gate status `abstain`.
+
+VERIFY:
+- PYTHONPATH=packages:apps/api:apps/worker:. pytest tests/unit/test_workflow_production_executor.py tests/unit/test_citation_integrity_stage11.py tests/unit/test_semantic_verification_stage12.py → **66 passed in 1.85s**
+- python3 -c "import ast; ast.parse(open('packages/workflow_engine/production_executor.py').read()); print('Syntax OK')" → Syntax OK
+
+STATUS: DONE T-IMP-004
+GIT: handoff only
+
+

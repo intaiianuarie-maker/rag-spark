@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 from models.interfaces import GenerationResult
+from answer.models import CanonicalChunk, Claim, DocumentStatus
 from workflow_engine import (
     NodeSpec,
     NodeType,
@@ -97,7 +98,8 @@ async def test_production_executor_refuses_unadmitted_model() -> None:
 
 
 @pytest.mark.asyncio
-async def test_production_executor_evidence_verification_flagging() -> None:
+async def test_production_executor_verification_no_evidence_returns_unverified() -> None:
+    """Node with requires_verification=True but NO evidence → verified=False."""
     mock_provider = AsyncMock()
     mock_provider.generate.return_value = GenerationResult(
         text="Verified evidence analysis.",
@@ -114,8 +116,177 @@ async def test_production_executor_evidence_verification_flagging() -> None:
 
     result = await executor.execute_node(node, "check facts", "ws-test")
     assert result["output"] == "Verified evidence analysis."
+    assert result["verified"] is False
+    assert result["verification_stage"] == "insufficient_evidence"
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_invalid_citations() -> None:
+    """Node with invalid/unresolvable citations → verified=False."""
+    mock_provider = AsyncMock()
+    mock_provider.generate.return_value = GenerationResult(
+        text="The moon is made of cheese.",
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The moon is made of cheese.", chunk_ids=["fake-chunk"])],
+                "citations": [],
+                "canonical": {},
+                "allowed_workspace_ids": {"ws-test"},
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    assert result["output"] == "The moon is made of cheese."
+    assert result["verified"] is False
+    assert result["verification_stage"] == "Stage 11 rejected"
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_valid_claims_no_verifier() -> None:
+    """Node with valid evidence passing Stage 11 (no Stage 12 verifier) → verified=True."""
+    mock_provider = AsyncMock()
+    mock_provider.generate.return_value = GenerationResult(
+        text="The launch budget is 20 dollars.",
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical_content = "The team met to review expenses. The launch budget is 20 dollars."
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content=canonical_content, status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
     assert result["verified"] is True
     assert result["verification_stage"] == "Stage 11 & 12"
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_valid_with_semantic_pass() -> None:
+    """Node with valid evidence + Stage 12 verifier that agrees → verified=True."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _PassVerifier:
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    mock_provider = AsyncMock()
+    mock_provider.generate.return_value = GenerationResult(
+        text="The launch budget is 20 dollars.",
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical_content = "The team met to review expenses. The launch budget is 20 dollars."
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content=canonical_content, status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": _PassVerifier(),
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    assert result["verified"] is True
+    assert result["verification_stage"] == "Stage 11 & 12"
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_contradicted_by_semantic() -> None:
+    """Node with valid Stage 11 evidence but Stage 12 contradiction → verified=False."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _ContradictVerifier:
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.CONTRADICTED,
+                evidence_ids=[], reason_code="CONTRADICTION_FOUND",
+            )
+
+    mock_provider = AsyncMock()
+    mock_provider.generate.return_value = GenerationResult(
+        text="The launch budget is 20 dollars.",
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical_content = "The team met to review expenses. The launch budget is 20 dollars."
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content=canonical_content, status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": _ContradictVerifier(),
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    assert result["verified"] is False
+    assert "abstain" in result["verification_stage"].lower()
 
 
 @pytest.mark.asyncio
