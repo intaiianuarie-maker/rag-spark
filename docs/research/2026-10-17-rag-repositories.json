@@ -1,0 +1,558 @@
+{
+  "review_date": "2026-10-17",
+  "captured_at_utc": "2026-10-17T20:34:43.040293+00:00",
+  "local_review_sha": "c46927c85119a915fa575369371a37b7c35d31ad",
+  "scope": "Architecture/reuse assessment of ten public repositories; selected source/docs only; no upstream code execution or benchmarking.",
+  "method": "GitHub REST API through authenticated gh for repository metadata, default-branch commits, trees, README/LICENSE and selected files; Firecrawl search and primary-page scrape corroboration.",
+  "limitations": [
+    "Star counts and push timestamps are snapshots, not adoption scores or maintenance guarantees.",
+    "Root licenses do not clear every dependency, model or file.",
+    "No exhaustive upstream audit; FastGPT documentation/license only.",
+    "Historical local test evidence is not new release verification."
+  ],
+  "repositories": [
+    {
+      "full_name": "HKUDS/LightRAG",
+      "html_url": "https://github.com/HKUDS/LightRAG",
+      "description": "[EMNLP2025] LightRAG: Simple and Fast Retrieval-Augmented Generation",
+      "stargazers_count": 40185,
+      "archived": false,
+      "pushed_at": "2026-10-15T18:04:12Z",
+      "default_branch": "main",
+      "sha": "aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "HKUDS/LightRAG",
+      "metadata_source": "https://api.github.com/repos/HKUDS/LightRAG",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/HKUDS/LightRAG/blob/aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a/README.md",
+          "sha256": "b495a0fb015976fca63152962ebd4a4daf82f32fdd8c3bb146fab90a0b09e8e4"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/HKUDS/LightRAG/blob/aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a/LICENSE",
+          "sha256": "0c16924564059e493c86854574660a47ed1dcc2a476ba7b5f949d3f2f73a1984"
+        },
+        {
+          "repo": "HKUDS/LightRAG",
+          "path": "lightrag/operate.py",
+          "sha": "aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a",
+          "bytes": 299834,
+          "url": "https://github.com/HKUDS/LightRAG/blob/aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a/lightrag/operate.py",
+          "sha256": "176585e3f686574ab98657b666982302ce47d58229baacb529ef601bd6799326",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "HKUDS/LightRAG",
+          "path": "lightrag/lightrag.py",
+          "sha": "aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a",
+          "bytes": 406713,
+          "url": "https://github.com/HKUDS/LightRAG/blob/aaebfe1bb8d55deb6a4304d357a3bf4c92fcd40a/lightrag/lightrag.py",
+          "sha256": "f92e25bf1bf8082dba64f604fe22badaeaa69ef2eaa34d23c5058059be8031d3",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_code",
+        "text": "Existing source IDs merged; document removal subtracts sources and rebuilds supported entities."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Contribution-level provenance and lifecycle repair reference; no new runtime."
+      }
+    },
+    {
+      "full_name": "Mintplex-Labs/anything-llm",
+      "html_url": "https://github.com/Mintplex-Labs/anything-llm",
+      "description": "Stop renting your intelligence. Own it with AnythingLLM. Everything you need for a powerful local-first agent experience ",
+      "stargazers_count": 67251,
+      "archived": false,
+      "pushed_at": "2026-10-17T01:36:42Z",
+      "default_branch": "master",
+      "sha": "d7d68e75c422d10384b8aa30f72d6d032fcc555e",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "Mintplex-Labs/anything-llm",
+      "metadata_source": "https://api.github.com/repos/Mintplex-Labs/anything-llm",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/Mintplex-Labs/anything-llm/blob/d7d68e75c422d10384b8aa30f72d6d032fcc555e/README.md",
+          "sha256": "88174db2f05effe59f122a9f2b9729b840d14bbd137323f2c5c499be78e9ceff"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/Mintplex-Labs/anything-llm/blob/d7d68e75c422d10384b8aa30f72d6d032fcc555e/LICENSE",
+          "sha256": "782d2dc18a1ed9028ca992520f42b2e0b6187807da0d14455b8ae608e2e5692e"
+        },
+        {
+          "repo": "Mintplex-Labs/anything-llm",
+          "path": "server/models/workspace.js",
+          "sha": "d7d68e75c422d10384b8aa30f72d6d032fcc555e",
+          "bytes": 25618,
+          "url": "https://github.com/Mintplex-Labs/anything-llm/blob/d7d68e75c422d10384b8aa30f72d6d032fcc555e/server/models/workspace.js",
+          "sha256": "f5ba19bfc54ce4f2aeac420dd0aff2b025ba79f6f1c0d8d76616621fef05cc9b",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "Mintplex-Labs/anything-llm",
+          "path": "server/utils/telemetry/index.js",
+          "sha": "d7d68e75c422d10384b8aa30f72d6d032fcc555e",
+          "bytes": 1214,
+          "url": "https://github.com/Mintplex-Labs/anything-llm/blob/d7d68e75c422d10384b8aa30f72d6d032fcc555e/server/utils/telemetry/index.js",
+          "sha256": "bd3c2762201ee1f39bb828d37f7f429f522c6b2972fa8b6dd8e8235f233dbc62",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_code_and_readme",
+        "text": "Workspace settings and explicit DISABLE_TELEMETRY switch."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Workspace route transparency and egress checks; no whole platform."
+      }
+    },
+    {
+      "full_name": "The-Vibe-Company/quivr",
+      "html_url": "https://github.com/The-Vibe-Company/quivr",
+      "description": "An open-source engine that turns continuous content streams into search and monitoring. Durable ingestion, hybrid search, alerts, and plugins for formats, models and business rules.",
+      "stargazers_count": 39598,
+      "archived": false,
+      "pushed_at": "2026-10-15T12:29:58Z",
+      "default_branch": "main",
+      "sha": "1f72133e27e1cc0a7a05fb35a93df0f9e33136c4",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "QuivrHQ/quivr",
+      "metadata_source": "https://api.github.com/repos/QuivrHQ/quivr",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/The-Vibe-Company/quivr/blob/1f72133e27e1cc0a7a05fb35a93df0f9e33136c4/README.md",
+          "sha256": "6a22dc3fa1da5b9e78b5f68c4600f5e2ad1a3cd13df354bd8c8444d99c8bcffd"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/The-Vibe-Company/quivr/blob/1f72133e27e1cc0a7a05fb35a93df0f9e33136c4/LICENSE",
+          "sha256": "40ea289abc21eaaaec4cb5a1106dde97b8f322005398ee59b575af56d370c352"
+        },
+        {
+          "repo": "The-Vibe-Company/quivr",
+          "path": "internal/adapters/postgres/receipts.go",
+          "sha": "1f72133e27e1cc0a7a05fb35a93df0f9e33136c4",
+          "bytes": 2731,
+          "url": "https://github.com/The-Vibe-Company/quivr/blob/1f72133e27e1cc0a7a05fb35a93df0f9e33136c4/internal/adapters/postgres/receipts.go",
+          "sha256": "8c59280784bf6e326837f3eb675f9202e852c61ea6be8e70973347cebf2a9867",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "The-Vibe-Company/quivr",
+          "path": "internal/online/search.go",
+          "sha": "1f72133e27e1cc0a7a05fb35a93df0f9e33136c4",
+          "bytes": 4090,
+          "url": "https://github.com/The-Vibe-Company/quivr/blob/1f72133e27e1cc0a7a05fb35a93df0f9e33136c4/internal/online/search.go",
+          "sha256": "a9cc6e172a5123127316481f63733f394bf65ce7d3c052b4ace2fbe8bbbd0e45",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "reported_by_upstream_and_partially_inspected",
+        "text": "V2 README explicitly evaluation-stage; receipts and idempotent ingestion, rebuildable indexes, canonical rehydration described."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Contract patterns only; no Go/Temporal/Weaviate migration."
+      }
+    },
+    {
+      "full_name": "SciPhi-AI/R2R",
+      "html_url": "https://github.com/SciPhi-AI/R2R",
+      "description": "SoTA production-ready AI retrieval system. Agentic Retrieval-Augmented Generation (RAG) with a RESTful API.",
+      "stargazers_count": 8025,
+      "archived": false,
+      "pushed_at": "2025-11-07T01:02:44Z",
+      "default_branch": "main",
+      "sha": "9c5a94d151f90876bd7eb860f300a8fd662dc481",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "SciPhi-AI/R2R",
+      "metadata_source": "https://api.github.com/repos/SciPhi-AI/R2R",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/SciPhi-AI/R2R/blob/9c5a94d151f90876bd7eb860f300a8fd662dc481/README.md",
+          "sha256": "74e0977922cf0633922a3eac12dbd6ea05ee4da2b8e43d6e49213a824973740d"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/SciPhi-AI/R2R/blob/9c5a94d151f90876bd7eb860f300a8fd662dc481/LICENSE.md",
+          "sha256": "5041ffdc59c9d2d22315c83e301e39623cea7d4d7f70d23500a697e8095eee82"
+        },
+        {
+          "repo": "SciPhi-AI/R2R",
+          "path": "py/core/main/api/v3/documents_router.py",
+          "sha": "9c5a94d151f90876bd7eb860f300a8fd662dc481",
+          "bytes": 95161,
+          "url": "https://github.com/SciPhi-AI/R2R/blob/9c5a94d151f90876bd7eb860f300a8fd662dc481/py/core/main/api/v3/documents_router.py",
+          "sha256": "46b66aff7f4e6a99e0b922a0d56a5b10d75e51d24d0eabb8b8e1b423f91597dc",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "SciPhi-AI/R2R",
+          "path": "py/core/main/services/ingestion_service.py",
+          "sha": "9c5a94d151f90876bd7eb860f300a8fd662dc481",
+          "bytes": 34241,
+          "url": "https://github.com/SciPhi-AI/R2R/blob/9c5a94d151f90876bd7eb860f300a8fd662dc481/py/core/main/services/ingestion_service.py",
+          "sha256": "0d39d585c6753b8050e24e2356b9883d5909ca3e1313fd4d45ecf6cf702b95c8",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_code_and_metadata",
+        "text": "Versioned document create endpoint returns 202 and accepts collection IDs; repository pushed_at 2025-11-07."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Lifecycle/API contract reference; verify support cadence before dependency adoption."
+      }
+    },
+    {
+      "full_name": "arc53/DocsGPT",
+      "html_url": "https://github.com/arc53/DocsGPT",
+      "description": "Private AI platform for agents, assistants and enterprise search. Built-in Agent Builder, Deep research, Document analysis, Multi-model support, and API connectivity for agents.",
+      "stargazers_count": 18323,
+      "archived": false,
+      "pushed_at": "2026-10-17T15:58:07Z",
+      "default_branch": "main",
+      "sha": "8e141aeda99533154c940a8a07450787e13f6805",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "arc53/DocsGPT",
+      "metadata_source": "https://api.github.com/repos/arc53/DocsGPT",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/arc53/DocsGPT/blob/8e141aeda99533154c940a8a07450787e13f6805/README.md",
+          "sha256": "11091d9746e5de257bdf0f0c9a6661f897b5ac58a927e73748669ffc606ba46d"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/arc53/DocsGPT/blob/8e141aeda99533154c940a8a07450787e13f6805/LICENSE",
+          "sha256": "7abadaa20d1ddc34acd6da4033b18a64a6a17728b1fad6899605767a986e1c2a"
+        },
+        {
+          "repo": "arc53/DocsGPT",
+          "path": "docs/content/Concepts/Architecture.mdx",
+          "sha": "8e141aeda99533154c940a8a07450787e13f6805",
+          "bytes": 20077,
+          "url": "https://github.com/arc53/DocsGPT/blob/8e141aeda99533154c940a8a07450787e13f6805/docs/content/Concepts/Architecture.mdx",
+          "sha256": "d1e676bf5f6123f62f1f16bb982aaddd3dfd8c591217f422f3a0e488554ae2e6",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "arc53/DocsGPT",
+          "path": "docsgpt/retriever/classic_rag.py",
+          "sha": "8e141aeda99533154c940a8a07450787e13f6805",
+          "bytes": 21826,
+          "url": "https://github.com/arc53/DocsGPT/blob/8e141aeda99533154c940a8a07450787e13f6805/docsgpt/retriever/classic_rag.py",
+          "sha256": "508b5a8440b02bdd7ffcdec06d880902a5e8c01b3c14f2adc2b924f8bcd35138",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_code_and_readme",
+        "text": "Source-based retriever uses bounded source fan-out and tracing; assistant/API UX documented."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Source diagnostics and API UX patterns; defer new features."
+      }
+    },
+    {
+      "full_name": "deepset-ai/haystack",
+      "html_url": "https://github.com/deepset-ai/haystack",
+      "description": "Open-source AI orchestration framework for building context-engineered, production-ready LLM applications. Design modular pipelines and agent workflows with explicit control over retrieval, routing, memory, and generation. Built for scalable agents, RAG, multimodal applications, semantic search, and conversational systems.",
+      "stargazers_count": 26757,
+      "archived": false,
+      "pushed_at": "2026-10-17T02:14:47Z",
+      "default_branch": "main",
+      "sha": "c6c46c67b7ab19d9aa08290c2524c07cb185d2f1",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      },
+      "requested_repository": "deepset-ai/haystack",
+      "metadata_source": "https://api.github.com/repos/deepset-ai/haystack",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/deepset-ai/haystack/blob/c6c46c67b7ab19d9aa08290c2524c07cb185d2f1/README.md",
+          "sha256": "e016e944fa840265e85e73520522c6152798330720d53d3d64fdffcc448554e6"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/deepset-ai/haystack/blob/c6c46c67b7ab19d9aa08290c2524c07cb185d2f1/LICENSE",
+          "sha256": "3f0a3af7e9b0f3b6358aaa3c7501ab522a67dc5483b870e9a8b3db41ea42e249"
+        },
+        {
+          "repo": "deepset-ai/haystack",
+          "path": "haystack/components/evaluators/document_recall.py",
+          "sha": "c6c46c67b7ab19d9aa08290c2524c07cb185d2f1",
+          "bytes": 7911,
+          "url": "https://github.com/deepset-ai/haystack/blob/c6c46c67b7ab19d9aa08290c2524c07cb185d2f1/haystack/components/evaluators/document_recall.py",
+          "sha256": "f4b44de4a1884e0dbb20fbde393cd43c8fe1991820105c44056a715a35a0c27e",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "deepset-ai/haystack",
+          "path": "haystack/tracing/tracer.py",
+          "sha": "c6c46c67b7ab19d9aa08290c2524c07cb185d2f1",
+          "bytes": 5844,
+          "url": "https://github.com/deepset-ai/haystack/blob/c6c46c67b7ab19d9aa08290c2524c07cb185d2f1/haystack/tracing/tracer.py",
+          "sha256": "78ac0c1ab263b25b7c6d1ba01e7dba2888b364aa5d261678e40d779822dc6105",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_code",
+        "text": "Recall evaluator supports explicit comparison keys and empty-input handling; content tracing off by default."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Evaluation and tracing patterns; do not add second framework."
+      }
+    },
+    {
+      "full_name": "infiniflow/ragflow",
+      "html_url": "https://github.com/infiniflow/ragflow",
+      "description": "RAGFlow is a leading open-source Retrieval-Augmented Generation (RAG) engine that fuses cutting-edge RAG with Agent capabilities to create a superior context layer for LLMs",
+      "stargazers_count": 92378,
+      "archived": false,
+      "pushed_at": "2026-10-17T13:11:26Z",
+      "default_branch": "main",
+      "sha": "543e16738b4883fcb7e70520e0b5849e7e18c9b7",
+      "license": {
+        "key": "apache-2.0",
+        "name": "Apache License 2.0",
+        "spdx_id": "Apache-2.0",
+        "url": "https://api.github.com/licenses/apache-2.0",
+        "node_id": "MDc6TGljZW5zZTI="
+      },
+      "requested_repository": "infiniflow/ragflow",
+      "metadata_source": "https://api.github.com/repos/infiniflow/ragflow",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/infiniflow/ragflow/blob/543e16738b4883fcb7e70520e0b5849e7e18c9b7/README.md",
+          "sha256": "a732162653165a1b588ca7a24d0645e8a1050436c4910fe95ca9da1e9607b118"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/infiniflow/ragflow/blob/543e16738b4883fcb7e70520e0b5849e7e18c9b7/LICENSE",
+          "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+        },
+        {
+          "repo": "infiniflow/ragflow",
+          "path": "docs/guides/dataset/chunk_parsing_results_and_knowledge_fragment_management.md",
+          "sha": "543e16738b4883fcb7e70520e0b5849e7e18c9b7",
+          "bytes": 4307,
+          "url": "https://github.com/infiniflow/ragflow/blob/543e16738b4883fcb7e70520e0b5849e7e18c9b7/docs/guides/dataset/chunk_parsing_results_and_knowledge_fragment_management.md",
+          "sha256": "f5b9094f52a80445afb634818497070dbf38b8ed230d6ae169abc668d8c4b110",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "infiniflow/ragflow",
+          "path": "docs/guides/dataset/retrieval_testing.md",
+          "sha": "543e16738b4883fcb7e70520e0b5849e7e18c9b7",
+          "bytes": 6343,
+          "url": "https://github.com/infiniflow/ragflow/blob/543e16738b4883fcb7e70520e0b5849e7e18c9b7/docs/guides/dataset/retrieval_testing.md",
+          "sha256": "566c45c26e342f6d1e0d6155481c8f105ab067c6e2d6f1ce911e49b6d17d32bc",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_docs",
+        "text": "Chunk/source inspection and standalone retrieval tests; current source tree uses Go."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "UI and diagnostic patterns; retain Docling/current stack."
+      }
+    },
+    {
+      "full_name": "labring/FastGPT",
+      "html_url": "https://github.com/labring/FastGPT",
+      "description": "FastGPT is a knowledge-based platform built on the LLMs, offers a comprehensive suite of out-of-the-box capabilities such as data processing, RAG retrieval, and visual AI workflow orchestration, letting you easily develop and deploy complex question-answering systems without the need for extensive setup or configuration.",
+      "stargazers_count": 29848,
+      "archived": false,
+      "pushed_at": "2026-10-16T09:53:24Z",
+      "default_branch": "main",
+      "sha": "ce153e1b8c998ffa8b2bf8d8eaa7bca62f651249",
+      "license": {
+        "key": "other",
+        "name": "Other",
+        "spdx_id": "NOASSERTION",
+        "url": null,
+        "node_id": "MDc6TGljZW5zZTA="
+      },
+      "requested_repository": "labring/FastGPT",
+      "metadata_source": "https://api.github.com/repos/labring/FastGPT",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/labring/FastGPT/blob/ce153e1b8c998ffa8b2bf8d8eaa7bca62f651249/README.md",
+          "sha256": "c67933b9dfeaa6e2c8b5689e429331c65db425be00170f7e451bf4586c1cc900"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/labring/FastGPT/blob/ce153e1b8c998ffa8b2bf8d8eaa7bca62f651249/LICENSE",
+          "sha256": "84569a7a2a79f9f97093019ae12d914b975db773ed17443fb726a0b6f585bc24"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_license_and_readme",
+        "text": "Custom license adds similar multi-tenant SaaS authorization and branding conditions."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "No source adoption under current policy; product requirements reference only."
+      }
+    },
+    {
+      "full_name": "microsoft/graphrag",
+      "html_url": "https://github.com/microsoft/graphrag",
+      "description": "A modular graph-based Retrieval-Augmented Generation (RAG) system",
+      "stargazers_count": 36364,
+      "archived": false,
+      "pushed_at": "2026-10-12T22:32:27Z",
+      "default_branch": "main",
+      "sha": "5faaaf4f5685fa2056fa8c3bf9342cb089f2942f",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "microsoft/graphrag",
+      "metadata_source": "https://api.github.com/repos/microsoft/graphrag",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/microsoft/graphrag/blob/5faaaf4f5685fa2056fa8c3bf9342cb089f2942f/README.md",
+          "sha256": "36df9326f1e83343fd46373a2a059093590e4c2ad2256d3ed5de5c5e6e492709"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/microsoft/graphrag/blob/5faaaf4f5685fa2056fa8c3bf9342cb089f2942f/LICENSE",
+          "sha256": "c2cfccb812fe482101a8f04597dfc5a9991a6b2748266c47ac91b6a5aae15383"
+        },
+        {
+          "repo": "microsoft/graphrag",
+          "path": "packages/graphrag/graphrag/query/structured_search/global_search/search.py",
+          "sha": "5faaaf4f5685fa2056fa8c3bf9342cb089f2942f",
+          "bytes": 20309,
+          "url": "https://github.com/microsoft/graphrag/blob/5faaaf4f5685fa2056fa8c3bf9342cb089f2942f/packages/graphrag/graphrag/query/structured_search/global_search/search.py",
+          "sha256": "c201e86aa401452ab4b5eee25f439283b572e7148ab3d823bf555f68c495cd30",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "reported_by_upstream_and_observed_in_code",
+        "text": "README says largely maintenance mode; global search has map/reduce and token/concurrency bounds."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Corpus-wide query experiment only, after core graph acceptance."
+      }
+    },
+    {
+      "full_name": "run-llama/llama_index",
+      "html_url": "https://github.com/run-llama/llama_index",
+      "description": "LlamaIndex is the document processing platform for AI",
+      "stargazers_count": 52539,
+      "archived": false,
+      "pushed_at": "2026-10-14T15:29:28Z",
+      "default_branch": "main",
+      "sha": "619d74664e8404612038bc15a1a40c686037277c",
+      "license": {
+        "key": "mit",
+        "name": "MIT License",
+        "spdx_id": "MIT",
+        "url": "https://api.github.com/licenses/mit",
+        "node_id": "MDc6TGljZW5zZTEz"
+      },
+      "requested_repository": "run-llama/llama_index",
+      "metadata_source": "https://api.github.com/repos/run-llama/llama_index",
+      "sources": [
+        {
+          "kind": "readme",
+          "url": "https://github.com/run-llama/llama_index/blob/619d74664e8404612038bc15a1a40c686037277c/README.md",
+          "sha256": "625c49e7dedf84826b350be28d118e7823e669504689105611e91ff709406d1f"
+        },
+        {
+          "kind": "license_text",
+          "url": "https://github.com/run-llama/llama_index/blob/619d74664e8404612038bc15a1a40c686037277c/LICENSE",
+          "sha256": "24f40b5190fdacabc24ddbb5f76364d15e4f030925220ea300d8a2dd4993c8cb"
+        },
+        {
+          "repo": "run-llama/llama_index",
+          "path": "llama-index-core/llama_index/core/ingestion/pipeline.py",
+          "sha": "619d74664e8404612038bc15a1a40c686037277c",
+          "bytes": 34249,
+          "url": "https://github.com/run-llama/llama_index/blob/619d74664e8404612038bc15a1a40c686037277c/llama-index-core/llama_index/core/ingestion/pipeline.py",
+          "sha256": "00a1de638af05f7cf8bfa068f24f8f6b4037fa5849896ebfab0e2edbe165695d",
+          "scope": "selected relevant passages inspected, not full file audit"
+        },
+        {
+          "repo": "run-llama/llama_index",
+          "path": "llama-index-core/llama_index/core/retrievers/auto_merging_retriever.py",
+          "sha": "619d74664e8404612038bc15a1a40c686037277c",
+          "bytes": 7330,
+          "url": "https://github.com/run-llama/llama_index/blob/619d74664e8404612038bc15a1a40c686037277c/llama-index-core/llama_index/core/retrievers/auto_merging_retriever.py",
+          "sha256": "d9b6e42d5874880ec3410bc33a2897748405777f8c422362b31ee1f449fee278",
+          "scope": "selected relevant passages inspected, not full file audit"
+        }
+      ],
+      "claim": {
+        "status": "observed_in_code_and_readme",
+        "text": "Transform hash includes node content/metadata and transform config; parent merging; company focus shift toward parsing."
+      },
+      "recommendation": {
+        "status": "reviewer_inference",
+        "text": "Pinned adapter components, workspace/model-aware invalidation and measured parent retrieval."
+      }
+    }
+  ]
+}
