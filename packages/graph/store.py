@@ -276,6 +276,7 @@ class MemoryGraphStore(GraphStore):
         tombstoned_entity_ids: set[str],
         tombstoned_relationship_ids: set[str],
         changed_entity_ids: set[str] | None = None,
+        changed_relationship_ids: set[str] | None = None,
     ) -> None:
         """Prune invalidated members from community provenance in-place.
 
@@ -286,7 +287,10 @@ class MemoryGraphStore(GraphStore):
         """
         if changed_entity_ids is None:
             changed_entity_ids = set()
+        if changed_relationship_ids is None:
+            changed_relationship_ids = set()
         affected = tombstoned_entity_ids | changed_entity_ids
+        affected_rels = tombstoned_relationship_ids | changed_relationship_ids
         ws_comms = self._communities[workspace_id]
         ws_entities = self._entities[workspace_id]
         for cid in list(ws_comms.keys()):
@@ -300,7 +304,7 @@ class MemoryGraphStore(GraphStore):
                 continue
             affected_member = (
                 bool(set(comm.entity_ids) & affected)
-                or bool(set(comm.relationship_ids) & tombstoned_relationship_ids)
+                or bool(set(comm.relationship_ids) & affected_rels)
             )
             if not affected_member:
                 comm.entity_ids = kept_entities
@@ -323,6 +327,7 @@ class MemoryGraphStore(GraphStore):
         tombstoned_ent_ids: set[str] = set()
         tombstoned_rel_ids: set[str] = set()
         changed_ent_ids: set[str] = set()
+        changed_rel_ids: set[str] = set()
 
         for eid in list(self._entities[workspace_id].keys()):
             ent = self._entities[workspace_id][eid]
@@ -378,6 +383,7 @@ class MemoryGraphStore(GraphStore):
                 rel.chunk_ids = remaining_chunks
                 rel.description = ""
                 self._relationships[workspace_id][rid] = rel
+                changed_rel_ids.add(rid)
             else:
                 tombstoned_rel_ids.add(rid)
                 del self._relationships[workspace_id][rid]
@@ -385,7 +391,7 @@ class MemoryGraphStore(GraphStore):
 
         self._prune_communities(
             workspace_id, tombstoned_ent_ids, tombstoned_rel_ids,
-            changed_ent_ids,
+            changed_ent_ids, changed_rel_ids,
         )
         # cleanup mapping + retire chunks
         deleted_chunks = self._document_chunks[workspace_id].get(document_id, set())

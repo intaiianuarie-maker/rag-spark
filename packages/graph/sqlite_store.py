@@ -1100,6 +1100,7 @@ class SQLiteGraphStore(GraphStore):
         tombstoned_entity_ids: set[str],
         tombstoned_relationship_ids: set[str],
         changed_entity_ids: set[str] | None = None,
+        changed_relationship_ids: set[str] | None = None,
     ) -> int:
         """Prune invalidated nodes from community provenance in-place.
 
@@ -1113,7 +1114,10 @@ class SQLiteGraphStore(GraphStore):
         invalidated = 0
         if changed_entity_ids is None:
             changed_entity_ids = set()
+        if changed_relationship_ids is None:
+            changed_relationship_ids = set()
         affected = tombstoned_entity_ids | changed_entity_ids
+        affected_rels = tombstoned_relationship_ids | changed_relationship_ids
         cur = conn.execute(
             "SELECT community_id, payload FROM graph_communities"
             " WHERE workspace_id=? AND tombstoned=0",
@@ -1127,7 +1131,7 @@ class SQLiteGraphStore(GraphStore):
             ]
             affected_member = (
                 bool(set(comm.entity_ids) & affected)
-                or bool(set(comm.relationship_ids) & tombstoned_relationship_ids)
+                or bool(set(comm.relationship_ids) & affected_rels)
             )
             if not kept_entities:
                 conn.execute(
@@ -1254,6 +1258,7 @@ class SQLiteGraphStore(GraphStore):
             tombstoned_ent_ids: set[str] = set()
             tombstoned_rel_ids: set[str] = set()
             changed_ent_ids: set[str] = set()
+            changed_rel_ids: set[str] = set()
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -1287,14 +1292,7 @@ class SQLiteGraphStore(GraphStore):
                                 "SELECT 1 FROM graph_document_chunks WHERE workspace_id=? LIMIT 1",
                                 (workspace_id,),
                             ).fetchone() is not None
-                            doc_has_mapping = bool(deleted_chunks) or conn.execute(
-                                "SELECT 1 FROM graph_document_chunks "
-                                "WHERE workspace_id=? AND document_id=? LIMIT 1",
-                                (workspace_id, document_id),
-                            ).fetchone() is not None
-                            if not doc_has_mapping and not deleted_chunks:
-                                remaining_doc_ids = []
-                            elif not has_any_mapping:
+                            if not has_any_mapping:
                                 remaining_doc_ids = []
                             surviving_mapped: set[str] = set()
                             for sd in remaining_doc_ids:
@@ -1322,6 +1320,8 @@ class SQLiteGraphStore(GraphStore):
                                 ]
                             else:
                                 remaining_chunk_ids = []
+                            if not remaining_chunk_ids:
+                                remaining_doc_ids = []
                             if remaining_doc_ids:
                                 data["document_ids"] = remaining_doc_ids
                                 data["chunk_ids"] = remaining_chunk_ids
@@ -1333,6 +1333,8 @@ class SQLiteGraphStore(GraphStore):
                                 )
                                 if table == "graph_entities":
                                     changed_ent_ids.add(gid)
+                                else:
+                                    changed_rel_ids.add(gid)
                             else:
                                 data["document_ids"] = []
                                 data["chunk_ids"] = []
@@ -1369,7 +1371,7 @@ class SQLiteGraphStore(GraphStore):
                             count += 1
                     self._prune_communities(
                         conn, workspace_id, tombstoned_ent_ids,
-                        tombstoned_rel_ids, changed_ent_ids,
+                        tombstoned_rel_ids, changed_ent_ids, changed_rel_ids,
                     )
                     # Retire deleted document's chunks + drop mapping.
                     cur = conn.execute(
@@ -1418,6 +1420,7 @@ class SQLiteGraphStore(GraphStore):
             tombstoned_ent_ids: set[str] = set()
             tombstoned_rel_ids: set[str] = set()
             changed_ent_ids: set[str] = set()
+            changed_rel_ids: set[str] = set()
             with self._connect() as conn:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -1465,6 +1468,10 @@ class SQLiteGraphStore(GraphStore):
                                     " WHERE workspace_id=? AND " + idcol + "=?",
                                     (json.dumps(data), workspace_id, gid),
                                 )
+                                if table == "graph_entities":
+                                    changed_ent_ids.add(gid)
+                                else:
+                                    changed_rel_ids.add(gid)
                             else:
                                 data["document_ids"] = []
                                 data["chunk_ids"] = []
@@ -1480,7 +1487,7 @@ class SQLiteGraphStore(GraphStore):
                                 count += 1
                     self._prune_communities(
                         conn, workspace_id, tombstoned_ent_ids,
-                        tombstoned_rel_ids, changed_ent_ids,
+                        tombstoned_rel_ids, changed_ent_ids, changed_rel_ids,
                     )
                     now = datetime.now(UTC).isoformat()
                     for c in chunk_ids:

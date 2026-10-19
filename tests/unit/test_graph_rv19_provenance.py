@@ -111,3 +111,43 @@ async def test_rv19_f9_legacy_pre_mapping_schema(tmp_path):
     ent = await s2.get_entity("ws", "alice")
     s2.close()
     assert not (ent is not None and not ent.chunk_ids), "empty live row from legacy provenance (F9)"
+
+
+async def test_rv19_f7_shared_retirement_rebuilds_community(tmp_path):
+    """Retiring one document's chunk while the entity SURVIVES on another document must still
+    regenerate the intersecting community (F7 regression in scoped rebuild)."""
+    s = SQLiteGraphStore(tmp_path / "f7r.sqlite")
+    await s.upsert_entities("ws", [_E("alice", "doc-a", "chunk-a", "works at Acme")])
+    await s.upsert_entities("ws", [_E("alice", "doc-b", "chunk-b", "salary 900")])
+    await s.upsert_communities("ws", [GraphCommunity(
+        id="c1", workspace_id="ws", title="Alice", summary="Alice salary 900",
+        entity_ids=["alice"])])
+    await s.tombstone_chunks("ws", ["chunk-b"])
+    gs = await GraphRetriever(s).global_search("ws", "Alice")
+    s.close()
+    assert "salary 900" not in gs.summary, "surviving entity did not rebuild community (F7)"
+
+
+async def test_rv19_f9_overdeletion_keeps_verified_survivor(tmp_path):
+    """Deleting an unmapped legacy document must not over-delete a survivor with verified
+    ownership (F9 over-deletion)."""
+    path = tmp_path / "f9od.sqlite"
+    s = SQLiteGraphStore(path)
+    conn = s._connect()
+    conn.execute("DROP TABLE graph_document_chunks")       # pre-mapping schema
+    legacy = Entity(id="alice", name="alice", workspace_id="ws",
+                    document_ids=["old-doc"], chunk_ids=["old-uuid"])
+    conn.execute(
+        "INSERT INTO graph_entities(workspace_id,entity_id,payload,tombstoned) VALUES(?,?,?,0)",
+        ("ws", "alice", legacy.model_dump_json()))
+    conn.commit()
+    s.close()
+    s2 = SQLiteGraphStore(path)
+    await s2.upsert_extraction("ws", [_E("alice", "new-doc", "new-uuid")], [], [],
+                               document_id="new-doc")
+    await s2.tombstone_document("ws", "old-doc")
+    ent = await s2.get_entity("ws", "alice")
+    s2.close()
+    assert ent is not None, "verified surviving doc was over-deleted (F9)"
+    assert "old-uuid" not in ent.chunk_ids, "deleted legacy uuid survived (F9)"
+    assert "new-uuid" in ent.chunk_ids, "verified surviving uuid was dropped (F9)"
