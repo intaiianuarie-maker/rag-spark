@@ -905,3 +905,88 @@ async def test_rv19_f9_optional_no_document_id(tmp_path) -> None:
     s = await GraphRetriever(store).local_search(ws, "Alice")
     assert "old-uuid" not in s.evidence_chunk_ids
     store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f7_community_summary_cleared(tmp_path) -> None:
+    from graph.interfaces import EntityType, GraphCommunity
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-f7"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    da, db = "doc-a", "doc-b"
+    e1 = Entity(id="e", name="Alice", type=EntityType.PERSON, workspace_id=ws,
+                document_ids=[da], chunk_ids=["ca"], description="works at Acme")
+    e2 = Entity(id="e", name="Alice", type=EntityType.PERSON, workspace_id=ws,
+                document_ids=[db], chunk_ids=["cb"], description="secret salary 900")
+    c = GraphCommunity(id="comm", workspace_id=ws, title="Team",
+                       summary="secret salary 900", entity_ids=["e"], relationship_ids=[])
+    await store.upsert_extraction(ws, [e1], [], [c], document_id=da)
+    await store.upsert_extraction(ws, [e2], [], [c], document_id=db)
+    await store.tombstone_document(ws, db)
+    from graph.retriever import GraphRetriever
+    s = await GraphRetriever(store).global_search(ws, "Alice")
+    assert "salary 900" not in (s.summary or "")
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f10_fence_optional(tmp_path) -> None:
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-f10"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=["deleted"], chunk_ids=["c"])],
+        [],
+        [],
+        document_id="deleted",
+    )
+    await store.tombstone_document(ws, "deleted")
+    r = await store.upsert_extraction(
+        ws,
+        [
+            Entity(
+                id="fresh",
+                name="Fresh",
+                workspace_id=ws,
+                document_ids=["deleted"],
+                chunk_ids=["c2"],
+            )
+        ],
+        [],
+        [],
+    )
+    assert r["entities"] == 0
+    from graph.retriever import GraphRetriever
+
+    s = await GraphRetriever(store).local_search(ws, "Fresh")
+    assert s.evidence_chunk_ids == []
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f11_refused_no_mapping(tmp_path) -> None:
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-f11"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    await store.tombstone_chunks(ws, ["retired"])
+    # refused write should not create mapping
+    r = await store.upsert_entities(
+        ws,
+        [
+            Entity(
+                id="e", name="Alice", workspace_id=ws, document_ids=["doc"], chunk_ids=["retired"]
+            )
+        ],
+    )
+    assert r == 0
+    # doc mapping should not contain retired
+    cur = store._connect()
+    rows = cur.execute(
+        "SELECT * FROM graph_document_chunks WHERE workspace_id=? AND document_id='doc'", (ws,)
+    ).fetchall()
+    assert rows == []
+    store.close()

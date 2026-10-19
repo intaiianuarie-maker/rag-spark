@@ -66,6 +66,8 @@ class MemoryGraphStore(GraphStore):
                 continue
             if any(d in self._tombstoned_docs[workspace_id] for d in ent.document_ids):
                 continue
+            if any(c in self._retired_chunks[workspace_id] for c in ent.chunk_ids):
+                continue
             # F2/F8: record document->chunk contributions only when unambiguous
             if len(ent.document_ids) == 1:
                 d = ent.document_ids[0]
@@ -103,6 +105,8 @@ class MemoryGraphStore(GraphStore):
             if rel.id in self._tombstoned_rels[workspace_id]:
                 continue
             if any(d in self._tombstoned_docs[workspace_id] for d in rel.document_ids):
+                continue
+            if any(c in self._retired_chunks[workspace_id] for c in rel.chunk_ids):
                 continue
             if len(rel.document_ids) == 1:
                 d = rel.document_ids[0]
@@ -290,20 +294,14 @@ class MemoryGraphStore(GraphStore):
             if not kept_entities:
                 del ws_comms[cid]
                 continue
-            if kept_entities != comm.entity_ids or kept_rels != comm.relationship_ids:
-                surviving_names = [
-                    ws_entities[eid].name for eid in kept_entities if eid in ws_entities
-                ]
-                comm.entity_ids = kept_entities
-                comm.relationship_ids = kept_rels
-                if surviving_names:
-                    comm.title = " + ".join(surviving_names)
-                    comm.summary = "; ".join(surviving_names)
-                else:
-                    # Entity IDs remain in the community but none can be
-                    # loaded — invalidate the community to avoid retaining
-                    # stale summary/title referencing deleted provenance.
-                    del ws_comms[cid]
+            surviving_names = [ws_entities[eid].name for eid in kept_entities if eid in ws_entities]
+            comm.entity_ids = kept_entities
+            comm.relationship_ids = kept_rels
+            if surviving_names:
+                comm.title = " + ".join(surviving_names)
+                comm.summary = "; ".join(surviving_names)
+            else:
+                del ws_comms[cid]
 
     async def tombstone_document(self, workspace_id: str, document_id: str) -> int:
         self._ensure_ws(workspace_id)

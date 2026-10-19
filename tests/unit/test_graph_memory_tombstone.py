@@ -347,3 +347,21 @@ async def test_rv19_f2_uuid_memory_upsert_entities() -> None:
     assert ent is not None
     assert da not in ent.document_ids
     assert ua not in ent.chunk_ids
+
+
+@pytest.mark.unit
+async def test_rv19_f10_memory_retired_fence() -> None:
+    store = MemoryGraphStore()
+    ws = "ws-mem-f10"
+    await store.ensure_graph(ws)
+    da = "doc"
+    from graph.interfaces import Entity, EntityType
+    e = Entity(id="e", name="Alice", type=EntityType.PERSON, workspace_id=ws,
+               document_ids=[da], chunk_ids=["uuid-a"])
+    await store.upsert_entities(ws, [e])
+    await store.tombstone_document(ws, da)
+    fresh = Entity(id="fresh", name="Fresh", type=EntityType.PERSON, workspace_id=ws,
+                   document_ids=["doc2"], chunk_ids=["uuid-a"])
+    written = await store.upsert_entities(ws, [fresh])
+    assert written == 0
+    assert await store.get_entity(ws, "fresh") is None

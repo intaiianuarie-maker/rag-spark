@@ -352,15 +352,22 @@ class SQLiteGraphStore(GraphStore):
                     if row is not None and not row[0]:
                         conn.commit()
                         return 0
-                    tombstoned_docs = {r[0] for r in conn.execute(
-                        "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
-                        (workspace_id,),
-                    ).fetchall()}
-                    retired = {r[0] for r in conn.execute(
-                        "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
-                        (workspace_id,),
-                    ).fetchall()}
+                    tombstoned_docs = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
+                            (workspace_id,),
+                        ).fetchall()
+                    }
+                    retired = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
+                            (workspace_id,),
+                        ).fetchall()
+                    }
                     count = 0
+                    written_entities = []
                     for e in filtered:
                         if any(d in tombstoned_docs for d in e.document_ids):
                             continue
@@ -380,6 +387,7 @@ class SQLiteGraphStore(GraphStore):
                                 (merged.model_dump_json(), workspace_id, e.id),
                             )
                             count += 1
+                            written_entities.append(e)
                         else:
                             cur = conn.execute(
                                 "SELECT 1 FROM graph_entities"
@@ -394,8 +402,9 @@ class SQLiteGraphStore(GraphStore):
                                     (workspace_id, e.id, e.model_dump_json()),
                                 )
                                 count += 1
+                                written_entities.append(e)
                     rows = []
-                    for e in filtered:
+                    for e in written_entities:
                         if len(e.document_ids) == 1:
                             d = e.document_ids[0]
                             for c in e.chunk_ids:
@@ -433,15 +442,22 @@ class SQLiteGraphStore(GraphStore):
                     if row is not None and not row[0]:
                         conn.commit()
                         return 0
-                    tombstoned_docs = {r[0] for r in conn.execute(
-                        "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
-                        (workspace_id,),
-                    ).fetchall()}
-                    retired = {r[0] for r in conn.execute(
-                        "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
-                        (workspace_id,),
-                    ).fetchall()}
+                    tombstoned_docs = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
+                            (workspace_id,),
+                        ).fetchall()
+                    }
+                    retired = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
+                            (workspace_id,),
+                        ).fetchall()
+                    }
                     count = 0
+                    written_rels = []
                     for r in filtered:
                         if any(d in tombstoned_docs for d in r.document_ids):
                             continue
@@ -467,6 +483,7 @@ class SQLiteGraphStore(GraphStore):
                                 ),
                             )
                             count += 1
+                            written_rels.append(r)
                         else:
                             cur = conn.execute(
                                 "SELECT 1 FROM graph_relationships"
@@ -920,18 +937,56 @@ class SQLiteGraphStore(GraphStore):
                             )
                             conn.commit()
                             return counts
+                    # F10: per-row fences even when document_id is None.
+                    tombstoned_docs = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
+                            (workspace_id,),
+                        ).fetchall()
+                    }
+                    retired_chunks = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
+                            (workspace_id,),
+                        ).fetchall()
+                    }
+                    for e in entities:
+                        if e.workspace_id != workspace_id:
+                            continue
+                        if any(d in tombstoned_docs for d in e.document_ids):
+                            conn.commit()
+                            return counts
+                        if any(c in retired_chunks for c in e.chunk_ids):
+                            conn.commit()
+                            return counts
+                    for r in relationships:
+                        if r.workspace_id != workspace_id:
+                            continue
+                        if any(d in tombstoned_docs for d in r.document_ids):
+                            conn.commit()
+                            return counts
+                        if any(c in retired_chunks for c in r.chunk_ids):
+                            conn.commit()
+                            return counts
+
+                    written_entities = []
                     if entities:
                         for e in entities:
                             if e.workspace_id != workspace_id:
                                 continue
                             if _upsert_entity_row(conn, e):
                                 counts["entities"] += 1
+                                written_entities.append(e)
+                    written_rels = []
                     if relationships:
                         for r in relationships:
                             if r.workspace_id != workspace_id:
                                 continue
                             if _upsert_relationship_row(conn, r):
                                 counts["relationships"] += 1
+                                written_rels.append(r)
                     if communities:
                         comm_count = 0
                         for c in communities:
@@ -980,25 +1035,33 @@ class SQLiteGraphStore(GraphStore):
                         counts["communities"] = comm_count
                     # T-RV19-05: persist document->chunks association for
                     # exact granular deletion.
+                    chunk_rows = []
                     if document_id is not None:
-                        chunk_rows = []
-                        for e in entities:
-                            if e.workspace_id != workspace_id:
-                                continue
+                        for e in written_entities:
                             for cid in e.chunk_ids:
                                 chunk_rows.append((workspace_id, document_id, cid))
-                        for r in relationships:
-                            if r.workspace_id != workspace_id:
-                                continue
+                        for r in written_rels:
                             for cid in r.chunk_ids:
                                 chunk_rows.append((workspace_id, document_id, cid))
-                        if chunk_rows:
-                            conn.executemany(
-                                "INSERT OR IGNORE INTO graph_document_chunks"
-                                "(workspace_id, document_id, chunk_id)"
-                                " VALUES (?, ?, ?)",
-                                chunk_rows,
-                            )
+                    else:
+                        # Optional-argument writes: persist unambiguous single-doc ownership.
+                        for e in written_entities:
+                            if len(e.document_ids) == 1:
+                                d = e.document_ids[0]
+                                for cid in e.chunk_ids:
+                                    chunk_rows.append((workspace_id, d, cid))
+                        for r in written_rels:
+                            if len(r.document_ids) == 1:
+                                d = r.document_ids[0]
+                                for cid in r.chunk_ids:
+                                    chunk_rows.append((workspace_id, d, cid))
+                    if chunk_rows:
+                        conn.executemany(
+                            "INSERT OR IGNORE INTO graph_document_chunks"
+                            "(workspace_id, document_id, chunk_id)"
+                            " VALUES (?, ?, ?)",
+                            chunk_rows,
+                        )
                     conn.commit()
                 except Exception:
                     conn.rollback()
@@ -1064,9 +1127,9 @@ class SQLiteGraphStore(GraphStore):
                     (workspace_id, cid),
                 )
                 invalidated += 1
-            elif kept_entities != comm.entity_ids or kept_rels != comm.relationship_ids:
-                # Regenerate summary/title from surviving entity names so
-                # deleted provenance is not retained in searchable text.
+            else:
+                # Always regenerate summary/title from surviving entity names so
+                # deleted provenance is not retained in searchable text (F7).
                 surviving_names: list[str] = [
                     name
                     for eid in kept_entities
@@ -1075,8 +1138,6 @@ class SQLiteGraphStore(GraphStore):
                 comm.entity_ids = kept_entities
                 comm.relationship_ids = kept_rels
                 if not surviving_names:
-                    # No survivable provenance — invalidate rather than
-                    # retaining a summary that references deleted entities.
                     conn.execute(
                         "UPDATE graph_communities SET tombstoned=1"
                         " WHERE workspace_id=? AND community_id=?",
@@ -1205,10 +1266,14 @@ class SQLiteGraphStore(GraphStore):
                                 continue
                             chunk_ids: list[str] = data.get("chunk_ids", [])
                             remaining_doc_ids = [d for d in doc_ids if d != document_id]
-                            has_any_mapping = conn.execute(
-                                "SELECT 1 FROM graph_document_chunks WHERE workspace_id=? LIMIT 1",
-                                (workspace_id,),
-                            ).fetchone() is not None
+                            has_any_mapping = (
+                                conn.execute(
+                                    "SELECT 1 FROM graph_document_chunks "
+                                    "WHERE workspace_id=? LIMIT 1",
+                                    (workspace_id,),
+                                ).fetchone()
+                                is not None
+                            )
                             if not has_any_mapping:
                                 remaining_doc_ids = []
                             cur2 = conn.execute(
@@ -1225,10 +1290,14 @@ class SQLiteGraphStore(GraphStore):
                                     (workspace_id, sd),
                                 )
                                 surviving_mapped.update(r[0] for r in cur3.fetchall())
-                            has_any_mapping = conn.execute(
-                                "SELECT 1 FROM graph_document_chunks WHERE workspace_id=? LIMIT 1",
-                                (workspace_id,),
-                            ).fetchone() is not None
+                            has_any_mapping = (
+                                conn.execute(
+                                    "SELECT 1 FROM graph_document_chunks "
+                                    "WHERE workspace_id=? LIMIT 1",
+                                    (workspace_id,),
+                                ).fetchone()
+                                is not None
+                            )
                             if deleted_chunks:
                                 remaining_chunk_ids = [
                                     c for c in chunk_ids if c not in deleted_chunks

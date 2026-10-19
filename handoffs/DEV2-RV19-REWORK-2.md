@@ -26,3 +26,9 @@ Fixed text provenance, replay ownership, unmapped provenance, universal fences. 
 
 ## Rework-6 (F8/F9 fix + tests)
 Fixed SQLite Cartesian mapping guard and removed UUID-unsafe heuristic. Added F8/F9 regressions. Ruff clean; 37 green (1 PG env).
+
+## Rework-7 (F7-community/F9/F10/F11)
+Fixed community summary rebuild, unmapped provenance safety, universal fences, mapping-only-on-success. Ruff clean; 40 green (1 PG env).
+
+## Rework-8 (F9/F10-memory/F7-test)
+Fixed optional-arg mappings, memory retired fence, strengthened F7 test. Ruff clean; 41 green (1 PG env).
