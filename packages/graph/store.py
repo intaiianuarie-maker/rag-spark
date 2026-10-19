@@ -26,6 +26,8 @@ class MemoryGraphStore(GraphStore):
         self._tombstoned_docs: dict[str, set[str]] = {}
         # workspace_id -> document_id -> set of chunk ids
         self._document_chunks: dict[str, dict[str, set[str]]] = {}
+        # workspace_id -> set of retired chunk ids
+        self._retired_chunks: dict[str, set[str]] = {}
         # workspace_id -> set of permanently tombstoned entity ids
         self._tombstoned_entities: dict[str, set[str]] = {}
         # workspace_id -> set of permanently tombstoned relationship ids
@@ -42,6 +44,8 @@ class MemoryGraphStore(GraphStore):
             self._tombstoned_docs[ws] = set()
         if ws not in self._document_chunks:
             self._document_chunks[ws] = {}
+        if ws not in self._retired_chunks:
+            self._retired_chunks[ws] = set()
         if ws not in self._tombstoned_entities:
             self._tombstoned_entities[ws] = set()
         if ws not in self._tombstoned_rels:
@@ -62,8 +66,9 @@ class MemoryGraphStore(GraphStore):
                 continue
             if any(d in self._tombstoned_docs[workspace_id] for d in ent.document_ids):
                 continue
-            # F2: record document->chunk contributions
-            for d in ent.document_ids:
+            # F2/F8: record document->chunk contributions only when unambiguous
+            if len(ent.document_ids) == 1:
+                d = ent.document_ids[0]
                 self._document_chunks[workspace_id].setdefault(d, set()).update(ent.chunk_ids)
             if ent.id in ws_entities and ws_entities[ent.id].workspace_id == workspace_id:
                 existing = ws_entities[ent.id]
@@ -99,7 +104,8 @@ class MemoryGraphStore(GraphStore):
                 continue
             if any(d in self._tombstoned_docs[workspace_id] for d in rel.document_ids):
                 continue
-            for d in rel.document_ids:
+            if len(rel.document_ids) == 1:
+                d = rel.document_ids[0]
                 self._document_chunks[workspace_id].setdefault(d, set()).update(rel.chunk_ids)
             if rel.id in ws_rels and ws_rels[rel.id].workspace_id == workspace_id:
                 existing = ws_rels[rel.id]
@@ -312,15 +318,22 @@ class MemoryGraphStore(GraphStore):
             if document_id not in ent.document_ids:
                 continue
             remaining_docs = [d for d in ent.document_ids if d != document_id]
+            surviving_mapped = set()
+            for sd in remaining_docs:
+                surviving_mapped.update(self._document_chunks[workspace_id].get(sd, set()))
+            has_mapping = bool(self._document_chunks[workspace_id])
+            if not has_mapping:
+                remaining_docs = []
             if deleted_chunks:
                 remaining_chunks = [c for c in ent.chunk_ids if c not in deleted_chunks]
+            elif has_mapping and surviving_mapped:
+                remaining_chunks = [c for c in ent.chunk_ids if c in surviving_mapped]
             else:
-                remaining_chunks = [
-                    c for c in ent.chunk_ids if not (c == document_id or c == f"c-{document_id}")
-                ]
+                remaining_chunks = []
             if remaining_docs:
                 ent.document_ids = remaining_docs
                 ent.chunk_ids = remaining_chunks
+                ent.description = ""
                 self._entities[workspace_id][eid] = ent
             else:
                 tombstoned_ent_ids.add(eid)
@@ -336,15 +349,22 @@ class MemoryGraphStore(GraphStore):
                 rel.source_entity_id in tombstoned_ent_ids
                 or rel.target_entity_id in tombstoned_ent_ids
             )
+            surviving_mapped = set()
+            for sd in remaining_docs:
+                surviving_mapped.update(self._document_chunks[workspace_id].get(sd, set()))
+            has_mapping = bool(self._document_chunks[workspace_id])
+            if not has_mapping:
+                remaining_docs = []
             if deleted_chunks:
                 remaining_chunks = [c for c in rel.chunk_ids if c not in deleted_chunks]
+            elif has_mapping and surviving_mapped:
+                remaining_chunks = [c for c in rel.chunk_ids if c in surviving_mapped]
             else:
-                remaining_chunks = [
-                    c for c in rel.chunk_ids if not (c == document_id or c == f"c-{document_id}")
-                ]
+                remaining_chunks = []
             if remaining_docs and not dangling:
                 rel.document_ids = remaining_docs
                 rel.chunk_ids = remaining_chunks
+                rel.description = ""
                 self._relationships[workspace_id][rid] = rel
             else:
                 tombstoned_rel_ids.add(rid)
@@ -352,7 +372,9 @@ class MemoryGraphStore(GraphStore):
                 count += 1
 
         self._prune_communities(workspace_id, tombstoned_ent_ids, tombstoned_rel_ids)
-        # cleanup mapping
+        # cleanup mapping + retire chunks
+        deleted_chunks = self._document_chunks[workspace_id].get(document_id, set())
+        self._retired_chunks[workspace_id].update(deleted_chunks)
         self._document_chunks[workspace_id].pop(document_id, None)
         return count
 

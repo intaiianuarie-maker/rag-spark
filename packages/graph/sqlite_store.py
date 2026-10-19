@@ -352,8 +352,20 @@ class SQLiteGraphStore(GraphStore):
                     if row is not None and not row[0]:
                         conn.commit()
                         return 0
+                    tombstoned_docs = {r[0] for r in conn.execute(
+                        "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
+                        (workspace_id,),
+                    ).fetchall()}
+                    retired = {r[0] for r in conn.execute(
+                        "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
+                        (workspace_id,),
+                    ).fetchall()}
                     count = 0
                     for e in filtered:
+                        if any(d in tombstoned_docs for d in e.document_ids):
+                            continue
+                        if any(c in retired for c in e.chunk_ids):
+                            continue
                         cur = conn.execute(
                             "SELECT payload FROM graph_entities"
                             " WHERE workspace_id=? AND entity_id=? AND tombstoned=0",
@@ -384,7 +396,8 @@ class SQLiteGraphStore(GraphStore):
                                 count += 1
                     rows = []
                     for e in filtered:
-                        for d in e.document_ids:
+                        if len(e.document_ids) == 1:
+                            d = e.document_ids[0]
                             for c in e.chunk_ids:
                                 rows.append((workspace_id, d, c))
                     if rows:
@@ -420,8 +433,20 @@ class SQLiteGraphStore(GraphStore):
                     if row is not None and not row[0]:
                         conn.commit()
                         return 0
+                    tombstoned_docs = {r[0] for r in conn.execute(
+                        "SELECT document_id FROM graph_tombstones WHERE workspace_id=?",
+                        (workspace_id,),
+                    ).fetchall()}
+                    retired = {r[0] for r in conn.execute(
+                        "SELECT chunk_id FROM graph_retired_chunks WHERE workspace_id=?",
+                        (workspace_id,),
+                    ).fetchall()}
                     count = 0
                     for r in filtered:
+                        if any(d in tombstoned_docs for d in r.document_ids):
+                            continue
+                        if any(c in retired for c in r.chunk_ids):
+                            continue
                         cur = conn.execute(
                             "SELECT payload FROM graph_relationships"
                             " WHERE workspace_id=? AND relationship_id=? AND tombstoned=0",
@@ -465,7 +490,8 @@ class SQLiteGraphStore(GraphStore):
                                 count += 1
                     rows = []
                     for r in filtered:
-                        for d in r.document_ids:
+                        if len(r.document_ids) == 1:
+                            d = r.document_ids[0]
                             for c in r.chunk_ids:
                                 rows.append((workspace_id, d, c))
                     if rows:
@@ -1179,27 +1205,45 @@ class SQLiteGraphStore(GraphStore):
                                 continue
                             chunk_ids: list[str] = data.get("chunk_ids", [])
                             remaining_doc_ids = [d for d in doc_ids if d != document_id]
+                            has_any_mapping = conn.execute(
+                                "SELECT 1 FROM graph_document_chunks WHERE workspace_id=? LIMIT 1",
+                                (workspace_id,),
+                            ).fetchone() is not None
+                            if not has_any_mapping:
+                                remaining_doc_ids = []
                             cur2 = conn.execute(
                                 "SELECT chunk_id FROM graph_document_chunks"
                                 " WHERE workspace_id=? AND document_id=?",
                                 (workspace_id, document_id),
                             )
                             deleted_chunks = {r[0] for r in cur2.fetchall()}
+                            surviving_mapped: set[str] = set()
+                            for sd in remaining_doc_ids:
+                                cur3 = conn.execute(
+                                    "SELECT chunk_id FROM graph_document_chunks"
+                                    " WHERE workspace_id=? AND document_id=?",
+                                    (workspace_id, sd),
+                                )
+                                surviving_mapped.update(r[0] for r in cur3.fetchall())
+                            has_any_mapping = conn.execute(
+                                "SELECT 1 FROM graph_document_chunks WHERE workspace_id=? LIMIT 1",
+                                (workspace_id,),
+                            ).fetchone() is not None
                             if deleted_chunks:
                                 remaining_chunk_ids = [
                                     c for c in chunk_ids if c not in deleted_chunks
                                 ]
-                            elif chunk_ids:
+                            elif has_any_mapping and surviving_mapped:
                                 remaining_chunk_ids = [
-                                    c
-                                    for c in chunk_ids
-                                    if not (c == document_id or c == f"c-{document_id}")
+                                    c for c in chunk_ids if c in surviving_mapped
                                 ]
                             else:
                                 remaining_chunk_ids = []
                             if remaining_doc_ids:
                                 data["document_ids"] = remaining_doc_ids
                                 data["chunk_ids"] = remaining_chunk_ids
+                                # F7: drop text provenance that may have come from deleted doc.
+                                data["description"] = ""
                                 conn.execute(
                                     "UPDATE " + table + " SET payload=?"
                                     " WHERE workspace_id=? AND " + idcol + "=?",
@@ -1329,6 +1373,7 @@ class SQLiteGraphStore(GraphStore):
                             data["chunk_ids"] = remaining_chunk_ids
                             data["document_ids"] = surviving_docs
                             if remaining_chunk_ids and surviving_docs:
+                                data["description"] = ""
                                 conn.execute(
                                     "UPDATE " + table + " SET payload=?"
                                     " WHERE workspace_id=? AND " + idcol + "=?",

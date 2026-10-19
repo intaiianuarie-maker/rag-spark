@@ -826,3 +826,82 @@ async def test_rv19_f6_mixed_retirement_deletion(tmp_path) -> None:
     s = await GraphRetriever(store).local_search(ws, "Alice")
     assert s.evidence_chunk_ids == []
     store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f8_replay_preserves_ownership(tmp_path) -> None:
+    import uuid
+
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-replay"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    da, db = str(uuid.uuid4()), str(uuid.uuid4())
+    ua, ub = str(uuid.uuid4()), str(uuid.uuid4())
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[da], chunk_ids=[ua])],
+        [],
+        [],
+        document_id=da,
+    )
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[db], chunk_ids=[ub])],
+        [],
+        [],
+        document_id=db,
+    )
+    # replay unchanged merged entity
+    merged = await store.get_entity(ws, "e")
+    assert merged is not None
+    await store.upsert_entities(ws, [merged])
+    await store.tombstone_document(ws, da)
+    ent = await store.get_entity(ws, "e")
+    assert ent is not None
+    assert ub in ent.chunk_ids
+    assert ua not in ent.chunk_ids
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f9_optional_no_document_id(tmp_path) -> None:
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-opt"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    # two extractions without document_id
+    await store.upsert_extraction(
+        ws,
+        [
+            Entity(
+                id="e",
+                name="Alice",
+                workspace_id=ws,
+                document_ids=["old-doc"],
+                chunk_ids=["old-uuid"],
+            )
+        ],
+        [],
+        [],
+    )
+    await store.upsert_extraction(
+        ws,
+        [
+            Entity(
+                id="e",
+                name="Alice",
+                workspace_id=ws,
+                document_ids=["new-doc"],
+                chunk_ids=["new-uuid"],
+            )
+        ],
+        [],
+        [],
+    )
+    await store.tombstone_document(ws, "old-doc")
+    from graph.retriever import GraphRetriever
+
+    s = await GraphRetriever(store).local_search(ws, "Alice")
+    assert "old-uuid" not in s.evidence_chunk_ids
+    store.close()
