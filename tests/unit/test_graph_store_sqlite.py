@@ -7,6 +7,10 @@
 * issue #5 - the SQLite connection is opened once, closed deterministically
   (close()/context-manager/Exception path) and lazily reopened; schema setup
   runs once per file.
+* T-IMP-006 - multi-document provenance merge: entities/relationships shared
+  across documents retain all supporting document_ids/chunk_ids (union, not
+  replace). Granular document tombstoning removes only the deleted document's
+  contribution, keeping entities live when other documents still support them.
 """
 
 from __future__ import annotations
@@ -368,6 +372,75 @@ async def test_sqlite_tombstone_all_entities_invalidates_community(
 
 
 @pytest.mark.unit
+async def test_multidoc_provenance_merge_granular_tombstone(tmp_path) -> None:
+    """T-IMP-006: Multi-document provenance is merged, not replaced; granular
+    document tombstoning only removes the deleted doc's provenance.
+
+    Verifies:
+    - Ingest doc 1 with entity "Alice Smith".
+    - Ingest doc 2 with entity "Alice Smith".
+    - Verify Alice Smith's document_ids contain BOTH [doc-1, doc-2].
+    - Tombstone doc 2 -> Alice Smith remains live with document_ids=[doc-1].
+    - Tombstone doc 1 -> Alice Smith is now tombstoned (0 live entities).
+    """
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-merge"
+    doc1 = "doc-1"
+    doc2 = "doc-2"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+
+        # Doc 1: Alice Smith
+    e1 = Entity(
+        id="e-alice-1", name="Alice Smith", type=EntityType.PERSON,
+        workspace_id=ws, chunk_ids=["c-doc-1"], document_ids=[doc1],
+    )
+    await store.upsert_extraction(ws, [e1], [], [], document_id=doc1)
+    entity = await store.get_entity(ws, "e-alice-1")
+    assert entity is not None
+    assert entity.document_ids == [doc1]
+    assert entity.chunk_ids == ["c-doc-1"]
+
+    # Doc 2: Alice Smith (same entity, different doc)
+    e2 = Entity(
+        id="e-alice-1", name="Alice Smith", type=EntityType.PERSON,
+        workspace_id=ws, chunk_ids=["c-doc-2"], document_ids=[doc2],
+    )
+    await store.upsert_extraction(ws, [e2], [], [], document_id=doc2)
+    entity = await store.get_entity(ws, "e-alice-1")
+    assert entity is not None
+    # Both documents should be in document_ids
+    assert doc1 in entity.document_ids
+    assert doc2 in entity.document_ids
+    assert len(entity.document_ids) == 2
+    # Both chunks should be in chunk_ids
+    assert "c-doc-1" in entity.chunk_ids
+    assert "c-doc-2" in entity.chunk_ids
+    assert len(entity.chunk_ids) == 2
+
+    # Tombstone doc 2 -> Alice should survive with doc-1
+    removed = await store.tombstone_document(ws, doc2)
+    # e-alice-1 is NOT fully tombstoned because doc-1 still supports it
+    assert removed == 0
+    entity = await store.get_entity(ws, "e-alice-1")
+    assert entity is not None, "Alice should survive doc-2 tombstone"
+    assert entity.document_ids == [doc1]
+    assert entity.chunk_ids == ["c-doc-1"]
+
+    # Tombstone doc 1 -> Alice should now be fully tombstoned
+    removed = await store.tombstone_document(ws, doc1)
+    assert removed == 1, "Alice should be fully tombstoned when no docs remain"
+    entity = await store.get_entity(ws, "e-alice-1")
+    assert entity is None, "Alice should be tombstoned after all docs deleted"
+
+    # Verify the graph_tombstones table recorded both documents
+    assert await store.is_document_tombstoned(ws, doc1) is True
+    assert await store.is_document_tombstoned(ws, doc2) is True
+
+    store.close()
+
+
+@pytest.mark.unit
 async def test_sqlite_context_manager_closes_and_lazy_reconnects(tmp_path) -> None:
     path = tmp_path / "g.db"
     ws = "ws-x"
@@ -383,4 +456,113 @@ async def test_sqlite_context_manager_closes_and_lazy_reconnects(tmp_path) -> No
     # connection was closed; next op lazily reopens it
     got = await store.get_entity(ws, "e1")
     assert got is not None and got.name == "Alice"
+    store.close()
+
+
+@pytest.mark.unit
+async def test_multidoc_relationship_granular_tombstone(tmp_path) -> None:
+    """T-IMP-006: Relationships also preserve multi-document provenance.
+
+    Tests that a relationship shared by two documents is not fully tombstoned
+    when only one document is deleted, and that dangling relationships (referencing
+    a tombstoned entity) are also tombstoned.
+    """
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-rel-merge"
+    doc1 = "doc-1"
+    doc2 = "doc-2"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+
+    e1 = Entity(id="e1", name="Alice", type=EntityType.PERSON,
+                workspace_id=ws, document_ids=[doc1])
+    e2 = Entity(id="e2", name="Acme", type=EntityType.ORGANIZATION,
+                workspace_id=ws, document_ids=[doc1])
+    await store.upsert_entities(ws, [e1, e2])
+
+    # Relationship supported by both docs
+    r1 = Relationship(
+        id="r1", source_entity_id="e1", target_entity_id="e2",
+        type=RelationshipType.WORKS_FOR, workspace_id=ws,
+        chunk_ids=["c-1"], document_ids=[doc1],
+    )
+    await store.upsert_relationships(ws, [r1])
+
+    # Now upsert the same relationship with doc-2 (merge provenance)
+    r2 = Relationship(
+        id="r1", source_entity_id="e1", target_entity_id="e2",
+        type=RelationshipType.WORKS_FOR, workspace_id=ws,
+        chunk_ids=["c-2"], document_ids=[doc2],
+    )
+    await store.upsert_relationships(ws, [r2])
+
+    # Verify relationship has merged provenance via direct DB query
+    def _check_rel():
+        import sqlite3
+        conn = sqlite3.connect(str(tmp_path / "g.db"))
+        cur = conn.execute(
+            "SELECT payload FROM graph_relationships"
+            " WHERE workspace_id=? AND relationship_id=? AND tombstoned=0",
+            (ws, "r1"),
+        )
+        row = cur.fetchone()
+        conn.close()
+        if row is None:
+            return None
+        import json
+        payload = json.loads(row[0])
+        return payload
+    rel_data = await store._run(_check_rel)
+    assert rel_data is not None
+    assert doc1 in rel_data["document_ids"]
+    assert doc2 in rel_data["document_ids"]
+
+    # Tombstone doc 1 — entities e1/e2 are fully tombstoned (only doc-1)
+    # and r1 becomes dangling — all should be tombstoned
+    removed = await store.tombstone_document(ws, doc1)
+    assert removed >= 2  # at least e1 and e2
+
+    # Entities should be gone
+    assert await store.get_entity(ws, "e1") is None
+    assert await store.get_entity(ws, "e2") is None
+
+    store.close()
+
+
+@pytest.mark.unit
+async def test_upsert_extraction_merges_multi_document_provenance(tmp_path) -> None:
+    """T-IMP-006: upsert_extraction merges provenance across documents."""
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-upsert-merge"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+
+    # First document
+    e1_doc1 = Entity(
+        id="e-alice", name="Alice Smith", type=EntityType.PERSON,
+        workspace_id=ws, chunk_ids=["chunk-1"], document_ids=["doc-1"],
+    )
+    await store.upsert_extraction(
+        ws, [e1_doc1], [], [], document_id="doc-1"
+    )
+    entity = await store.get_entity(ws, "e-alice")
+    assert entity is not None
+    assert entity.document_ids == ["doc-1"]
+
+    # Second document with same entity
+    e1_doc2 = Entity(
+        id="e-alice", name="Alice Smith", type=EntityType.PERSON,
+        workspace_id=ws, chunk_ids=["chunk-2"], document_ids=["doc-2"],
+    )
+    await store.upsert_extraction(
+        ws, [e1_doc2], [], [], document_id="doc-2"
+    )
+    entity = await store.get_entity(ws, "e-alice")
+    assert entity is not None
+    # Provenance should be merged, not replaced
+    assert "doc-1" in entity.document_ids
+    assert "doc-2" in entity.document_ids
+    assert "chunk-1" in entity.chunk_ids
+    assert "chunk-2" in entity.chunk_ids
+
     store.close()

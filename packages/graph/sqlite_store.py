@@ -12,8 +12,9 @@ import json
 import logging
 import sqlite3
 from collections.abc import Callable, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import ClassVar, TypeVar
+from typing import Any, ClassVar, TypeVar
 
 from .interfaces import Entity, GraphCommunity, GraphStore, Relationship
 
@@ -72,6 +73,20 @@ CREATE TABLE IF NOT EXISTS graph_tombstones (
   tombstoned_at TEXT NOT NULL,
   PRIMARY KEY (workspace_id, document_id)
 );
+
+CREATE TABLE IF NOT EXISTS graph_document_chunks (
+  workspace_id TEXT NOT NULL,
+  document_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, document_id, chunk_id)
+);
+CREATE INDEX IF NOT EXISTS idx_gdocchunks_doc ON graph_document_chunks(workspace_id, document_id);
+CREATE TABLE IF NOT EXISTS graph_retired_chunks (
+  workspace_id TEXT NOT NULL,
+  chunk_id TEXT NOT NULL,
+  retired_at TEXT NOT NULL,
+  PRIMARY KEY (workspace_id, chunk_id)
+);
 """
 
 
@@ -85,6 +100,76 @@ def _loads_relationship(row: str) -> Relationship:
 
 def _loads_community(row: str) -> GraphCommunity:
     return GraphCommunity.model_validate(json.loads(row))
+
+
+def _merge_provenance(
+    existing_doc_ids: list[str],
+    existing_chunk_ids: list[str],
+    new_doc_ids: list[str],
+    new_chunk_ids: list[str],
+) -> tuple[list[str], list[str]]:
+    """Union-merge document_ids and chunk_ids, preserving order and deduplicating.
+
+    T-IMP-006: When a second document references an existing entity/relationship,
+    the new document's provenance should be merged (not replace) with the
+    existing provenance.
+    """
+    merged_doc_ids = existing_doc_ids + [
+        d for d in new_doc_ids if d not in existing_doc_ids
+    ]
+    merged_chunk_ids = existing_chunk_ids + [
+        c for c in new_chunk_ids if c not in existing_chunk_ids
+    ]
+    return merged_doc_ids, merged_chunk_ids
+
+
+def _merge_entity_payload(
+    existing: dict[str, Any], incoming: Entity
+) -> Entity:
+    """Merge an incoming Entity's provenance into an existing entity's payload.
+
+    T-IMP-006: document_ids and chunk_ids are unioned. Other fields (name, type,
+    description, aliases, properties) take the incoming value (latest wins).
+    """
+    existing_doc_ids = existing.get("document_ids", [])
+    existing_chunk_ids = existing.get("chunk_ids", [])
+    merged_doc_ids, merged_chunk_ids = _merge_provenance(
+        existing_doc_ids, existing_chunk_ids,
+        incoming.document_ids, incoming.chunk_ids,
+    )
+    existing["document_ids"] = merged_doc_ids
+    existing["chunk_ids"] = merged_chunk_ids
+    existing["name"] = incoming.name
+    existing["type"] = incoming.type
+    existing["description"] = incoming.description
+    existing["aliases"] = incoming.aliases
+    existing["properties"] = incoming.properties
+    return Entity.model_validate(existing)
+
+
+def _merge_relationship_payload(
+    existing: dict[str, Any], incoming: Relationship
+) -> Relationship:
+    """Merge an incoming Relationship's provenance into an existing relationship.
+
+    T-IMP-006: document_ids and chunk_ids are unioned. Other fields take the
+    incoming value (latest wins).
+    """
+    existing_doc_ids = existing.get("document_ids", [])
+    existing_chunk_ids = existing.get("chunk_ids", [])
+    merged_doc_ids, merged_chunk_ids = _merge_provenance(
+        existing_doc_ids, existing_chunk_ids,
+        incoming.document_ids, incoming.chunk_ids,
+    )
+    existing["document_ids"] = merged_doc_ids
+    existing["chunk_ids"] = merged_chunk_ids
+    existing["source_entity_id"] = incoming.source_entity_id
+    existing["target_entity_id"] = incoming.target_entity_id
+    existing["type"] = incoming.type
+    existing["description"] = incoming.description
+    existing["weight"] = incoming.weight
+    existing["properties"] = incoming.properties
+    return Relationship.model_validate(existing)
 
 
 def _load_entity_name(
@@ -260,12 +345,8 @@ class SQLiteGraphStore(GraphStore):
 
     async def upsert_entities(self, workspace_id: str, entities: Sequence[Entity]) -> int:
         def _op() -> int:
-            rows = [
-                (workspace_id, e.id, e.model_dump_json())
-                for e in entities
-                if e.workspace_id == workspace_id
-            ]
-            if not rows:
+            filtered = [e for e in entities if e.workspace_id == workspace_id]
+            if not filtered:
                 return 0
             with self._connect() as conn:
                 # Per-workspace enablement defaults OFF: disabled pays nothing
@@ -276,15 +357,39 @@ class SQLiteGraphStore(GraphStore):
                 row = cur.fetchone()
                 if row is not None and not row[0]:
                     return 0
-                conn.executemany(
-                    "INSERT INTO graph_entities(workspace_id, entity_id, payload, tombstoned)"
-                    " VALUES (?, ?, ?, 0)"
-                    " ON CONFLICT(workspace_id, entity_id)"
-                    " DO UPDATE SET payload=excluded.payload, tombstoned=0",
-                    rows,
-                )
+                count = 0
+                for e in filtered:
+                    cur = conn.execute(
+                        "SELECT payload FROM graph_entities"
+                        " WHERE workspace_id=? AND entity_id=? AND tombstoned=0",
+                        (workspace_id, e.id),
+                    )
+                    existing = cur.fetchone()
+                    if existing is not None:
+                        merged = _merge_entity_payload(json.loads(existing[0]), e)
+                        conn.execute(
+                            "UPDATE graph_entities SET payload=?"
+                            " WHERE workspace_id=? AND entity_id=? AND tombstoned=0",
+                            (merged.model_dump_json(), workspace_id, e.id),
+                        )
+                        count += 1
+                    else:
+                        # Check if a tombstoned row exists — don't resurrect
+                        cur = conn.execute(
+                            "SELECT 1 FROM graph_entities"
+                            " WHERE workspace_id=? AND entity_id=? AND tombstoned=1",
+                            (workspace_id, e.id),
+                        )
+                        if cur.fetchone() is None:
+                            conn.execute(
+                                "INSERT INTO graph_entities"
+                                "(workspace_id, entity_id, payload, tombstoned)"
+                                " VALUES (?, ?, ?, 0)",
+                                (workspace_id, e.id, e.model_dump_json()),
+                            )
+                            count += 1
                 conn.commit()
-            return len(rows)
+            return count
 
         res = await self._run(_op)
         return int(res)
@@ -293,12 +398,8 @@ class SQLiteGraphStore(GraphStore):
         self, workspace_id: str, relationships: Sequence[Relationship]
     ) -> int:
         def _op() -> int:
-            rows = [
-                (workspace_id, r.id, r.source_entity_id, r.target_entity_id, r.model_dump_json())
-                for r in relationships
-                if r.workspace_id == workspace_id
-            ]
-            if not rows:
+            filtered = [r for r in relationships if r.workspace_id == workspace_id]
+            if not filtered:
                 return 0
             with self._connect() as conn:
                 cur = conn.execute(
@@ -308,17 +409,52 @@ class SQLiteGraphStore(GraphStore):
                 row = cur.fetchone()
                 if row is not None and not row[0]:
                     return 0
-                conn.executemany(
-                    "INSERT INTO graph_relationships"
-                    "(workspace_id, relationship_id, source_id, target_id, payload, tombstoned)"
-                    " VALUES (?, ?, ?, ?, ?, 0)"
-                    " ON CONFLICT(workspace_id, relationship_id)"
-                    " DO UPDATE SET payload=excluded.payload,"
-                    " source_id=excluded.source_id, target_id=excluded.target_id, tombstoned=0",
-                    rows,
-                )
+                count = 0
+                for r in filtered:
+                    cur = conn.execute(
+                        "SELECT payload FROM graph_relationships"
+                        " WHERE workspace_id=? AND relationship_id=? AND tombstoned=0",
+                        (workspace_id, r.id),
+                    )
+                    existing = cur.fetchone()
+                    if existing is not None:
+                        merged = _merge_relationship_payload(json.loads(existing[0]), r)
+                        conn.execute(
+                            "UPDATE graph_relationships SET payload=?, source_id=?, target_id=?"
+                            " WHERE workspace_id=? AND relationship_id=? AND tombstoned=0",
+                            (
+                                merged.model_dump_json(),
+                                r.source_entity_id,
+                                r.target_entity_id,
+                                workspace_id,
+                                r.id,
+                            ),
+                        )
+                        count += 1
+                    else:
+                        # Check if a tombstoned row exists — don't resurrect
+                        cur = conn.execute(
+                            "SELECT 1 FROM graph_relationships"
+                            " WHERE workspace_id=? AND relationship_id=? AND tombstoned=1",
+                            (workspace_id, r.id),
+                        )
+                        if cur.fetchone() is None:
+                            conn.execute(
+                                "INSERT INTO graph_relationships"
+                                "(workspace_id, relationship_id, source_id,"
+                                " target_id, payload, tombstoned)"
+                                " VALUES (?, ?, ?, ?, ?, 0)",
+                                (
+                                    workspace_id,
+                                    r.id,
+                                    r.source_entity_id,
+                                    r.target_entity_id,
+                                    r.model_dump_json(),
+                                ),
+                            )
+                            count += 1
                 conn.commit()
-            return len(rows)
+            return count
 
         res = await self._run(_op)
         return int(res)
@@ -470,10 +606,12 @@ class SQLiteGraphStore(GraphStore):
                 if row is not None and not row[0]:
                     return 0
                 conn.executemany(
-                    "INSERT INTO graph_communities(workspace_id, community_id, payload)"
-                    " VALUES (?, ?, ?)"
+                    "INSERT INTO graph_communities"
+                    "(workspace_id, community_id, payload, tombstoned)"
+                    " VALUES (?, ?, ?, 0)"
                     " ON CONFLICT(workspace_id, community_id)"
-                    " DO UPDATE SET payload=excluded.payload, tombstoned=0",
+                    " DO UPDATE SET payload=excluded.payload,"
+                    " tombstoned=graph_communities.tombstoned",
                     rows,
                 )
                 conn.commit()
@@ -528,90 +666,227 @@ class SQLiteGraphStore(GraphStore):
         ``tombstoned=tombstoned`` so a previously tombstoned row is not
         silently resurrected by an upsert.
 
+        **T-IMP-006 — Multi-document provenance merge:** when an entity or
+        relationship already exists, the new extraction's ``document_ids`` and
+        ``chunk_ids`` are **merged** (union) with the existing provenance rather
+        than replaced, so multi-document evidence is preserved. The same applies
+        to ``upsert_entities`` and ``upsert_relationships``.
+
         Returns counts {entities, relationships, communities}.
         """
+
+        def _upsert_entity_row(
+            conn: sqlite3.Connection, e: Entity
+        ) -> bool:
+            """Upsert a single entity row with provenance merge.
+
+            On conflict with a live (tombstoned=0) row, document_ids and
+            chunk_ids are unioned (preserving order and deduplication) rather
+            than replaced. If the existing row is tombstoned, the upsert is
+            **skipped** — a tombstoned entity is not resurrected (T-IMP-005
+            defense-in-depth). Returns True if the row was written or merged.
+            """
+            # Check for a live row first
+            cur = conn.execute(
+                "SELECT payload FROM graph_entities"
+                " WHERE workspace_id=? AND entity_id=? AND tombstoned=0",
+                (workspace_id, e.id),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                merged = _merge_entity_payload(json.loads(row[0]), e)
+                conn.execute(
+                    "UPDATE graph_entities SET payload=?"
+                    " WHERE workspace_id=? AND entity_id=? AND tombstoned=0",
+                    (merged.model_dump_json(), workspace_id, e.id),
+                )
+                return True
+            # No live row — check if a tombstoned row exists.
+            cur = conn.execute(
+                "SELECT 1 FROM graph_entities"
+                " WHERE workspace_id=? AND entity_id=? AND tombstoned=1",
+                (workspace_id, e.id),
+            )
+            if cur.fetchone() is not None:
+                # Resurrect only if not permanently tombstoned
+                # (document deletion or manual entity tombstone).
+                blocked = False
+                check_ids = [*e.document_ids, "entity:" + e.id]
+                for d in check_ids:
+                    c2 = conn.execute(
+                        "SELECT 1 FROM graph_tombstones"
+                        " WHERE workspace_id=? AND document_id=?",
+                        (workspace_id, d),
+                    )
+                    if c2.fetchone() is not None:
+                        blocked = True
+                        break
+                if blocked:
+                    return False  # permanent tombstone — do not resurrect
+                # Version/chunk supersession — resurrect with merged provenance
+                conn.execute(
+                    "UPDATE graph_entities SET payload=?, tombstoned=0"
+                    " WHERE workspace_id=? AND entity_id=?",
+                    (e.model_dump_json(), workspace_id, e.id),
+                )
+                return True
+            # No row at all — insert fresh
+            conn.execute(
+                "INSERT INTO graph_entities"
+                "(workspace_id, entity_id, payload, tombstoned)"
+                " VALUES (?, ?, ?, 0)",
+                (workspace_id, e.id, e.model_dump_json()),
+            )
+            return True
+
+        def _upsert_relationship_row(
+            conn: sqlite3.Connection, r: Relationship
+        ) -> bool:
+            """Upsert a single relationship row with provenance merge.
+
+            On conflict with a live row, document_ids and chunk_ids are unioned
+            rather than replaced. If the existing row is tombstoned, the upsert
+            is **skipped** — a tombstoned relationship is not resurrected
+            (T-IMP-005 defense-in-depth). Returns True if the row was written.
+            """
+            # Check for a live row first
+            cur = conn.execute(
+                "SELECT payload FROM graph_relationships"
+                " WHERE workspace_id=? AND relationship_id=? AND tombstoned=0",
+                (workspace_id, r.id),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                merged = _merge_relationship_payload(json.loads(row[0]), r)
+                conn.execute(
+                    "UPDATE graph_relationships SET payload=?, source_id=?, target_id=?"
+                    " WHERE workspace_id=? AND relationship_id=? AND tombstoned=0",
+                    (
+                        merged.model_dump_json(),
+                        r.source_entity_id,
+                        r.target_entity_id,
+                        workspace_id,
+                        r.id,
+                    ),
+                )
+                return True
+            # No live row — check if a tombstoned row exists.
+            cur = conn.execute(
+                "SELECT 1 FROM graph_relationships"
+                " WHERE workspace_id=? AND relationship_id=? AND tombstoned=1",
+                (workspace_id, r.id),
+            )
+            if cur.fetchone() is not None:
+                blocked = False
+                check_ids = [*r.document_ids, "relationship:" + r.id]
+                for d in check_ids:
+                    c2 = conn.execute(
+                        "SELECT 1 FROM graph_tombstones"
+                        " WHERE workspace_id=? AND document_id=?",
+                        (workspace_id, d),
+                    )
+                    if c2.fetchone() is not None:
+                        blocked = True
+                        break
+                if blocked:
+                    return False
+                conn.execute(
+                    "UPDATE graph_relationships SET payload=?, source_id=?,"
+                    " target_id=?, tombstoned=0"
+                    " WHERE workspace_id=? AND relationship_id=?",
+                    (r.model_dump_json(), r.source_entity_id, r.target_entity_id,
+                     workspace_id, r.id),
+                )
+                return True
+            # No row at all — insert fresh
+            conn.execute(
+                "INSERT INTO graph_relationships"
+                "(workspace_id, relationship_id, source_id,"
+                " target_id, payload, tombstoned)"
+                " VALUES (?, ?, ?, ?, ?, 0)",
+                (
+                    workspace_id,
+                    r.id,
+                    r.source_entity_id,
+                    r.target_entity_id,
+                    r.model_dump_json(),
+                ),
+            )
+            return True
 
         def _op() -> dict[str, int]:
             counts = {"entities": 0, "relationships": 0, "communities": 0}
             with self._connect() as conn:
-                cur = conn.execute(
-                    "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
-                    (workspace_id,),
-                )
-                row = cur.fetchone()
-                if row is not None and not row[0]:
-                    return counts
-
-                # T-IMP-005: Re-entrancy / resurrection fence. If a document_id
-                # is supplied, verify the document is NOT tombstoned before
-                # writing. This check runs inside the same BEGIN IMMEDIATE
-                # transaction as the upsert, so it is atomic with respect to
-                # concurrent tombstone_document calls.
-                if document_id is not None:
-                    tomb_row = conn.execute(
-                        "SELECT tombstoned FROM graph_tombstones"
-                        " WHERE workspace_id=? AND document_id=?",
-                        (workspace_id, document_id),
-                    ).fetchone()
-                    if tomb_row is not None and tomb_row[0]:
-                        logger.warning(
-                            "graph_extraction_upsert_refused_tombstoned_document",
-                            extra={
-                                "event": "graph_extraction_upsert_refused_tombstoned_document",
-                                "workspace_id": workspace_id,
-                                "document_id": document_id,
-                            },
-                        )
-                        return counts
-
-                # BEGIN IMMEDIATE acquires the write lock up front so the
-                # busy_timeout (5s) applies to the whole transaction, not per
-                # statement, and readers see either all or none.
+                # Acquire the write lock FIRST so the tombstone/enable reads
+                # are atomic with respect to concurrent tombstone_document calls.
                 conn.execute("BEGIN IMMEDIATE")
                 try:
+                    cur = conn.execute(
+                        "SELECT enabled FROM graph_workspace_settings WHERE workspace_id=?",
+                        (workspace_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is not None and not row[0]:
+                        conn.commit()
+                        return counts
+
+                    # T-IMP-005: Re-entrancy / resurrection fence.
+                    if document_id is not None:
+                        tomb_row = conn.execute(
+                            "SELECT tombstoned FROM graph_tombstones"
+                            " WHERE workspace_id=? AND document_id=?",
+                            (workspace_id, document_id),
+                        ).fetchone()
+                        if tomb_row is not None and tomb_row[0]:
+                            logger.warning(
+                                "graph_extraction_upsert_refused_tombstoned_document",
+                                extra={
+                                    "event": "graph_extraction_upsert_refused_tombstoned_document",
+                                    "workspace_id": workspace_id,
+                                    "document_id": document_id,
+                                },
+                            )
+                            conn.commit()
+                            return counts
+
+                    # T-RV19-06: fence late extraction from restoring superseded rows.
+                    incoming_chunks = set()
+                    for e in entities:
+                        if e.workspace_id == workspace_id:
+                            incoming_chunks.update(e.chunk_ids)
+                    for r in relationships:
+                        if r.workspace_id == workspace_id:
+                            incoming_chunks.update(r.chunk_ids)
+                    if incoming_chunks:
+                        placeholders = ",".join("?" for _ in incoming_chunks)
+                        cur = conn.execute(
+                            "SELECT chunk_id FROM graph_retired_chunks"
+                            " WHERE workspace_id=? AND chunk_id IN ("
+                            + placeholders + ")",
+                            (workspace_id, *incoming_chunks),
+                        )
+                        if cur.fetchone() is not None:
+                            logger.warning(
+                                "graph_extraction_upsert_refused_retired_chunks",
+                                extra={
+                                    "event": "graph_extraction_upsert_refused_retired_chunks",
+                                    "workspace_id": workspace_id,
+                                },
+                            )
+                            conn.commit()
+                            return counts
                     if entities:
-                        rows = [
-                            (workspace_id, e.id, e.model_dump_json())
-                            for e in entities
-                            if e.workspace_id == workspace_id
-                        ]
-                        if rows:
-                            conn.executemany(
-                                "INSERT INTO graph_entities"
-                                "(workspace_id, entity_id, payload, tombstoned)"
-                                " VALUES (?, ?, ?, 0)"
-                                " ON CONFLICT(workspace_id, entity_id)"
-                                " DO UPDATE SET payload=excluded.payload,"
-                                " tombstoned=graph_entities.tombstoned",
-                                rows,
-                            )
-                            counts["entities"] = len(rows)
+                        for e in entities:
+                            if e.workspace_id != workspace_id:
+                                continue
+                            if _upsert_entity_row(conn, e):
+                                counts["entities"] += 1
                     if relationships:
-                        rel_rows = [
-                            (
-                                workspace_id,
-                                r.id,
-                                r.source_entity_id,
-                                r.target_entity_id,
-                                r.model_dump_json(),
-                            )
-                            for r in relationships
-                            if r.workspace_id == workspace_id
-                        ]
-                        if rel_rows:
-                            conn.executemany(
-                                "INSERT INTO graph_relationships"
-                                "(workspace_id, relationship_id, source_id,"
-                                " target_id, payload, tombstoned)"
-                                " VALUES (?, ?, ?, ?, ?, 0)"
-                                " ON CONFLICT(workspace_id, relationship_id)"
-                                " DO UPDATE SET payload=excluded.payload,"
-                                " source_id=excluded.source_id,"
-                                " target_id=excluded.target_id,"
-                                " tombstoned=graph_relationships.tombstoned",
-                                rel_rows,
-                            )
-                            counts["relationships"] = len(rel_rows)
+                        for r in relationships:
+                            if r.workspace_id != workspace_id:
+                                continue
+                            if _upsert_relationship_row(conn, r):
+                                counts["relationships"] += 1
                     if communities:
                         comm_rows = [
                             (workspace_id, c.id, c.model_dump_json())
@@ -629,6 +904,27 @@ class SQLiteGraphStore(GraphStore):
                                 comm_rows,
                             )
                             counts["communities"] = len(comm_rows)
+                    # T-RV19-05: persist document->chunks association for
+                    # exact granular deletion.
+                    if document_id is not None:
+                        chunk_rows = []
+                        for e in entities:
+                            if e.workspace_id != workspace_id:
+                                continue
+                            for c in e.chunk_ids:
+                                chunk_rows.append((workspace_id, document_id, c))
+                        for r in relationships:
+                            if r.workspace_id != workspace_id:
+                                continue
+                            for c in r.chunk_ids:
+                                chunk_rows.append((workspace_id, document_id, c))
+                        if chunk_rows:
+                            conn.executemany(
+                                "INSERT OR IGNORE INTO graph_document_chunks"
+                                "(workspace_id, document_id, chunk_id)"
+                                " VALUES (?, ?, ?)",
+                                chunk_rows,
+                            )
                     conn.commit()
                 except Exception:
                     conn.rollback()
@@ -755,6 +1051,15 @@ class SQLiteGraphStore(GraphStore):
                     " WHERE workspace_id=? AND (source_id=? OR target_id=?)",
                     (workspace_id, entity_id, entity_id),
                 )
+                if hit:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO graph_tombstones"
+                        "(workspace_id, document_id, tombstoned, tombstoned_at)"
+                        " VALUES (?, ?, 1, ?)",
+                        (workspace_id, "entity:" + entity_id,
+                         __import__("datetime").datetime.now(
+                             __import__("datetime").timezone.utc).isoformat()),
+                    )
                 self._prune_communities(conn, workspace_id, {entity_id}, rel_ids)
                 conn.commit()
             return hit
@@ -779,6 +1084,14 @@ class SQLiteGraphStore(GraphStore):
                 )
                 hit = cur.rowcount > 0
                 if hit:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO graph_tombstones"
+                        "(workspace_id, document_id, tombstoned, tombstoned_at)"
+                        " VALUES (?, ?, 1, ?)",
+                        (workspace_id, "relationship:" + relationship_id,
+                         __import__("datetime").datetime.now(
+                             __import__("datetime").timezone.utc).isoformat()),
+                    )
                     self._prune_communities(
                         conn, workspace_id, set(), {relationship_id}
                     )
@@ -801,6 +1114,13 @@ class SQLiteGraphStore(GraphStore):
         in-flight extraction jobs can detect that a document was deleted or
         superseded during extraction and refuse to upsert (resurrection
         prevention fence).
+
+        T-IMP-006: **Granular tombstoning** — instead of tombstoning the entire
+        entity/relationship when the deleted document appears in its provenance,
+        removes only that document's ``document_ids`` and ``chunk_ids`` from the
+        row. The entity/relationship is tombstoned (``tombstoned=1``) only if
+        no active ``document_ids`` remain. If another document still supports
+        the entity, it stays live with the surviving provenance.
         """
 
         def _op() -> int:
@@ -808,7 +1128,7 @@ class SQLiteGraphStore(GraphStore):
             tombstoned_ent_ids: set[str] = set()
             tombstoned_rel_ids: set[str] = set()
             with self._connect() as conn:
-                for table, idcol, store in (
+                for table, idcol, _store in (
                     ("graph_entities", "entity_id", tombstoned_ent_ids),
                     ("graph_relationships", "relationship_id", tombstoned_rel_ids),
                 ):
@@ -817,23 +1137,116 @@ class SQLiteGraphStore(GraphStore):
                         + " WHERE workspace_id=? AND tombstoned=0",
                         (workspace_id,),
                     )
-                    targets = [
-                        gid
-                        for gid, payload in cur.fetchall()
-                        if document_id in json.loads(payload).get("document_ids", [])
-                    ]
-                    if targets:
-                        placeholders = ",".join("?" for _ in targets)
-                        conn.execute(
-                            "UPDATE " + table + " SET tombstoned=1"
-                            " WHERE workspace_id=? AND " + idcol
-                            + " IN (" + placeholders + ")",
-                            (workspace_id, *targets),
+                    rows = cur.fetchall()
+                    for gid, payload in rows:
+                        data = json.loads(payload)
+                        doc_ids: list[str] = data.get("document_ids", [])
+                        if document_id not in doc_ids:
+                            continue
+                        chunk_ids: list[str] = data.get("chunk_ids", [])
+                        # Remove the deleted document's chunk_ids.
+                        # Each chunk_id is associated with a document via the
+                        # chunk_id<->document_id mapping carried by the entity.
+                        # We use the chunk_id prefix (c-<doc_id>) to identify
+                        # chunks belonging to the deleted document.
+                        remaining_doc_ids = [d for d in doc_ids if d != document_id]
+                        # T-RV19-05: remove exact contributing chunks via persisted mapping.
+                        cur2 = conn.execute(
+                            "SELECT chunk_id FROM graph_document_chunks"
+                            " WHERE workspace_id=? AND document_id=?",
+                            (workspace_id, document_id),
                         )
-                        store.update(targets)
-                        count += len(targets)
+                        deleted_chunks = {r[0] for r in cur2.fetchall()}
+                        if deleted_chunks:
+                            remaining_chunk_ids = [
+                                c for c in chunk_ids if c not in deleted_chunks
+                            ]
+                        elif chunk_ids:
+                            remaining_chunk_ids = [
+                                c for c in chunk_ids
+                                if not (c == document_id or c == f"c-{document_id}")
+                            ]
+                        else:
+                            remaining_chunk_ids = []
+                        if remaining_doc_ids:
+                            # Other documents still support this entity —
+                            # keep it live, just update provenance.
+                            data["document_ids"] = remaining_doc_ids
+                            data["chunk_ids"] = remaining_chunk_ids
+                            conn.execute(
+                                "UPDATE " + table + " SET payload=?"
+                                " WHERE workspace_id=? AND " + idcol + "=?",
+                                (
+                                    json.dumps(data),
+                                    workspace_id,
+                                    gid,
+                                ),
+                            )
+                        else:
+                            # No surviving documents — fully tombstone.
+                            data["document_ids"] = []
+                            data["chunk_ids"] = []
+                            conn.execute(
+                                "UPDATE " + table + " SET tombstoned=1, payload=?"
+                                " WHERE workspace_id=? AND " + idcol + "=?",
+                                (
+                                    json.dumps(data),
+                                    workspace_id,
+                                    gid,
+                                ),
+                            )
+                            if table == "graph_entities":
+                                tombstoned_ent_ids.add(gid)
+                            else:
+                                tombstoned_rel_ids.add(gid)
+                            count += 1
+                    # T-IMP-006: After processing entities, tombstone any
+                    # relationships whose source or target entity was fully
+                    # tombstoned (they are now dangling). This is done in a
+                    # second pass so relationships still supported by other
+                    # documents but referencing a dead entity are also removed.
+                    if tombstoned_ent_ids:
+                        placeholders = ",".join("?" for _ in tombstoned_ent_ids)
+                        placeholders2 = ",".join("?" for _ in tombstoned_ent_ids)
+                        cur = conn.execute(
+                            "SELECT relationship_id, payload FROM graph_relationships"
+                            " WHERE workspace_id=? AND tombstoned=0"
+                            " AND (source_id IN (" + placeholders + ")"
+                            " OR target_id IN (" + placeholders2 + "))",
+                            (workspace_id, *tombstoned_ent_ids, *tombstoned_ent_ids),
+                        )
+                        for rid, payload in cur.fetchall():
+                            data = json.loads(payload)
+                            data["document_ids"] = []
+                            data["chunk_ids"] = []
+                            conn.execute(
+                                "UPDATE graph_relationships SET tombstoned=1, payload=?"
+                                " WHERE workspace_id=? AND relationship_id=?",
+                                (json.dumps(data), workspace_id, rid),
+                            )
+                            tombstoned_rel_ids.add(rid)
+                            count += 1
                 self._prune_communities(
                     conn, workspace_id, tombstoned_ent_ids, tombstoned_rel_ids
+                )
+                # T-RV19-05: retire the deleted document's chunks and drop mapping.
+                cur = conn.execute(
+                    "SELECT chunk_id FROM graph_document_chunks"
+                    " WHERE workspace_id=? AND document_id=?",
+                    (workspace_id, document_id),
+                )
+                retired = [r[0] for r in cur.fetchall()]
+                now = datetime.now(UTC).isoformat()
+                for c in retired:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO graph_retired_chunks"
+                        "(workspace_id, chunk_id, retired_at) VALUES (?, ?, ?)",
+                        (workspace_id, c, now),
+                    )
+                conn.execute(
+                    "DELETE FROM graph_document_chunks"
+                    " WHERE workspace_id=? AND document_id=?",
+                    (workspace_id, document_id),
                 )
                 # T-IMP-005: Record document-level tombstone so upsert_extraction
                 # can refuse to resurrect deleted/superseded document graph rows.
@@ -846,9 +1259,7 @@ class SQLiteGraphStore(GraphStore):
                     (
                         workspace_id,
                         document_id,
-                        __import__("datetime").datetime.now(
-                            __import__("datetime").timezone.utc
-                        ).isoformat(),
+                        datetime.now(UTC).isoformat(),
                     ),
                 )
                 conn.commit()
@@ -878,7 +1289,7 @@ class SQLiteGraphStore(GraphStore):
             tombstoned_ent_ids: set[str] = set()
             tombstoned_rel_ids: set[str] = set()
             with self._connect() as conn:
-                for table, idcol, store in (
+                for table, idcol, _store in (
                     ("graph_entities", "entity_id", tombstoned_ent_ids),
                     ("graph_relationships", "relationship_id", tombstoned_rel_ids),
                 ):
@@ -887,26 +1298,47 @@ class SQLiteGraphStore(GraphStore):
                         + " WHERE workspace_id=? AND tombstoned=0",
                         (workspace_id,),
                     )
-                    targets = [
-                        gid
-                        for gid, payload in cur.fetchall()
-                        if chunk_set.intersection(
-                            set(json.loads(payload).get("chunk_ids", []))
-                        )
-                    ]
-                    if targets:
-                        placeholders = ",".join("?" for _ in targets)
-                        conn.execute(
-                            "UPDATE " + table + " SET tombstoned=1"
-                            " WHERE workspace_id=? AND " + idcol
-                            + " IN (" + placeholders + ")",
-                            (workspace_id, *targets),
-                        )
-                        store.update(targets)
-                        count += len(targets)
+                    rows = cur.fetchall()
+                    for gid, payload in rows:
+                        data = json.loads(payload)
+                        entity_chunk_ids: list[str] = data.get("chunk_ids", [])
+                        if not chunk_set.intersection(set(entity_chunk_ids)):
+                            continue
+                        remaining_chunk_ids = [
+                            c for c in entity_chunk_ids if c not in chunk_set
+                        ]
+                        data["chunk_ids"] = remaining_chunk_ids
+                        if remaining_chunk_ids:
+                            # Some chunks survive — keep it live, update chunks.
+                            conn.execute(
+                                "UPDATE " + table + " SET payload=?"
+                                " WHERE workspace_id=? AND " + idcol + "=?",
+                                (json.dumps(data), workspace_id, gid),
+                            )
+                        else:
+                            # No surviving chunks — fully tombstone.
+                            data["document_ids"] = []
+                            data["chunk_ids"] = []
+                            conn.execute(
+                                "UPDATE " + table + " SET tombstoned=1, payload=?"
+                                " WHERE workspace_id=? AND " + idcol + "=?",
+                                (json.dumps(data), workspace_id, gid),
+                            )
+                            if table == "graph_entities":
+                                tombstoned_ent_ids.add(gid)
+                            else:
+                                tombstoned_rel_ids.add(gid)
+                            count += 1
                 self._prune_communities(
                     conn, workspace_id, tombstoned_ent_ids, tombstoned_rel_ids
                 )
+                now = datetime.now(UTC).isoformat()
+                for c in chunk_ids:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO graph_retired_chunks"
+                        "(workspace_id, chunk_id, retired_at) VALUES (?, ?, ?)",
+                        (workspace_id, c, now),
+                    )
                 conn.commit()
             return count
 

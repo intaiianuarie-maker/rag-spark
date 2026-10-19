@@ -256,15 +256,17 @@ async def test_inflight_extraction_cannot_resurrect_deleted_document(tmp_path: P
     assert await store.get_entity(ws, "e2") is None
     assert await store.get_entity(ws, "e3") is None
 
-    # Defense-in-depth: even without document_id, tombstoned=1 is preserved
-    # on conflict (no blind tombstoned=0 reset)
+        # Defense-in-depth: even without document_id, tombstoned=1 is preserved
+    # on conflict (no blind tombstoned=0 reset). A tombstoned entity is NOT
+    # resurrected — the upsert is skipped entirely.
     stale_entity_no_doc = Entity(
         id="e1", name="Alice Smith", type=EntityType.PERSON,
         workspace_id=ws, document_ids=[doc_id],
     )
     result = await store.upsert_extraction(ws, [stale_entity_no_doc], [], [])
-    assert result["entities"] == 1  # row was touched
-        # But entity must STILL be invisible — tombstone preserved
+    assert result["entities"] == 0, (\
+        "tombstoned entity must be skipped, not resurrected")
+    # But entity must STILL be invisible — tombstone preserved
     assert await store.get_entity(ws, "e1") is None, (
         "upsert without document_id must NOT resurrect a tombstoned entity"
     )
