@@ -32,3 +32,6 @@ Fixed community summary rebuild, unmapped provenance safety, universal fences, m
 
 ## Rework-8 (F9/F10-memory/F7-test)
 Fixed optional-arg mappings, memory retired fence, strengthened F7 test. Ruff clean; 41 green (1 PG env).
+
+## Rework-9 (F11-rel/F12/F9-legacy)
+Fixed relationship mapping, community rebuild scoping, legacy unmapped handling. Ruff clean; 41 green (1 PG env).

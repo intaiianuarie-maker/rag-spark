@@ -7,7 +7,7 @@ Each FAILS on a8414fd and passes on the fix.
 
 import uuid
 
-from graph.interfaces import Entity, GraphCommunity
+from graph.interfaces import Entity, GraphCommunity, Relationship, RelationshipType
 from graph.retriever import GraphRetriever
 from graph.sqlite_store import SQLiteGraphStore
 
@@ -57,3 +57,57 @@ async def test_rv19_f9_no_empty_live_row(tmp_path):
     ent = await s.get_entity("ws", "alice")
     s.close()
     assert not (ent is not None and not ent.chunk_ids), "empty live row left after delete (F9)"
+
+
+async def test_rv19_f11_rel_refused_no_mapping(tmp_path):
+    """A refused RELATIONSHIP write must not insert ownership mappings (F11 relationship path)."""
+    s = SQLiteGraphStore(tmp_path / "f11rel.sqlite")
+    await s.upsert_extraction("ws", [_E("e0", "doc-a", "uuid-a")], [], [], document_id="doc-a")
+    await s.tombstone_chunks("ws", ["retired-x"])
+    rel = Relationship(id="rel", source_entity_id="e0", target_entity_id="e0",
+                       type=next(iter(RelationshipType)), workspace_id="ws",
+                       document_ids=["doc-b"], chunk_ids=["retired-x", "uuid-a"])
+    n = await s.upsert_relationships("ws", [rel])          # refused (carries a retired chunk)
+    await s.tombstone_document("ws", "doc-b")
+    refresh = await s.upsert_entities("ws", [_E("e0", "doc-a", "uuid-a")])
+    s.close()
+    assert n == 0, "refused relationship was written (F11-rel)"
+    assert refresh == 1, "valid doc-a refresh blocked after doc-b delete (F11-rel)"
+
+
+async def test_rv19_f12_unrelated_community_preserved(tmp_path):
+    """A delete/retirement must not rewrite UNRELATED live community summaries (F12)."""
+    s = SQLiteGraphStore(tmp_path / "f12.sqlite")
+    await s.upsert_entities("ws", [_E("live", "live-doc", "live-chunk")])
+    await s.upsert_communities("ws", [GraphCommunity(
+        id="cm", workspace_id="ws", title="Merger negotiations",
+        summary="Merger negotiations live-chunk", entity_ids=["live"])])
+    await s.upsert_entities("ws", [_E("other", "unrelated-doc", "unrelated-chunk")])
+    await s.tombstone_document("ws", "unrelated-doc")
+    gs = await GraphRetriever(s).global_search("ws", "Merger")
+    s.close()
+    assert "Merger" in gs.summary, "unrelated delete overwrote a live community summary (F12)"
+    assert "live-chunk" in gs.evidence_chunk_ids, "unrelated delete dropped live evidence (F12)"
+
+
+async def test_rv19_f9_legacy_pre_mapping_schema(tmp_path):
+    """A genuine pre-mapping schema must not leave an empty live/searchable row (F9 legacy)."""
+    path = tmp_path / "f9legacy.sqlite"
+    s = SQLiteGraphStore(path)
+    conn = s._connect()
+    conn.execute("DROP TABLE graph_document_chunks")       # simulate pre-mapping schema
+    legacy = Entity(id="alice", name="alice", workspace_id="ws",
+                    document_ids=["legacy-a", "legacy-b"],
+                    chunk_ids=["legacy-uuid-a", "legacy-uuid-b"])
+    conn.execute(
+        "INSERT INTO graph_entities(workspace_id,entity_id,payload,tombstoned) VALUES(?,?,?,0)",
+        ("ws", "alice", legacy.model_dump_json()))
+    conn.commit()
+    s.close()
+    s2 = SQLiteGraphStore(path)
+    await s2.upsert_extraction("ws", [_E("other", "unrelated-doc", "uz")], [], [],
+                               document_id="unrelated-doc")
+    await s2.tombstone_document("ws", "legacy-a")
+    ent = await s2.get_entity("ws", "alice")
+    s2.close()
+    assert not (ent is not None and not ent.chunk_ids), "empty live row from legacy provenance (F9)"
