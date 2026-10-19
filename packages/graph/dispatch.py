@@ -27,9 +27,13 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from graph.extractor import GraphExtractor, RuleBasedGraphExtractor
 from graph.factory import graph_mode
+
+if TYPE_CHECKING:
+    from models.interfaces import LLMProvider
 
 #: Modes that declare the graph leg ON. Mirrors factory.GRAPH_MODES_ON; kept
 #: separate from factory's retrieval concern (the retriever is built for both).
@@ -94,7 +98,7 @@ def llm_model_name(env: dict[str, str] | None = None) -> str:
     return DEFAULT_LLM_MODEL
 
 
-def build_llm_provider(env: dict[str, str] | None = None) -> object:
+def build_llm_provider(env: dict[str, str] | None = None) -> LLMProvider:
     """Build the injected LLM provider for ``llm`` mode via the model router.
 
     Resolves ``GRAPH_MODE=llm`` to the Gemma route (T-OR-03 unified Gemma
@@ -123,7 +127,7 @@ def build_llm_provider(env: dict[str, str] | None = None) -> object:
     return create_llm_provider()
 
 
-def gemma_provider() -> tuple[object, str, str]:
+def gemma_provider() -> tuple[LLMProvider, str, str]:
     """Return ``(provider, free_model, paid_model)`` for the approved Gemma route.
 
     Wires ``GRAPH_MODE=llm`` resolution to the Gemma route with its paid fallback
