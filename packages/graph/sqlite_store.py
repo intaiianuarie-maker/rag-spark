@@ -1282,18 +1282,9 @@ class SQLiteGraphStore(GraphStore):
                                 continue
                             chunk_ids: list[str] = data.get("chunk_ids", [])
                             remaining_doc_ids = [d for d in doc_ids if d != document_id]
-                            cur2 = conn.execute(
-                                "SELECT chunk_id FROM graph_document_chunks"
-                                " WHERE workspace_id=? AND document_id=?",
-                                (workspace_id, document_id),
-                            )
-                            deleted_chunks = {r[0] for r in cur2.fetchall()}
-                            has_any_mapping = conn.execute(
-                                "SELECT 1 FROM graph_document_chunks WHERE workspace_id=? LIMIT 1",
-                                (workspace_id,),
-                            ).fetchone() is not None
-                            if not has_any_mapping:
-                                remaining_doc_ids = []
+                            # F9: rebuild from VERIFIED surviving ownership. A chunk is
+                            # kept only if a SURVIVING document verifiably owns it; every
+                            # deleted OR unverified (legacy) chunk is excluded.
                             surviving_mapped: set[str] = set()
                             for sd in remaining_doc_ids:
                                 cur3 = conn.execute(
@@ -1302,24 +1293,9 @@ class SQLiteGraphStore(GraphStore):
                                     (workspace_id, sd),
                                 )
                                 surviving_mapped.update(r[0] for r in cur3.fetchall())
-                            has_any_mapping = (
-                                conn.execute(
-                                    "SELECT 1 FROM graph_document_chunks "
-                                    "WHERE workspace_id=? LIMIT 1",
-                                    (workspace_id,),
-                                ).fetchone()
-                                is not None
-                            )
-                            if deleted_chunks:
-                                remaining_chunk_ids = [
-                                    c for c in chunk_ids if c not in deleted_chunks
-                                ]
-                            elif has_any_mapping and surviving_mapped:
-                                remaining_chunk_ids = [
-                                    c for c in chunk_ids if c in surviving_mapped
-                                ]
-                            else:
-                                remaining_chunk_ids = []
+                            remaining_chunk_ids = [
+                                c for c in chunk_ids if c in surviving_mapped
+                            ]
                             if not remaining_chunk_ids:
                                 remaining_doc_ids = []
                             if remaining_doc_ids:

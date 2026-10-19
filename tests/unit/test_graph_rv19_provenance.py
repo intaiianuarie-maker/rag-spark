@@ -151,3 +151,31 @@ async def test_rv19_f9_overdeletion_keeps_verified_survivor(tmp_path):
     assert ent is not None, "verified surviving doc was over-deleted (F9)"
     assert "old-uuid" not in ent.chunk_ids, "deleted legacy uuid survived (F9)"
     assert "new-uuid" in ent.chunk_ids, "verified surviving uuid was dropped (F9)"
+
+
+async def test_rv19_f9_partial_mapping_excludes_unverified(tmp_path):
+    """A partially-mapped deleted document must not leave unverified legacy chunks behind,
+    while the verified survivor is preserved (F9 partial mapping)."""
+    path = tmp_path / "f9partial.sqlite"
+    s = SQLiteGraphStore(path)
+    conn = s._connect()
+    conn.execute("DROP TABLE graph_document_chunks")       # pre-mapping row for old-doc
+    legacy = Entity(id="alice", name="alice", workspace_id="ws",
+                    document_ids=["old-doc"], chunk_ids=["legacy-old-uuid"])
+    conn.execute(
+        "INSERT INTO graph_entities(workspace_id,entity_id,payload,tombstoned) VALUES(?,?,?,0)",
+        ("ws", "alice", legacy.model_dump_json()))
+    conn.commit()
+    s.close()
+    s2 = SQLiteGraphStore(path)
+    await s2.upsert_extraction("ws", [_E("alice", "old-doc", "old-mapped-uuid")], [], [],
+                               document_id="old-doc")
+    await s2.upsert_extraction("ws", [_E("alice", "new-doc", "new-uuid")], [], [],
+                               document_id="new-doc")
+    await s2.tombstone_document("ws", "old-doc")
+    s2.close()
+    s3 = SQLiteGraphStore(path)
+    search = await GraphRetriever(s3).local_search("ws", "alice")
+    s3.close()
+    assert "legacy-old-uuid" not in search.evidence_chunk_ids, "legacy chunk survived (F9)"
+    assert "new-uuid" in search.evidence_chunk_ids, "verified survivor dropped (F9)"

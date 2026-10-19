@@ -337,15 +337,9 @@ class MemoryGraphStore(GraphStore):
             surviving_mapped = set()
             for sd in remaining_docs:
                 surviving_mapped.update(self._document_chunks[workspace_id].get(sd, set()))
-            has_mapping = bool(self._document_chunks[workspace_id])
-            if not has_mapping:
+            remaining_chunks = [c for c in ent.chunk_ids if c in surviving_mapped]
+            if not remaining_chunks:
                 remaining_docs = []
-            if deleted_chunks:
-                remaining_chunks = [c for c in ent.chunk_ids if c not in deleted_chunks]
-            elif has_mapping and surviving_mapped:
-                remaining_chunks = [c for c in ent.chunk_ids if c in surviving_mapped]
-            else:
-                remaining_chunks = []
             if remaining_docs:
                 ent.document_ids = remaining_docs
                 ent.chunk_ids = remaining_chunks
@@ -369,15 +363,9 @@ class MemoryGraphStore(GraphStore):
             surviving_mapped = set()
             for sd in remaining_docs:
                 surviving_mapped.update(self._document_chunks[workspace_id].get(sd, set()))
-            has_mapping = bool(self._document_chunks[workspace_id])
-            if not has_mapping:
+            remaining_chunks = [c for c in rel.chunk_ids if c in surviving_mapped]
+            if not remaining_chunks:
                 remaining_docs = []
-            if deleted_chunks:
-                remaining_chunks = [c for c in rel.chunk_ids if c not in deleted_chunks]
-            elif has_mapping and surviving_mapped:
-                remaining_chunks = [c for c in rel.chunk_ids if c in surviving_mapped]
-            else:
-                remaining_chunks = []
             if remaining_docs and not dangling:
                 rel.document_ids = remaining_docs
                 rel.chunk_ids = remaining_chunks
