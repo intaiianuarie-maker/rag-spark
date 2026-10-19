@@ -1,3 +1,4 @@
+# ruff: noqa: E501, UP031
 """T-V2-002: graph store concurrency - single-writer, atomic visibility, crash durability."""
 
 from __future__ import annotations
@@ -66,6 +67,7 @@ async def test_concurrent_writers_no_busy_errors(tmp_path: Path) -> None:
 
     # Verify no busy errors and all entities present
     store = SQLiteGraphStore(db)
+
     # Count via direct DB query to avoid store's own filtering
     def check():
         conn = sqlite3.connect(str(db))
@@ -210,15 +212,19 @@ async def test_inflight_extraction_cannot_resurrect_deleted_document(tmp_path: P
     await store.ensure_graph(ws)
     await store.set_enabled(ws, True)
 
-    e1 = Entity(id="e1", name="Alice Smith", type=EntityType.PERSON,
-                workspace_id=ws, document_ids=[doc_id])
-    e2 = Entity(id="e2", name="Acme Corp", type=EntityType.ORGANIZATION,
-                workspace_id=ws, document_ids=[doc_id])
+    e1 = Entity(
+        id="e1", name="Alice Smith", type=EntityType.PERSON, workspace_id=ws, document_ids=[doc_id]
+    )
+    e2 = Entity(
+        id="e2",
+        name="Acme Corp",
+        type=EntityType.ORGANIZATION,
+        workspace_id=ws,
+        document_ids=[doc_id],
+    )
 
     # Initial extraction writes entities
-    result = await store.upsert_extraction(
-        ws, [e1, e2], [], [], document_id=doc_id
-    )
+    result = await store.upsert_extraction(ws, [e1, e2], [], [], document_id=doc_id)
     assert result["entities"] == 2
 
     # Verify entities are present
@@ -239,16 +245,29 @@ async def test_inflight_extraction_cannot_resurrect_deleted_document(tmp_path: P
     # Simulate in-flight extraction finishing AFTER deletion — tries to upsert
     # with same document_id. Fence must refuse it.
     stale_entities = [
-        Entity(id="e1", name="Alice Smith", type=EntityType.PERSON,
-               workspace_id=ws, document_ids=[doc_id]),
-        Entity(id="e2", name="Acme Corp", type=EntityType.ORGANIZATION,
-               workspace_id=ws, document_ids=[doc_id]),
-        Entity(id="e3", name="New Entity", type=EntityType.CONCEPT,
-               workspace_id=ws, document_ids=[doc_id]),
+        Entity(
+            id="e1",
+            name="Alice Smith",
+            type=EntityType.PERSON,
+            workspace_id=ws,
+            document_ids=[doc_id],
+        ),
+        Entity(
+            id="e2",
+            name="Acme Corp",
+            type=EntityType.ORGANIZATION,
+            workspace_id=ws,
+            document_ids=[doc_id],
+        ),
+        Entity(
+            id="e3",
+            name="New Entity",
+            type=EntityType.CONCEPT,
+            workspace_id=ws,
+            document_ids=[doc_id],
+        ),
     ]
-    result = await store.upsert_extraction(
-        ws, stale_entities, [], [], document_id=doc_id
-    )
+    result = await store.upsert_extraction(ws, stale_entities, [], [], document_id=doc_id)
     assert result["entities"] == 0, "upsert must be refused for tombstoned document"
 
     # No entities should have been written
@@ -256,16 +275,18 @@ async def test_inflight_extraction_cannot_resurrect_deleted_document(tmp_path: P
     assert await store.get_entity(ws, "e2") is None
     assert await store.get_entity(ws, "e3") is None
 
-        # Defense-in-depth: even without document_id, tombstoned=1 is preserved
+    # Defense-in-depth: even without document_id, tombstoned=1 is preserved
     # on conflict (no blind tombstoned=0 reset). A tombstoned entity is NOT
     # resurrected — the upsert is skipped entirely.
     stale_entity_no_doc = Entity(
-        id="e1", name="Alice Smith", type=EntityType.PERSON,
-        workspace_id=ws, document_ids=[doc_id],
+        id="e1",
+        name="Alice Smith",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        document_ids=[doc_id],
     )
     result = await store.upsert_extraction(ws, [stale_entity_no_doc], [], [])
-    assert result["entities"] == 0, (\
-        "tombstoned entity must be skipped, not resurrected")
+    assert result["entities"] == 0, "tombstoned entity must be skipped, not resurrected"
     # But entity must STILL be invisible — tombstone preserved
     assert await store.get_entity(ws, "e1") is None, (
         "upsert without document_id must NOT resurrect a tombstoned entity"
@@ -291,8 +312,9 @@ async def test_upsert_extraction_without_document_id_preserves_tombstone(
     await store.ensure_graph(ws)
     await store.set_enabled(ws, True)
 
-    e1 = Entity(id="e1", name="Ghost", type=EntityType.PERSON,
-                workspace_id=ws, document_ids=[doc_id])
+    e1 = Entity(
+        id="e1", name="Ghost", type=EntityType.PERSON, workspace_id=ws, document_ids=[doc_id]
+    )
     await store.upsert_extraction(ws, [e1], [], [])
     assert await store.get_entity(ws, "e1") is not None
 
@@ -321,9 +343,250 @@ async def test_document_not_tombstoned_allows_upsert(tmp_path: Path) -> None:
     # Document is NOT tombstoned
     assert await store.is_document_tombstoned(ws, doc_id) is False
 
-    e1 = Entity(id="e1", name="Live Entity", type=EntityType.PERSON,
-                workspace_id=ws, document_ids=[doc_id])
+    e1 = Entity(
+        id="e1", name="Live Entity", type=EntityType.PERSON, workspace_id=ws, document_ids=[doc_id]
+    )
     result = await store.upsert_extraction(ws, [e1], [], [], document_id=doc_id)
     assert result["entities"] == 1
     assert await store.get_entity(ws, "e1") is not None
     store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f5_union_preservation_sqlite(tmp_path: Path) -> None:
+    db = tmp_path / "union.sqlite"
+    ws = "ws-union"
+    store = SQLiteGraphStore(db)
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    store.close()
+
+    async def writer(i):
+        s = SQLiteGraphStore(db)
+        await s.ensure_graph(ws)
+        await s.set_enabled(ws, True)
+        doc = f"doc-{i}"
+        chunk = f"chunk-{i}"
+        await s.upsert_entities(
+            ws,
+            [
+                Entity(
+                    id="shared",
+                    name="Shared",
+                    workspace_id=ws,
+                    document_ids=[doc],
+                    chunk_ids=[chunk],
+                ),
+            ],
+        )
+        s.close()
+
+    import asyncio
+
+    await asyncio.gather(*[writer(i) for i in range(5)])
+    s = SQLiteGraphStore(db)
+    await s.ensure_graph(ws)
+    ent = await s.get_entity(ws, "shared")
+    assert ent is not None
+    assert len(ent.document_ids) == 5
+    s.close()
+
+
+@pytest.mark.unit
+def test_rv19_f1_cross_process_deletion(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+
+    db = tmp_path / "f1.sqlite"
+    # setup
+    setup = (
+        "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "from graph.interfaces import Entity;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws'); await s.set_enabled('ws',True);\n"
+        "    await s.upsert_extraction('ws',[Entity(id='e',name='Alice',workspace_id='ws',document_ids=['doc'],chunk_ids=['c'])],[],[],document_id='doc');\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", setup],
+        check=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+
+    # independent process deletes
+    deleter = (
+        "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws');\n"
+        "    await s.tombstone_document('ws','doc');\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", deleter],
+        check=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+
+    # parent attempts upsert -> refused
+    checker = (
+        "import asyncio,sys,json; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "from graph.interfaces import Entity;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws'); await s.set_enabled('ws',True);\n"
+        "    r=await s.upsert_extraction('ws',[Entity(id='e2',name='Bob',workspace_id='ws',document_ids=['doc'],chunk_ids=['c2'])],[],[],document_id='doc');\n"
+        "    print(json.dumps(r));\n"
+        "    e=await s.get_entity('ws','e2');\n"
+        "    print('LIVE' if e is not None else 'NONE');\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", checker],
+        capture_output=True,
+        text=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+    assert "NONE" in out.stdout
+
+
+@pytest.mark.unit
+def test_rv19_f4_cross_process_tombstone_chunks(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    db = tmp_path / "f4.sqlite"
+    setup = (
+        "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "from graph.interfaces import Entity;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws'); await s.set_enabled('ws',True);\n"
+        "    await s.upsert_extraction('ws',[Entity(id='e',name='Alice',workspace_id='ws',document_ids=['doc'],chunk_ids=['old'])],[],[],document_id='doc');\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", setup],
+        check=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+
+    # retire chunks
+    retire = (
+        "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws');\n"
+        "    await s.tombstone_chunks('ws',['old']);\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", retire],
+        check=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+
+    # late publish with retiring chunk -> refused
+    late = (
+        "import asyncio,sys,json; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "from graph.interfaces import Entity;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws'); await s.set_enabled('ws',True);\n"
+        "    r=await s.upsert_extraction('ws',[Entity(id='late',name='Late',workspace_id='ws',document_ids=['doc'],chunk_ids=['old'])],[],[],document_id='doc');\n"
+        "    print(json.dumps(r));\n"
+        "    from graph.retriever import GraphRetriever;\n"
+        "    sr=await GraphRetriever(s).local_search('ws','Late');\n"
+        "    print('OLDINSEARCH' if 'old' in sr.evidence_chunk_ids else 'NOOLD');\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", late],
+        capture_output=True,
+        text=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+    assert "NOOLD" in out.stdout
+
+
+@pytest.mark.unit
+def test_rv19_f5_cross_process_union(tmp_path: Path) -> None:
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    db = tmp_path / "f5.sqlite"
+    setup = (
+        "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws'); await s.set_enabled('ws',True);\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    subprocess.run(
+        [sys.executable, "-c", setup],
+        check=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+
+    for i in range(5):
+        code = (
+            "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+            "from pathlib import Path;\n"
+            "from graph.sqlite_store import SQLiteGraphStore;\n"
+            "from graph.interfaces import Entity;\n"
+            "async def m():\n"
+            "    s=SQLiteGraphStore(Path(%r));\n"
+            "    await s.ensure_graph('ws'); await s.set_enabled('ws',True);\n"
+            "    await s.upsert_entities('ws',[Entity(id='shared',name='Shared',workspace_id='ws',document_ids=['doc-%d'],chunk_ids=['chunk-%d'])]);\n"
+            "    s.close();\n"
+            "asyncio.run(m());\n"
+        ) % (str(db), i, i)
+        subprocess.run(
+            [sys.executable, "-c", code],
+            check=True,
+            cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        )
+
+    check = (
+        "import asyncio,sys; sys.path.insert(0,'packages'); sys.path.insert(0,'apps/worker');\n"
+        "from pathlib import Path;\n"
+        "from graph.sqlite_store import SQLiteGraphStore;\n"
+        "async def m():\n"
+        f"    s=SQLiteGraphStore(Path({str(db)!r}));\n"
+        "    await s.ensure_graph('ws');\n"
+        "    e=await s.get_entity('ws','shared');\n"
+        "    print(len(e.document_ids) if e else 0);\n"
+        "    s.close();\n"
+        "asyncio.run(m());\n"
+    )
+    out = subprocess.run(
+        [sys.executable, "-c", check],
+        capture_output=True,
+        text=True,
+        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+    )
+    assert out.stdout.strip() == "5"

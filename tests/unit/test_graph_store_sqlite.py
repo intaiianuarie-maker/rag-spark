@@ -56,10 +56,20 @@ async def test_sqlite_workspace_boundary_isolation(tmp_path) -> None:
     await store.ensure_graph("ws-a")
     await store.ensure_graph("ws-b")
 
-    ea = Entity(id="e1", name="Apple Inc", type=EntityType.ORGANIZATION,
-                workspace_id="ws-a", document_ids=["d-1"])
-    eb = Entity(id="e1", name="Apple Inc", type=EntityType.ORGANIZATION,
-                workspace_id="ws-b", document_ids=["d-1"])
+    ea = Entity(
+        id="e1",
+        name="Apple Inc",
+        type=EntityType.ORGANIZATION,
+        workspace_id="ws-a",
+        document_ids=["d-1"],
+    )
+    eb = Entity(
+        id="e1",
+        name="Apple Inc",
+        type=EntityType.ORGANIZATION,
+        workspace_id="ws-b",
+        document_ids=["d-1"],
+    )
     await store.upsert_entities("ws-a", [ea])
     await store.upsert_entities("ws-b", [eb])
 
@@ -83,8 +93,12 @@ async def test_sqlite_tombstone_document_invalidates_community_and_retrieval(
     e2.type = EntityType.ORGANIZATION
     r1 = _rel("r1", ws, "e1", "e2", "d-1")
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Team", summary="Alice at Acme",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        id="c1",
+        workspace_id=ws,
+        title="Team",
+        summary="Alice at Acme",
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -111,18 +125,38 @@ async def test_sqlite_tombstone_document_preserves_multidoc_community(
     store = SQLiteGraphStore(tmp_path / "g.db")
     ws = "ws-x"
     await store.ensure_graph(ws)
-    e1 = Entity(id="e1", name="Alice", type=EntityType.PERSON, workspace_id=ws,
-                chunk_ids=["c-1"], document_ids=["d-1"])
-    e2 = Entity(id="e2", name="Bob", type=EntityType.PERSON, workspace_id=ws,
-                chunk_ids=["c-2"], document_ids=["d-2"])
+    e1 = Entity(
+        id="e1",
+        name="Alice",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=["d-1"],
+    )
+    e2 = Entity(
+        id="e2",
+        name="Bob",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-2"],
+        document_ids=["d-2"],
+    )
     r1 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e2",
-        type=RelationshipType.RELATED_TO, workspace_id=ws,
-        chunk_ids=["c-1", "c-2"], document_ids=["d-1", "d-2"],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e2",
+        type=RelationshipType.RELATED_TO,
+        workspace_id=ws,
+        chunk_ids=["c-1", "c-2"],
+        document_ids=["d-1", "d-2"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Team", summary="Alice and Bob",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        id="c1",
+        workspace_id=ws,
+        title="Team",
+        summary="Alice and Bob",
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -165,22 +199,37 @@ async def test_sqlite_partial_deletion_regenerates_summary_and_invalidates_commu
     ws = "ws-y"
     await store.ensure_graph(ws)
     e1 = Entity(
-        id="e1", name="Alice", type=EntityType.PERSON, workspace_id=ws,
-        chunk_ids=["c-1"], document_ids=["d-1"],
+        id="e1",
+        name="Alice",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=["d-1"],
     )
     e2 = Entity(
-        id="e2", name="Bob", type=EntityType.PERSON, workspace_id=ws,
-        chunk_ids=["c-2"], document_ids=["d-1"],
+        id="e2",
+        name="Bob",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-2"],
+        document_ids=["d-1"],
     )
     r1 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e2",
-        type=RelationshipType.RELATED_TO, workspace_id=ws,
-        chunk_ids=["c-1", "c-2"], document_ids=["d-1"],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e2",
+        type=RelationshipType.RELATED_TO,
+        workspace_id=ws,
+        chunk_ids=["c-1", "c-2"],
+        document_ids=["d-1"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice and Bob",
+        id="c1",
+        workspace_id=ws,
+        title="Alice and Bob",
         summary="Alice and Bob are members of the team.",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -224,22 +273,37 @@ async def test_sqlite_tombstone_relationship_invalidates_community_summary(
     ws = "ws-z"
     await store.ensure_graph(ws)
     e1 = Entity(
-        id="e1", name="Alice", type=EntityType.PERSON, workspace_id=ws,
-        chunk_ids=["c-1"], document_ids=["d-1"],
+        id="e1",
+        name="Alice",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=["d-1"],
     )
     e2 = Entity(
-        id="e2", name="Bob", type=EntityType.PERSON, workspace_id=ws,
-        chunk_ids=["c-2"], document_ids=["d-1"],
+        id="e2",
+        name="Bob",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-2"],
+        document_ids=["d-1"],
     )
     r1 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e2",
-        type=RelationshipType.RELATED_TO, workspace_id=ws,
-        chunk_ids=["c-1", "c-2"], document_ids=["d-1"],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e2",
+        type=RelationshipType.RELATED_TO,
+        workspace_id=ws,
+        chunk_ids=["c-1", "c-2"],
+        document_ids=["d-1"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice and Bob",
+        id="c1",
+        workspace_id=ws,
+        title="Alice and Bob",
         summary="Alice and Bob are connected.",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -336,13 +400,20 @@ async def test_sqlite_tombstone_all_entities_invalidates_community(
     ws = "ws-w"
     await store.ensure_graph(ws)
     e1 = Entity(
-        id="e1", name="Alice", type=EntityType.PERSON, workspace_id=ws,
-        chunk_ids=["c-1"], document_ids=["d-1"],
+        id="e1",
+        name="Alice",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=["d-1"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice Team",
+        id="c1",
+        workspace_id=ws,
+        title="Alice Team",
         summary="Alice is the sole member.",
-        entity_ids=["e1"], relationship_ids=[],
+        entity_ids=["e1"],
+        relationship_ids=[],
     )
     await store.upsert_entities(ws, [e1])
     await store.upsert_communities(ws, [c1])
@@ -359,8 +430,12 @@ async def test_sqlite_tombstone_all_entities_invalidates_community(
     store = SQLiteGraphStore(path)
     await store.ensure_graph(ws)
     await store.upsert_entities(
-        ws, [Entity(id="e1", name="Alice", type=EntityType.PERSON,
-                     workspace_id=ws, document_ids=["d-1"])]
+        ws,
+        [
+            Entity(
+                id="e1", name="Alice", type=EntityType.PERSON, workspace_id=ws, document_ids=["d-1"]
+            )
+        ],
     )
     store.close()
 
@@ -390,10 +465,14 @@ async def test_multidoc_provenance_merge_granular_tombstone(tmp_path) -> None:
     await store.ensure_graph(ws)
     await store.set_enabled(ws, True)
 
-        # Doc 1: Alice Smith
+    # Doc 1: Alice Smith
     e1 = Entity(
-        id="e-alice-1", name="Alice Smith", type=EntityType.PERSON,
-        workspace_id=ws, chunk_ids=["c-doc-1"], document_ids=[doc1],
+        id="e-alice-1",
+        name="Alice Smith",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-doc-1"],
+        document_ids=[doc1],
     )
     await store.upsert_extraction(ws, [e1], [], [], document_id=doc1)
     entity = await store.get_entity(ws, "e-alice-1")
@@ -403,8 +482,12 @@ async def test_multidoc_provenance_merge_granular_tombstone(tmp_path) -> None:
 
     # Doc 2: Alice Smith (same entity, different doc)
     e2 = Entity(
-        id="e-alice-1", name="Alice Smith", type=EntityType.PERSON,
-        workspace_id=ws, chunk_ids=["c-doc-2"], document_ids=[doc2],
+        id="e-alice-1",
+        name="Alice Smith",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["c-doc-2"],
+        document_ids=[doc2],
     )
     await store.upsert_extraction(ws, [e2], [], [], document_id=doc2)
     entity = await store.get_entity(ws, "e-alice-1")
@@ -448,8 +531,16 @@ async def test_sqlite_context_manager_closes_and_lazy_reconnects(tmp_path) -> No
     with store:
         await store.ensure_graph(ws)
         await store.upsert_entities(
-            ws, [Entity(id="e1", name="Alice", type=EntityType.PERSON,
-                         workspace_id=ws, document_ids=["d-1"])]
+            ws,
+            [
+                Entity(
+                    id="e1",
+                    name="Alice",
+                    type=EntityType.PERSON,
+                    workspace_id=ws,
+                    document_ids=["d-1"],
+                )
+            ],
         )
     assert store._conn is None  # deterministic close via __exit__
 
@@ -474,31 +565,40 @@ async def test_multidoc_relationship_granular_tombstone(tmp_path) -> None:
     await store.ensure_graph(ws)
     await store.set_enabled(ws, True)
 
-    e1 = Entity(id="e1", name="Alice", type=EntityType.PERSON,
-                workspace_id=ws, document_ids=[doc1])
-    e2 = Entity(id="e2", name="Acme", type=EntityType.ORGANIZATION,
-                workspace_id=ws, document_ids=[doc1])
+    e1 = Entity(id="e1", name="Alice", type=EntityType.PERSON, workspace_id=ws, document_ids=[doc1])
+    e2 = Entity(
+        id="e2", name="Acme", type=EntityType.ORGANIZATION, workspace_id=ws, document_ids=[doc1]
+    )
     await store.upsert_entities(ws, [e1, e2])
 
     # Relationship supported by both docs
     r1 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e2",
-        type=RelationshipType.WORKS_FOR, workspace_id=ws,
-        chunk_ids=["c-1"], document_ids=[doc1],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e2",
+        type=RelationshipType.WORKS_FOR,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=[doc1],
     )
     await store.upsert_relationships(ws, [r1])
 
     # Now upsert the same relationship with doc-2 (merge provenance)
     r2 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e2",
-        type=RelationshipType.WORKS_FOR, workspace_id=ws,
-        chunk_ids=["c-2"], document_ids=[doc2],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e2",
+        type=RelationshipType.WORKS_FOR,
+        workspace_id=ws,
+        chunk_ids=["c-2"],
+        document_ids=[doc2],
     )
     await store.upsert_relationships(ws, [r2])
 
     # Verify relationship has merged provenance via direct DB query
     def _check_rel():
         import sqlite3
+
         conn = sqlite3.connect(str(tmp_path / "g.db"))
         cur = conn.execute(
             "SELECT payload FROM graph_relationships"
@@ -510,8 +610,10 @@ async def test_multidoc_relationship_granular_tombstone(tmp_path) -> None:
         if row is None:
             return None
         import json
+
         payload = json.loads(row[0])
         return payload
+
     rel_data = await store._run(_check_rel)
     assert rel_data is not None
     assert doc1 in rel_data["document_ids"]
@@ -539,24 +641,28 @@ async def test_upsert_extraction_merges_multi_document_provenance(tmp_path) -> N
 
     # First document
     e1_doc1 = Entity(
-        id="e-alice", name="Alice Smith", type=EntityType.PERSON,
-        workspace_id=ws, chunk_ids=["chunk-1"], document_ids=["doc-1"],
+        id="e-alice",
+        name="Alice Smith",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["chunk-1"],
+        document_ids=["doc-1"],
     )
-    await store.upsert_extraction(
-        ws, [e1_doc1], [], [], document_id="doc-1"
-    )
+    await store.upsert_extraction(ws, [e1_doc1], [], [], document_id="doc-1")
     entity = await store.get_entity(ws, "e-alice")
     assert entity is not None
     assert entity.document_ids == ["doc-1"]
 
     # Second document with same entity
     e1_doc2 = Entity(
-        id="e-alice", name="Alice Smith", type=EntityType.PERSON,
-        workspace_id=ws, chunk_ids=["chunk-2"], document_ids=["doc-2"],
+        id="e-alice",
+        name="Alice Smith",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        chunk_ids=["chunk-2"],
+        document_ids=["doc-2"],
     )
-    await store.upsert_extraction(
-        ws, [e1_doc2], [], [], document_id="doc-2"
-    )
+    await store.upsert_extraction(ws, [e1_doc2], [], [], document_id="doc-2")
     entity = await store.get_entity(ws, "e-alice")
     assert entity is not None
     # Provenance should be merged, not replaced
@@ -565,4 +671,158 @@ async def test_upsert_extraction_merges_multi_document_provenance(tmp_path) -> N
     assert "chunk-1" in entity.chunk_ids
     assert "chunk-2" in entity.chunk_ids
 
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f2_uuid_upsert_extraction(tmp_path) -> None:
+    import uuid
+
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-uuid"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    da, db = str(uuid.uuid4()), str(uuid.uuid4())
+    ua, ub = str(uuid.uuid4()), str(uuid.uuid4())
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[da], chunk_ids=[ua])],
+        [],
+        [],
+        document_id=da,
+    )
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[db], chunk_ids=[ub])],
+        [],
+        [],
+        document_id=db,
+    )
+    await store.tombstone_document(ws, da)
+    ent = await store.get_entity(ws, "e")
+    assert ent is not None
+    assert da not in ent.document_ids
+    assert ua not in ent.chunk_ids
+    assert db in ent.document_ids
+    assert ub in ent.chunk_ids
+    from graph.retriever import GraphRetriever
+
+    s = await GraphRetriever(store).local_search(ws, "Alice")
+    assert ua not in s.evidence_chunk_ids
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f2_uuid_upsert_entities(tmp_path) -> None:
+    import uuid
+
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-uuid2"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    da, db = str(uuid.uuid4()), str(uuid.uuid4())
+    ua, ub = str(uuid.uuid4()), str(uuid.uuid4())
+    await store.upsert_entities(
+        ws, [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[da], chunk_ids=[ua])]
+    )
+    await store.upsert_entities(
+        ws, [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[db], chunk_ids=[ub])]
+    )
+    await store.tombstone_document(ws, da)
+    ent = await store.get_entity(ws, "e")
+    assert ent is not None
+    assert da not in ent.document_ids
+    assert ua not in ent.chunk_ids
+    from graph.retriever import GraphRetriever
+
+    s = await GraphRetriever(store).local_search(ws, "Alice")
+    assert ua not in s.evidence_chunk_ids
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f3_replacement_retrieval(tmp_path) -> None:
+    from graph.interfaces import EntityType, GraphCommunity
+
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-repl"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    e = Entity(
+        id="e1",
+        name="Alice",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        document_ids=["doc"],
+        chunk_ids=["old"],
+    )
+    c = GraphCommunity(
+        id="comm1",
+        workspace_id=ws,
+        title="Team",
+        summary="Alice team",
+        entity_ids=["e1"],
+        relationship_ids=[],
+    )
+    await store.upsert_extraction(ws, [e], [], [c], document_id="doc")
+    await store.tombstone_chunks(ws, ["old"])
+    e2 = Entity(
+        id="e1",
+        name="Alice",
+        type=EntityType.PERSON,
+        workspace_id=ws,
+        document_ids=["doc"],
+        chunk_ids=["new"],
+    )
+    c2 = GraphCommunity(
+        id="comm1",
+        workspace_id=ws,
+        title="Team",
+        summary="Alice team",
+        entity_ids=["e1"],
+        relationship_ids=[],
+    )
+    await store.upsert_extraction(ws, [e2], [], [c2], document_id="doc")
+    comms = await store.get_communities(ws)
+    assert len(comms) == 1
+    from graph.retriever import GraphRetriever
+
+    s = await GraphRetriever(store).global_search(ws, "Alice")
+    assert "new" in s.evidence_chunk_ids or s.evidence_chunk_ids
+    assert "old" not in s.evidence_chunk_ids
+    store.close()
+
+
+@pytest.mark.unit
+async def test_rv19_f6_mixed_retirement_deletion(tmp_path) -> None:
+    import uuid
+
+    store = SQLiteGraphStore(tmp_path / "g.db")
+    ws = "ws-mixed"
+    await store.ensure_graph(ws)
+    await store.set_enabled(ws, True)
+    da, db = str(uuid.uuid4()), str(uuid.uuid4())
+    ua, ub = str(uuid.uuid4()), str(uuid.uuid4())
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[da], chunk_ids=[ua])],
+        [],
+        [],
+        document_id=da,
+    )
+    await store.upsert_extraction(
+        ws,
+        [Entity(id="e", name="Alice", workspace_id=ws, document_ids=[db], chunk_ids=[ub])],
+        [],
+        [],
+        document_id=db,
+    )
+    await store.tombstone_chunks(ws, [ua])
+    await store.tombstone_document(ws, db)
+    ent = await store.get_entity(ws, "e")
+    assert ent is None
+    from graph.retriever import GraphRetriever
+
+    s = await GraphRetriever(store).local_search(ws, "Alice")
+    assert s.evidence_chunk_ids == []
     store.close()
