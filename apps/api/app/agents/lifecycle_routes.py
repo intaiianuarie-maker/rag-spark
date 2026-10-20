@@ -19,6 +19,7 @@ Provides HTTP endpoints enforcing server policy:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -295,6 +296,24 @@ async def start_queued_run(
     - Queued job enqueued to durable queue.
     """
     _require_workspace(principal, workspace_id)
+
+    # T-IMP-001: fail-closed admission unless a shared durable agent store is
+    # configured. In-memory stores are process-local and silently lose queued
+    # runs across API/worker processes (reproduced: parent depth 1, worker 0).
+    if not os.environ.get("AGENT_STORE_DB", "").strip():
+        app_env = os.environ.get("APP_ENV", "").strip().lower()
+        if app_env not in ("test", "dev", "local", ""):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={
+                    "error": "agent_store_not_configured",
+                    "message": (
+                        "AGENT_STORE_DB is not set; queued agent runs require a "
+                        "shared durable store. Configure AGENT_STORE_DB to a "
+                        "shared sqlite path for api + worker."
+                    ),
+                },
+            )
 
     ws_id_str = str(workspace_id)
     policy = get_workspace_policy(ws_id_str)

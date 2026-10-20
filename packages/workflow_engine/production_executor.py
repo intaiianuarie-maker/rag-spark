@@ -40,9 +40,11 @@ class ProductionNodeExecutor:
         self,
         manifest: CapabilityManifest | None = None,
         llm_provider: LLMProvider | None = None,
+        verifier: Any = None,
     ) -> None:
         self._manifest = manifest if manifest is not None else PRODUCTION_CAPABILITY_MANIFEST
         self._llm_provider = llm_provider
+        self._verifier = verifier
 
     @property
     def manifest(self) -> CapabilityManifest:
@@ -51,6 +53,10 @@ class ProductionNodeExecutor:
     @property
     def llm_provider(self) -> LLMProvider | None:
         return self._llm_provider
+
+    @property
+    def verifier(self) -> Any:
+        return self._verifier
 
     @staticmethod
     def _extract_primary(input_data: dict[str, Any] | Any) -> Any:
@@ -218,35 +224,97 @@ class ProductionNodeExecutor:
                 "verification_reasons": ["no_evidence_provided"],
             }
 
-        from answer.models import CanonicalChunk as _CanonicalChunk, Claim as _Claim
         from answer.citation_integrity import CandidateCitation
+        from answer.models import CanonicalChunk as _CanonicalChunk
+        from answer.models import Claim as _Claim
 
-        claims = evidence.get("claims") or []
-        # Normalize dict claims to Claim objects
-        claims = [
-            c if isinstance(c, _Claim) else _Claim(**c) for c in claims
-        ]
-        citations = evidence.get("citations") or []
-        citations = [
+        # References come from configured evidence only (T-RV19-01): the
+        # claims that get verified are derived from the ACTUAL generated
+        # output, never from the node's preconfigured evidence claims. The
+        # configured evidence supplies the *reference set* (chunk ids) those
+        # output claims are checked against.
+        evidence_citations = [
             c if isinstance(c, CandidateCitation) else CandidateCitation(**c)
-            for c in citations
+            for c in (evidence.get("citations") or [])
         ]
+        evidence_claims = [
+            c if isinstance(c, _Claim) else _Claim(**c)
+            for c in (evidence.get("claims") or [])
+        ]
+        reference_ids: list[str] = []
+        for chunk_id in [c.chunk_id for c in evidence_citations] + [
+            cid for c in evidence_claims for cid in c.chunk_ids
+        ]:
+            if chunk_id and chunk_id not in reference_ids:
+                reference_ids.append(chunk_id)
         canonical = evidence.get("canonical") or {}
-        # Normalize dict canonical entries to CanonicalChunk objects
         canonical = {
             k: v if isinstance(v, _CanonicalChunk) else _CanonicalChunk(**v)
             for k, v in canonical.items()
         }
         allowed_workspace_ids = evidence.get("allowed_workspace_ids")
+        # Resolve the semantic verifier through the runtime DI boundary first,
+        # then the per-node evidence (T-RV19-02).
         verifier = evidence.get("verifier")
+        if verifier is None:
+            verifier = self._verifier
         chunk_lookup = evidence.get("chunk_lookup")
 
-        if not citations and not claims:
+        # Extract claims from the generated output (T-RV19-01).
+        claims: list[_Claim] = []
+        try:
+            from answer.prompts import parse_model_output
+
+            parsed = parse_model_output(output)
+            for entry in parsed.get("claims", []) or []:
+                claims.append(
+                    _Claim(
+                        text=entry["text"],
+                        chunk_ids=[str(x) for x in (entry.get("chunk_ids") or [])],
+                    )
+                )
+        except Exception:
+            claims = []
+        if not claims and (output or "").strip():
+            # Plain-prose output: one claim carrying the generated text.
+            claims = [_Claim(text=str(output).strip(), chunk_ids=list(reference_ids))]
+        else:
+            # A claim that asserted no reference of its own inherits the
+            # configured reference set; claims that did assert references
+            # keep them (they must exist in the canonical store to pass).
+            for claim in claims:
+                if not claim.chunk_ids:
+                    claim.chunk_ids = list(reference_ids)
+
+        if not claims:
             return {
                 "verified": False,
                 "verification_stage": "insufficient_evidence",
-                "verification_reasons": ["no_citations_or_claims_provided"],
+                "verification_reasons": ["no_claims_extracted_from_output"],
             }
+
+        if not any(c.chunk_ids for c in claims):
+            return {
+                "verified": False,
+                "verification_stage": "insufficient_evidence",
+                "verification_reasons": ["no_references_provided"],
+            }
+
+        # Bind the reference set to the *output* claim texts: the evidence
+        # citation provenance (page/section/span) is preserved, but the
+        # candidate citation is attributed to the text actually verified.
+        citations: list[CandidateCitation] = []
+        for claim in claims:
+            for chunk_id in claim.chunk_ids:
+                base = next(
+                    (c for c in evidence_citations if c.chunk_id == chunk_id), None
+                )
+                if base is not None:
+                    citations.append(base.model_copy(update={"claim_text": claim.text}))
+                else:
+                    citations.append(
+                        CandidateCitation(chunk_id=chunk_id, claim_text=claim.text)
+                    )
 
         # --- Stage 11: deterministic citation integrity ---
         from answer.citation_integrity import validate_citation_integrity
@@ -268,30 +336,39 @@ class ProductionNodeExecutor:
                 "verification_reasons": reasons or ["stage_11_failed"],
             }
 
-        # --- Stage 12: semantic verification (only if verifier injected) ---
-        if verifier is not None:
-            from answer.semantic_verification import (
-                evaluate_publication_gate,
-                verify_semantic_claims,
-            )
+        # --- Stage 12: semantic verification ---
+        # T-RV19-02: never claim Stage 12 without a successful Stage 12
+        # report. If no verifier is available, return an explicit
+        # incomplete/unavailable result instead of falling through to success.
+        if verifier is None:
+            return {
+                "verified": False,
+                "verification_stage": "Stage 12 unavailable",
+                "verification_reasons": ["no_verifier_configured"],
+            }
 
-            stage12_report = await verify_semantic_claims(
-                claims=claims,
-                integrity_report=stage11_report,
-                verifier=verifier,
-            )
-            gate_result = await evaluate_publication_gate(
-                claims=claims,
-                integrity_report=stage11_report,
-                semantic_report=stage12_report,
-                chunk_lookup=chunk_lookup,
-            )
-            if not gate_result.can_publish:
-                return {
-                    "verified": False,
-                    "verification_stage": str(gate_result.status),
-                    "verification_reasons": list(gate_result.reasons),
-                }
+        from answer.semantic_verification import (
+            evaluate_publication_gate,
+            verify_semantic_claims,
+        )
+
+        stage12_report = await verify_semantic_claims(
+            claims=claims,
+            integrity_report=stage11_report,
+            verifier=verifier,
+        )
+        gate_result = await evaluate_publication_gate(
+            claims=claims,
+            integrity_report=stage11_report,
+            semantic_report=stage12_report,
+            chunk_lookup=chunk_lookup,
+        )
+        if not gate_result.can_publish:
+            return {
+                "verified": False,
+                "verification_stage": str(gate_result.status),
+                "verification_reasons": list(gate_result.reasons),
+            }
 
         return {
             "verified": True,

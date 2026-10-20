@@ -5,8 +5,9 @@ from __future__ import annotations
 from unittest.mock import AsyncMock
 
 import pytest
-from models.interfaces import GenerationResult
+from answer.citation_integrity import CandidateCitation
 from answer.models import CanonicalChunk, Claim, DocumentStatus
+from models.interfaces import GenerationResult
 from workflow_engine import (
     NodeSpec,
     NodeType,
@@ -138,7 +139,11 @@ async def test_production_executor_verification_invalid_citations() -> None:
             "requires_verification": True,
             "evidence": {
                 "claims": [Claim(text="The moon is made of cheese.", chunk_ids=["fake-chunk"])],
-                "citations": [],
+                "citations": [
+                    CandidateCitation(
+                        chunk_id="fake-chunk", claim_text="The moon is made of cheese."
+                    )
+                ],
                 "canonical": {},
                 "allowed_workspace_ids": {"ws-test"},
             },
@@ -179,6 +184,11 @@ async def test_production_executor_verification_valid_claims_no_verifier() -> No
             "requires_verification": True,
             "evidence": {
                 "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "citations": [
+                    CandidateCitation(
+                        chunk_id="ch-1", claim_text="The launch budget is 20 dollars."
+                    )
+                ],
                 "canonical": canonical,
                 "allowed_workspace_ids": {"ws-test"},
             },
@@ -187,8 +197,9 @@ async def test_production_executor_verification_valid_claims_no_verifier() -> No
     )
 
     result = await executor.execute_node(node, "check facts", "ws-test")
-    assert result["verified"] is True
-    assert result["verification_stage"] == "Stage 11 & 12"
+    # T-RV19-02: no verifier => explicit unavailable, never a Stage 12 pass.
+    assert result["verified"] is False
+    assert result["verification_stage"] == "Stage 12 unavailable"
 
 
 @pytest.mark.asyncio
@@ -227,6 +238,11 @@ async def test_production_executor_verification_valid_with_semantic_pass() -> No
             "requires_verification": True,
             "evidence": {
                 "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "citations": [
+                    CandidateCitation(
+                        chunk_id="ch-1", claim_text="The launch budget is 20 dollars."
+                    )
+                ],
                 "canonical": canonical,
                 "allowed_workspace_ids": {"ws-test"},
                 "verifier": _PassVerifier(),
@@ -276,6 +292,11 @@ async def test_production_executor_verification_contradicted_by_semantic() -> No
             "requires_verification": True,
             "evidence": {
                 "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "citations": [
+                    CandidateCitation(
+                        chunk_id="ch-1", claim_text="The launch budget is 20 dollars."
+                    )
+                ],
                 "canonical": canonical,
                 "allowed_workspace_ids": {"ws-test"},
                 "verifier": _ContradictVerifier(),
@@ -311,3 +332,175 @@ async def test_production_executor_deterministic_primitives() -> None:
     # Output
     out = _make_node("o1", NodeType.OUTPUT)
     assert await executor.execute_node(out, "final value", "ws-1") == {"output": "final value"}
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_recording_verifier_receives_output() -> None:
+    """T-RV19-01: Stage 12 verifier must receive the generated output text."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _RecordingVerifier:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            self.seen.append(claim_text)
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    recorder = _RecordingVerifier()
+    mock_provider = AsyncMock()
+    generated = "The launch budget is 20 dollars."
+    mock_provider.generate.return_value = GenerationResult(
+        text=generated,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical_content = "The team met to review expenses. The launch budget is 20 dollars."
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content=canonical_content, status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "citations": [CandidateCitation(chunk_id="ch-1", claim_text=generated)],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": recorder,
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    assert result["output"] == generated
+    assert result["verified"] is True
+    assert recorder.seen == [generated], recorder.seen
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_checks_output_not_evidence_claim() -> None:
+    """T-RV19-01: the verified text is the generated output, not the evidence claim."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _RecordingVerifier:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            self.seen.append(claim_text)
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    recorder = _RecordingVerifier()
+    mock_provider = AsyncMock()
+    generated = "The moon is made of cheese."
+    mock_provider.generate.return_value = GenerationResult(
+        text=generated,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content="The launch budget is 20 dollars.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                # The configured claim differs from what the model generated.
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": recorder,
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    assert result["output"] == generated
+    # The verifier must see the GENERATED text, never the preconfigured claim.
+    assert recorder.seen == [generated], recorder.seen
+    assert "The launch budget is 20 dollars." not in recorder.seen
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_uses_runtime_verifier() -> None:
+    """T-RV19-02: the verifier can be resolved through the runtime DI boundary."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _RuntimeVerifier:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            self.seen.append(claim_text)
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    runtime_verifier = _RuntimeVerifier()
+    mock_provider = AsyncMock()
+    generated = "The launch budget is 20 dollars."
+    mock_provider.generate.return_value = GenerationResult(
+        text=generated,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content="The launch budget is 20 dollars.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    # No verifier in the node evidence: it must come from the executor DI.
+    executor = ProductionNodeExecutor(
+        llm_provider=mock_provider, verifier=runtime_verifier
+    )
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text=generated, chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    assert result["verified"] is True
+    assert result["verification_stage"] == "Stage 11 & 12"
+    assert runtime_verifier.seen == [generated], runtime_verifier.seen

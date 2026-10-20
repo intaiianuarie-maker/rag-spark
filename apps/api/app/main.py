@@ -62,6 +62,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     if agent_db:
         set_agent_store_db(agent_db)
         logger.info("agent_store_installed", extra={"event": "agent_store_installed"})
+    else:
+        logger.warning(
+            "agent_store_in_memory",
+            extra={
+                "event": "agent_store_in_memory",
+                "reason": "AGENT_STORE_DB unset; queued runs are process-local (dev/test only)",
+            },
+        )
 
     try:
         yield
