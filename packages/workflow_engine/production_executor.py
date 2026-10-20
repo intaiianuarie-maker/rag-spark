@@ -25,6 +25,7 @@ class TransformError(ValueError):
 
 
 
+
 class ProductionNodeExecutor:
     """Production NodeExecutor adhering to the NodeExecutor Protocol.
 
@@ -185,9 +186,13 @@ class ProductionNodeExecutor:
             res = await provider.generate(req)
             result_payload: dict[str, Any] = {"output": res.text.strip()}
             if node.config.get("verify") or node.config.get("requires_verification"):
-                result_payload.update(
-                    await self._evaluate_verification(node, result_payload["output"])
-                )
+                verdict = await self._evaluate_verification(node, result_payload["output"])
+                # The published output is the covered representation — never
+                # the raw model payload (T-RV19-01, POLICE F1).
+                published = verdict.pop("output", None)
+                result_payload.update(verdict)
+                if published is not None:
+                    result_payload["output"] = published
             return result_payload
 
         # 8. AGENT
@@ -206,23 +211,34 @@ class ProductionNodeExecutor:
     async def _evaluate_verification(
         self, node: NodeSpec, output: str
     ) -> dict[str, Any]:
-        """Evaluate node evidence through the Stage 11+12 publication gate.
+        """Evaluate the GENERATED output through the Stage 11+12 publication gate.
+
+        The published content is exactly the content that was verified
+        (T-RV19-01, POLICE F1):
+
+        - Claims are extracted from the **generated output**. The node's
+          preconfigured evidence supplies *references* (chunk ids) only; it is
+          never verified in place of the produced text.
+        - A structured answer's ``answer`` field is published content, so it
+          joins the verification set. A verifier that only supports the
+          model's ``claims`` can no longer pass an answer it never saw.
+        - Prose outside the JSON payload (prefix/suffix) is uncovered: it is
+          rejected, never published.
+        - The published output is always the *covered representation* (the
+          answer text, the claims' text, or the prose itself). The raw model
+          payload is never published, and the ``verified`` flag is the gate
+          that says whether the published text passed Stage 11 + Stage 12.
 
         Only emits ``verified=True`` + ``verification_stage="Stage 11 & 12"``
         when both Stage 11 (deterministic citation integrity) and Stage 12
-        (semantic verification) pass.
-
-        Fail-closed: missing evidence, failed Stage 11, or non-SUPPORTED
-        Stage 12 verdict all yield ``verified=False``.
+        (semantic verification) pass over the published content.
         """
-        evidence = self._extract_node_evidence(node)
-
-        if evidence is None:
-            return {
-                "verified": False,
-                "verification_stage": "insufficient_evidence",
-                "verification_reasons": ["no_evidence_provided"],
-            }
+        configured_evidence = self._extract_node_evidence(node)
+        evidence_missing = configured_evidence is None
+        # No evidence configuration means there are no references, so nothing
+        # can be verified. The flow continues so the published content is
+        # still the covered representation, never the raw payload.
+        evidence: dict[str, Any] = configured_evidence or {}
 
         from answer.citation_integrity import CandidateCitation
         from answer.models import CanonicalChunk as _CanonicalChunk
@@ -260,44 +276,76 @@ class ProductionNodeExecutor:
             verifier = self._verifier
         chunk_lookup = evidence.get("chunk_lookup")
 
-        # Extract claims from the generated output (T-RV19-01).
+        # --- Split the generated output into payload + uncovered prose ---
+        # (T-RV19-01, POLICE F1)
+        payload, residual = self._split_output_payload(output)
+        answer_text = ""
         claims: list[_Claim] = []
-        try:
-            from answer.prompts import parse_model_output
-
-            parsed = parse_model_output(output)
-            for entry in parsed.get("claims", []) or []:
+        if payload is not None:
+            answer_text = str(payload.get("answer") or "").strip()
+            for entry in payload.get("claims", []) or []:
+                if not isinstance(entry, dict):
+                    continue
+                text = entry.get("text")
+                if not isinstance(text, str) or not text.strip():
+                    continue
+                chunk_ids = entry.get("chunk_ids", [])
+                if not isinstance(chunk_ids, list):
+                    chunk_ids = []
                 claims.append(
                     _Claim(
-                        text=entry["text"],
-                        chunk_ids=[str(x) for x in (entry.get("chunk_ids") or [])],
+                        text=text.strip(),
+                        chunk_ids=[str(cid) for cid in chunk_ids],
                     )
                 )
-        except Exception:
-            claims = []
-        if not claims and (output or "").strip():
+        if payload is None and (output or "").strip():
             # Plain-prose output: one claim carrying the generated text.
             claims = [_Claim(text=str(output).strip(), chunk_ids=list(reference_ids))]
-        else:
-            # A claim that asserted no reference of its own inherits the
-            # configured reference set; claims that did assert references
-            # keep them (they must exist in the canonical store to pass).
-            for claim in claims:
-                if not claim.chunk_ids:
-                    claim.chunk_ids = list(reference_ids)
+
+        # A claim that asserted no reference of its own inherits the
+        # configured reference set; claims that did assert references keep
+        # them (they must exist in the canonical store to pass).
+        for claim in claims:
+            if not claim.chunk_ids:
+                claim.chunk_ids = list(reference_ids)
+
+        # The structured answer IS published content, so it is verified too.
+        # Without this a verifier that only supports the model's claims could
+        # pass an answer it never saw (POLICE F1).
+        if answer_text and not self._text_covered(answer_text, claims):
+            claims.append(_Claim(text=answer_text, chunk_ids=list(reference_ids)))
+
+        # The published content is the covered representation: the answer
+        # text, the claims' text, or the prose itself. The raw model payload
+        # is never published.
+        covered_output = self._covered_representation(answer_text, claims)
+
+        # Uncovered prose around the payload (prefix/suffix) is rejected: it
+        # is content no claim covers and must never be published.
+        if residual:
+            return {
+                "verified": False,
+                "verification_stage": "uncovered_output",
+                "verification_reasons": ["uncovered_output_text"],
+                "output": covered_output,
+            }
 
         if not claims:
             return {
                 "verified": False,
                 "verification_stage": "insufficient_evidence",
                 "verification_reasons": ["no_claims_extracted_from_output"],
+                "output": "",
             }
 
         if not any(c.chunk_ids for c in claims):
             return {
                 "verified": False,
                 "verification_stage": "insufficient_evidence",
-                "verification_reasons": ["no_references_provided"],
+                "verification_reasons": (
+                    ["no_evidence_provided"] if evidence_missing else ["no_references_provided"]
+                ),
+                "output": covered_output,
             }
 
         # Bind the reference set to the *output* claim texts: the evidence
@@ -334,6 +382,7 @@ class ProductionNodeExecutor:
                 "verified": False,
                 "verification_stage": "Stage 11 rejected",
                 "verification_reasons": reasons or ["stage_11_failed"],
+                "output": covered_output,
             }
 
         # --- Stage 12: semantic verification ---
@@ -345,6 +394,7 @@ class ProductionNodeExecutor:
                 "verified": False,
                 "verification_stage": "Stage 12 unavailable",
                 "verification_reasons": ["no_verifier_configured"],
+                "output": covered_output,
             }
 
         from answer.semantic_verification import (
@@ -368,12 +418,112 @@ class ProductionNodeExecutor:
                 "verified": False,
                 "verification_stage": str(gate_result.status),
                 "verification_reasons": list(gate_result.reasons),
+                "output": covered_output,
             }
 
+        # The gate passed over the published content: publish exactly the
+        # covered representation, never the raw model payload (POLICE F1).
         return {
             "verified": True,
             "verification_stage": "Stage 11 & 12",
+            "output": covered_output,
         }
+
+    @staticmethod
+    def _split_output_payload(output: str) -> tuple[dict[str, Any] | None, str]:
+        """Split the generated output into a JSON payload and uncovered prose.
+
+        Returns ``(payload, residual)``:
+
+        - ``payload`` is the parsed JSON object of the model output (fenced or
+          embedded in prose), or ``None`` when the output is plain prose.
+        - ``residual`` is the text OUTSIDE that JSON block (prefix/suffix
+          prose). Any non-empty residual is content that no claim covers, so
+          it must never be published (T-RV19-01, POLICE F1).
+
+        The block is located with a brace-depth scan that ignores braces
+        inside strings, so a JSON string containing ``}`` cannot truncate the
+        payload. Parsing of the located block is delegated to
+        ``answer.prompts.parse_model_output`` so the workflow executor and
+        the answer engine agree on the answer/claims shape.
+        """
+        from answer.prompts import parse_model_output
+
+        stripped = (output or "").strip()
+        if not stripped:
+            return None, ""
+        candidate = stripped
+        if candidate.startswith("```"):
+            lines = candidate.splitlines()
+            if len(lines) >= 3:
+                candidate = "\n".join(lines[1:-1]).strip()
+        start = candidate.find("{")
+        if start == -1:
+            return None, ""
+        depth = 0
+        end = -1
+        in_string = False
+        escaped = False
+        for index in range(start, len(candidate)):
+            char = candidate[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+                continue
+            if char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    end = index
+                    break
+        if end == -1:
+            return None, ""
+        block = candidate[start : end + 1]
+        residual = (candidate[:start] + candidate[end + 1 :]).replace("`", " ").strip()
+        try:
+            parsed = parse_model_output(block)
+        except ValueError:
+            return None, ""
+        return parsed, residual
+
+    @staticmethod
+    def _text_covered(text: str, claims: list[Any]) -> bool:
+        """Return True when ``text`` is already one of the verified claims."""
+        normalized = " ".join(text.split()).casefold()
+        if not normalized:
+            return False
+        for claim in claims:
+            claim_text = " ".join(str(getattr(claim, "text", "")).split()).casefold()
+            if claim_text and claim_text == normalized:
+                return True
+        return False
+
+    @staticmethod
+    def _covered_representation(answer_text: str, claims: list[Any]) -> str:
+        """Return the published text: the covered representation of the output.
+
+        For a structured answer this is the answer text (the content that is
+        published); for a claims-only payload it is the claims' text joined
+        by newlines; for plain prose it is the prose itself (a single claim
+        covering it). The raw model payload is never published.
+        """
+        if answer_text:
+            return answer_text
+        texts = [
+            str(getattr(claim, "text", "")).strip()
+            for claim in claims
+            if str(getattr(claim, "text", "")).strip()
+        ]
+        if texts:
+            return "\n".join(texts)
+        return ""
 
     @staticmethod
     def _extract_node_evidence(node: NodeSpec) -> dict[str, Any] | None:

@@ -58,16 +58,48 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     import os
 
     from stores.agent_stores import set_agent_store_db
-    agent_db = os.environ.get("AGENT_STORE_DB", "").strip()
-    if agent_db:
+
+    from app.agents.lifecycle_routes import agent_store_readiness
+
+    # T-IMP-001 (POLICE F4a/F4b): the durable agent store is resolved through
+    # the same settings/startup boundary the application uses. The store is
+    # installed ONLY when the configured path is a shared durable location;
+    # an unshared path (or none) in production/staging leaves the queue
+    # unusable and the queued-run endpoint refuses admission with 503.
+    readiness = agent_store_readiness()
+    agent_db = readiness.path
+    if readiness.admit and agent_db:
         set_agent_store_db(agent_db)
-        logger.info("agent_store_installed", extra={"event": "agent_store_installed"})
-    else:
+        logger.info(
+            "agent_store_installed",
+            extra={
+                "event": "agent_store_installed",
+                "path": agent_db,
+                "shared": readiness.shared,
+                "environment": readiness.environment,
+            },
+        )
+    elif readiness.shared:
         logger.warning(
             "agent_store_in_memory",
             extra={
                 "event": "agent_store_in_memory",
                 "reason": "AGENT_STORE_DB unset; queued runs are process-local (dev/test only)",
+                "environment": readiness.environment,
+            },
+        )
+    else:
+        logger.error(
+            "agent_store_unavailable",
+            extra={
+                "event": "agent_store_unavailable",
+                "reason": readiness.reason,
+                "path": agent_db,
+                "environment": readiness.environment,
+                "shared_root": (
+                    os.environ.get("AGENT_STORE_SHARED_ROOT", "").strip()
+                    or "/app/.agent"
+                ),
             },
         )
 

@@ -116,6 +116,8 @@ async def test_production_executor_verification_no_evidence_returns_unverified()
     )
 
     result = await executor.execute_node(node, "check facts", "ws-test")
+    # T-RV19-01 (POLICE F1): the published output is the covered
+    # representation, and the verdict says it was not verified.
     assert result["output"] == "Verified evidence analysis."
     assert result["verified"] is False
     assert result["verification_stage"] == "insufficient_evidence"
@@ -152,6 +154,8 @@ async def test_production_executor_verification_invalid_citations() -> None:
     )
 
     result = await executor.execute_node(node, "check facts", "ws-test")
+    # The published text is the covered representation, and the verdict says
+    # it did NOT pass the gate.
     assert result["output"] == "The moon is made of cheese."
     assert result["verified"] is False
     assert result["verification_stage"] == "Stage 11 rejected"
@@ -504,3 +508,197 @@ async def test_production_executor_verification_uses_runtime_verifier() -> None:
     assert result["verified"] is True
     assert result["verification_stage"] == "Stage 11 & 12"
     assert runtime_verifier.seen == [generated], runtime_verifier.seen
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_answer_mismatch_is_not_published() -> None:
+    """T-RV19-01 (POLICE F1): an answer the verifier never saw cannot pass.
+
+    The model returns a structured answer ("The moon is made of cheese") plus
+    a claim about the launch budget. A verifier that supports ONLY the budget
+    statement must not be able to publish the answer: the answer joins the
+    verification set, the gate fails, and the text is withheld.
+    """
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _BudgetOnlyVerifier:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            self.seen.append(claim_text)
+            if "launch budget" in claim_text:
+                return ClaimVerdict(
+                    claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                    evidence_ids=[], reason_code="SUPPORTED",
+                )
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.CONTRADICTED,
+                evidence_ids=[], reason_code="CONTRADICTION_FOUND",
+            )
+
+    verifier = _BudgetOnlyVerifier()
+    mock_provider = AsyncMock()
+    payload = (
+        '{"answer": "The moon is made of cheese", "claims": '
+        '[{"text": "The launch budget is 20 dollars.", "chunk_ids": ["ch-1"]}]}'
+    )
+    mock_provider.generate.return_value = GenerationResult(
+        text=payload,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content="The launch budget is 20 dollars.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": verifier,
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+
+    # The verifier must have been asked about the ANSWER, not only the claim.
+    assert "The moon is made of cheese" in verifier.seen, verifier.seen
+    # A budget-only verifier cannot publish an answer it did not support.
+    assert result["verified"] is False
+    assert result["verification_stage"] != "Stage 11 & 12"
+    # The published content is the covered representation (the answer), and
+    # the verdict marks it as NOT verified.
+    assert result["output"] == "The moon is made of cheese"
+    assert result["verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_mixed_prose_is_rejected() -> None:
+    """T-RV19-01 (POLICE F1): prose around the JSON payload is uncovered."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _PassVerifier:
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    mock_provider = AsyncMock()
+    payload = (
+        "Sure! Here is the answer: "
+        '{"answer": "The launch budget is 20 dollars.", "claims": '
+        '[{"text": "The launch budget is 20 dollars.", "chunk_ids": ["ch-1"]}]}'
+        " Hope that helps!"
+    )
+    mock_provider.generate.return_value = GenerationResult(
+        text=payload,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content="The launch budget is 20 dollars.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": _PassVerifier(),
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+
+    assert result["verified"] is False
+    assert result["verification_stage"] == "uncovered_output"
+    assert "uncovered_output_text" in result["verification_reasons"]
+    # The wrapper prose is never published: only the covered representation.
+    assert "Hope that helps" not in result["output"]
+    assert "Sure!" not in result["output"]
+    assert result["output"] == "The launch budget is 20 dollars."
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_publishes_covered_representation() -> None:
+    """T-RV19-01 (POLICE F1): the published output is the covered content."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _PassVerifier:
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    mock_provider = AsyncMock()
+    payload = (
+        '{"answer": "The launch budget is 20 dollars.", "claims": '
+        '[{"text": "The launch budget is 20 dollars.", "chunk_ids": ["ch-1"]}]}'
+    )
+    mock_provider.generate.return_value = GenerationResult(
+        text=payload,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content="The launch budget is 20 dollars.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The launch budget is 20 dollars.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": _PassVerifier(),
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+
+    assert result["verified"] is True
+    assert result["verification_stage"] == "Stage 11 & 12"
+    # The published output is the covered answer, not the raw JSON payload.
+    assert result["output"] == "The launch budget is 20 dollars."

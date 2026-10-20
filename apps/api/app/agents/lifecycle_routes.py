@@ -23,7 +23,8 @@ import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, NamedTuple
 
 from agents.interfaces import (
     AgentErrorCode,
@@ -54,6 +55,110 @@ from app.authz.principal import get_principal
 
 subrouter = APIRouter(tags=["agent-lifecycle"])
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/agent", tags=["agent-lifecycle"])
+
+
+# ---------------------------------------------------------------------------
+# Durable agent store readiness (T-IMP-001, POLICE F4a/F4b)
+# ---------------------------------------------------------------------------
+
+#: Environments where a process-local (in-memory) agent store is tolerated.
+#: Production and staging must use the shared durable store: an in-memory
+#: queue accepts runs that no other process can consume (review 2026-10-19
+#: finding 4: parent depth 1, independent worker depth 0).
+LOCAL_ENVIRONMENTS = frozenset({"local", "test", "ci", ""})
+
+#: Default shared root of the durable agent store. In the compose deployment
+#: this is the named volume mounted into BOTH api and worker
+#: (``agentdata:/app/.agent``); a path outside it is not shared storage.
+DEFAULT_AGENT_STORE_SHARED_ROOT = "/app/.agent"
+
+
+class AgentStoreReadiness(NamedTuple):
+    """Resolved readiness of the durable agent store.
+
+    * ``admit``  - a queued run may be accepted (the store is durable and,
+      in production/staging, shared between api and worker).
+    * ``shared`` - the configured path lives inside the shared root.
+    * ``reason`` - machine-readable reason for the verdict.
+    * ``path``   - the configured durable path ("" when unset).
+    * ``environment`` - the RESOLVED application environment.
+    """
+
+    admit: bool
+    shared: bool
+    reason: str
+    path: str
+    environment: str
+
+
+def agent_store_readiness() -> AgentStoreReadiness:
+    """Resolve the durable agent-store readiness (fail-closed).
+
+    The environment comes from the RESOLVED application settings (process
+    environment or ``.env``), never from a raw ``os.environ`` read that can
+    disagree with the running application (POLICE F4a: a ``.env`` with
+    ``APP_ENV=production`` used to log production while admitting runs into
+    a process-local queue).
+
+    A configured path is only *shared* when it lives inside the shared root
+    (``AGENT_STORE_SHARED_ROOT``, default ``/app/.agent``). In production and
+    staging an unshared path is refused: two containers with the same
+    relative path have two different filesystems (POLICE F4b).
+    """
+    from core.config import get_settings
+
+    settings = get_settings()
+    environment = str(settings.app_env).strip().lower()
+    raw_path = os.environ.get("AGENT_STORE_DB", "").strip()
+    root = shared_root()
+    local = environment in LOCAL_ENVIRONMENTS
+
+    if not raw_path:
+        return AgentStoreReadiness(
+            admit=local,
+            shared=False,
+            reason="agent_store_not_configured",
+            path="",
+            environment=environment,
+        )
+
+    shared = _is_inside(raw_path, root)
+    if shared:
+        return AgentStoreReadiness(
+            admit=True,
+            shared=True,
+            reason="agent_store_shared",
+            path=raw_path,
+            environment=environment,
+        )
+    return AgentStoreReadiness(
+        admit=local,
+        shared=False,
+        reason=(
+            "agent_store_unshared_dev_only"
+            if local
+            else "agent_store_unshared"
+        ),
+        path=raw_path,
+        environment=environment,
+    )
+
+
+def shared_root() -> str:
+    """Return the shared root the durable agent store must live in."""
+    return os.environ.get("AGENT_STORE_SHARED_ROOT", "").strip() or (
+        DEFAULT_AGENT_STORE_SHARED_ROOT
+    )
+
+
+def _is_inside(path: str, root: str) -> bool:
+    """Return True when ``path`` resolves inside ``root``."""
+    try:
+        resolved = Path(path).resolve()
+        resolved_root = Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+    return resolved == resolved_root or resolved_root in resolved.parents
 
 
 # ---------------------------------------------------------------------------
@@ -297,23 +402,24 @@ async def start_queued_run(
     """
     _require_workspace(principal, workspace_id)
 
-    # T-IMP-001: fail-closed admission unless a shared durable agent store is
-    # configured. In-memory stores are process-local and silently lose queued
-    # runs across API/worker processes (reproduced: parent depth 1, worker 0).
-    if not os.environ.get("AGENT_STORE_DB", "").strip():
-        app_env = os.environ.get("APP_ENV", "").strip().lower()
-        if app_env not in ("test", "dev", "local", ""):
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail={
-                    "error": "agent_store_not_configured",
-                    "message": (
-                        "AGENT_STORE_DB is not set; queued agent runs require a "
-                        "shared durable store. Configure AGENT_STORE_DB to a "
-                        "shared sqlite path for api + worker."
-                    ),
-                },
-            )
+    # T-IMP-001 (POLICE F4a/F4b): fail-closed admission unless a shared
+    # durable agent store is configured. The verdict comes from the RESOLVED
+    # settings/startup boundary, and it runs BEFORE the run record is
+    # persisted, so a refused run leaves nothing behind.
+    readiness = agent_store_readiness()
+    if not readiness.admit:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": readiness.reason,
+                "message": (
+                    "Queued agent runs require a shared durable agent store. "
+                    "Set AGENT_STORE_DB to a path inside the shared root "
+                    f"({shared_root()}) so api and worker use the same store."
+                ),
+                "environment": readiness.environment,
+            },
+        )
 
     ws_id_str = str(workspace_id)
     policy = get_workspace_policy(ws_id_str)

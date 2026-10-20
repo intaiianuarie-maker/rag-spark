@@ -131,10 +131,13 @@ x-backend-env: &backend-env
   WORKFLOW_RUNS_DB: ${WORKFLOW_RUNS_DB:?WORKFLOW_RUNS_DB must be set to the durable workflow runs sqlite path}
   WORKFLOW_APPROVALS_DB: ${WORKFLOW_APPROVALS_DB:?WORKFLOW_APPROVALS_DB must be set to the durable workflow approvals sqlite path}
   WORKFLOW_CHECKPOINT_DB: ${WORKFLOW_CHECKPOINT_DB:?WORKFLOW_CHECKPOINT_DB must be set to the durable workflow checkpoint sqlite path}
-  # T-IMP-001: shared durable agent-store sqlite path. Required (fail-closed):
-  # api + worker must share one file, otherwise queued runs land in a
-  # process-local in-memory queue (parent depth 1, worker 0).
-  AGENT_STORE_DB: ${AGENT_STORE_DB:?AGENT_STORE_DB must be set to the shared durable agent store sqlite path}
+  # T-IMP-001 (POLICE F4b): the durable agent store MUST live on a volume
+  # shared by api and worker. The default is the `agentdata` named volume
+  # mounted at /app/.agent in BOTH services; a path outside that shared root
+  # is refused by the application (503 / no consumer), because two containers
+  # with the same relative path have two different filesystems.
+  AGENT_STORE_SHARED_ROOT: ${AGENT_STORE_SHARED_ROOT:-/app/.agent}
+  AGENT_STORE_DB: ${AGENT_STORE_DB:-/app/.agent/agent.db}
 
 services:
   postgres:
@@ -227,6 +230,10 @@ services:
       # T-R11: shared with the worker so both open the SAME graph sqlite file.
       - graphdata:/app/.graph
       - workflowdata:/app/.workflow
+      # T-IMP-001 (POLICE F4b): the durable agent store (run/step/checkpoint +
+      # queue) lives on a volume shared with the worker. Without this the API
+      # accepts queued runs into a container-local file the worker never sees.
+      - agentdata:/app/.agent
     command:
       ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
@@ -247,6 +254,9 @@ services:
       # reads here; without this the two processes never see each other's rows.
       - graphdata:/app/.graph
       - workflowdata:/app/.workflow
+      # T-IMP-001 (POLICE F4b): same named volume as api — the durable agent
+      # queue the API writes to is the queue this worker consumes from.
+      - agentdata:/app/.agent
 
   web:
     # Frontend shell owned by code2 (apps/web). Uses the app's production
@@ -304,6 +314,9 @@ volumes:
   workflowdata:
   # T-R11: the ONE persistent graph store shared by api and worker.
   graphdata:
+  # T-IMP-001 (POLICE F4b): the ONE persistent agent store (runs, steps,
+  # checkpoints, queue) shared by api and worker.
+  agentdata:
   pgdata:
   redisdata:
   qdrantdata:
