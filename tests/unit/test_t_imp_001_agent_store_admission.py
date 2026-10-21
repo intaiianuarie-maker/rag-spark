@@ -594,6 +594,130 @@ def test_escaped_intended_mount_target_still_validates(
     assert (worker.admit, worker.shared) == (True, True), (api, worker)
 
 
+def test_relative_store_paths_are_refused_across_working_directories(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b (P2): a RELATIVE store path is working-directory dependent.
+
+    An api and a worker started from DIFFERENT working directories both
+    reported ``admit=True/shared=True`` while resolving DIFFERENT databases:
+    the api accepted a run (202, queue depth 1) and the worker saw depth 0 /
+    claim None. A relative path can never be shared, so it is refused.
+    """
+    api_cwd = tmp_path / "api-cwd"
+    worker_cwd = tmp_path / "worker-cwd"
+    api_cwd.mkdir()
+    worker_cwd.mkdir()
+    monkeypatch.setenv("APP_ENV", "production")
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", "state")
+    monkeypatch.setenv("AGENT_STORE_DB", "state/agent.db")
+    monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
+    monkeypatch.delenv("AGENT_STORE_MOUNTINFO", raising=False)
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    outcomes = []
+    for cwd in (api_cwd, worker_cwd):
+        monkeypatch.chdir(cwd)
+        _reset_settings()
+        api = api_ready()
+        worker = worker_ready()
+        outcomes.append((api, worker))
+        # Neither service may claim the store is shared.
+        assert api.admit is False, (cwd, api)
+        assert api.shared is False, (cwd, api)
+        assert worker.admit is False, (cwd, worker)
+        assert worker.shared is False, (cwd, worker)
+        assert api.reason == "agent_store_path_not_absolute", (cwd, api)
+
+    # Both services must agree, and no admission may have happened.
+    (api_a, worker_a), (api_b, worker_b) = outcomes
+    assert api_a.reason == api_b.reason == worker_a.reason == worker_b.reason
+    monkeypatch.chdir(tmp_path)
+
+    ws_id = str(uuid.uuid4())
+    with _client(ws_id) as client:
+        resp = client.post(f"/v1/workspaces/{ws_id}/agent/runs/queued", json={"goal": "x"})
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"]["error"] == "agent_store_path_not_absolute"
+
+
+def test_absolute_store_paths_are_shared_across_working_directories(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """The absolute host-mode guard is retained: api and worker share the store.
+
+    The same relative-shaped configuration with ABSOLUTE paths must still be
+    admitted, and an independent worker process started from a DIFFERENT
+    working directory must see and claim the accepted run.
+    """
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    db = shared / "agent.db"
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(shared))
+    monkeypatch.setenv("AGENT_STORE_DB", str(db))
+    monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
+    monkeypatch.delenv("AGENT_STORE_MOUNTINFO", raising=False)
+
+    api_cwd = tmp_path / "api-cwd"
+    worker_cwd = tmp_path / "worker-cwd"
+    api_cwd.mkdir()
+    worker_cwd.mkdir()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    monkeypatch.chdir(api_cwd)
+    _reset_settings()
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared) == (True, True), api
+    assert (worker.admit, worker.shared) == (True, True), worker
+
+    ws_id = str(uuid.uuid4())
+    with _client(ws_id) as client:
+        resp = client.post(f"/v1/workspaces/{ws_id}/agent/runs/queued", json={"goal": "x"})
+        assert resp.status_code == 202, resp.text
+        run_id = resp.json()["run_id"]
+
+    # An independent worker process started from a DIFFERENT working
+    # directory must see and claim the accepted run.
+    child = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            (
+                "import asyncio, os\n"
+                "from stores.agent_stores import set_agent_store_db, get_queue\n"
+                "set_agent_store_db(os.environ['AGENT_STORE_DB'])\n"
+                "q = get_queue()\n"
+                "print('DEPTH', asyncio.run(q.depth()))\n"
+                "print('CLAIM', asyncio.run(q.claim(30.0)))\n"
+            ),
+        ],
+        env={
+            **os.environ,
+            "AGENT_STORE_DB": str(db),
+            "PYTHONPATH": os.pathsep.join(
+                [
+                    str(REPO_ROOT / "packages"),
+                    str(REPO_ROOT / "apps" / "api"),
+                    str(REPO_ROOT / "apps" / "worker"),
+                ]
+            ),
+        },
+        capture_output=True,
+        text=True,
+        timeout=120,
+        cwd=str(worker_cwd),
+    )
+    assert child.returncode == 0, child.stderr
+    assert "DEPTH 1" in child.stdout, child.stdout
+    assert f"CLAIM {run_id}" in child.stdout, child.stdout
+    monkeypatch.chdir(tmp_path)
+
+
 def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
     """The API and the worker must resolve the store readiness identically.
 

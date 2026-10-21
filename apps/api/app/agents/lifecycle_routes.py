@@ -134,6 +134,18 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
+    if _absolute_path(root) is None or _absolute_path(raw_path) is None:
+        # A relative path is working-directory dependent: two processes
+        # started from different directories would open different databases
+        # while both reporting the store as shared (POLICE F4b, P2).
+        return AgentStoreReadiness(
+            admit=False,
+            shared=False,
+            reason="agent_store_path_not_absolute",
+            path=raw_path,
+            environment=environment,
+        )
+
     if root_is_shadowed(root):
         return AgentStoreReadiness(
             admit=local,
@@ -202,6 +214,23 @@ def agent_store_readiness() -> AgentStoreReadiness:
         path=raw_path,
         environment=environment,
     )
+
+
+def _absolute_path(value: str) -> Path | None:
+    """Return the absolute path, or None when the value is relative.
+
+    A RELATIVE store path is resolved against the PROCESS working
+    directory: an api and a worker started from different directories would
+    open two different databases while both believe the store is shared
+    (reproduced: api 202 + queue depth 1, fresh worker depth 0 / claim
+    None). Relative paths are therefore refused (POLICE F4b, P2).
+    """
+    if not value:
+        return None
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        return None
+    return path
 
 
 def _same_path(left: str, right: str) -> bool:
