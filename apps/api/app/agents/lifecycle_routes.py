@@ -147,6 +147,34 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
+    declared_mount = shared_mount_target()
+    if declared_mount:
+        if not _same_path(declared_mount, root):
+            # The declared mount is not the resolved root: the store would
+            # live somewhere the other process cannot see.
+            return AgentStoreReadiness(
+                admit=local,
+                shared=False,
+                reason="agent_store_root_not_mounted",
+                path=raw_path,
+                environment=environment,
+            )
+        # A DECLARED shared mount must be proven by a readable mount table
+        # that contains an entry AT that mount point. Without the evidence
+        # the store may be a per-container file (POLICE F4b, P2).
+        if not mount_evidence_ok(declared_mount):
+            return AgentStoreReadiness(
+                admit=local,
+                shared=False,
+                reason=(
+                    "agent_store_mount_unverified_dev_only"
+                    if local
+                    else "agent_store_mount_unverified"
+                ),
+                path=raw_path,
+                environment=environment,
+            )
+
     shared = _is_inside(raw_path, root) and root_is_mounted(root)
     if shared:
         return AgentStoreReadiness(
@@ -174,6 +202,14 @@ def agent_store_readiness() -> AgentStoreReadiness:
         path=raw_path,
         environment=environment,
     )
+
+
+def _same_path(left: str, right: str) -> bool:
+    """Return True when both paths resolve to the same location."""
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
 
 
 def shared_root() -> str:
@@ -234,12 +270,53 @@ def shadow_mounts() -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def _unescape_mountinfo_path(value: str) -> str:
+    """Decode the kernel's octal escapes in ONE pass.
+
+    The kernel escapes the characters that would break the whitespace
+    separated mountinfo format: space (\\040), tab (\\011), newline
+    (\\012) and backslash (\\134) are written as octal sequences. Decoding
+    only the space escape misses a nested mount under a root that contains a
+    backslash or a tab, so the store would be admitted while it actually
+    lives on a shadowed filesystem (POLICE F4b, P2).
+
+    The pass is left to right and the decoded bytes are never re-scanned, so
+    a literal ``\\134040`` decodes to ``\\040`` (a backslash followed by
+    "040") and not to a space (Moby ``sys/mountinfo`` semantics).
+    """
+    if "\\" not in value:
+        return value
+    out: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        char = value[index]
+        if char != "\\":
+            out.append(char)
+            index += 1
+            continue
+        if index + 3 < length and all(
+            c in "01234567" for c in value[index + 1 : index + 4]
+        ):
+            out.append(chr(int(value[index + 1 : index + 4], 8)))
+            index += 4
+            continue
+        if index + 1 < length and value[index + 1] in " \t\n":
+            out.append(value[index + 1])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
 def _mount_points() -> list[str]:
     """Return the mount points of this process (best effort).
 
     The mount table can be redirected with ``AGENT_STORE_MOUNTINFO`` so the
     definitions can be probed with a synthetic mountinfo file (no container
-    required).
+    required). An unreadable table yields NO points: a declared shared mount
+    then has no evidence and is refused.
     """
     path = (
         os.environ.get(MOUNTINFO_PATH_ENV, "").strip() or DEFAULT_MOUNTINFO_PATH
@@ -249,12 +326,36 @@ def _mount_points() -> list[str]:
             points = []
             for line in handle:
                 fields = line.split(" ")
-                # 5th field is the mount point (fields are escaped for spaces).
+                # 5th field is the mount point (octal escaped by the kernel).
                 if len(fields) > 4:
-                    points.append(fields[4].replace("\\040", " "))
+                    points.append(_unescape_mountinfo_path(fields[4]))
             return points
     except OSError:  # pragma: no cover - not Linux / unreadable
         return []
+
+
+def mount_evidence_ok(target: str) -> bool:
+    """Return True when the mount table proves the intended mount exists.
+
+    A DECLARED shared mount (``AGENT_STORE_SHARED_MOUNT``) must be backed by
+    a readable mount table that contains an entry AT that mount point. Absent
+    or unreadable evidence is a refusal, not a pass: without it the store
+    could be a per-container file (POLICE F4b, P2).
+    """
+    points = _mount_points()
+    if not points:
+        return False
+    try:
+        resolved_target = Path(target).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+    for point in points:
+        try:
+            if Path(point).resolve() == resolved_target:
+                return True
+        except OSError:  # pragma: no cover - unresolvable path
+            continue
+    return False
 
 
 def root_is_shadowed(root: str) -> bool:

@@ -278,7 +278,7 @@ def test_queued_run_refused_when_root_is_not_the_mounted_volume(
 
 
 def test_queued_run_refused_when_root_shadows_a_bind_mount(
-    monkeypatch, production_env
+    monkeypatch, production_env, tmp_path
 ) -> None:
     """F4b (P2): a root that covers another mount is NOT shared storage.
 
@@ -305,7 +305,19 @@ def test_queued_run_refused_when_root_shadows_a_bind_mount(
             "AGENT_STORE_SHADOW_MOUNTS",
             "AGENT_STORE_DB",
         ):
-            monkeypatch.setenv(key, env[key])
+            # The optional keys may be absent on an older deployment: the
+            # test must fail on the BEHAVIOURAL assertion, never on setup.
+            value = env.get(key)
+            if value is None:
+                monkeypatch.delenv(key, raising=False)
+            else:
+                monkeypatch.setenv(key, value)
+        # Mount evidence: the declared shared mount exists AND a source bind
+        # mount shadows a subtree of it.
+        monkeypatch.setenv(
+            "AGENT_STORE_MOUNTINFO",
+            _write_mountinfo(tmp_path, ["/", "/app", "/app/apps/api"]),
+        )
         _reset_settings()
 
         from app.agents.lifecycle_routes import agent_store_readiness as api_ready
@@ -329,14 +341,29 @@ def test_queued_run_refused_when_root_shadows_a_bind_mount(
     assert resp.json()["detail"]["error"] == "agent_store_root_shadowed"
 
 
-def _write_mountinfo(tmp_path: Path, mount_points: list[str]) -> str:
-    """Write a synthetic mountinfo file and return its path."""
-    path = tmp_path / "mountinfo"
+def _escape_mountinfo_path(value: str) -> str:
+    """Escape a path the way the kernel writes mountinfo.
+
+    Space, tab, newline and backslash are written as octal sequences
+    (``\\040``, ``\\011``, ``\\012``, ``\\134``).
+    """
+    return (
+        value.replace("\\", "\\134")
+        .replace("\t", "\\011")
+        .replace("\n", "\\012")
+        .replace(" ", "\\040")
+    )
+
+
+def _write_mountinfo(tmp_path: Path, mount_points: list[str], name: str = "mountinfo") -> str:
+    """Write a synthetic (kernel-escaped) mountinfo file and return its path."""
+    path = tmp_path / name
     lines = []
     for index, point in enumerate(mount_points):
+        escaped = _escape_mountinfo_path(point)
         # mountinfo format: id parent major:minor root mountpoint options...
         lines.append(
-            f"{100 + index} 1 0:99 / {point} / rw,relatime shared:{index} - overlay / rw"
+            f"{100 + index} 1 8:1 / {escaped} rw,relatime - ext4 /dev/vda1 rw"
         )
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return str(path)
@@ -412,6 +439,161 @@ def test_nested_mount_inside_the_root_shadows_the_store(
     assert api.reason == "agent_store_root_shadowed", api
 
 
+def test_declared_shared_mount_without_mount_evidence_is_refused(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b (P2): a DECLARED shared mount must be proven by the mount table.
+
+    With ``AGENT_STORE_SHARED_MOUNT`` declared, the mount table must contain
+    an entry AT that mount point. A table that only shows a COMPETING
+    ancestor proves nothing about the intended mount, so the store is refused
+    instead of being reported shared.
+    """
+    root = tmp_path / "app" / "apps" / "api" / "private"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+    monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(root))
+    monkeypatch.setenv("AGENT_STORE_DB", str(root / "agent.db"))
+    # Only the competing ancestor is present: no entry at the intended mount.
+    monkeypatch.setenv(
+        "AGENT_STORE_MOUNTINFO",
+        _write_mountinfo(tmp_path, ["/", str(root.parent)]),
+    )
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared, api.reason) == (
+        worker.admit,
+        worker.shared,
+        worker.reason,
+    ), (api, worker)
+    assert api.admit is False, api
+    assert api.shared is False, api
+    assert api.reason == "agent_store_mount_unverified", api
+
+
+def test_declared_shared_mount_with_unreadable_mountinfo_is_refused(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b (P2): unreadable mount evidence is a refusal, not a pass."""
+    root = tmp_path / "shared"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+    monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(root))
+    monkeypatch.setenv("AGENT_STORE_DB", str(root / "agent.db"))
+    # The mount table path is a DIRECTORY: it cannot be read.
+    monkeypatch.setenv("AGENT_STORE_MOUNTINFO", str(tmp_path))
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared, api.reason) == (
+        worker.admit,
+        worker.shared,
+        worker.reason,
+    ), (api, worker)
+    assert api.admit is False, api
+    assert api.reason == "agent_store_mount_unverified", api
+
+
+def test_host_mode_without_declared_shared_mount_still_admits(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """The valid host mode (no declared shared mount) keeps admitting.
+
+    Outside the compose deployment the api and worker processes share one host
+    filesystem; a configuration that declares no shared mount must not be
+    refused for lack of mount evidence.
+    """
+    root = tmp_path / "shared"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+    monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
+    monkeypatch.setenv("AGENT_STORE_DB", str(root / "agent.db"))
+    monkeypatch.setenv(
+        "AGENT_STORE_MOUNTINFO", _write_mountinfo(tmp_path, ["/", str(root)])
+    )
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared) == (True, True), (api, worker)
+    assert (worker.admit, worker.shared) == (True, True), (api, worker)
+
+
+def test_nested_mount_under_escaped_root_is_detected(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b (P2): octal escapes must be decoded in ONE pass.
+
+    A nested mount under a root whose path contains a backslash or a tab is
+    written octal-escaped in the mount table (``\\134`` / ``\\011``). A
+    decoder that only handles the space escape misses it and the shadowed
+    store is admitted.
+    """
+    for label, root_name in (("backslash", "shared\\root"), ("tab", "shared\troot")):
+        root = tmp_path / root_name
+        root.mkdir(parents=True, exist_ok=True)
+        nested = root / "private"
+        nested.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+        monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(root))
+        monkeypatch.setenv("AGENT_STORE_DB", str(nested / "agent.db"))
+        # The kernel escapes the path; the nested mount sits under the root.
+        monkeypatch.setenv(
+            "AGENT_STORE_MOUNTINFO",
+            _write_mountinfo(tmp_path, ["/", str(root), str(nested)]),
+        )
+        _reset_settings()
+
+        from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+        from worker.main import agent_store_readiness as worker_ready
+
+        api = api_ready()
+        worker = worker_ready()
+        assert (api.admit, api.shared, api.reason) == (
+            worker.admit,
+            worker.shared,
+            worker.reason,
+        ), (label, api, worker)
+        assert api.admit is False, (label, api)
+        assert api.reason == "agent_store_root_shadowed", (label, api)
+
+
+def test_escaped_intended_mount_target_still_validates(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b (P2): a correctly escaped intended mount still validates and admits."""
+    root = tmp_path / "shared root"
+    root.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+    monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(root))
+    monkeypatch.setenv("AGENT_STORE_DB", str(root / "agent.db"))
+    # The mount table writes the root escaped as \040 (space).
+    monkeypatch.setenv(
+        "AGENT_STORE_MOUNTINFO", _write_mountinfo(tmp_path, ["/", str(root)])
+    )
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared) == (True, True), (api, worker)
+    assert (worker.admit, worker.shared) == (True, True), (api, worker)
+
+
 def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
     """The API and the worker must resolve the store readiness identically.
 
@@ -426,37 +608,68 @@ def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
 
     root = tmp_path / "shared"
     root.mkdir(parents=True, exist_ok=True)
+    # (environment, db path, declared mount, mount table points, expected)
     cases = [
-        ("production", "", None, "agent_store_not_configured"),
-        ("production", str(root / "agent.db"), str(root), "agent_store_shared"),
+        ("production", "", None, None, "agent_store_not_configured"),
+        (
+            "production",
+            str(root / "agent.db"),
+            str(root),
+            [str(root)],
+            "agent_store_shared",
+        ),
+        (
+            "production",
+            str(root / "agent.db"),
+            str(root),
+            [],
+            "agent_store_mount_unverified",
+        ),
         (
             "production",
             str(root / "agent.db"),
             str(tmp_path / "elsewhere"),
+            [str(root)],
             "agent_store_root_not_mounted",
         ),
         (
             "production",
             str(root / "agent.db"),
             str(root),
+            [str(root), str(root / "bind-mounted-subtree")],
             "agent_store_root_shadowed",
         ),
         (
             "production",
             str(tmp_path / "other" / "agent.db"),
             str(root),
+            [str(root)],
             "agent_store_unshared",
         ),
-        ("local", "", None, "agent_store_not_configured"),
-        ("local", str(root / "agent.db"), str(root), "agent_store_shared"),
+        ("local", "", None, None, "agent_store_not_configured"),
+        (
+            "local",
+            str(root / "agent.db"),
+            str(root),
+            [str(root)],
+            "agent_store_shared",
+        ),
+        (
+            "local",
+            str(root / "agent.db"),
+            str(root),
+            [],
+            "agent_store_mount_unverified_dev_only",
+        ),
         (
             "local",
             str(tmp_path / "other" / "agent.db"),
             str(root),
+            [str(root)],
             "agent_store_unshared_dev_only",
         ),
     ]
-    for environment, path, mount, _expected in cases:
+    for environment, path, mount, points, _expected in cases:
         monkeypatch.setenv("APP_ENV", environment)
         monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
         if mount:
@@ -470,6 +683,11 @@ def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
             )
         else:
             monkeypatch.delenv("AGENT_STORE_SHADOW_MOUNTS", raising=False)
+        # The mount table the readiness reads (empty = no evidence).
+        monkeypatch.setenv(
+            "AGENT_STORE_MOUNTINFO",
+            _write_mountinfo(tmp_path, points or []),
+        )
         if path:
             monkeypatch.setenv("AGENT_STORE_DB", path)
         else:
