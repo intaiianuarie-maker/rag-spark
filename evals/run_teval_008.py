@@ -40,7 +40,10 @@ def main() -> None:
     print()
 
     print("--- SEPARATION (mean cosine; identical texts, identical metric code) ---")
-    print(f'  {"embedder":30s} {"pair_set":30s} {"n":>4s}  {"mean":>8s}  {"std":>8s}  {"min":>8s}  {"max":>8s}')
+    print(
+        f'  {"embedder":30s} {"pair_set":30s} {"n":>4s}  '
+        f'{"mean":>8s}  {"std":>8s}  {"min":>8s}  {"max":>8s}'
+    )
     for row in report["separation"]:
         print(
             f'  {row["embedder"]:30s} {row["pair_set"]:30s} '

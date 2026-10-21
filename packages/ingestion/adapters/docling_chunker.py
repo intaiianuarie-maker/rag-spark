@@ -17,7 +17,7 @@ from typing import Any
 
 from docling.chunking import HybridChunker
 from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer
-from docling_core.types.doc import DoclingDocument
+from docling_core.types.doc import DocItemLabel, DoclingDocument
 
 from ..chunk import Chunk, ChunkResult
 from ..interfaces import ElementType, ParsedDocument
@@ -89,9 +89,11 @@ class DoclingHybridChunker:
         elif tokenizer in ("gemini", "gemini_approx", "cl100k"):
             self.tokenizer = ApproxGeminiTokenizer(max_tokens=max_tokens)
         elif callable(tokenizer):
+            token_counter: Callable[[str], int] = tokenizer
+
             class CallableTokenizer(BaseTokenizer):
                 max_tokens: int = self.max_tokens
-                fn: Callable[[str], int] = tokenizer
+                fn: Callable[[str], int] = token_counter
 
                 def count_tokens(self, text: str) -> int:
                     return self.fn(text)
@@ -140,25 +142,25 @@ class DoclingHybridChunker:
 
             if el.type == ElementType.TITLE:
                 current_section = el_text
-                docling_doc.add_text(label="title", text=el_text)
+                docling_doc.add_text(label=DocItemLabel.TITLE, text=el_text)
                 page_map.append(el.page)
                 section_map.append(current_section)
             elif el.type == ElementType.HEADING:
                 current_section = el_text
-                docling_doc.add_text(label="section_header", text=el_text)
+                docling_doc.add_text(label=DocItemLabel.SECTION_HEADER, text=el_text)
                 page_map.append(el.page)
                 section_map.append(current_section)
             elif el.type == ElementType.TABLE:
                 st = el.metadata.get("structured_table") if el.metadata else None
                 table_text = (st.get("markdown") if st and isinstance(st, dict) else "") or el_text
-                docling_doc.add_text(label="text", text=table_text)
+                docling_doc.add_text(label=DocItemLabel.TEXT, text=table_text)
                 t_idx = len(page_map)
                 if st:
                     table_meta_map[t_idx] = st
                 page_map.append(el.page)
                 section_map.append(current_section)
             else:
-                docling_doc.add_text(label="text", text=el_text)
+                docling_doc.add_text(label=DocItemLabel.TEXT, text=el_text)
                 page_map.append(el.page)
                 section_map.append(current_section)
 

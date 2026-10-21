@@ -85,11 +85,23 @@ class MultimodalEmbeddingProfile:
         )
 
     async def _call_provider_embed(self, part: ImageContentPart) -> list[float]:
-        """Call underlying provider for multimodal embedding."""
-        if hasattr(self.provider, "embed_multimodal"):
-            return await self.provider.embed_multimodal(part)  # type: ignore[no-any-return]
-        if hasattr(self.provider, "embed_texts"):
+        """Call underlying provider for multimodal embedding.
+
+        ``embed_multimodal`` / ``embed_texts`` are OPTIONAL duck-typed
+        extensions on a concrete provider — they are not declared on the
+        ``LLMProvider`` ABC — so they are probed at runtime and narrowed
+        explicitly instead of being asserted on the declared type.
+        """
+        provider = self.provider
+        if provider is None:
+            return [0.0] * self.dimension
+        embed_multimodal = getattr(provider, "embed_multimodal", None)
+        if callable(embed_multimodal):
+            vectors: list[float] = await embed_multimodal(part)
+            return vectors
+        embed_texts = getattr(provider, "embed_texts", None)
+        if callable(embed_texts):
             # Fallback for text representation
-            res = await self.provider.embed_texts([part.media_type])  # type: ignore[no-any-return]
-            return res[0]  # type: ignore[no-any-return]
+            res: list[list[float]] = await embed_texts([part.media_type])
+            return res[0]
         return [0.0] * self.dimension

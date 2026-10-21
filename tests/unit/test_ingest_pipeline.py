@@ -156,7 +156,9 @@ async def test_worker_survives_process_one_failure(monkeypatch: pytest.MonkeyPat
     assert calls["n"] >= 2  # loop consumed the next iteration after the failure
 
 
-async def test_graph_indexing_hook_executed_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_graph_indexing_hook_executed_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """RP-04 / QF-04: When GRAPH_MODE=rule, graph extraction and persistence hooks run."""
     db_file = tmp_path / "test_graph.db"
     monkeypatch.setenv("GRAPH_MODE", "rule")

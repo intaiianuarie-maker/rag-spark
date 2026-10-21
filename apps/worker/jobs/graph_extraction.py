@@ -277,7 +277,9 @@ async def process_graph_job(job_id: str) -> dict:
                     "entities": len(extraction_result.entities),
                     "relationships": len(extraction_result.relationships),
                     "communities": len(communities),
-                    "reason": "document tombstoned (deleted/superseded) while extraction was in-flight",
+                    "reason": (
+                        "document tombstoned (deleted/superseded) while extraction was in-flight"
+                    ),
                 },
             )
             return {

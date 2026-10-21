@@ -518,7 +518,11 @@ class _DelegationSpy:
 
     def __init__(self, outputs: dict[str, Any] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
-        self._outputs = outputs if outputs is not None else {"status": "completed", "output_data": {"out": "v3"}}
+        self._outputs = (
+            outputs
+            if outputs is not None
+            else {"status": "completed", "output_data": {"out": "v3"}}
+        )
 
     async def __call__(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self.calls.append(dict(request))

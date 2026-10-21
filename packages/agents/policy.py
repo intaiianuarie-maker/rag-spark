@@ -74,16 +74,12 @@ def _free_pool_exhausted(workspace_id: str) -> bool:
     (the default), the free route is available.
     """
     with _GLOBAL_POLICY_STORE._lock:
-        return workspace_id in getattr(
-            _GLOBAL_POLICY_STORE, "_free_exhausted", set()
-        )
+        return workspace_id in _GLOBAL_POLICY_STORE._free_exhausted
 
 
 def set_free_pool_exhausted(workspace_id: str, exhausted: bool = True) -> None:
     """Mark the free pool as exhausted (or not) for a workspace."""
     with _GLOBAL_POLICY_STORE._lock:
-        if not hasattr(_GLOBAL_POLICY_STORE, "_free_exhausted"):
-            _GLOBAL_POLICY_STORE._free_exhausted: set[str] = set()
         if exhausted:
             _GLOBAL_POLICY_STORE._free_exhausted.add(workspace_id)
         else:
@@ -93,8 +89,7 @@ def set_free_pool_exhausted(workspace_id: str, exhausted: bool = True) -> None:
 def reset_free_pool_state() -> None:
     """Clear all per-workspace free-pool exhaustion markers."""
     with _GLOBAL_POLICY_STORE._lock:
-        if hasattr(_GLOBAL_POLICY_STORE, "_free_exhausted"):
-            _GLOBAL_POLICY_STORE._free_exhausted.clear()
+        _GLOBAL_POLICY_STORE._free_exhausted.clear()
 
 
 # T-V3-009: workspace budget gate for paid-model fallback.
@@ -373,6 +368,10 @@ class WorkspacePolicyStore:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._policies: dict[str, WorkspaceAgentPolicy] = {}
+        #: Per-workspace markers of an exhausted free model pool (T-GEMMA-001).
+        #: Declared here (not attached dynamically) so the state is typed and
+        #: always present; the free/paid fallback reads it under ``_lock``.
+        self._free_exhausted: set[str] = set()
 
     def get_policy(self, workspace_id: str) -> WorkspaceAgentPolicy:
         with self._lock:

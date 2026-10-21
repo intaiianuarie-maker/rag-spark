@@ -1367,3 +1367,26 @@ RESUME HERE after context loss. Verified at write time:
 
 
 
+
+## 2026-10-19 — LOOP CHANGE (user): museR → POLICE → deploy
+- New step inserted before deploy/commit: museR reviews dev1/dev2 work; on ACCEPT, museR stages a commit and sends the SHA + ticket IDs to POLICE (herdr pane w5:pS) for independent review.
+- POLICE replies to museR (w5:p4) with exactly one of: OK <sha> | <evidence> · CHANGES <sha> | <findings> · BLOCKED <sha> | <gate/why>.
+- OK → museR deploys + updates the git repo. CHANGES → museR routes findings to dev1/dev2, fix → museR review → police review (loop resumes).
+- No deploy/merge without a POLICE OK. POLICE never writes product code, never commits, never deploys.
+- Pane map: museR=w5:p4 · dev1=w5:pP · dev2=w5:p6 · police=w5:pS · judge=w5:p5.
+- Police role prompt sent to w5:pS; judge (w5:p5) informed.
+- First application: dev2 graph lane committed cd5be3e (T-IMP-006 + T-RV19-03/05/06) — committed under the PREVIOUS loop; submitting to POLICE for the first independent review.
+- Open: dev1 workflow lane (T-RV19-01/02 + T-IMP-001) uncommitted, 5 ruff errors in test_workflow_production_executor.py; board shows those DONE prematurely (set by another writer at ~23:31).
+
+## 2026-10-19 — museR REVIEW RETROSPECTIVE (after POLICE rejected cd5be3e)
+- POLICE CHANGES cd5be3e exposed 3 misses in MY review: F1 (P1) tombstone_document read-before-write race (I fixed the cited line, not the class); F2 (P2) deleted UUID retained on upsert_entities/upsert_relationships + MemoryGraphStore (I trusted the handoff's file scope instead of enumerating every writer); F3 (P2) retirement fence over-blocks replacement (I tested only that the guard fires, never that it over-fires). I also never ran the source review's own reproducers probes.py.txt against the commit.
+- Improvement codified: tasks/MUSER-REVIEW-CHECKLIST.md — mandatory pre-POLICE checklist (run source reproducers; defect-class sweep; enumerate all writers/adapters; bidirectional guard tests; scope check; gates; adversarial 3-ways-to-be-wrong).
+- Rule going forward: no lane is staged to POLICE until the checklist is satisfied. A POLICE CHANGES verdict triggers a written self-retrospective + checklist update.
+
+## 2026-10-20 — GRAPH LANE ACCEPTED (POLICE OK 3dd4e9d)
+- POLICE independently verified canonical graph gates on an isolated snapshot: ruff clean; mypy packages/graph Success (15 files); graph suite 57 passed/0 failed (incl. PostgreSQL purge test); extraction/community suite 34 passed; f0b99ec byte-for-byte unchanged; provider annotations match create_llm_provider -> LLMProvider; no new findings/out-of-scope files.
+- Accepted tickets: T-RV19-03/05/06/07/08/09/10/11/12/13/14 + T-IMP-006 (F1-F12). Commits: cd5be3e -> 819302c -> a8414fd -> 7dcaad8 -> cf95d38 -> 2ed5c5e -> f0b99ec -> 3dd4e9d.
+- Gate blockers cleared: mypy root cause = dispatch.py provider typed `object` (3dd4e9d); PostgreSQL container restarted.
+- DEPLOYED: docker restart api+worker (bind-mount ./packages); started postgres/redis/qdrant; api /health ok, worker redis-connected + ingest_worker_started. GIT: pushed origin review/super-rag-2026-10-17 (e35090b..3dd4e9d).
+- PROCESS NOTE: dev2 did not converge on the graph lane (9 reworks, shallow fixes, vacuous tests); museR took over implementation + authored teeth-bearing regressions; POLICE remained the independent check. Backtick-in-herdr-prompt lesson recurred once (shell-substituted) — avoid backticks in herdr prompt text.
+- STILL OPEN: T-IMP-007 (repo-wide ruff/eslint/model_origin_guard), T-IMP-003 (search), dev1 workflow lane (T-RV19-01/02 + T-IMP-001).

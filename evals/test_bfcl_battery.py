@@ -40,7 +40,10 @@ NO_CALL_ITEM = next(i for i in battery.BATTERY if i.category == "irrelevance")
 
 
 def _native(name: str, arguments: object) -> dict[str, object]:
-    return {"content": None, "tool_calls": [{"function": {"name": name, "arguments": json.dumps(arguments)}}]}
+    return {
+        "content": None,
+        "tool_calls": [{"function": {"name": name, "arguments": json.dumps(arguments)}}],
+    }
 
 
 # --------------------------------------------------------------------------- #
@@ -113,10 +116,15 @@ def test_ast_diff_explains_the_mismatch() -> None:
     # A missing argument is named as missing, not as a value diff.
     assert any(
         "missing argument 'top_k'" in reason
-        for reason in astspec.ast_diff(gold, ({"name": "knowledge_search", "arguments": {"query": "sla"}},))
+        for reason in astspec.ast_diff(
+            gold, ({"name": "knowledge_search", "arguments": {"query": "sla"}},)
+        )
     )
     # A wrong tool is counted by name.
-    assert any("calculator" in reason for reason in astspec.ast_diff(gold, ({"name": "calculator", "arguments": {}},)))
+    assert any(
+        "calculator" in reason
+        for reason in astspec.ast_diff(gold, ({"name": "calculator", "arguments": {}},))
+    )
 
 
 @pytest.mark.unit
@@ -128,7 +136,9 @@ def test_contract_shape_matches_the_007_placeholder() -> None:
                 pred_calls=({"name": "calculator", "arguments": {"expression": "1+1"}},),
                 gold_calls=({"name": "calculator", "arguments": {"expression": "1+1"}},),
             ),
-            astspec.AstComparison(pred_calls=(), gold_calls=({"name": "calculator", "arguments": {}},)),
+            astspec.AstComparison(
+                pred_calls=(), gold_calls=({"name": "calculator", "arguments": {}},)
+            ),
         ]
     )
     assert tuple(result) == astspec.CONTRACT_KEYS == ("total", "correct", "ast_accuracy")
@@ -148,7 +158,9 @@ def test_official_placeholder_is_still_standing() -> None:
     assert vendored_source_for("bfcl_ast_accuracy").status == "placeholder"
     source = vendored_source_for("bfcl_ast_accuracy")
     assert source.name == astspec.SWAP_REGISTRY_ENTRY
-    assert any(s.name == "bfcl_ast_metrics" and s.status == "placeholder" for s in VENDOR_PROVENANCE)
+    assert any(
+        s.name == "bfcl_ast_metrics" and s.status == "placeholder" for s in VENDOR_PROVENANCE
+    )
     with pytest.raises(lb.OfficialMetricNotVendored):
         official_placeholder()
 
@@ -164,7 +176,8 @@ def _result(bucket: str, **kwargs) -> battery.ItemResult:
         category="simple",
         model_used=lb.VENDOR_PROVENANCE[0].name and "google/gemma-4-26b-a4b-it:free",
         bucket=bucket,
-        emitted=bucket in ("ast_match", "ast_mismatch", "invalid_arguments", "wrong_function", "false_call"),
+        emitted=bucket
+        in ("ast_match", "ast_mismatch", "invalid_arguments", "wrong_function", "false_call"),
         mode="native",
         n_predicted_calls=1,
         n_gold_calls=1,
@@ -199,24 +212,43 @@ def test_classify_fills_every_bucket_from_a_real_message() -> None:
     specs = battery.real_specs()
     names = set(specs)
     # ast_match
-    ok = battery.classify(SEARCH_ITEM, _native("knowledge_search", {"query": "SLA penalty clause", "top_k": 3}), names, specs)
+    ok = battery.classify(
+        SEARCH_ITEM,
+        _native("knowledge_search", {"query": "SLA penalty clause", "top_k": 3}),
+        names,
+        specs,
+    )
     assert ok.bucket == "ast_match" and ok.errors == ()
     # ast_mismatch: right call, wrong values
-    wrong = battery.classify(SEARCH_ITEM, _native("knowledge_search", {"query": "SLA penalty clause", "top_k": 9}), names, specs)
+    wrong = battery.classify(
+        SEARCH_ITEM,
+        _native("knowledge_search", {"query": "SLA penalty clause", "top_k": 9}),
+        names,
+        specs,
+    )
     assert wrong.bucket == "ast_mismatch" and wrong.errors
     # invalid_arguments: schema-valid call, wrong type (top_k as string)
-    typed = battery.classify(SEARCH_ITEM, _native("knowledge_search", {"query": "SLA penalty clause", "top_k": "3"}), names, specs)
+    typed = battery.classify(
+        SEARCH_ITEM,
+        _native("knowledge_search", {"query": "SLA penalty clause", "top_k": "3"}),
+        names,
+        specs,
+    )
     assert typed.bucket == "invalid_arguments"
     # wrong_function: a real tool, but not the gold one
     tool = battery.classify(CALL_ITEM, _native("knowledge_search", {"query": "x"}), names, specs)
     assert tool.bucket == "wrong_function"
     # no_call: prose instead of a call
-    silent = battery.classify(CALL_ITEM, {"content": "I will call the calculator tool."}, names, specs)
+    silent = battery.classify(
+        CALL_ITEM, {"content": "I will call the calculator tool."}, names, specs
+    )
     assert silent.bucket == "no_call" and silent.errors
     # correct_abstain / false_call on an irrelevance item
     abstained = battery.classify(NO_CALL_ITEM, {"content": "Water boils at 100 C."}, names, specs)
     assert abstained.bucket == "correct_abstain" and abstained.scored_correct
-    false_call = battery.classify(NO_CALL_ITEM, _native("calculator", {"expression": "1+1"}), names, specs)
+    false_call = battery.classify(
+        NO_CALL_ITEM, _native("calculator", {"expression": "1+1"}), names, specs
+    )
     assert false_call.bucket == "false_call" and not false_call.scored_correct
     # Multi-call item where only one call is emitted.
     multi = next(i for i in battery.BATTERY if len(i.gold_calls) == 2)
@@ -232,7 +264,9 @@ def test_transport_failure_is_a_bucket_not_a_missing_row(monkeypatch: pytest.Mon
 
     monkeypatch.setattr(battery, "chat_once", boom)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    result = battery.run_item(CALL_ITEM, specs=battery.real_specs(), functions=battery.bfcl_functions())
+    result = battery.run_item(
+        CALL_ITEM, specs=battery.real_specs(), functions=battery.bfcl_functions()
+    )
     assert result.bucket == "transport_error"
     assert result.errors and "500" in result.errors[0]
     assert not result.scored_correct
@@ -299,7 +333,9 @@ def test_ast_accuracy_is_reported_over_call_items_only() -> None:
             ast_match=False,
             n_gold_calls=2,
             gold_calls=next(i for i in battery.BATTERY if len(i.gold_calls) == 2).gold_calls,
-            predicted_calls=(next(i for i in battery.BATTERY if len(i.gold_calls) == 2).gold_calls[:1]),
+            predicted_calls=(
+                next(i for i in battery.BATTERY if len(i.gold_calls) == 2).gold_calls[:1]
+            ),
         ),
         _result("correct_abstain", item_id="c", category="irrelevance", n_gold_calls=0,
                 n_predicted_calls=0, emitted=False, ast_match=False, errors=(), predicted_calls=()),
@@ -334,7 +370,9 @@ def test_battery_covers_the_categories_and_the_real_tools() -> None:
     assert 8 <= len(battery.BATTERY) <= 15
     categories = {item.category for item in battery.BATTERY}
     assert categories == {"simple", "multiple", "parallel", "irrelevance"}
-    assert all(len(item.gold_calls) >= 1 for item in battery.BATTERY if item.category != "irrelevance")
+    assert all(
+        len(item.gold_calls) >= 1 for item in battery.BATTERY if item.category != "irrelevance"
+    )
     assert all(item.gold_calls == () for item in battery.BATTERY if item.category == "irrelevance")
     # Every gold call names a real V3 tool and its gold arguments validate.
     specs = battery.real_specs()
@@ -348,7 +386,9 @@ def test_battery_covers_the_categories_and_the_real_tools() -> None:
 @pytest.mark.unit
 def test_pricing_is_reused_from_the_009_harness() -> None:
     assert battery.price_usd(battery.FREE_MODEL, 1_000_000, 1_000_000) == 0.0
-    assert battery.price_usd(battery.PAID_MODEL, 1_000_000, 1_000_000) == pytest.approx(0.39, abs=1e-6)
+    assert battery.price_usd(battery.PAID_MODEL, 1_000_000, 1_000_000) == pytest.approx(
+        0.39, abs=1e-6
+    )
     assert battery.FREE_MODEL == "google/gemma-4-26b-a4b-it:free"
     assert battery.PAID_MODEL == "google/gemma-4-26b-a4b-it"
     assert battery._looks_exhausted("HTTP 429 provider returned error")

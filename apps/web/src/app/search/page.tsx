@@ -30,12 +30,26 @@ export default function SearchPage() {
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [selected, setSelected] = useState<SearchResultItem | null>(null);
   const runIdRef = useRef(0);
+  const activeId = active?.id;
+  const [lastActiveId, setLastActiveId] = useState(activeId);
 
   useEffect(() => {
+    // Invalidate any in-flight request from the previous workspace so a
+    // delayed result/error can never land under the new workspace.
+    runIdRef.current += 1;
+  }, [activeId]);
+
+  // Reset the result surface when the active workspace changes. Adjusted
+  // during render (React's "adjust state when a prop changes" pattern)
+  // instead of from an effect: an effect that resets state synchronously
+  // cascades an extra render pass on every workspace switch.
+  if (lastActiveId !== activeId) {
+    setLastActiveId(activeId);
     setResponse(null);
     setSelected(null);
     setError(null);
-  }, [active?.id]);
+    setLoading(false);
+  }
 
   const dateError = !isValidDateFilter(filters.date);
 
@@ -45,9 +59,12 @@ export default function SearchPage() {
       const workspaceId = active.id;
       const thisRun = ++runIdRef.current;
       if (q.trim().length === 0) {
-        setError("Enter a query to search.");
+        if (runIdRef.current === thisRun) {
+          setError("Enter a query to search.");
+        }
         return;
       }
+      if (runIdRef.current !== thisRun) return;
       setLoading(true);
       setError(null);
       setSelected(null);
@@ -62,7 +79,9 @@ export default function SearchPage() {
         setError(msg);
         setResponse(null);
       } finally {
-        setLoading(false);
+        if (runIdRef.current === thisRun) {
+          setLoading(false);
+        }
       }
     },
     [active],

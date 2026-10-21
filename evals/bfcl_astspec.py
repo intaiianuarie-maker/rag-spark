@@ -137,7 +137,8 @@ def ast_equal(expected: object, actual: object, *, strict_list: bool = False) ->
     if isinstance(expected, list) and isinstance(actual, list):
         if strict_list:
             return len(expected) == len(actual) and all(
-                ast_equal(e, a, strict_list=strict_list) for e, a in zip(expected, actual, strict=True)
+                ast_equal(e, a, strict_list=strict_list)
+                for e, a in zip(expected, actual, strict=True)
             )
         if len(expected) != len(actual):
             return False
@@ -154,7 +155,9 @@ def ast_equal(expected: object, actual: object, *, strict_list: bool = False) ->
     if isinstance(expected, Mapping) and isinstance(actual, Mapping):
         if set(expected) != set(actual):
             return False
-        return all(ast_equal(expected[key], actual[key], strict_list=strict_list) for key in expected)
+        return all(
+            ast_equal(expected[key], actual[key], strict_list=strict_list) for key in expected
+        )
     # Rule 1 then rule 3.
     if isinstance(expected, str) and isinstance(actual, str):
         return expected == actual
@@ -209,7 +212,8 @@ def ast_match(
             if set(gold_args) != set(pred_args):
                 continue
             if all(
-                ast_equal(gold_args[key], pred_args[key], strict_list=strict_list) for key in gold_args
+                ast_equal(gold_args[key], pred_args[key], strict_list=strict_list)
+                for key in gold_args
             ):
                 remaining.pop(index)
                 break
@@ -280,7 +284,9 @@ def bfcl_ast_accuracy(
     """
     total = len(per_item)
     correct = sum(
-        1 for item in per_item if ast_match(item.pred_calls, item.gold_calls, strict_list=strict_list)
+        1
+        for item in per_item
+        if ast_match(item.pred_calls, item.gold_calls, strict_list=strict_list)
     )
     return {"total": total, "correct": correct, "ast_accuracy": (correct / total) if total else 0.0}
 

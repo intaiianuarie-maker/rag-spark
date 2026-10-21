@@ -121,7 +121,7 @@ class MultimodalMessage(BaseModel):
 
     def to_chat_message_dict(self) -> dict[str, Any]:
         """Serializes to OpenAI-compatible multimodal chat format."""
-        serialized_parts = []
+        serialized_parts: list[dict[str, Any]] = []
         for part in self.parts:
             if isinstance(part, TextContentPart):
                 serialized_parts.append({"type": "text", "text": part.text})
@@ -129,11 +129,13 @@ class MultimodalMessage(BaseModel):
                 serialized_parts.append(
                     {"type": "image_url", "image_url": part.image_url}
                 )
-        return {
+        payload: dict[str, Any] = {
             "role": self.role.value,
             "content": serialized_parts,
-            **({"name": self.name} if self.name else {}),
         }
+        if self.name:
+            payload["name"] = self.name
+        return payload
 
 
 def to_content_parts(content: str | list[Any]) -> list[ContentPart]:

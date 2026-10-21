@@ -78,10 +78,10 @@ from evals.gemma_call_probe import (  # noqa: E402
     real_specs,
     validate_arguments,
 )
-from evals.gemma_call_probe import (
+from evals.gemma_call_probe import (  # noqa: E402
     _is_exhausted as _looks_exhausted,
 )
-from evals.gemma_call_probe import (
+from evals.gemma_call_probe import (  # noqa: E402
     _price_usd as price_usd,
 )
 
@@ -499,7 +499,9 @@ def bucket_counts(results: Sequence[ItemResult]) -> dict[str, int]:
     return counts
 
 
-def summarize(results: Sequence[ItemResult], *, model_label: str = "gemma-4-26b-a4b-it") -> dict[str, Any]:
+def summarize(
+    results: Sequence[ItemResult], *, model_label: str = "gemma-4-26b-a4b-it"
+) -> dict[str, Any]:
     """Exact counts, the closed-bucket invariant, and the metered spend."""
     call_results = [r for r in results if r.is_call_item]
     irrelevance = [r for r in results if not r.is_call_item]
@@ -541,7 +543,9 @@ def summarize(results: Sequence[ItemResult], *, model_label: str = "gemma-4-26b-
             "prompt_tokens": sum(r.prompt_tokens for r in results),
             "completion_tokens": sum(r.completion_tokens for r in results),
             "usd": round(sum(r.cost_usd for r in results), 6),
-            "paid_items": sum(1 for r in results if r.model_used and not r.model_used.endswith(":free")),
+            "paid_items": sum(
+                1 for r in results if r.model_used and not r.model_used.endswith(":free")
+            ),
         },
     }
 

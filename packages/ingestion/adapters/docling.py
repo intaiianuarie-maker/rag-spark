@@ -104,7 +104,11 @@ class DoclingParser(DocumentParser):
         try:
             from docling.datamodel.base_models import InputFormat
             from docling.datamodel.pipeline_options import NativePdfPipelineOptions
-            from docling.document_converter import DocumentConverter, NativePdfFormatOption
+            from docling.document_converter import (
+                DocumentConverter,
+                FormatOption,
+                NativePdfFormatOption,
+            )
             from docling_core.types.io import DocumentStream
         except Exception as exc:
             raise ParseError(f"docling not available: {exc}") from exc
@@ -153,7 +157,7 @@ class DoclingParser(DocumentParser):
                     "fell back to native profile with disclosed limitations."
                 )
                 try:
-                    native_opts = {
+                    native_opts: dict[InputFormat, FormatOption] = {
                         InputFormat.PDF: NativePdfFormatOption(
                             pipeline_options=NativePdfPipelineOptions()
                         )
