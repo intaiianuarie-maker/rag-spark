@@ -839,3 +839,76 @@ async def test_production_executor_verification_case_sensitive_identifier_is_not
     assert "acmecorp issued the report." in verifier.seen, verifier.seen
     assert result["verified"] is False
     assert result["verification_stage"] != "Stage 11 & 12"
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_fails_closed_on_gate_error(
+    monkeypatch,
+) -> None:
+    """A broken publication gate must fail closed, never crash the node.
+
+    Distinct from a verifier outage: a verifier timeout/error is already
+    mapped to an UNCERTAIN verdict inside ``verify_semantic_claims`` (the
+    reviewer's probe returns ``verified=False`` / ``needs_review`` on the
+    parent too). Here the GATE itself fails, which on the parent propagated
+    out of ``execute_node`` and crashed the node; the candidate turns it into
+    an explicit unverified verdict.
+    """
+
+    class _PassVerifier:
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            from answer.semantic_verification import ClaimVerdict, Verdict
+
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                evidence_ids=[], reason_code="SUPPORTED",
+            )
+
+    mock_provider = AsyncMock()
+    generated = "The launch budget is 20 dollars."
+    mock_provider.generate.return_value = GenerationResult(
+        text=generated,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="launch_plan.pdf", page=1, section="Budget",
+            content="The launch budget is 20 dollars.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text=generated, chunk_ids=["ch-1"])],
+                "citations": [
+                    CandidateCitation(chunk_id="ch-1", claim_text=generated)
+                ],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": _PassVerifier(),
+            },
+        },
+        caps=["llm"],
+    )
+
+    def _broken_gate(*args, **kwargs):
+        raise RuntimeError("publication gate unavailable")
+
+    monkeypatch.setattr(
+        "answer.semantic_verification.evaluate_publication_gate", _broken_gate
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+    # Fail closed: no exception escapes, and the node is NOT verified.
+    assert result["verified"] is False
+    assert result["verification_stage"] == "Stage 12 failed"
+    assert "stage_12_error" in " ".join(result["verification_reasons"])

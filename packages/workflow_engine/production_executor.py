@@ -10,6 +10,7 @@ Executes workflow nodes through real providers and standard transforms:
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from models.catalog import _lookup_admitted
@@ -18,6 +19,8 @@ from models.policy import ModelRole, PolicyError
 
 from .interfaces import CapabilityManifest, NodeSpec, NodeType
 from .manifest import PRODUCTION_CAPABILITY_MANIFEST, CapabilityNotSupportedError
+
+logger = logging.getLogger("knowledge_os.workflow.production_executor")
 
 
 class TransformError(ValueError):
@@ -402,17 +405,35 @@ class ProductionNodeExecutor:
             verify_semantic_claims,
         )
 
-        stage12_report = await verify_semantic_claims(
-            claims=claims,
-            integrity_report=stage11_report,
-            verifier=verifier,
-        )
-        gate_result = await evaluate_publication_gate(
-            claims=claims,
-            integrity_report=stage11_report,
-            semantic_report=stage12_report,
-            chunk_lookup=chunk_lookup,
-        )
+        try:
+            stage12_report = await verify_semantic_claims(
+                claims=claims,
+                integrity_report=stage11_report,
+                verifier=verifier,
+            )
+            gate_result = await evaluate_publication_gate(
+                claims=claims,
+                integrity_report=stage11_report,
+                semantic_report=stage12_report,
+                chunk_lookup=chunk_lookup,
+            )
+        except Exception as exc:
+            # A verifier that fails, times out or is unreachable must fail
+            # CLOSED: the publication gate never passes without a successful
+            # Stage 12 report, and the node never crashes on it.
+            logger.warning(
+                "stage12_verification_failed",
+                extra={
+                    "event": "stage12_verification_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
+            return {
+                "verified": False,
+                "verification_stage": "Stage 12 failed",
+                "verification_reasons": [f"stage_12_error:{type(exc).__name__}"],
+                "output": covered_output,
+            }
         if not gate_result.can_publish:
             return {
                 "verified": False,

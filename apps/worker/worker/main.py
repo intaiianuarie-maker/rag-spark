@@ -39,6 +39,18 @@ LOCAL_ENVIRONMENTS = frozenset({"local", "test", "ci", ""})
 #: (``agentdata:/app/.agent``); a path outside it is not shared storage.
 DEFAULT_AGENT_STORE_SHARED_ROOT = "/app/.agent"
 
+#: The source bind mounts the compose deployment puts inside the container
+#: image tree. A shared root that covers one of them is NOT shared storage:
+#: the agent volume is only present where nothing else is bound, so the store
+#: file would live in a per-container filesystem and api and worker would
+#: open different files (POLICE F4b, P2 shadowing finding).
+CONTAINER_BIND_MOUNTS = ("/app/apps/api", "/app/apps/worker", "/app/packages")
+
+#: The mount table the readiness consults. Overridable so the definitions can
+#: be probed with a synthetic mountinfo file (no container required).
+MOUNTINFO_PATH_ENV = "AGENT_STORE_MOUNTINFO"
+DEFAULT_MOUNTINFO_PATH = "/proc/self/mountinfo"
+
 
 class AgentStoreReadiness(NamedTuple):
     """Resolved readiness of the durable agent store (mirrors the API side)."""
@@ -102,6 +114,19 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
+    if root_is_shadowed(root):
+        return AgentStoreReadiness(
+            admit=local,
+            shared=False,
+            reason=(
+                "agent_store_root_shadowed_dev_only"
+                if local
+                else "agent_store_root_shadowed"
+            ),
+            path=raw_path,
+            environment=environment,
+        )
+
     shared = _is_inside(raw_path, root) and root_is_mounted(root)
     if shared:
         return AgentStoreReadiness(
@@ -137,6 +162,78 @@ def _is_inside(path: str, root: str) -> bool:
     except OSError:  # pragma: no cover - unresolvable path
         return False
     return resolved == resolved_root or resolved_root in resolved.parents
+
+def shadow_mounts() -> list[str]:
+    """Return the mount targets that can shadow the shared agent volume.
+
+    The compose deployment bind-mounts the api/worker sources and the shared
+    graph/workflow volumes into the container. When the resolved shared root
+    covers one of those subtrees, the agent volume is only present where
+    nothing else is bound: the store file would live in a per-container
+    filesystem and the two processes would open different files
+    (POLICE F4b, P2 shadowing finding).
+    """
+    raw = os.environ.get("AGENT_STORE_SHADOW_MOUNTS", "").strip()
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _mount_points() -> list[str]:
+    """Return the mount points of this process (best effort).
+
+    The mount table can be redirected with ``AGENT_STORE_MOUNTINFO`` so the
+    definitions can be probed with a synthetic mountinfo file (no container
+    required).
+    """
+    path = (
+        os.environ.get(MOUNTINFO_PATH_ENV, "").strip() or DEFAULT_MOUNTINFO_PATH
+    )
+    try:
+        with open(path, encoding="utf-8") as handle:
+            points = []
+            for line in handle:
+                fields = line.split(" ")
+                # 5th field is the mount point (fields are escaped for spaces).
+                if len(fields) > 4:
+                    points.append(fields[4].replace("\\040", " "))
+            return points
+    except OSError:  # pragma: no cover - not Linux / unreadable
+        return []
+
+
+def root_is_shadowed(root: str) -> bool:
+    """Return True when another mount covers part of ``root``.
+
+    Mirrors ``app.agents.lifecycle_routes.root_is_shadowed``: the INTENDED
+    shared mount sits at the root's own mount point and does not shadow it;
+    a competing mount inside the root (or the root itself being a known
+    bind mount) does (POLICE F4b).
+    """
+    try:
+        resolved_root = Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return True
+
+    for candidate in list(CONTAINER_BIND_MOUNTS) + shadow_mounts():
+        try:
+            resolved = Path(candidate).resolve()
+        except OSError:  # pragma: no cover - unresolvable path
+            continue
+        if resolved == resolved_root or resolved_root in resolved.parents:
+            # A known competing mount covers the root or lives inside it.
+            return True
+
+    for candidate in _mount_points():
+        try:
+            resolved = Path(candidate).resolve()
+        except OSError:  # pragma: no cover - unresolvable path
+            continue
+        if resolved_root in resolved.parents:
+            # A mount lives INSIDE the root: the shared volume is shadowed
+            # there, so the store would not be on the shared filesystem.
+            return True
+        # A mount AT the root is the intended shared volume; a mount ABOVE
+        # the root is the filesystem the root lives on. Neither shadows it.
+    return False
 
 
 async def run() -> None:

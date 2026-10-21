@@ -277,6 +277,141 @@ def test_queued_run_refused_when_root_is_not_the_mounted_volume(
     assert resp.json()["detail"]["error"] == "agent_store_root_not_mounted"
 
 
+def test_queued_run_refused_when_root_shadows_a_bind_mount(
+    monkeypatch, production_env
+) -> None:
+    """F4b (P2): a root that covers another mount is NOT shared storage.
+
+    POLICE's reproduction: ``AGENT_STORE_SHARED_ROOT=/app`` with
+    ``AGENT_STORE_DB=/app/apps/api/review-agent.db``. The api service
+    bind-mounts its source over ``/app/apps/api``, so the agent volume is
+    only present where nothing else is bound: the store file lands in the
+    api's own filesystem and the worker (depth 0) never sees it. The
+    readiness must refuse the configuration instead of reporting it shared.
+    """
+    config = _render_compose(
+        {
+            "APP_ENV": "production",
+            "AGENT_STORE_SHARED_ROOT": "/app",
+            "AGENT_STORE_DB": "/app/apps/api/review-agent.db",
+        }
+    )
+    for service in ("api", "worker"):
+        env = config["services"][service]["environment"]
+        for key in (
+            "APP_ENV",
+            "AGENT_STORE_SHARED_ROOT",
+            "AGENT_STORE_SHARED_MOUNT",
+            "AGENT_STORE_SHADOW_MOUNTS",
+            "AGENT_STORE_DB",
+        ):
+            monkeypatch.setenv(key, env[key])
+        _reset_settings()
+
+        from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+        from worker.main import agent_store_readiness as worker_ready
+
+        api = api_ready()
+        worker = worker_ready()
+        assert (api.admit, api.shared, api.reason) == (
+            worker.admit,
+            worker.shared,
+            worker.reason,
+        ), (service, api, worker)
+        assert api.admit is False, (service, api)
+        assert api.shared is False, (service, api)
+        assert api.reason == "agent_store_root_shadowed", (service, api)
+
+    ws_id = str(uuid.uuid4())
+    with _client(ws_id) as client:
+        resp = client.post(f"/v1/workspaces/{ws_id}/agent/runs/queued", json={"goal": "x"})
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"]["error"] == "agent_store_root_shadowed"
+
+
+def _write_mountinfo(tmp_path: Path, mount_points: list[str]) -> str:
+    """Write a synthetic mountinfo file and return its path."""
+    path = tmp_path / "mountinfo"
+    lines = []
+    for index, point in enumerate(mount_points):
+        # mountinfo format: id parent major:minor root mountpoint options...
+        lines.append(
+            f"{100 + index} 1 0:99 / {point} / rw,relatime shared:{index} - overlay / rw"
+        )
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return str(path)
+
+
+def test_intended_shared_mount_at_the_root_is_not_shadowed(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """The happy path must NOT be refused (POLICE preflight, item 1).
+
+    With the agentdata volume mounted AT the shared root (the intended
+    shared mount sitting at its own mountpoint), production admission and the
+    worker readiness must SUCCEED. Probed with a synthetic mountinfo file -
+    no container required.
+    """
+    root = tmp_path / "app" / ".agent"
+    root.mkdir(parents=True, exist_ok=True)
+    db = root / "agent.db"
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+    monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(root))
+    monkeypatch.setenv("AGENT_STORE_DB", str(db))
+    # The ONLY mount is the intended shared volume at the root.
+    monkeypatch.setenv(
+        "AGENT_STORE_MOUNTINFO", _write_mountinfo(tmp_path, [str(root)])
+    )
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared) == (True, True), api
+    assert (worker.admit, worker.shared) == (True, True), worker
+
+    ws_id = str(uuid.uuid4())
+    with _client(ws_id) as client:
+        resp = client.post(f"/v1/workspaces/{ws_id}/agent/runs/queued", json={"goal": "x"})
+    assert resp.status_code == 202, resp.text
+
+
+def test_nested_mount_inside_the_root_shadows_the_store(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """A mount INSIDE the root is a competing mount -> the store is refused."""
+    root = tmp_path / "app"
+    root.mkdir(parents=True, exist_ok=True)
+    nested = root / "apps" / "api"
+    nested.mkdir(parents=True, exist_ok=True)
+    db = nested / "review-agent.db"
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+    monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(root))
+    monkeypatch.setenv("AGENT_STORE_DB", str(db))
+    # The intended volume is at the root AND a source bind mount shadows a
+    # subtree of it.
+    monkeypatch.setenv(
+        "AGENT_STORE_MOUNTINFO",
+        _write_mountinfo(tmp_path, [str(root), str(nested)]),
+    )
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared, api.reason) == (
+        worker.admit,
+        worker.shared,
+        worker.reason,
+    ), (api, worker)
+    assert api.admit is False, api
+    assert api.reason == "agent_store_root_shadowed", api
+
+
 def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
     """The API and the worker must resolve the store readiness identically.
 
@@ -302,6 +437,12 @@ def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
         ),
         (
             "production",
+            str(root / "agent.db"),
+            str(root),
+            "agent_store_root_shadowed",
+        ),
+        (
+            "production",
             str(tmp_path / "other" / "agent.db"),
             str(root),
             "agent_store_unshared",
@@ -322,6 +463,13 @@ def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
             monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", mount)
         else:
             monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
+        # A shadow mount inside the root makes the configuration unshared.
+        if _expected == "agent_store_root_shadowed":
+            monkeypatch.setenv(
+                "AGENT_STORE_SHADOW_MOUNTS", str(root / "bind-mounted-subtree")
+            )
+        else:
+            monkeypatch.delenv("AGENT_STORE_SHADOW_MOUNTS", raising=False)
         if path:
             monkeypatch.setenv("AGENT_STORE_DB", path)
         else:
