@@ -702,3 +702,140 @@ async def test_production_executor_verification_publishes_covered_representation
     assert result["verification_stage"] == "Stage 11 & 12"
     # The published output is the covered answer, not the raw JSON payload.
     assert result["output"] == "The launch budget is 20 dollars."
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_altered_unit_answer_is_not_covered() -> None:
+    """T-RV19-01 (POLICE rework 2 F1): casefolded coverage is NOT equivalence.
+
+    The claim/canonical text says "20 mW"; the model answered "20 MW". A
+    verifier that supports ONLY the exact mW claim must still be asked about
+    the published answer, and the altered answer must not be published as
+    verified.
+    """
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _ExactVerifier:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            self.seen.append(claim_text)
+            if claim_text == "The device draws 20 mW.":
+                return ClaimVerdict(
+                    claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                    evidence_ids=[], reason_code="SUPPORTED",
+                )
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.CONTRADICTED,
+                evidence_ids=[], reason_code="CONTRADICTION_FOUND",
+            )
+
+    verifier = _ExactVerifier()
+    mock_provider = AsyncMock()
+    payload = (
+        '{"answer": "The device draws 20 MW.", "claims": '
+        '[{"text": "The device draws 20 mW.", "chunk_ids": ["ch-1"]}]}'
+    )
+    mock_provider.generate.return_value = GenerationResult(
+        text=payload,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="datasheet.pdf", page=1, section="Power",
+            content="The device draws 20 mW.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="The device draws 20 mW.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": verifier,
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+
+    # The altered answer must be verified on its own, not treated as covered.
+    assert "The device draws 20 MW." in verifier.seen, verifier.seen
+    assert result["verified"] is False
+    assert result["verification_stage"] != "Stage 11 & 12"
+
+
+@pytest.mark.asyncio
+async def test_production_executor_verification_case_sensitive_identifier_is_not_covered() -> None:
+    """T-RV19-01 (POLICE rework 2 F1): identifiers are case-sensitive."""
+    from answer.semantic_verification import ClaimVerdict, Verdict
+
+    class _ExactVerifier:
+        def __init__(self) -> None:
+            self.seen: list[str] = []
+
+        async def verify_claim(self, claim_text, evidence, *, recheck=False):
+            self.seen.append(claim_text)
+            if claim_text == "AcmeCorp issued the report.":
+                return ClaimVerdict(
+                    claim_id=claim_text, verdict=Verdict.SUPPORTED,
+                    evidence_ids=[], reason_code="SUPPORTED",
+                )
+            return ClaimVerdict(
+                claim_id=claim_text, verdict=Verdict.CONTRADICTED,
+                evidence_ids=[], reason_code="CONTRADICTION_FOUND",
+            )
+
+    verifier = _ExactVerifier()
+    mock_provider = AsyncMock()
+    payload = (
+        '{"answer": "acmecorp issued the report.", "claims": '
+        '[{"text": "AcmeCorp issued the report.", "chunk_ids": ["ch-1"]}]}'
+    )
+    mock_provider.generate.return_value = GenerationResult(
+        text=payload,
+        model="google/gemma-4-26b-a4b-it:free",
+    )
+
+    canonical = {
+        "ch-1": CanonicalChunk(
+            chunk_id="ch-1", workspace_id="ws-test", document_id="doc-1",
+            filename="filing.pdf", page=1, section="Issuer",
+            content="AcmeCorp issued the report.",
+            status=DocumentStatus.ACTIVE, metadata={},
+        )
+    }
+
+    executor = ProductionNodeExecutor(llm_provider=mock_provider)
+    node = _make_node(
+        "llm-verified",
+        NodeType.LLM,
+        config={
+            "model": "google/gemma-4-26b-a4b-it:free",
+            "requires_verification": True,
+            "evidence": {
+                "claims": [Claim(text="AcmeCorp issued the report.", chunk_ids=["ch-1"])],
+                "canonical": canonical,
+                "allowed_workspace_ids": {"ws-test"},
+                "verifier": verifier,
+            },
+        },
+        caps=["llm"],
+    )
+
+    result = await executor.execute_node(node, "check facts", "ws-test")
+
+    assert "acmecorp issued the report." in verifier.seen, verifier.seen
+    assert result["verified"] is False
+    assert result["verification_stage"] != "Stage 11 & 12"

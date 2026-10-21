@@ -495,13 +495,22 @@ class ProductionNodeExecutor:
 
     @staticmethod
     def _text_covered(text: str, claims: list[Any]) -> bool:
-        """Return True when ``text`` is already one of the verified claims."""
-        normalized = " ".join(text.split()).casefold()
-        if not normalized:
+        """Return True when ``text`` is EXACTLY one of the verified claims.
+
+        Coverage is EXACT. Casefolding or collapsing whitespace is not
+        semantic equivalence: "The device draws 20 mW." and "The device draws
+        20 MW." are different claims, and so are case-sensitive identifiers
+        (``AcmeCorp`` vs ``acmecorp``). A published answer that is not
+        byte-identical to an already-verified claim must be verified on its
+        own, otherwise an altered answer is published as verified without
+        ever being checked (T-RV19-01, POLICE rework 2 F1).
+        """
+        candidate = text or ""
+        if not candidate.strip():
             return False
         for claim in claims:
-            claim_text = " ".join(str(getattr(claim, "text", "")).split()).casefold()
-            if claim_text and claim_text == normalized:
+            claim_text = str(getattr(claim, "text", ""))
+            if claim_text and claim_text == candidate:
                 return True
         return False
 

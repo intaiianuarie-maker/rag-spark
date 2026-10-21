@@ -57,6 +57,27 @@ def shared_root() -> str:
     )
 
 
+def shared_mount_target() -> str:
+    """Return the path the shared agent volume is actually mounted at."""
+    return os.environ.get("AGENT_STORE_SHARED_MOUNT", "").strip()
+
+
+def root_is_mounted(root: str) -> bool:
+    """Return True when ``root`` is the mounted shared volume.
+
+    Mirrors ``app.agents.lifecycle_routes.root_is_mounted``: a resolved root
+    that is not where the shared volume is mounted is NOT shared storage
+    (POLICE F4b).
+    """
+    mount_target = shared_mount_target()
+    if not mount_target:
+        return True
+    try:
+        return Path(mount_target).resolve() == Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+
+
 def agent_store_readiness() -> AgentStoreReadiness:
     """Resolve the durable agent-store readiness (fail-closed).
 
@@ -81,7 +102,7 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
-    shared = _is_inside(raw_path, root)
+    shared = _is_inside(raw_path, root) and root_is_mounted(root)
     if shared:
         return AgentStoreReadiness(
             admit=True,
@@ -90,12 +111,19 @@ def agent_store_readiness() -> AgentStoreReadiness:
             path=raw_path,
             environment=environment,
         )
+    reason = (
+        "agent_store_unshared_dev_only" if local else "agent_store_unshared"
+    )
+    if not root_is_mounted(root):
+        reason = (
+            "agent_store_root_not_mounted_dev_only"
+            if local
+            else "agent_store_root_not_mounted"
+        )
     return AgentStoreReadiness(
         admit=local,
         shared=False,
-        reason=(
-            "agent_store_unshared_dev_only" if local else "agent_store_unshared"
-        ),
+        reason=reason,
         path=raw_path,
         environment=environment,
     )

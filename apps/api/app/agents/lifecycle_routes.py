@@ -122,7 +122,7 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
-    shared = _is_inside(raw_path, root)
+    shared = _is_inside(raw_path, root) and root_is_mounted(root)
     if shared:
         return AgentStoreReadiness(
             admit=True,
@@ -131,14 +131,21 @@ def agent_store_readiness() -> AgentStoreReadiness:
             path=raw_path,
             environment=environment,
         )
+    reason = (
+        "agent_store_unshared_dev_only"
+        if local
+        else "agent_store_unshared"
+    )
+    if not root_is_mounted(root):
+        reason = (
+            "agent_store_root_not_mounted_dev_only"
+            if local
+            else "agent_store_root_not_mounted"
+        )
     return AgentStoreReadiness(
         admit=local,
         shared=False,
-        reason=(
-            "agent_store_unshared_dev_only"
-            if local
-            else "agent_store_unshared"
-        ),
+        reason=reason,
         path=raw_path,
         environment=environment,
     )
@@ -149,6 +156,34 @@ def shared_root() -> str:
     return os.environ.get("AGENT_STORE_SHARED_ROOT", "").strip() or (
         DEFAULT_AGENT_STORE_SHARED_ROOT
     )
+
+
+def shared_mount_target() -> str:
+    """Return the path the shared agent volume is actually mounted at.
+
+    The compose deployment mounts the ``agentdata`` named volume at the
+    RESOLVED shared root in BOTH services, so the two are equal by
+    construction. When they disagree (a hand-built deployment that overrides
+    the root without moving the mount) the store is NOT shared storage and
+    the readiness must not report ``shared=True`` (POLICE F4b).
+    """
+    return os.environ.get("AGENT_STORE_SHARED_MOUNT", "").strip()
+
+
+def root_is_mounted(root: str) -> bool:
+    """Return True when ``root`` is the mounted shared volume.
+
+    Unknown (no declared mount target) counts as mounted: outside the
+    compose deployment the api and worker processes share one host
+    filesystem, and the deployment contract is the operator's.
+    """
+    mount_target = shared_mount_target()
+    if not mount_target:
+        return True
+    try:
+        return Path(mount_target).resolve() == Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
 
 
 def _is_inside(path: str, root: str) -> bool:

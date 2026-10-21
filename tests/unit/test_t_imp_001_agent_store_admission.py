@@ -254,6 +254,29 @@ def test_queued_run_survives_restart(
     assert f"CLAIM {run_id}" in child.stdout, child.stdout
 
 
+def test_queued_run_refused_when_root_is_not_the_mounted_volume(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b: the resolved root must BE the mounted shared volume.
+
+    A deployment that overrides the root without moving the volume puts the
+    admitted database in separate container filesystems, so the readiness
+    must not report the store as shared.
+    """
+    root = _shared_root(tmp_path, monkeypatch)
+    db = root / "agent.db"
+    monkeypatch.setenv("AGENT_STORE_DB", str(db))
+    # The shared volume is mounted somewhere else entirely.
+    monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", str(tmp_path / "mounted-elsewhere"))
+
+    ws_id = str(uuid.uuid4())
+    with _client(ws_id) as client:
+        resp = client.post(f"/v1/workspaces/{ws_id}/agent/runs/queued", json={"goal": "x"})
+
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"]["error"] == "agent_store_root_not_mounted"
+
+
 def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
     """The API and the worker must resolve the store readiness identically.
 
@@ -269,16 +292,36 @@ def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
     root = tmp_path / "shared"
     root.mkdir(parents=True, exist_ok=True)
     cases = [
-        ("production", "", "agent_store_not_configured"),
-        ("production", str(root / "agent.db"), "agent_store_shared"),
-        ("production", str(tmp_path / "other" / "agent.db"), "agent_store_unshared"),
-        ("local", "", "agent_store_not_configured"),
-        ("local", str(root / "agent.db"), "agent_store_shared"),
-        ("local", str(tmp_path / "other" / "agent.db"), "agent_store_unshared_dev_only"),
+        ("production", "", None, "agent_store_not_configured"),
+        ("production", str(root / "agent.db"), str(root), "agent_store_shared"),
+        (
+            "production",
+            str(root / "agent.db"),
+            str(tmp_path / "elsewhere"),
+            "agent_store_root_not_mounted",
+        ),
+        (
+            "production",
+            str(tmp_path / "other" / "agent.db"),
+            str(root),
+            "agent_store_unshared",
+        ),
+        ("local", "", None, "agent_store_not_configured"),
+        ("local", str(root / "agent.db"), str(root), "agent_store_shared"),
+        (
+            "local",
+            str(tmp_path / "other" / "agent.db"),
+            str(root),
+            "agent_store_unshared_dev_only",
+        ),
     ]
-    for environment, path, _expected in cases:
+    for environment, path, mount, _expected in cases:
         monkeypatch.setenv("APP_ENV", environment)
         monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(root))
+        if mount:
+            monkeypatch.setenv("AGENT_STORE_SHARED_MOUNT", mount)
+        else:
+            monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
         if path:
             monkeypatch.setenv("AGENT_STORE_DB", path)
         else:
@@ -296,11 +339,8 @@ def test_api_and_worker_readiness_agree(monkeypatch, tmp_path) -> None:
     _reset_settings()
 
 
-@pytest.mark.skipif(
-    shutil.which("docker") is None, reason="docker is not available on this host"
-)
-def test_compose_renders_shared_agent_store_volume() -> None:
-    """F4b: the rendered deployment shares ONE agent volume between api and worker."""
+def _render_compose(extra_env: dict | None = None) -> dict:
+    """Render the compose deployment and return the parsed config."""
     import yaml
 
     env = {
@@ -312,6 +352,7 @@ def test_compose_renders_shared_agent_store_volume() -> None:
         "WORKFLOW_APPROVALS_DB": "/app/.workflow/approvals.db",
         "WORKFLOW_CHECKPOINT_DB": "/app/.workflow/checkpoints.db",
     }
+    env.update(extra_env or {})
     rendered = subprocess.run(
         ["docker", "compose", "config", "--format", "json"],
         cwd=str(REPO_ROOT),
@@ -321,16 +362,62 @@ def test_compose_renders_shared_agent_store_volume() -> None:
         timeout=180,
     )
     assert rendered.returncode == 0, rendered.stderr
-    config = yaml.safe_load(rendered.stdout)
+    return yaml.safe_load(rendered.stdout)
 
+
+def _assert_agent_store_on_shared_volume(config: dict, expected_root: str) -> None:
+    """The ADMITTED database must sit on the agentdata volume in BOTH services."""
     assert "agentdata" in config["volumes"], config["volumes"].keys()
     for service in ("api", "worker"):
         svc = config["services"][service]
+        shared_root = svc["environment"]["AGENT_STORE_SHARED_ROOT"]
+        db_path = svc["environment"]["AGENT_STORE_DB"]
+        mount_target = svc["environment"].get("AGENT_STORE_SHARED_MOUNT", "")
+        assert shared_root == expected_root, (service, shared_root, expected_root)
+        assert db_path.startswith(shared_root + "/"), (service, db_path, shared_root)
+        # The declared mount target is the same path the volume is mounted at,
+        # so the application can refuse a root that is not the mounted volume.
+        assert mount_target == expected_root, (service, mount_target, expected_root)
+
         mounts = {
             (m.get("type"), m.get("source"), m.get("target"))
             for m in svc.get("volumes", [])
         }
-        assert ("volume", "agentdata", "/app/.agent") in mounts, (service, mounts)
-        db_path = svc["environment"]["AGENT_STORE_DB"]
-        shared_root = svc["environment"]["AGENT_STORE_SHARED_ROOT"]
-        assert db_path.startswith(shared_root + "/"), (service, db_path, shared_root)
+        # The shared volume is mounted AT the resolved shared root, and the
+        # admitted database lives on it.
+        assert ("volume", "agentdata", shared_root) in mounts, (service, mounts)
+        agent_volume_target = next(
+            target
+            for (kind, source, target) in mounts
+            if kind == "volume" and source == "agentdata"
+        )
+        assert db_path.startswith(agent_volume_target + "/"), (
+            service,
+            db_path,
+            agent_volume_target,
+        )
+
+
+@pytest.mark.skipif(
+    shutil.which("docker") is None, reason="docker is not available on this host"
+)
+def test_compose_renders_shared_agent_store_volume() -> None:
+    """F4b: the rendered deployment shares ONE agent volume between api and worker."""
+    config = _render_compose()
+    _assert_agent_store_on_shared_volume(config, "/app/.agent")
+
+
+@pytest.mark.skipif(
+    shutil.which("docker") is None, reason="docker is not available on this host"
+)
+def test_compose_renders_custom_shared_root_volume() -> None:
+    """F4b: a custom shared root must move the MOUNT, not just the path.
+
+    A configured root that is not where the volume is mounted would put the
+    admitted database in separate container filesystems (the reviewer's
+    reproduction: config succeeds, api/worker readiness says shared, but the
+    agentdata volume is mounted elsewhere).
+    """
+    custom_root = "/tmp/review-private"
+    config = _render_compose({"AGENT_STORE_SHARED_ROOT": custom_root})
+    _assert_agent_store_on_shared_volume(config, custom_root)
