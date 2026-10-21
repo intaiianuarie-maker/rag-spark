@@ -643,6 +643,80 @@ def test_relative_store_paths_are_refused_across_working_directories(
     assert resp.json()["detail"]["error"] == "agent_store_path_not_absolute"
 
 
+def test_tilde_relative_store_paths_are_refused_across_working_directories(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """F4b (P2): a TILDE-RELATIVE path is not raw-absolute -> refused.
+
+    "~/state" (and the "~root/state" variant) is expanded at validation time
+    but the raw string was used afterwards, so the store opened a literal
+    "~" directory relative to the process working directory: api and worker
+    with different CWDs (or different HOME) opened different databases while
+    both reported the store as shared.
+    """
+    api_cwd = tmp_path / "api-cwd"
+    worker_cwd = tmp_path / "worker-cwd"
+    api_cwd.mkdir()
+    worker_cwd.mkdir()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    for label, shared in (("tilde", "~/state"), ("named-user", "~root/state")):
+        monkeypatch.setenv("APP_ENV", "production")
+        monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", shared)
+        monkeypatch.setenv("AGENT_STORE_DB", shared + "/agent.db")
+        monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
+        monkeypatch.delenv("AGENT_STORE_MOUNTINFO", raising=False)
+        for cwd in (api_cwd, worker_cwd):
+            monkeypatch.chdir(cwd)
+            _reset_settings()
+            api = api_ready()
+            worker = worker_ready()
+            assert api.admit is False, (label, cwd, api)
+            assert api.shared is False, (label, cwd, api)
+            assert worker.admit is False, (label, cwd, worker)
+            assert worker.shared is False, (label, cwd, worker)
+            assert api.reason == "agent_store_path_not_absolute", (label, cwd, api)
+            assert worker.reason == api.reason, (label, cwd, api, worker)
+    monkeypatch.chdir(tmp_path)
+
+    ws_id = str(uuid.uuid4())
+    with _client(ws_id) as client:
+        resp = client.post(f"/v1/workspaces/{ws_id}/agent/runs/queued", json={"goal": "x"})
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["detail"]["error"] == "agent_store_path_not_absolute"
+
+
+def test_absolute_path_with_a_literal_tilde_component_still_admits(
+    monkeypatch, production_env, tmp_path
+) -> None:
+    """A raw-absolute path CONTAINING a tilde component stays valid.
+
+    "/app/dist/~archive/state" is absolute: the tilde is an ordinary path
+    character there, and the store is still shared between the processes.
+    """
+    shared = tmp_path / "dist" / "~archive" / "state"
+    shared.mkdir(parents=True, exist_ok=True)
+    db = shared / "agent.db"
+    monkeypatch.setenv("AGENT_STORE_SHARED_ROOT", str(shared))
+    monkeypatch.setenv("AGENT_STORE_DB", str(db))
+    monkeypatch.delenv("AGENT_STORE_SHARED_MOUNT", raising=False)
+    monkeypatch.delenv("AGENT_STORE_MOUNTINFO", raising=False)
+    _reset_settings()
+
+    from app.agents.lifecycle_routes import agent_store_readiness as api_ready
+    from worker.main import agent_store_readiness as worker_ready
+
+    api = api_ready()
+    worker = worker_ready()
+    assert (api.admit, api.shared) == (True, True), api
+    assert (worker.admit, worker.shared) == (True, True), worker
+    # The published path is the normalized absolute one (no expansion).
+    assert api.path == str(db), api
+    assert worker.path == str(db), worker
+
+
 def test_absolute_store_paths_are_shared_across_working_directories(
     monkeypatch, production_env, tmp_path
 ) -> None:

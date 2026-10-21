@@ -63,23 +63,37 @@ class AgentStoreReadiness(NamedTuple):
 
 
 def _absolute_path(value: str) -> Path | None:
-    """Return the absolute path, or None when the value is relative.
+    """Return the RAW absolute path, or None when the value is not absolute.
 
-    A RELATIVE store path is resolved against the PROCESS working
-    directory: an api and a worker started from different directories would
-    open two different databases while both believe the store is shared
-    (reproduced: api 202 + queue depth 1, fresh worker depth 0 / claim
-    None). Relative paths are therefore refused (POLICE F4b, P2).
+    The RAW value is validated (``Path(value).is_absolute()``) and NEVER
+    expanded:
+
+    - A RELATIVE path is resolved against the PROCESS working directory: an
+      api and a worker started from different directories would open two
+      different databases while both believe the store is shared (reproduced:
+      api 202 + queue depth 1, fresh worker depth 0 / claim None).
+    - A TILDE-RELATIVE value ("~/state", "~root/state") is not raw-absolute.
+      Expanding it at validation time while using the raw string later would
+      open a literal "~" directory relative to the working directory — again
+      two different databases for two processes.
+
+    A raw-absolute path that merely CONTAINS a tilde component (e.g.
+    ``/app/dist/~archive/state``) is absolute and stays valid: the tilde is
+    an ordinary path character there.
+
+    The returned Path is the ONE normalized object used everywhere afterwards
+    (db location, shared root, mount comparison), so validation and use can
+    never diverge (POLICE F4b, P2).
     """
     if not value:
         return None
-    path = Path(value).expanduser()
+    path = Path(value)
     if not path.is_absolute():
         return None
     return path
 
 
-def _same_path(left: str, right: str) -> bool:
+def _same_path(left: str | Path, right: str | Path) -> bool:
     """Return True when both paths resolve to the same location."""
     try:
         return Path(left).resolve() == Path(right).resolve()
@@ -99,7 +113,7 @@ def shared_mount_target() -> str:
     return os.environ.get("AGENT_STORE_SHARED_MOUNT", "").strip()
 
 
-def root_is_mounted(root: str) -> bool:
+def root_is_mounted(root: str | Path) -> bool:
     """Return True when ``root`` is the mounted shared volume.
 
     Mirrors ``app.agents.lifecycle_routes.root_is_mounted``: a resolved root
@@ -127,7 +141,6 @@ def agent_store_readiness() -> AgentStoreReadiness:
     settings = get_settings()
     environment = str(settings.app_env).strip().lower()
     raw_path = os.environ.get("AGENT_STORE_DB", "").strip()
-    root = shared_root()
     local = environment in LOCAL_ENVIRONMENTS
 
     if not raw_path:
@@ -139,10 +152,17 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
-    if _absolute_path(root) is None or _absolute_path(raw_path) is None:
-        # A relative path is working-directory dependent: two processes
-        # started from different directories would open different databases
-        # while both reporting the store as shared (POLICE F4b, P2).
+    # ONE normalized path flow: the RAW absolute paths are validated here and
+    # the very same Path objects are used for every check below and for the
+    # store location itself (POLICE F4b, P2: a partial expansion at
+    # validation time and the raw string at use time opened two different
+    # databases).
+    db_path = _absolute_path(raw_path)
+    root_path = _absolute_path(shared_root())
+    if db_path is None or root_path is None:
+        # A relative or tilde-relative path is working-directory dependent:
+        # two processes started from different directories would open
+        # different databases while both reporting the store as shared.
         return AgentStoreReadiness(
             admit=False,
             shared=False,
@@ -151,7 +171,7 @@ def agent_store_readiness() -> AgentStoreReadiness:
             environment=environment,
         )
 
-    if root_is_shadowed(root):
+    if root_is_shadowed(root_path):
         return AgentStoreReadiness(
             admit=local,
             shared=False,
@@ -160,26 +180,27 @@ def agent_store_readiness() -> AgentStoreReadiness:
                 if local
                 else "agent_store_root_shadowed"
             ),
-            path=raw_path,
+            path=str(db_path),
             environment=environment,
         )
 
     declared_mount = shared_mount_target()
     if declared_mount:
-        if not _same_path(declared_mount, root):
+        mount_path = _absolute_path(declared_mount)
+        if mount_path is None or not _same_path(mount_path, root_path):
             # The declared mount is not the resolved root: the store would
             # live somewhere the other process cannot see.
             return AgentStoreReadiness(
                 admit=local,
                 shared=False,
                 reason="agent_store_root_not_mounted",
-                path=raw_path,
+                path=str(db_path),
                 environment=environment,
             )
         # A DECLARED shared mount must be proven by a readable mount table
         # that contains an entry AT that mount point. Without the evidence
         # the store may be a per-container file (POLICE F4b, P2).
-        if not mount_evidence_ok(declared_mount):
+        if not mount_evidence_ok(mount_path):
             return AgentStoreReadiness(
                 admit=local,
                 shared=False,
@@ -188,23 +209,23 @@ def agent_store_readiness() -> AgentStoreReadiness:
                     if local
                     else "agent_store_mount_unverified"
                 ),
-                path=raw_path,
+                path=str(db_path),
                 environment=environment,
             )
 
-    shared = _is_inside(raw_path, root) and root_is_mounted(root)
+    shared = _is_inside(db_path, root_path) and root_is_mounted(root_path)
     if shared:
         return AgentStoreReadiness(
             admit=True,
             shared=True,
             reason="agent_store_shared",
-            path=raw_path,
+            path=str(db_path),
             environment=environment,
         )
     reason = (
         "agent_store_unshared_dev_only" if local else "agent_store_unshared"
     )
-    if not root_is_mounted(root):
+    if not root_is_mounted(root_path):
         reason = (
             "agent_store_root_not_mounted_dev_only"
             if local
@@ -214,12 +235,12 @@ def agent_store_readiness() -> AgentStoreReadiness:
         admit=local,
         shared=False,
         reason=reason,
-        path=raw_path,
+        path=str(db_path),
         environment=environment,
     )
 
 
-def _is_inside(path: str, root: str) -> bool:
+def _is_inside(path: str | Path, root: str | Path) -> bool:
     """Return True when ``path`` resolves inside ``root``."""
     try:
         resolved = Path(path).resolve()
@@ -306,7 +327,7 @@ def _mount_points() -> list[str]:
         return []
 
 
-def mount_evidence_ok(target: str) -> bool:
+def mount_evidence_ok(target: str | Path) -> bool:
     """Return True when the mount table proves the intended mount exists.
 
     A DECLARED shared mount (``AGENT_STORE_SHARED_MOUNT``) must be backed by
@@ -330,7 +351,7 @@ def mount_evidence_ok(target: str) -> bool:
     return False
 
 
-def root_is_shadowed(root: str) -> bool:
+def root_is_shadowed(root: str | Path) -> bool:
     """Return True when another mount covers part of ``root``.
 
     Mirrors ``app.agents.lifecycle_routes.root_is_shadowed``: the INTENDED
