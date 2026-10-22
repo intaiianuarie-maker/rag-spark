@@ -23,7 +23,10 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-const page = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)), "utf8");
+const page = readFileSync(
+  fileURLToPath(new URL(process.env.SEARCH_PAGE_PATH ?? "./page.tsx", import.meta.url)),
+  "utf8",
+);
 
 /** The body of the workspace-change effect (the first `useEffect` block). */
 function workspaceEffect(): string {
@@ -69,9 +72,28 @@ describe("T-IMP-003: a superseded run never writes state", () => {
 
   it("drops a stale response or error instead of applying it", () => {
     expect(page).toMatch(/if \(runIdRef\.current !== thisRun\) return;/);
-    // The stale guard also covers the empty-query error path.
+    // Guard: the stale guard also covers the empty-query error path — the
+    // error is only written while the run is still the current one.
     expect(page).toMatch(
-      /if \(runIdRef\.current === thisRun\) \{\s*setError\("Enter a query to search\."\);/,
+      /if \(runIdRef\.current === thisRun\) \{[\s\S]{0,200}setError\([\s\S]{0,200}"Enter a query to search\."/,
     );
+  });
+});
+
+describe("T-IMP-003: the published value carries its workspace identity", () => {
+  it("publishes a result with the workspace the request was made for", () => {
+    expect(page).toMatch(/setResponse\(\{\s*workspaceId,\s*value: result\s*\}\);/);
+  });
+
+  it("publishes an error with the workspace the request was made for", () => {
+    expect(page).toMatch(/setError\(\{\s*workspaceId,\s*value: msg\s*\}\);/);
+  });
+
+  it("only shows a published value under the workspace it belongs to", () => {
+    // The identity fence: visibility is decided by the ACTIVE workspace, not
+    // by when the value happened to land (commit window).
+    expect(page).toMatch(/response\.workspaceId === scopeId/);
+    expect(page).toMatch(/error\.workspaceId === scopeId/);
+    expect(page).toMatch(/selected\.workspaceId === scopeId/);
   });
 });
