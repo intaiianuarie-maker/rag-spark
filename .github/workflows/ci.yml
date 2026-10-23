@@ -71,8 +71,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install the required dotenv parser
+        run: python -m pip install python-dotenv==1.2.4
+
       - name: Model origin allowlist gate
-        run: bash scripts/model_origin_guard.sh
+        run: |
+          bash scripts/model_origin_guard.sh
+          bash scripts/model_origin_guard.sh --selftest
 
   frontend:
     name: frontend (lint, build)

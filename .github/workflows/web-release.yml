@@ -32,6 +32,11 @@ jobs:
       - run: npm ci --no-fund
       - run: npm audit --omit=dev --audit-level=high
       - run: npm run lint
+      - name: Require Chrome for browser outcome regressions
+        run: |
+          CHROME_BINARY="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -x "$CHROME_BINARY"
+          echo "CHROME_PATH=$CHROME_BINARY" >> "$GITHUB_ENV"
       - run: npm run test -- --maxWorkers=2 --minWorkers=1
       - run: npm run build -- --webpack
       - name: Package standalone server
