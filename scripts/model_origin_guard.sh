@@ -115,6 +115,7 @@ import io
 import os
 import re
 import sys
+from dotenv.parser import parse_stream
 
 path = sys.argv[1]
 allowed = set(os.environ.get("GUARD_ALLOWED", "").splitlines())
@@ -127,8 +128,9 @@ def is_model_name(name: str) -> bool:
 def python_value(node):
     try:
         literal = ast.literal_eval(node)
-    except (ValueError, SyntaxError, TypeError):
-        return None
+    except (ValueError, SyntaxError, TypeError) as exc:
+        print(f"FAIL: model origin guard - cannot eval pin value with ast.literal_eval: {exc}", file=sys.stderr)
+        sys.exit(1)
     if isinstance(literal, bytes):
         literal = literal.decode("utf-8", "replace")
     if not isinstance(literal, str):
@@ -201,20 +203,31 @@ def dotenv_pins_manual(source: str):
 
 
 def dotenv_pins(source: str):
-    try:
-        from dotenv import dotenv_values
-    except Exception:
-        return dotenv_pins_manual(source)
-    try:
-        vals = dotenv_values(stream=io.StringIO(source), interpolate=False)
-    except Exception:
-        return dotenv_pins_manual(source)
+    # Use dotenv.parser.parse_stream to validate EVERY model pin without
+    # collapsing duplicates (dotenv_values returns a dict and keeps only the
+    # last value) or ignoring malformed bindings. The parse_stream iterator
+    # yields Binding namedtuples with (key, value, original, error).
+    # CRITICAL: Check binding.error FIRST, before skipping key=None. This
+    # ensures malformed bindings (e.g. unterminated quotes) fail the gate
+    # closed instead of being silently swallowed.
     pins = []
-    for name, val in vals.items():
-        if val is None:
-            val = ""
-        if is_model_name(name):
-            pins.append((name, val))
+    for binding in parse_stream(io.StringIO(source)):
+        # If there's a parse error (e.g. unterminated quote, None key), fail
+        # closed immediately. Must check error BEFORE checking key is None.
+        if binding.error:
+            print(f"FAIL: model origin guard - malformed dotenv binding at line {binding.index}: {binding.original}")
+            sys.exit(1)
+        # Skip comment lines where key is None (no error, just a comment).
+        if binding.key is None:
+            continue
+        # Only process MODEL-named pins.
+        if not is_model_name(binding.key):
+            continue
+        value = binding.value if binding.value is not None else ""
+        if value not in allowed:
+            print(f"FAIL: model origin guard - model {value!r} (pin {binding.key}) not in allowlist: {', '.join(sorted(allowed))}")
+            sys.exit(1)
+        pins.append((binding.key, value))
     return pins
 
 
@@ -237,12 +250,16 @@ except Exception as exc:
     print(f"FAIL: model origin guard - cannot parse {path}: {exc}")
     sys.exit(2)
 
-failed = False
-for name, value in pins:
-    if value not in allowed:
-        print(f"FAIL: model origin guard - model {value!r} (pin {name}) not in allowlist: {', '.join(sorted(allowed))}")
-        failed = True
-sys.exit(1 if failed else 0)
+# For .py files: validate each pin against the allowlist.
+# For .env files: all pins have already been validated inside dotenv_pins;
+# fall through to success.
+if path.endswith(".py"):
+    failed = False
+    for name, value in pins:
+        if value not in allowed:
+            print(f"FAIL: model origin guard - model {value!r} (pin {name}) not in allowlist: {', '.join(sorted(allowed))}")
+            failed = True
+    sys.exit(1 if failed else 0)
 PY
 }
 
