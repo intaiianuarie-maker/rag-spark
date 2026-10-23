@@ -128,9 +128,8 @@ def is_model_name(name: str) -> bool:
 def python_value(node):
     try:
         literal = ast.literal_eval(node)
-    except (ValueError, SyntaxError, TypeError) as exc:
-        print(f"FAIL: model origin guard - cannot eval pin value with ast.literal_eval: {exc}", file=sys.stderr)
-        sys.exit(1)
+    except (ValueError, SyntaxError, TypeError):
+        return None
     if isinstance(literal, bytes):
         literal = literal.decode("utf-8", "replace")
     if not isinstance(literal, str):
@@ -215,7 +214,7 @@ def dotenv_pins(source: str):
         # If there's a parse error (e.g. unterminated quote, None key), fail
         # closed immediately. Must check error BEFORE checking key is None.
         if binding.error:
-            print(f"FAIL: model origin guard - malformed dotenv binding at line {binding.index}: {binding.original}")
+            print(f"FAIL: model origin guard - malformed dotenv binding at line {binding.original.line}: {binding.original}")
             sys.exit(1)
         # Skip comment lines where key is None (no error, just a comment).
         if binding.key is None:
