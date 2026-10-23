@@ -17,7 +17,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { mergeRunRecords, type RunRecord, type RunSnapshot } from "./page";
+import { mergeRunRecords, type RunRecord, type RunSnapshot } from "./agent-runs";
 
 describe("T-R17: surface field tracing and merge discipline (zero mock data)", () => {
   it("mergeRunRecords merges server-authoritative runs with local records", () => {
@@ -122,7 +122,7 @@ describe("T-R17: surface field tracing and merge discipline (zero mock data)", (
 describe("T-R17: rollout posture and honest unavailable states", () => {
   it("agent-runs list page checks readiness and disables form when unconfigured", () => {
     const page = readFileSync(
-      fileURLToPath(new URL("./page.tsx", import.meta.url)),
+      fileURLToPath(new URL("./agent-runs.tsx", import.meta.url)),
       "utf8",
     );
     // Checks readiness endpoint
@@ -139,7 +139,7 @@ describe("T-R17: rollout posture and honest unavailable states", () => {
 
   it("agent-runs detail page wires approval and cancel to backend transitions", () => {
     const detail = readFileSync(
-      fileURLToPath(new URL("./[id]/page.tsx", import.meta.url)),
+      fileURLToPath(new URL("./[id]/run-detail.tsx", import.meta.url)),
       "utf8",
     );
     // Wires cancel route

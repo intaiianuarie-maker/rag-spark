@@ -18,7 +18,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { startRunLimit } from "./page";
+import { startRunLimit } from "./agent-runs";
 
 const DEFAULTS = { max_steps: 5, max_tokens: 100000, max_tool_calls: 50 };
 
@@ -54,7 +54,7 @@ describe("limit fields fall back to their own default (F-3)", () => {
     // Pinned against the source so a changed DEFAULT_LIMITS cannot drift from
     // the values the form seeds its inputs with.
     const page = readFileSync(
-      fileURLToPath(new URL("./page.tsx", import.meta.url)),
+      fileURLToPath(new URL("./agent-runs.tsx", import.meta.url)),
       "utf8",
     );
     const match = page.match(
@@ -68,7 +68,7 @@ describe("limit fields fall back to their own default (F-3)", () => {
 
   it("the submit path uses the helper for all three fields", () => {
     const page = readFileSync(
-      fileURLToPath(new URL("./page.tsx", import.meta.url)),
+      fileURLToPath(new URL("./agent-runs.tsx", import.meta.url)),
       "utf8",
     );
     // The old bug, asserted impossible: a bare parseInt with no fallback.

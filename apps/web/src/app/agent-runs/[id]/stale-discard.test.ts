@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 const SOURCE = readFileSync(
-  new URL("./page.tsx", import.meta.url),
+  new URL("./run-detail.tsx", import.meta.url),
   "utf8",
 );
 

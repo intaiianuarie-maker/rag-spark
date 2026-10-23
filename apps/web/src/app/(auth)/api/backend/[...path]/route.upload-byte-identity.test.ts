@@ -27,7 +27,7 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({ get: cookieGetMock })),
 }));
 
-import { forward, MAX_UPLOAD_BYTES } from "./route";
+import { forward, MAX_UPLOAD_BYTES } from "./handlers";
 
 /** Global fetch stub = the "network"; every test drives the real `forward()`. */
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
