@@ -22,6 +22,16 @@ class MemoryGraphStore(GraphStore):
         self._relationships: dict[str, dict[str, Relationship]] = {}
         # workspace_id -> community_id -> GraphCommunity
         self._communities: dict[str, dict[str, GraphCommunity]] = {}
+        # workspace_id -> set of tombstoned document ids
+        self._tombstoned_docs: dict[str, set[str]] = {}
+        # workspace_id -> document_id -> set of chunk ids
+        self._document_chunks: dict[str, dict[str, set[str]]] = {}
+        # workspace_id -> set of retired chunk ids
+        self._retired_chunks: dict[str, set[str]] = {}
+        # workspace_id -> set of permanently tombstoned entity ids
+        self._tombstoned_entities: dict[str, set[str]] = {}
+        # workspace_id -> set of permanently tombstoned relationship ids
+        self._tombstoned_rels: dict[str, set[str]] = {}
 
     def _ensure_ws(self, ws: str) -> None:
         if ws not in self._entities:
@@ -30,6 +40,16 @@ class MemoryGraphStore(GraphStore):
             self._relationships[ws] = {}
         if ws not in self._communities:
             self._communities[ws] = {}
+        if ws not in self._tombstoned_docs:
+            self._tombstoned_docs[ws] = set()
+        if ws not in self._document_chunks:
+            self._document_chunks[ws] = {}
+        if ws not in self._retired_chunks:
+            self._retired_chunks[ws] = set()
+        if ws not in self._tombstoned_entities:
+            self._tombstoned_entities[ws] = set()
+        if ws not in self._tombstoned_rels:
+            self._tombstoned_rels[ws] = set()
 
     async def ensure_graph(self, workspace_id: str) -> None:
         self._ensure_ws(workspace_id)
@@ -39,9 +59,38 @@ class MemoryGraphStore(GraphStore):
         ws_entities = self._entities[workspace_id]
         written = 0
         for ent in entities:
-            if ent.workspace_id == workspace_id:
+            if ent.workspace_id != workspace_id:
+                continue
+            # Fence: skip if any of the entity's documents are tombstoned.
+            if ent.id in self._tombstoned_entities[workspace_id]:
+                continue
+            if any(d in self._tombstoned_docs[workspace_id] for d in ent.document_ids):
+                continue
+            if any(c in self._retired_chunks[workspace_id] for c in ent.chunk_ids):
+                continue
+            # F2/F8: record document->chunk contributions only when unambiguous
+            if len(ent.document_ids) == 1:
+                d = ent.document_ids[0]
+                self._document_chunks[workspace_id].setdefault(d, set()).update(ent.chunk_ids)
+            if ent.id in ws_entities and ws_entities[ent.id].workspace_id == workspace_id:
+                existing = ws_entities[ent.id]
+                merged_doc_ids = list(existing.document_ids) + [
+                    d for d in ent.document_ids if d not in existing.document_ids
+                ]
+                merged_chunk_ids = list(existing.chunk_ids) + [
+                    c for c in ent.chunk_ids if c not in existing.chunk_ids
+                ]
+                existing.document_ids = merged_doc_ids
+                existing.chunk_ids = merged_chunk_ids
+                existing.name = ent.name
+                existing.type = ent.type
+                existing.description = ent.description
+                existing.aliases = ent.aliases
+                existing.properties = ent.properties
+                ws_entities[ent.id] = existing
+            else:
                 ws_entities[ent.id] = ent
-                written += 1
+            written += 1
         return written
 
     async def upsert_relationships(
@@ -51,9 +100,37 @@ class MemoryGraphStore(GraphStore):
         ws_rels = self._relationships[workspace_id]
         written = 0
         for rel in relationships:
-            if rel.workspace_id == workspace_id:
+            if rel.workspace_id != workspace_id:
+                continue
+            if rel.id in self._tombstoned_rels[workspace_id]:
+                continue
+            if any(d in self._tombstoned_docs[workspace_id] for d in rel.document_ids):
+                continue
+            if any(c in self._retired_chunks[workspace_id] for c in rel.chunk_ids):
+                continue
+            if len(rel.document_ids) == 1:
+                d = rel.document_ids[0]
+                self._document_chunks[workspace_id].setdefault(d, set()).update(rel.chunk_ids)
+            if rel.id in ws_rels and ws_rels[rel.id].workspace_id == workspace_id:
+                existing = ws_rels[rel.id]
+                merged_doc_ids = list(existing.document_ids) + [
+                    d for d in rel.document_ids if d not in existing.document_ids
+                ]
+                merged_chunk_ids = list(existing.chunk_ids) + [
+                    c for c in rel.chunk_ids if c not in existing.chunk_ids
+                ]
+                existing.document_ids = merged_doc_ids
+                existing.chunk_ids = merged_chunk_ids
+                existing.source_entity_id = rel.source_entity_id
+                existing.target_entity_id = rel.target_entity_id
+                existing.type = rel.type
+                existing.description = rel.description
+                existing.weight = rel.weight
+                existing.properties = rel.properties
+                ws_rels[rel.id] = existing
+            else:
                 ws_rels[rel.id] = rel
-                written += 1
+            written += 1
         return written
 
     async def get_entity(self, workspace_id: str, entity_id: str) -> Entity | None:
@@ -153,9 +230,7 @@ class MemoryGraphStore(GraphStore):
         self._ensure_ws(workspace_id)
         return list(self._communities[workspace_id].values())
 
-    async def tombstone_entity(
-        self, workspace_id: str, entity_id: str
-    ) -> bool:
+    async def tombstone_entity(self, workspace_id: str, entity_id: str) -> bool:
         """Mark an entity, its incident edges, and affected communities tombstoned.
 
         Mirrors the SQLite adapter's behavior: the entity and its incident
@@ -176,13 +251,12 @@ class MemoryGraphStore(GraphStore):
         del self._entities[workspace_id][entity_id]
         for rid in incident_rel_ids:
             del ws_rels[rid]
+        self._tombstoned_entities[workspace_id].add(entity_id)
 
         self._prune_communities(workspace_id, {entity_id}, incident_rel_ids)
         return True
 
-    async def tombstone_relationship(
-        self, workspace_id: str, relationship_id: str
-    ) -> bool:
+    async def tombstone_relationship(self, workspace_id: str, relationship_id: str) -> bool:
         """Mark a relationship tombstoned and prune affected communities.
 
         The source and target entities survive; only the edge and any
@@ -192,6 +266,7 @@ class MemoryGraphStore(GraphStore):
         if relationship_id not in self._relationships[workspace_id]:
             return False
         del self._relationships[workspace_id][relationship_id]
+        self._tombstoned_rels[workspace_id].add(relationship_id)
         self._prune_communities(workspace_id, set(), {relationship_id})
         return True
 
@@ -200,6 +275,8 @@ class MemoryGraphStore(GraphStore):
         workspace_id: str,
         tombstoned_entity_ids: set[str],
         tombstoned_relationship_ids: set[str],
+        changed_entity_ids: set[str] | None = None,
+        changed_relationship_ids: set[str] | None = None,
     ) -> None:
         """Prune invalidated members from community provenance in-place.
 
@@ -208,61 +285,111 @@ class MemoryGraphStore(GraphStore):
         entity names; communities with no surviving entities are tombstoned
         (soft-deleted) so global retrieval never returns deleted facts.
         """
+        if changed_entity_ids is None:
+            changed_entity_ids = set()
+        if changed_relationship_ids is None:
+            changed_relationship_ids = set()
+        affected = tombstoned_entity_ids | changed_entity_ids
+        affected_rels = tombstoned_relationship_ids | changed_relationship_ids
         ws_comms = self._communities[workspace_id]
         ws_entities = self._entities[workspace_id]
         for cid in list(ws_comms.keys()):
             comm = ws_comms[cid]
-            kept_entities = [
-                eid for eid in comm.entity_ids if eid not in tombstoned_entity_ids
-            ]
+            kept_entities = [eid for eid in comm.entity_ids if eid not in tombstoned_entity_ids]
             kept_rels = [
-                rid
-                for rid in comm.relationship_ids
-                if rid not in tombstoned_relationship_ids
+                rid for rid in comm.relationship_ids if rid not in tombstoned_relationship_ids
             ]
             if not kept_entities:
                 del ws_comms[cid]
                 continue
-            if kept_entities != comm.entity_ids or kept_rels != comm.relationship_ids:
-                surviving_names = [
-                    ws_entities[eid].name
-                    for eid in kept_entities
-                    if eid in ws_entities
-                ]
+            affected_member = (
+                bool(set(comm.entity_ids) & affected)
+                or bool(set(comm.relationship_ids) & affected_rels)
+            )
+            if not affected_member:
                 comm.entity_ids = kept_entities
                 comm.relationship_ids = kept_rels
-                if surviving_names:
-                    comm.title = " + ".join(surviving_names)
-                    comm.summary = "; ".join(surviving_names)
-                else:
-                    # Entity IDs remain in the community but none can be
-                    # loaded — invalidate the community to avoid retaining
-                    # stale summary/title referencing deleted provenance.
-                    del ws_comms[cid]
+                continue
+            surviving_names = [ws_entities[eid].name for eid in kept_entities if eid in ws_entities]
+            comm.entity_ids = kept_entities
+            comm.relationship_ids = kept_rels
+            if surviving_names:
+                comm.title = " + ".join(surviving_names)
+                comm.summary = "; ".join(surviving_names)
+            else:
+                del ws_comms[cid]
 
     async def tombstone_document(self, workspace_id: str, document_id: str) -> int:
-        """Tombstone every entity/edge whose provenance includes document_id.
-
-        Communities referencing the removed nodes are pruned in the same
-        operation (summaries regenerated from surviving members; communities
-        with no surviving entities are invalidated).
-        """
         self._ensure_ws(workspace_id)
+        self._tombstoned_docs[workspace_id].add(document_id)
+        deleted_chunks = self._document_chunks[workspace_id].get(document_id, set())
         count = 0
         tombstoned_ent_ids: set[str] = set()
         tombstoned_rel_ids: set[str] = set()
+        changed_ent_ids: set[str] = set()
+        changed_rel_ids: set[str] = set()
+
         for eid in list(self._entities[workspace_id].keys()):
-            if document_id in self._entities[workspace_id][eid].document_ids:
+            ent = self._entities[workspace_id][eid]
+            if document_id not in ent.document_ids:
+                continue
+            remaining_docs = [d for d in ent.document_ids if d != document_id]
+            surviving_mapped = set()
+            for sd in remaining_docs:
+                surviving_mapped.update(self._document_chunks[workspace_id].get(sd, set()))
+            remaining_chunks = [c for c in ent.chunk_ids if c in surviving_mapped]
+            if not remaining_chunks:
+                remaining_docs = []
+            if remaining_docs:
+                ent.document_ids = remaining_docs
+                ent.chunk_ids = remaining_chunks
+                ent.description = ""
+                self._entities[workspace_id][eid] = ent
+                changed_ent_ids.add(eid)
+            else:
                 tombstoned_ent_ids.add(eid)
                 del self._entities[workspace_id][eid]
                 count += 1
+
         for rid in list(self._relationships[workspace_id].keys()):
-            if document_id in self._relationships[workspace_id][rid].document_ids:
+            rel = self._relationships[workspace_id][rid]
+            if document_id not in rel.document_ids:
+                continue
+            remaining_docs = [d for d in rel.document_ids if d != document_id]
+            dangling = (
+                rel.source_entity_id in tombstoned_ent_ids
+                or rel.target_entity_id in tombstoned_ent_ids
+            )
+            surviving_mapped = set()
+            for sd in remaining_docs:
+                surviving_mapped.update(self._document_chunks[workspace_id].get(sd, set()))
+            remaining_chunks = [c for c in rel.chunk_ids if c in surviving_mapped]
+            if not remaining_chunks:
+                remaining_docs = []
+            if remaining_docs and not dangling:
+                rel.document_ids = remaining_docs
+                rel.chunk_ids = remaining_chunks
+                rel.description = ""
+                self._relationships[workspace_id][rid] = rel
+                changed_rel_ids.add(rid)
+            else:
                 tombstoned_rel_ids.add(rid)
                 del self._relationships[workspace_id][rid]
                 count += 1
-        self._prune_communities(workspace_id, tombstoned_ent_ids, tombstoned_rel_ids)
+
+        self._prune_communities(
+            workspace_id, tombstoned_ent_ids, tombstoned_rel_ids,
+            changed_ent_ids, changed_rel_ids,
+        )
+        # cleanup mapping + retire chunks
+        deleted_chunks = self._document_chunks[workspace_id].get(document_id, set())
+        self._retired_chunks[workspace_id].update(deleted_chunks)
+        self._document_chunks[workspace_id].pop(document_id, None)
         return count
+
+    async def is_document_tombstoned(self, workspace_id: str, document_id: str) -> bool:
+        self._ensure_ws(workspace_id)
+        return document_id in self._tombstoned_docs[workspace_id]
 
     async def delete_workspace(self, workspace_id: str) -> int:
         total = 0

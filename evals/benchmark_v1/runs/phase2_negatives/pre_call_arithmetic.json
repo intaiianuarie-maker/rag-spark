@@ -1,0 +1,19 @@
+{
+  "run_tag": "h1_reader_ab",
+  "computed_utc": "2026-10-17T20:20:45.832306+00:00",
+  "n_attempts": 25,
+  "shared_drafts": 25,
+  "arms": 2,
+  "max_repairs_per_arm": 1,
+  "metered_units_per_attempt": 3,
+  "worst_unit_usd": 0.00011097,
+  "worst_per_attempt_usd": 0.00033291,
+  "worst_total_usd": 0.008323,
+  "total_cap_usd": 2.0,
+  "spent_to_date_usd": 0.09476821,
+  "remaining_cap_usd": 1.905232,
+  "note": "Generation is free-first with paid fallback, so the worst case charges the PAID rate for every unit. P02 measured 16/16 fallbacks, so the free tier is not assumed to save anything.",
+  "verdict": "PROCEED",
+  "reader_prompt_variant": "baseline",
+  "slices": "negatives"
+}

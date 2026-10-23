@@ -43,7 +43,7 @@ from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
 
 
-def create_orchestrator():
+def create_orchestrator(*, sensitive: bool = False):
     """Module seam over answer.factory.create_orchestrator (patchable).
 
     Import stays function-local so adapter clients are only needed
@@ -51,7 +51,7 @@ def create_orchestrator():
     """
     from answer.factory import create_orchestrator as factory
 
-    return factory()
+    return factory(sensitive=sensitive)
 
 
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}", tags=["search"])
@@ -103,6 +103,7 @@ class SearchResponse(BaseModel):
     reason: str | None = None
     trace_id: str | None = None
     rerank_disclosure: str | None = None
+    filters_truncated: bool = False
 
 
 def build_search_filter(*, workspace_id: str, filters: SearchFilters) -> SearchFilter:
@@ -217,8 +218,14 @@ async def search(
             detail={"error": exc.code, "message": exc.message},
         ) from exc
 
+    from models.router_config import load_workspace_config as _load_ws_config
+
+    # T-A01b: carry the workspace egress policy into retrieval/embedding.
+    _ws_config = _load_ws_config(str(workspace_id))
+    _egress_sensitive = bool(_ws_config.sensitive) if _ws_config is not None else False
+
     # Seam above keeps adapter imports lazy (see create_orchestrator).
-    orchestrator = create_orchestrator()
+    orchestrator = create_orchestrator(sensitive=_egress_sensitive)
     acl_scope = ACLScope(
         user_id=principal.user_id,
         workspace_ids=[str(workspace_id)],
@@ -272,6 +279,11 @@ async def search(
         reason=outcome.reason or None,
         trace_id=outcome.trace_id or request_id_ctx.get(),
         rerank_disclosure=getattr(outcome, "rerank_disclosure", None) or None,
+        filters_truncated=(
+            len(narrowed) == 0
+            and len(results) > 0
+            and body.filters.date is not None
+        ),
     )
 
 

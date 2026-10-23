@@ -41,7 +41,6 @@ from .interfaces import (
     RunContext,
 )
 from .planner import (
-    FREE_MODELS,
     InMemoryPlanStore,
     PlanStore,
     StormPlan,
@@ -79,6 +78,19 @@ def _extract_chunk_ids(sentence: str) -> list[str]:
     """Extract chunk ids from explicit citations like [chunk-1] or [chk-1]."""
     matches = re.findall(r"\[([a-zA-Z0-9_\-\.:]+)\]", sentence)
     return [m for m in matches if not m.isdigit()]
+
+
+def _chunk_source_hash(content: str) -> str:
+    """Compute a deterministic source hash for canonical citation provenance.
+
+    T-A03: every citation carries a ``source_hash`` so re-verification after
+    a delete or version-replace can detect that the content backing the claim
+    changed. The hash is computed from the canonical chunk content at retrieval
+    time and stored on the citation.
+    """
+    import hashlib
+
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
 
 
 class ResearchPipeline:
@@ -156,15 +168,17 @@ class ResearchPipeline:
         target_q_count = min(max_questions or 3, effective_cfg.max_steps, MAX_RESEARCH_QUESTIONS)
         target_q_count = max(1, target_q_count)
 
-        planner_model = effective_cfg.model
-        if planner_model not in FREE_MODELS:
-            # Planner strictly enforces free-first policy
-            planner_model = "google/gemma-4-26b-a4b-it:free"
+        # T-GEMMA-001: Planner uses canonical Gemma route — free-first, paid
+        # fallback only after workspace budget check (fail-closed).
+        from .policy import resolve_gemma_route
+
+        planner_model = resolve_gemma_route(workspace_id)
 
         planner = StormPlanner(
             llm=self.llm,
             plan_store=self.plan_store,
             model_name=planner_model,
+            workspace_id=workspace_id,
         )
         plan: StormPlan = await planner.create_plan(
             clean_topic,
@@ -307,6 +321,9 @@ class ResearchPipeline:
                         document_id=q_chunk_map.get(cid, {}).get("document_id", ""),
                         chunk_id=cid,
                         quote=q_chunk_map.get(cid, {}).get("content", "")[:100],
+                        source_hash=_chunk_source_hash(
+                            q_chunk_map.get(cid, {}).get("content", "")
+                        ),
                     )
                     for cid in target_chunks
                 ]
@@ -324,6 +341,7 @@ class ResearchPipeline:
                     chunk_ids=target_chunks,
                     citations=citations,
                     verdict="SUPPORTED",
+                    source_hash=citations[0].source_hash if citations else "",
                 )
                 candidate_records.append((q_text, rec))
 

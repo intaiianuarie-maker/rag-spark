@@ -1,0 +1,178 @@
+{
+  "label": "MEASUREMENT (not a rubric score); no judge, 0 model calls, $0.00 spend",
+  "comparison": "same 150 frozen HotpotQA ids, R=1 both sides, identical shared-draft + OFF/ON grounder + repair protocol; ONLY the reader prompt differs",
+  "n_items_compared": 150,
+  "baseline_items_missing_from_revised_run": [
+    "04a065a60bde11eba7f7acde48001122",
+    "0b3b00db091111ebbdadac1f6bf848b6",
+    "0bc0459808e311ebbda4ac1f6bf848b6",
+    "0cc648c80bb011ebab90acde48001122",
+    "0f241f7e0baf11ebab90acde48001122",
+    "14c0d745089711ebbd76ac1f6bf848b6",
+    "15f03853087011ebbd62ac1f6bf848b6",
+    "164376040bde11eba7f7acde48001122",
+    "1948b12e0bda11eba7f7acde48001122",
+    "2000538808bb11ebbd88ac1f6bf848b6",
+    "20e9c822086d11ebbd61ac1f6bf848b6",
+    "23d9667a085011ebbd56ac1f6bf848b6",
+    "2839db3e087b11ebbd67ac1f6bf848b6",
+    "2bb5d08c089f11ebbd78ac1f6bf848b6",
+    "2f6c960c0bb011ebab90acde48001122",
+    "36979dce0bdc11eba7f7acde48001122",
+    "3d03e0260bde11eba7f7acde48001122",
+    "49774ef8085511ebbd59ac1f6bf848b6",
+    "4f84536c0bdd11eba7f7acde48001122",
+    "584ec9960bdd11eba7f7acde48001122",
+    "62a9691e0bb011ebab90acde48001122",
+    "6a953aae0bb011ebab90acde48001122",
+    "745fe50c089011ebbd72ac1f6bf848b6",
+    "76cacca20bde11eba7f7acde48001122",
+    "77f0ff4e0bb011ebab90acde48001122",
+    "7fe79ad1096911ebbdafac1f6bf848b6",
+    "8d0836540bdd11eba7f7acde48001122",
+    "9558f80608cf11ebbd95ac1f6bf848b6",
+    "960f40120bdd11eba7f7acde48001122",
+    "962889100baf11ebab90acde48001122",
+    "9682ccf8087c11ebbd6aac1f6bf848b6",
+    "9c145b7b086b11ebbd5fac1f6bf848b6",
+    "9e63943b085811ebbd5bac1f6bf848b6",
+    "aa9d6da20baf11ebab90acde48001122",
+    "c4c544bd091211ebbdadac1f6bf848b6",
+    "c5114ec8089011ebbd72ac1f6bf848b6",
+    "cafd9a02089b11ebbd78ac1f6bf848b6",
+    "dab62b000baf11ebab90acde48001122",
+    "e1d634920bdd11eba7f7acde48001122",
+    "e1d7b56c0bae11ebab90acde48001122",
+    "e3333830088111ebbd6dac1f6bf848b6",
+    "e3ca509e093511ebbdaeac1f6bf848b6",
+    "e525d2da0bae11ebab90acde48001122",
+    "e765d558090911ebbdadac1f6bf848b6",
+    "eb3ff1900baf11ebab90acde48001122",
+    "f4d06fc9088011ebbd6dac1f6bf848b6",
+    "faedda9a0bdb11eba7f7acde48001122",
+    "fd201cb6085b11ebbd5cac1f6bf848b6"
+  ],
+  "before_baseline_prompt": {
+    "n_items": 150,
+    "refusals": 26,
+    "refusal_rate": 0.1733,
+    "false_refusals": 24,
+    "false_refusal_rate_all_items": 0.16,
+    "false_refusal_share_of_refusals": 0.9231,
+    "answered": 124,
+    "answer_em": {
+      "off": 0.0067,
+      "on": 0.02
+    },
+    "answer_f1": {
+      "off": 0.064,
+      "on": 0.2055
+    },
+    "citation_validity": {
+      "off": 0.3267,
+      "on": 0.8067
+    }
+  },
+  "after_revised_prompt": {
+    "n_items": 150,
+    "refusals": 4,
+    "refusal_rate": 0.0267,
+    "false_refusals": 4,
+    "false_refusal_rate_all_items": 0.0267,
+    "false_refusal_share_of_refusals": 1.0,
+    "answered": 146,
+    "answer_em": {
+      "off": 0.0,
+      "on": 0.0
+    },
+    "answer_f1": {
+      "off": 0.0718,
+      "on": 0.1713
+    },
+    "citation_validity": {
+      "off": 0.4267,
+      "on": 0.9467
+    }
+  },
+  "refusal_shift": {
+    "refused_before_and_answered_after": 22,
+    "answered_before_and_refused_after": 0,
+    "net_refusals_removed": 22,
+    "newly_refused_item_ids": [],
+    "recovered_item_ids": [
+      "5a7345185542992359bc32cb",
+      "5a7b581a5542992d025e6815",
+      "5a7cd0fd55429909bec76823",
+      "5a84f06f5542994c784dda92",
+      "5a875fee5542996e4f3087ab",
+      "5a88a8f4554299206df2b320",
+      "5a8ae5d355429970aeb70325",
+      "5a8ce15d554299653c1aa12f",
+      "5a8d9de2554299068b959d62",
+      "5a8e32d35542995a26add480",
+      "5a8ec55f5542995a26add50c",
+      "5ab2ac3d55429929539467ce",
+      "5ab502ae5542991779162d4c",
+      "5ab953a45542996be202047f",
+      "5abaa954554299232ef4a362",
+      "5abc25b6554299700f9d77f9",
+      "5ac02b325542992a796decb9",
+      "5ac43e0f554299076e296d8e",
+      "5adbe1c5554299438c868cc4",
+      "5adf32165542993344016c15"
+    ]
+  },
+  "answer_f1_delta_revised_minus_baseline": {
+    "off": 0.0078,
+    "on": -0.0342
+  },
+  "f1_decomposition": {
+    "off": {
+      "rescued_items": {
+        "n": 22,
+        "baseline_f1": 0.0,
+        "baseline_note": "these were refusals, so F1 was 0.0 by construction",
+        "revised_f1": 0.1049,
+        "revised_n_answered": 6,
+        "revised_mean_answer_words": 29.8,
+        "effect_on_total": "POSITIVE (0.0 -> above)"
+      },
+      "already_answered_in_both": {
+        "n": 128,
+        "baseline_f1": 0.196,
+        "revised_f1": 0.1747,
+        "shift": -0.0213,
+        "baseline_mean_answer_words": 24.8,
+        "revised_mean_answer_words": 23.8
+      }
+    },
+    "on": {
+      "rescued_items": {
+        "n": 22,
+        "baseline_f1": 0.0,
+        "baseline_note": "these were refusals, so F1 was 0.0 by construction",
+        "revised_f1": 0.1251,
+        "revised_n_answered": 18,
+        "revised_mean_answer_words": 25.4,
+        "effect_on_total": "POSITIVE (0.0 -> above)"
+      },
+      "already_answered_in_both": {
+        "n": 128,
+        "baseline_f1": 0.2548,
+        "revised_f1": 0.1891,
+        "shift": -0.0657,
+        "baseline_mean_answer_words": 20.6,
+        "revised_mean_answer_words": 22.9
+      }
+    },
+    "_reading": "Any F1 regression is attributable to the already-answered items, not to the rescued ones: the revision lengthens answers (verbosity), and token-F1 against short gold spans is diluted by extra words. The rescued items all gained."
+  },
+  "f1_no_regression_check": {
+    "verdict": "REGRESSION",
+    "arms_regressed": [
+      "on"
+    ],
+    "note": "F1 is averaged over ALL 150 items with refusals scored 0, exactly as in T-E01, so a refusal that becomes a correct answer raises F1 rather than rewarding silence."
+  },
+  "verdict_summary": "refusal 0.1733 -> 0.0267; false refusals 24 -> 4; answer F1 delta OFF 0.0078 / ON -0.0342"
+}

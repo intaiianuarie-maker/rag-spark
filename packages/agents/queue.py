@@ -44,7 +44,9 @@ def _prefix() -> str:
 
         return f"{get_settings().app_env}:"
     except Exception:
-        return "test:"
+        import os as _os
+
+        return f"{_os.environ.get('APP_ENV', 'prod')}-fallback:"
 
 
 def queue_key() -> str:

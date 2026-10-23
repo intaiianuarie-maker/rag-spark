@@ -182,7 +182,13 @@ def test_workspace_config_absent_degrades_to_no_rules(monkeypatch):
 
 def test_workspace_config_unparseable_degrades_safely(monkeypatch):
     monkeypatch.setenv(WORKSPACE_MODEL_CONFIG_ENV, "{not json")
-    assert load_workspace_config(_WS) is None  # no crash, no fabricated rules
+    cfg = load_workspace_config(_WS)
+    assert cfg is not None and cfg.sensitive is True  # veto stays on
+
+def test_workspace_config_malformed_payload_keeps_veto(monkeypatch):
+    monkeypatch.setenv(WORKSPACE_MODEL_CONFIG_ENV, json.dumps("not-a-dict"))
+    cfg = load_workspace_config(_WS)
+    assert cfg is not None and cfg.sensitive is True
 
 
 def test_workspace_config_ignores_other_workspaces(monkeypatch):
@@ -211,7 +217,7 @@ async def _ask(monkeypatch, *, override_model: str | None = None):
 
     engine = _FakeEngine()
 
-    def _factory(*, model: str):
+    def _factory(*, model: str, sensitive: bool = False):
         engine.model = model
         return engine
 

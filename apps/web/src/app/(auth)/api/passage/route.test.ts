@@ -22,7 +22,7 @@ import {
   buildPassageUpstreamUrl,
   normalizePassage,
   readPassageParams,
-} from "./route";
+} from "./handlers";
 
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
 

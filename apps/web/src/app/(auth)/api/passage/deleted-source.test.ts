@@ -15,7 +15,7 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({ get: cookieGetMock })),
 }));
 
-import { GET, buildDocumentUpstreamUrl, readPassageParams } from "./route";
+import { GET, buildDocumentUpstreamUrl, readPassageParams } from "./handlers";
 
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
 

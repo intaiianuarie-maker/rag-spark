@@ -1,0 +1,227 @@
+{
+  "tested_at_utc": "2026-10-16T12:17:03.176249+00:00",
+  "test_type": "bounded synthetic smoke; no automatic model/provider fallback; one request per test",
+  "results": [
+    {
+      "test": "generation_free_ro_en",
+      "requested_model": "google/gemma-4-26b-a4b-it:free",
+      "provider_policy": {
+        "only": [
+          "google-ai-studio"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 429,
+      "error": {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+          "raw": "google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations",
+          "provider_name": "Google AI Studio",
+          "is_byok": false,
+          "provider_error_code": "429",
+          "limit_source": "upstream_provider_shared_pool",
+          "remedy_hint": "Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"
+        }
+      },
+      "latency_seconds": 0.705
+    },
+    {
+      "test": "generation_paid_ro_en",
+      "requested_model": "google/gemma-4-26b-a4b-it",
+      "provider_policy": {
+        "only": [
+          "cloudflare"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 429,
+      "error": {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+          "raw": "google/gemma-4-26b-a4b-it is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations",
+          "provider_name": "Cloudflare",
+          "is_byok": false,
+          "limit_source": "upstream_provider_shared_pool",
+          "remedy_hint": "Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"
+        }
+      },
+      "latency_seconds": 5.31
+    },
+    {
+      "test": "semantic_verification_free",
+      "requested_model": "google/gemma-4-26b-a4b-it:free",
+      "provider_policy": {
+        "only": [
+          "google-ai-studio"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 429,
+      "error": {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+          "raw": "google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations",
+          "provider_name": "Google AI Studio",
+          "is_byok": false,
+          "provider_error_code": "429",
+          "limit_source": "upstream_provider_shared_pool",
+          "remedy_hint": "Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"
+        }
+      },
+      "latency_seconds": 0.706
+    },
+    {
+      "test": "semantic_verification_paid",
+      "requested_model": "google/gemma-4-26b-a4b-it",
+      "provider_policy": {
+        "only": [
+          "cloudflare"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 429,
+      "error": {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+          "raw": "google/gemma-4-26b-a4b-it is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations",
+          "provider_name": "Cloudflare",
+          "is_byok": false,
+          "limit_source": "upstream_provider_shared_pool",
+          "remedy_hint": "Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"
+        }
+      },
+      "latency_seconds": 4.805
+    },
+    {
+      "test": "vision_paid",
+      "requested_model": "google/gemma-4-26b-a4b-it",
+      "provider_policy": {
+        "only": [
+          "cloudflare"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 404,
+      "error": {
+        "message": "No allowed providers are available for the selected model. Providers serving google/gemma-4-26b-a4b-it-20260403: darkbloom, dekallm, nextbit, io-net, makora, coreweave, venice, parasail, novita, siliconflow, google-vertex, but your request's provider.only preference permits only: cloudflare.",
+        "code": 404,
+        "metadata": {
+          "available_providers": [
+            "darkbloom",
+            "dekallm",
+            "nextbit",
+            "io-net",
+            "makora",
+            "coreweave",
+            "venice",
+            "parasail",
+            "novita",
+            "siliconflow",
+            "google-vertex"
+          ],
+          "requested_providers": [
+            "cloudflare"
+          ],
+          "routing_funnel": [
+            {
+              "step": "Initial Endpoints",
+              "endpoint_count": 13
+            },
+            {
+              "step": "Filter by Image Support",
+              "endpoint_count": 11
+            }
+          ],
+          "failed_routing_step": "Filter by Allowed Providers"
+        }
+      },
+      "latency_seconds": 0.054
+    },
+    {
+      "test": "embedding_paid",
+      "requested_model": "google/gemini-embedding-2",
+      "provider_policy": {
+        "only": [
+          "google-vertex/eu"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 404,
+      "error": {
+        "message": "No allowed providers are available for the selected model. Providers serving google/gemini-embedding-2: google-ai-studio, but your request's provider.only preference permits only: google-vertex/eu.",
+        "code": 404,
+        "metadata": {
+          "available_providers": [
+            "google-ai-studio"
+          ],
+          "requested_providers": [
+            "google-vertex/eu"
+          ],
+          "routing_funnel": [
+            {
+              "step": "Initial Endpoints",
+              "endpoint_count": 4
+            },
+            {
+              "step": "Filter Vertex Prompt-Prefix by Batch Support",
+              "endpoint_count": 1
+            }
+          ],
+          "failed_routing_step": "Filter by Allowed Providers"
+        }
+      },
+      "latency_seconds": 0.213
+    },
+    {
+      "test": "rerank_nemotron_free",
+      "requested_model": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+      "provider_policy": {
+        "only": [
+          "nvidia"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "http_status": 200,
+      "response_id": "gen-rerank-1792153018-LZDA6l0PA8frgA6IFt4Q",
+      "returned_model": "nvidia/llama-nemotron-rerank-vl-1b-v2",
+      "provider": "Nvidia",
+      "usage": {
+        "total_tokens": 74,
+        "cost": 0
+      },
+      "ranked": [
+        {
+          "index": 1,
+          "score": 0.9802052211384412
+        },
+        {
+          "index": 2,
+          "score": 0.00013982207564732912
+        },
+        {
+          "index": 0,
+          "score": 9.387641443080781e-05
+        }
+      ],
+      "passed": true,
+      "latency_seconds": 0.244
+    }
+  ]
+}

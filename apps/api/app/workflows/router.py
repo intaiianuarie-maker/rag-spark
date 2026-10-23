@@ -17,13 +17,16 @@ Append-only and store invariants are never swallowed, returning HTTP 409 / 413 /
 
 from __future__ import annotations
 
+import asyncio
 import uuid
 from datetime import UTC, datetime
+from pathlib import Path
 
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from workflow_engine.adapters.langflow_adapter import LangflowAdapter, LangflowImportError
-from workflow_engine.checkpoint import InMemoryCheckpointStore
+from workflow_engine.adapters.v3_adapter import resolve_node_executor
+from workflow_engine.checkpoint import SqliteCheckpointStore
 from workflow_engine.compiler import WorkflowCompiler
 from workflow_engine.draft_store import (
     DraftConflictError,
@@ -34,12 +37,11 @@ from workflow_engine.draft_store import (
 )
 from workflow_engine.executor import WorkflowExecutor
 from workflow_engine.interfaces import (
-    CapabilityManifest,
-    NodeType,
     WorkflowDefinition,
     WorkflowRun,
     WorkflowRunStatus,
 )
+from workflow_engine.manifest import PRODUCTION_CAPABILITY_MANIFEST
 from workflow_engine.production_executor import ProductionNodeExecutor
 from workflow_engine.routes.schemas import (
     DraftErrorCode,
@@ -69,9 +71,13 @@ from app.workflows.schemas import (
 )
 from app.workflows.store import (
     cancel_run,
+    clear_dispatch,
     get_draft_store,
     get_run,
+    persist_run,
     record_approval,
+    register_dispatch,
+    register_run,
     save_run,
 )
 
@@ -466,10 +472,7 @@ async def validate_workflow(
             },
         )
 
-    manifest = CapabilityManifest(
-        supported_node_types=set(NodeType),
-        enabled_capabilities={"knowledge_search", "document_read", "llm_generate"},
-    )
+    manifest = PRODUCTION_CAPABILITY_MANIFEST
     result = WorkflowValidator.validate(definition, manifest)
     annotations = build_annotations(result)
 
@@ -578,10 +581,7 @@ async def approve_workflow(
         raise _handle_store_error(exc) from exc
 
     # Validate definition before approval
-    manifest = CapabilityManifest(
-        supported_node_types=set(NodeType),
-        enabled_capabilities={"knowledge_search", "document_read", "llm_generate"},
-    )
+    manifest = PRODUCTION_CAPABILITY_MANIFEST
     val_result = WorkflowValidator.validate(draft.spec, manifest)
     if not val_result.valid:
         raise HTTPException(
@@ -634,6 +634,14 @@ async def run_workflow(
     except AuthorizationError as exc:
         raise _handle_store_error(exc) from exc
 
+    try:
+        checkpoint_db_path()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": "checkpoint_unavailable", "message": str(exc)},
+        ) from exc
+
     store = get_draft_store()
     loaded_run_draft: DraftRevision | None = None
     try:
@@ -650,35 +658,120 @@ async def run_workflow(
     run_id = f"wfrun-{uuid.uuid4().hex[:8]}"
 
     try:
-        plan = WorkflowCompiler.compile(draft.revision)
-        executor = WorkflowExecutor(node_executor=ProductionNodeExecutor())
-        executor.configure_checkpoint_store(InMemoryCheckpointStore())
-        run = await executor.execute(
-            plan,
-            draft.revision,
-            initial_input=request.inputs,
-            run_id=run_id,
-        )
+        try:
+            plan = WorkflowCompiler.compile(draft.revision)
+        except Exception as exc:
+            # Invalid definition: refuse as HTTP 422 with a safe, no-raw-text message.
+            safe = "invalid workflow definition"
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail={"error": "invalid_definition", "message": safe},
+            ) from exc
+        try:
+            node_executor = resolve_node_executor(default_factory=ProductionNodeExecutor)
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "v3_adapter_unconfigured", "message": str(exc)},
+            ) from exc
+        executor = WorkflowExecutor(node_executor=node_executor)
+        try:
+            executor.configure_checkpoint_store(SqliteCheckpointStore(checkpoint_db_path()))
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail={"error": "checkpoint_unavailable", "message": str(exc)},
+            ) from exc
+    except HTTPException:
+        raise
     except Exception as exc:
+        # Compile/executor wiring failure: coded error, raw text stays server-side.
+        safe_code = "runtime_failure"
         run = WorkflowRun(
             id=run_id,
             workspace_id=workspace_id,
             workflow_id=workflow_id,
             status=WorkflowRunStatus.FAILED,
-            error=str(exc),
+            error=f"{safe_code}: {type(exc).__name__}",
             created_at=datetime.now(UTC).isoformat(),
             finished_at=datetime.now(UTC).isoformat(),
         )
-        executor = None
+        save_run(run, None)
+        timeline = build_timeline(run)
+        return WorkflowRunResponse(run=run, timeline=timeline)
 
-    save_run(run, executor)
-    timeline = build_timeline(run)
-    return WorkflowRunResponse(run=run, timeline=timeline)
+    # T-A16: register the run row AND its cancel handle BEFORE dispatch, so the
+    # run id exists and status/cancel can control the in-flight run. Previously
+    # the route awaited execute() first, leaving no run id and no cancel surface.
+    initial_run = WorkflowRun(
+        id=run_id,
+        workspace_id=workspace_id,
+        workflow_id=workflow_id,
+        status=WorkflowRunStatus.RUNNING,
+        initial_input=request.inputs,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    register_run(initial_run, executor)
+
+    async def _supervise_run() -> None:
+        """Execute and persist the final state; never raise into the loop."""
+        try:
+            final_run = await executor.execute(
+                plan,
+                draft.revision,
+                initial_input=request.inputs,
+                run_id=run_id,
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            # Node/runtime failure: coded error, raw text stays server-side.
+            safe_code = "runtime_failure"
+            final_run = WorkflowRun(
+                id=run_id,
+                workspace_id=workspace_id,
+                workflow_id=workflow_id,
+                status=WorkflowRunStatus.FAILED,
+                initial_input=request.inputs,
+                error=f"{safe_code}: {type(exc).__name__}",
+                created_at=initial_run.created_at,
+                finished_at=datetime.now(UTC).isoformat(),
+            )
+        # Monotonic: a run already CANCELLED by the API keeps CANCELLED.
+        stored = get_run(workspace_id, run_id)
+        if stored is not None and stored.status == WorkflowRunStatus.CANCELLED:
+            final_run = final_run.model_copy(
+                update={
+                    "status": WorkflowRunStatus.CANCELLED,
+                    "error": stored.error or final_run.error,
+                    "finished_at": stored.finished_at or final_run.finished_at,
+                }
+            )
+        persist_run(final_run, executor)
+
+    task = asyncio.create_task(_supervise_run())
+    register_dispatch(run_id, task)
+    task.add_done_callback(lambda _t: clear_dispatch(run_id))
+
+    timeline = build_timeline(initial_run)
+    return WorkflowRunResponse(run=initial_run, timeline=timeline)
 
 
 # --------------------------------------------------------------------------- #
 # 7. STATUS Handler
 # --------------------------------------------------------------------------- #
+
+
+
+def checkpoint_db_path() -> Path:
+    """Resolve the durable checkpoint DB path (fail-closed)."""
+    import os
+
+    raw = os.environ.get("WORKFLOW_CHECKPOINT_DB")
+    if raw is None or not raw.strip():
+        raise ValueError("WORKFLOW_CHECKPOINT_DB is required")
+    return Path(raw.strip())
+
 
 
 @router.get(
@@ -768,7 +861,13 @@ async def cancel_workflow_run(
             },
         )
 
-    updated_run = cancel_run(workspace_id, run_id)
+    try:
+        updated_run = cancel_run(workspace_id, run_id)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={"error": "no_live_executor", "message": str(exc)},
+        ) from exc
     if updated_run is None:
         updated_run = run
 

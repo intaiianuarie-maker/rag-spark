@@ -1,0 +1,158 @@
+{
+  "label": "MEASUREMENT (not a rubric score); no judge, 0 model calls, $0.00 spend",
+  "comparison": "same 150 frozen HotpotQA ids, R=1, identical shared-draft + OFF/ON grounder + repair protocol across all three variants; ONLY the reader prompt differs",
+  "n_items_compared": 150,
+  "variants": {
+    "baseline": {
+      "n_items": 150,
+      "refusals": 26,
+      "refusal_rate": 0.1733,
+      "false_refusals": 24,
+      "answered": 124,
+      "answer_em": {
+        "off": 0.0067,
+        "on": 0.02
+      },
+      "answer_f1": {
+        "off": 0.064,
+        "on": 0.2055
+      },
+      "citation_validity": {
+        "off": 0.3267,
+        "on": 0.8067
+      },
+      "mean_answer_words": {
+        "off": 24.8163,
+        "on": 20.6446
+      },
+      "n_answers_counted_for_words": {
+        "off": 49,
+        "on": 121
+      }
+    },
+    "revised": {
+      "n_items": 150,
+      "refusals": 4,
+      "refusal_rate": 0.0267,
+      "false_refusals": 4,
+      "answered": 146,
+      "answer_em": {
+        "off": 0.0,
+        "on": 0.0
+      },
+      "answer_f1": {
+        "off": 0.0718,
+        "on": 0.1713
+      },
+      "citation_validity": {
+        "off": 0.4267,
+        "on": 0.9467
+      },
+      "mean_answer_words": {
+        "off": 24.3594,
+        "on": 23.2465
+      },
+      "n_answers_counted_for_words": {
+        "off": 64,
+        "on": 142
+      }
+    },
+    "capped": {
+      "n_items": 150,
+      "refusals": 9,
+      "refusal_rate": 0.06,
+      "false_refusals": 7,
+      "answered": 141,
+      "answer_em": {
+        "off": 0.0067,
+        "on": 0.0067
+      },
+      "answer_f1": {
+        "off": 0.122,
+        "on": 0.3861
+      },
+      "citation_validity": {
+        "off": 0.32,
+        "on": 0.92
+      },
+      "mean_answer_words": {
+        "off": 9.9167,
+        "on": 8.6377
+      },
+      "n_answers_counted_for_words": {
+        "off": 48,
+        "on": 138
+      }
+    }
+  },
+  "mean_answer_words_by_variant": {
+    "off": {
+      "baseline": 24.8163,
+      "revised": 24.3594,
+      "capped": 9.9167,
+      "band": [
+        18.58,
+        22.71
+      ],
+      "capped_in_band": false,
+      "revised_in_band": false,
+      "capped_minus_baseline": -14.9
+    },
+    "on": {
+      "baseline": 20.6446,
+      "revised": 23.2465,
+      "capped": 8.6377,
+      "band": [
+        18.58,
+        22.71
+      ],
+      "capped_in_band": false,
+      "revised_in_band": false,
+      "capped_minus_baseline": -12.01
+    }
+  },
+  "length_band_definition": "baseline ON mean 20.6446 words +/-10% => [18.58, 22.71] words",
+  "deltas": {
+    "capped_vs_baseline": {
+      "off": {
+        "answer_em": 0.0,
+        "answer_f1": 0.058,
+        "citation_validity": -0.0067,
+        "refusal_rate": -0.1133,
+        "mean_answer_words": -14.9
+      },
+      "on": {
+        "answer_em": -0.0133,
+        "answer_f1": 0.1806,
+        "citation_validity": 0.1133,
+        "refusal_rate": -0.1133,
+        "mean_answer_words": -12.01
+      }
+    },
+    "capped_vs_revised": {
+      "off": {
+        "answer_em": 0.0067,
+        "answer_f1": 0.0502,
+        "citation_validity": -0.1067,
+        "refusal_rate": 0.0333,
+        "mean_answer_words": -14.44
+      },
+      "on": {
+        "answer_em": 0.0067,
+        "answer_f1": 0.2148,
+        "citation_validity": -0.0267,
+        "refusal_rate": 0.0333,
+        "mean_answer_words": -14.61
+      }
+    }
+  },
+  "ticket_verdict": {
+    "refusal_holding_fixed": false,
+    "length_back_in_band": false,
+    "answer_f1_at_or_above_baseline": {
+      "off": true,
+      "on": true
+    },
+    "verdict": "VERDICT: NOT both -- see length_back_in_band / refusal_holding_fixed"
+  }
+}

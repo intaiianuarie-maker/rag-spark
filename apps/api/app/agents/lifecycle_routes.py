@@ -19,10 +19,12 @@ Provides HTTP endpoints enforcing server policy:
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import uuid
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from pathlib import Path
+from typing import Any, NamedTuple
 
 from agents.interfaces import (
     AgentErrorCode,
@@ -53,6 +55,402 @@ from app.authz.principal import get_principal
 
 subrouter = APIRouter(tags=["agent-lifecycle"])
 router = APIRouter(prefix="/v1/workspaces/{workspace_id}/agent", tags=["agent-lifecycle"])
+
+
+# ---------------------------------------------------------------------------
+# Durable agent store readiness (T-IMP-001, POLICE F4a/F4b)
+# ---------------------------------------------------------------------------
+
+#: Environments where a process-local (in-memory) agent store is tolerated.
+#: Production and staging must use the shared durable store: an in-memory
+#: queue accepts runs that no other process can consume (review 2026-10-19
+#: finding 4: parent depth 1, independent worker depth 0).
+LOCAL_ENVIRONMENTS = frozenset({"local", "test", "ci", ""})
+
+#: Default shared root of the durable agent store. In the compose deployment
+#: this is the named volume mounted into BOTH api and worker
+#: (``agentdata:/app/.agent``); a path outside it is not shared storage.
+DEFAULT_AGENT_STORE_SHARED_ROOT = "/app/.agent"
+
+#: The source bind mounts the compose deployment puts inside the container
+#: image tree. A shared root that covers one of them is NOT shared storage:
+#: the agent volume is only present where nothing else is bound, so the store
+#: file would live in a per-container filesystem and api and worker would
+#: open different files (POLICE F4b, P2 shadowing finding).
+CONTAINER_BIND_MOUNTS = ("/app/apps/api", "/app/apps/worker", "/app/packages")
+
+#: The mount table the readiness consults. Overridable so the definitions can
+#: be probed with a synthetic mountinfo file (no container required).
+MOUNTINFO_PATH_ENV = "AGENT_STORE_MOUNTINFO"
+DEFAULT_MOUNTINFO_PATH = "/proc/self/mountinfo"
+
+
+class AgentStoreReadiness(NamedTuple):
+    """Resolved readiness of the durable agent store.
+
+    * ``admit``  - a queued run may be accepted (the store is durable and,
+      in production/staging, shared between api and worker).
+    * ``shared`` - the configured path lives inside the shared root.
+    * ``reason`` - machine-readable reason for the verdict.
+    * ``path``   - the configured durable path ("" when unset).
+    * ``environment`` - the RESOLVED application environment.
+    """
+
+    admit: bool
+    shared: bool
+    reason: str
+    path: str
+    environment: str
+
+
+def agent_store_readiness() -> AgentStoreReadiness:
+    """Resolve the durable agent-store readiness (fail-closed).
+
+    The environment comes from the RESOLVED application settings (process
+    environment or ``.env``), never from a raw ``os.environ`` read that can
+    disagree with the running application (POLICE F4a: a ``.env`` with
+    ``APP_ENV=production`` used to log production while admitting runs into
+    a process-local queue).
+
+    A configured path is only *shared* when it lives inside the shared root
+    (``AGENT_STORE_SHARED_ROOT``, default ``/app/.agent``). In production and
+    staging an unshared path is refused: two containers with the same
+    relative path have two different filesystems (POLICE F4b).
+    """
+    from core.config import get_settings
+
+    settings = get_settings()
+    environment = str(settings.app_env).strip().lower()
+    raw_path = os.environ.get("AGENT_STORE_DB", "").strip()
+    local = environment in LOCAL_ENVIRONMENTS
+
+    if not raw_path:
+        return AgentStoreReadiness(
+            admit=local,
+            shared=False,
+            reason="agent_store_not_configured",
+            path="",
+            environment=environment,
+        )
+
+    # ONE normalized path flow: the RAW absolute paths are validated here and
+    # the very same Path objects are used for every check below and for the
+    # store location itself (POLICE F4b, P2: a partial expansion at
+    # validation time and the raw string at use time opened two different
+    # databases).
+    db_path = _absolute_path(raw_path)
+    root_path = _absolute_path(shared_root())
+    if db_path is None or root_path is None:
+        # A relative or tilde-relative path is working-directory dependent:
+        # two processes started from different directories would open
+        # different databases while both reporting the store as shared.
+        return AgentStoreReadiness(
+            admit=False,
+            shared=False,
+            reason="agent_store_path_not_absolute",
+            path=raw_path,
+            environment=environment,
+        )
+
+    if root_is_shadowed(root_path):
+        return AgentStoreReadiness(
+            admit=local,
+            shared=False,
+            reason=(
+                "agent_store_root_shadowed_dev_only"
+                if local
+                else "agent_store_root_shadowed"
+            ),
+            path=str(db_path),
+            environment=environment,
+        )
+
+    declared_mount = shared_mount_target()
+    if declared_mount:
+        mount_path = _absolute_path(declared_mount)
+        if mount_path is None or not _same_path(mount_path, root_path):
+            # The declared mount is not the resolved root: the store would
+            # live somewhere the other process cannot see.
+            return AgentStoreReadiness(
+                admit=local,
+                shared=False,
+                reason="agent_store_root_not_mounted",
+                path=str(db_path),
+                environment=environment,
+            )
+        # A DECLARED shared mount must be proven by a readable mount table
+        # that contains an entry AT that mount point. Without the evidence
+        # the store may be a per-container file (POLICE F4b, P2).
+        if not mount_evidence_ok(mount_path):
+            return AgentStoreReadiness(
+                admit=local,
+                shared=False,
+                reason=(
+                    "agent_store_mount_unverified_dev_only"
+                    if local
+                    else "agent_store_mount_unverified"
+                ),
+                path=str(db_path),
+                environment=environment,
+            )
+
+    shared = _is_inside(db_path, root_path) and root_is_mounted(root_path)
+    if shared:
+        return AgentStoreReadiness(
+            admit=True,
+            shared=True,
+            reason="agent_store_shared",
+            path=str(db_path),
+            environment=environment,
+        )
+    reason = (
+        "agent_store_unshared_dev_only"
+        if local
+        else "agent_store_unshared"
+    )
+    if not root_is_mounted(root_path):
+        reason = (
+            "agent_store_root_not_mounted_dev_only"
+            if local
+            else "agent_store_root_not_mounted"
+        )
+    return AgentStoreReadiness(
+        admit=local,
+        shared=False,
+        reason=reason,
+        path=str(db_path),
+        environment=environment,
+    )
+
+
+def _absolute_path(value: str) -> Path | None:
+    """Return the RAW absolute path, or None when the value is not absolute.
+
+    The RAW value is validated (``Path(value).is_absolute()``) and NEVER
+    expanded:
+
+    - A RELATIVE path is resolved against the PROCESS working directory: an
+      api and a worker started from different directories would open two
+      different databases while both believe the store is shared (reproduced:
+      api 202 + queue depth 1, fresh worker depth 0 / claim None).
+    - A TILDE-RELATIVE value ("~/state", "~root/state") is not raw-absolute.
+      Expanding it at validation time while using the raw string later would
+      open a literal "~" directory relative to the working directory — again
+      two different databases for two processes.
+
+    A raw-absolute path that merely CONTAINS a tilde component (e.g.
+    ``/app/dist/~archive/state``) is absolute and stays valid: the tilde is
+    an ordinary path character there.
+
+    The returned Path is the ONE normalized object used everywhere afterwards
+    (db location, shared root, mount comparison), so validation and use can
+    never diverge (POLICE F4b, P2).
+    """
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        return None
+    return path
+
+
+def _same_path(left: str | Path, right: str | Path) -> bool:
+    """Return True when both paths resolve to the same location."""
+    try:
+        return Path(left).resolve() == Path(right).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+
+
+def shared_root() -> str:
+    """Return the shared root the durable agent store must live in."""
+    return os.environ.get("AGENT_STORE_SHARED_ROOT", "").strip() or (
+        DEFAULT_AGENT_STORE_SHARED_ROOT
+    )
+
+
+def shared_mount_target() -> str:
+    """Return the path the shared agent volume is actually mounted at.
+
+    The compose deployment mounts the ``agentdata`` named volume at the
+    RESOLVED shared root in BOTH services, so the two are equal by
+    construction. When they disagree (a hand-built deployment that overrides
+    the root without moving the mount) the store is NOT shared storage and
+    the readiness must not report ``shared=True`` (POLICE F4b).
+    """
+    return os.environ.get("AGENT_STORE_SHARED_MOUNT", "").strip()
+
+
+def root_is_mounted(root: str | Path) -> bool:
+    """Return True when ``root`` is the mounted shared volume.
+
+    Unknown (no declared mount target) counts as mounted: outside the
+    compose deployment the api and worker processes share one host
+    filesystem, and the deployment contract is the operator's.
+    """
+    mount_target = shared_mount_target()
+    if not mount_target:
+        return True
+    try:
+        return Path(mount_target).resolve() == Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+
+
+def _is_inside(path: str | Path, root: str | Path) -> bool:
+    """Return True when ``path`` resolves inside ``root``."""
+    try:
+        resolved = Path(path).resolve()
+        resolved_root = Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+    return resolved == resolved_root or resolved_root in resolved.parents
+
+def shadow_mounts() -> list[str]:
+    """Return the mount targets that can shadow the shared agent volume.
+
+    The compose deployment bind-mounts the api/worker sources and the shared
+    graph/workflow volumes into the container. When the resolved shared root
+    covers one of those subtrees, the agent volume is only present where
+    nothing else is bound: the store file would live in a per-container
+    filesystem and the two processes would open different files
+    (POLICE F4b, P2 shadowing finding).
+    """
+    raw = os.environ.get("AGENT_STORE_SHADOW_MOUNTS", "").strip()
+    return [item.strip() for item in raw.split(",") if item.strip()]
+
+
+def _unescape_mountinfo_path(value: str) -> str:
+    """Decode the kernel's octal escapes in ONE pass.
+
+    The kernel escapes the characters that would break the whitespace
+    separated mountinfo format: space (\\040), tab (\\011), newline
+    (\\012) and backslash (\\134) are written as octal sequences. Decoding
+    only the space escape misses a nested mount under a root that contains a
+    backslash or a tab, so the store would be admitted while it actually
+    lives on a shadowed filesystem (POLICE F4b, P2).
+
+    The pass is left to right and the decoded bytes are never re-scanned, so
+    a literal ``\\134040`` decodes to ``\\040`` (a backslash followed by
+    "040") and not to a space (Moby ``sys/mountinfo`` semantics).
+    """
+    if "\\" not in value:
+        return value
+    out: list[str] = []
+    index = 0
+    length = len(value)
+    while index < length:
+        char = value[index]
+        if char != "\\":
+            out.append(char)
+            index += 1
+            continue
+        if index + 3 < length and all(
+            c in "01234567" for c in value[index + 1 : index + 4]
+        ):
+            out.append(chr(int(value[index + 1 : index + 4], 8)))
+            index += 4
+            continue
+        if index + 1 < length and value[index + 1] in " \t\n":
+            out.append(value[index + 1])
+            index += 2
+            continue
+        out.append(char)
+        index += 1
+    return "".join(out)
+
+
+def _mount_points() -> list[str]:
+    """Return the mount points of this process (best effort).
+
+    The mount table can be redirected with ``AGENT_STORE_MOUNTINFO`` so the
+    definitions can be probed with a synthetic mountinfo file (no container
+    required). An unreadable table yields NO points: a declared shared mount
+    then has no evidence and is refused.
+    """
+    path = (
+        os.environ.get(MOUNTINFO_PATH_ENV, "").strip() or DEFAULT_MOUNTINFO_PATH
+    )
+    try:
+        with open(path, encoding="utf-8") as handle:
+            points = []
+            for line in handle:
+                fields = line.split(" ")
+                # 5th field is the mount point (octal escaped by the kernel).
+                if len(fields) > 4:
+                    points.append(_unescape_mountinfo_path(fields[4]))
+            return points
+    except OSError:  # pragma: no cover - not Linux / unreadable
+        return []
+
+
+def mount_evidence_ok(target: str | Path) -> bool:
+    """Return True when the mount table proves the intended mount exists.
+
+    A DECLARED shared mount (``AGENT_STORE_SHARED_MOUNT``) must be backed by
+    a readable mount table that contains an entry AT that mount point. Absent
+    or unreadable evidence is a refusal, not a pass: without it the store
+    could be a per-container file (POLICE F4b, P2).
+    """
+    points = _mount_points()
+    if not points:
+        return False
+    try:
+        resolved_target = Path(target).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return False
+    for point in points:
+        try:
+            if Path(point).resolve() == resolved_target:
+                return True
+        except OSError:  # pragma: no cover - unresolvable path
+            continue
+    return False
+
+
+def root_is_shadowed(root: str | Path) -> bool:
+    """Return True when another mount covers part of ``root``.
+
+    The INTENDED shared mount sits at the root's own mount point and is NOT
+    shadowing: the agent volume is mounted exactly there. What shadows the
+    root is a *competing* mount:
+
+    1. a known bind mount (the compose source mounts, or the ones the
+       deployment declares in ``AGENT_STORE_SHADOW_MOUNTS``) that lies inside
+       the root or IS the root;
+    2. a mount from the process mount table that lies strictly INSIDE the
+       root (a nested mount covers the volume's subtree there).
+
+    A mount that is an ANCESTOR of the root is the normal case (the root
+    lives on that filesystem) and never shadows it, and the mount at the
+    root's own path is the intended shared volume.
+    """
+    try:
+        resolved_root = Path(root).resolve()
+    except OSError:  # pragma: no cover - unresolvable path
+        return True
+
+    for candidate in list(CONTAINER_BIND_MOUNTS) + shadow_mounts():
+        try:
+            resolved = Path(candidate).resolve()
+        except OSError:  # pragma: no cover - unresolvable path
+            continue
+        if resolved == resolved_root or resolved_root in resolved.parents:
+            # A known competing mount covers the root or lives inside it.
+            return True
+
+    for candidate in _mount_points():
+        try:
+            resolved = Path(candidate).resolve()
+        except OSError:  # pragma: no cover - unresolvable path
+            continue
+        if resolved_root in resolved.parents:
+            # A mount lives INSIDE the root: the shared volume is shadowed
+            # there, so the store would not be on the shared filesystem.
+            return True
+        # A mount AT the root is the intended shared volume; a mount ABOVE
+        # the root is the filesystem the root lives on. Neither shadows it.
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -295,6 +693,25 @@ async def start_queued_run(
     - Queued job enqueued to durable queue.
     """
     _require_workspace(principal, workspace_id)
+
+    # T-IMP-001 (POLICE F4a/F4b): fail-closed admission unless a shared
+    # durable agent store is configured. The verdict comes from the RESOLVED
+    # settings/startup boundary, and it runs BEFORE the run record is
+    # persisted, so a refused run leaves nothing behind.
+    readiness = agent_store_readiness()
+    if not readiness.admit:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": readiness.reason,
+                "message": (
+                    "Queued agent runs require a shared durable agent store. "
+                    "Set AGENT_STORE_DB to a path inside the shared root "
+                    f"({shared_root()}) so api and worker use the same store."
+                ),
+                "environment": readiness.environment,
+            },
+        )
 
     ws_id_str = str(workspace_id)
     policy = get_workspace_policy(ws_id_str)
@@ -625,6 +1042,43 @@ async def approve_or_reject_run(
         )
 
     if body.decision == "approved":
+        # T-A14: bind the approval to the real pending action BEFORE re-queueing.
+        # Previously the route only flipped the state, so the runtime re-check
+        # (_is_approved) never passed and a restored run looped WAITING forever.
+        from agents.adapters.approval import (
+            ApprovalActionMismatch,
+            ApprovalAdapter,
+            ApprovalAuthorityDenied,
+            ApprovalBindingError,
+            ApprovalPolicyStale,
+        )
+
+        current_revision = (
+            rec.context.authz_policy_revision if rec.context is not None else None
+        )
+        try:
+            binding = ApprovalAdapter.resolve_and_approve(
+                run_id,
+                approver_principal_id=principal.user_id,
+                run_principal_id=rec.principal_id,
+                current_policy_revision=current_revision,
+                tool_name=body.tool_name,
+            )
+        except ApprovalAuthorityDenied as exc:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={"error": exc.code, "message": str(exc)},
+            ) from exc
+        except (
+            ApprovalActionMismatch,
+            ApprovalPolicyStale,
+            ApprovalBindingError,
+        ) as exc:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={"error": exc.code, "message": str(exc)},
+            ) from exc
+
         # Transition back to QUEUED and re-enqueue to resume execution
         rec.state.status = RunStatus.QUEUED
         run_store.update_status(run_id, RunStatus.QUEUED)
@@ -635,6 +1089,7 @@ async def approve_or_reject_run(
             workspace_id=rec.workspace_id,
             status=RunStatus.QUEUED.value,
             decision="approved",
+            error=None if binding is not None else "approval_binding_unavailable",
         )
     else:
         rec.state.transition_to(

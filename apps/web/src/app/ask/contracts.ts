@@ -33,6 +33,11 @@ export type AnswerPayload = {
   trace_id?: string | null;
   claims: Claim[];
   citations: Citation[];
+  citation_integrity?: Record<string, unknown> | null;
+  semantic_verification?: Record<string, unknown> | null;
+  publication_gate?: Record<string, unknown> | null;
+  publication_status?: "verified" | "needs_review" | "abstain" | "rejected" | string | null;
+  verifier_model?: string | null;
 };
 
 /**

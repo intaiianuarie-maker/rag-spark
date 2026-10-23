@@ -48,6 +48,7 @@ from .interfaces import (
     Usage,
     validate_tool_arguments,
 )
+from .policy import GEMMA_FREE_MODEL
 from .tools import Tool, ToolRegistry
 
 
@@ -185,6 +186,44 @@ _PERSISTED_USAGES: dict[str, Usage] = {}
 # same redaction/bounds/monotonic apply. Ephemeral steps (e.g., intermediate
 # RUNNING tool calls) stay in-memory only.
 _CHECKPOINT_STORE: object | None = None  # StepStoreCheckpointAdapter or None
+
+
+class CheckpointLoadError(RuntimeError):
+    """Raised when a durable checkpoint exists but cannot be restored.
+
+    A fresh run has *no* checkpoint; a run with a corrupt or unreadable
+    checkpoint must not silently masquerade as that (no silent fresh start).
+    """
+
+
+CheckpointUnavailable = CheckpointLoadError
+CheckpointUnavailableError = CheckpointLoadError
+CheckpointLoadFailed = CheckpointLoadError
+
+
+def _coerce_checkpoint_adapter(store):
+    """Resolve a checkpoint-like object to its StepStoreCheckpointAdapter shape."""
+    if store is None:
+        return _get_checkpoint_store()
+    if hasattr(store, "load_run_checkpoint"):
+        return store
+    adapter = getattr(store, "adapter", None)
+    if adapter is not None and hasattr(adapter, "load_run_checkpoint"):
+        return adapter
+    if hasattr(store, "load_checkpoint"):
+        # DurableCheckpointStore is passed directly; wrap its read-only load.
+        class _Proxy:
+            def __init__(self, wrapped):
+                self._wrapped = wrapped
+
+            def load_run_checkpoint(self, run_id):
+                return self._wrapped.load_checkpoint(run_id)
+
+            def save_run_checkpoint(self, *a, **k):
+                return None
+
+        return _Proxy(store)
+    return store
 
 
 def _get_checkpoint_store():
@@ -665,8 +704,14 @@ class AgentRuntime:
         instructions: str = (
             "You are a helpful knowledge agent. Solve user tasks step-by-step using tools."
         ),
+        checkpoint_store=None,
     ) -> AgentRun:
         """Production entrypoint: every contract in :class:`RunContext` is enforced."""
+        # T-A07: one explicit durable checkpoint contract before any dispatch.
+        if checkpoint_store is not None:
+            global _CHECKPOINT_STORE
+            _CHECKPOINT_STORE = _coerce_checkpoint_adapter(checkpoint_store)
+
         # T-V3-006: durable usage — survives simulated retry/restart. If a
         # run with this id already exists (persisted), resume from its usage
         # and state; otherwise start fresh. Missing usage is DENY, not unlimited.
@@ -680,14 +725,18 @@ class AgentRuntime:
         if _existing_state is not None:
             state = _existing_state
         else:
-            # Try durable checkpoint via StepStore bridge (for kill → resume byte-identical)
+            # Try durable checkpoint via StepStore bridge (for kill → resume byte-identical).
+            # The checkpoint is loaded BEFORE any dispatch, and a failed load is
+            # typed — never silently mistaken for a fresh run.
             _ckpt = None
+            _adapter_tmp = _coerce_checkpoint_adapter(checkpoint_store)
             try:
-                _adapter_tmp = _get_checkpoint_store()
                 if _adapter_tmp is not None and hasattr(_adapter_tmp, "load_run_checkpoint"):
                     _ckpt = _adapter_tmp.load_run_checkpoint(context.run_id)
-            except Exception:
-                _ckpt = None
+            except Exception as exc:
+                raise CheckpointLoadError(
+                    f"failed to load checkpoint for run {context.run_id}: {exc}"
+                ) from exc
             if _ckpt is not None:
                 try:
                     state = _ckpt["state"]
@@ -730,7 +779,7 @@ class AgentRuntime:
             usage = Usage()
         if _existing_run is not None and RunState.is_terminal(state.status):
             return _existing_run
-        model = context.model_policy.default_model or "gpt-4o-mini"
+        model = context.model_policy.default_model or GEMMA_FREE_MODEL
         if _existing_run is not None:
             agent_run = _existing_run
         elif "_ckpt" in locals() and locals().get("_ckpt") is not None and locals()["_ckpt"].get("agent_run") is not None:  # noqa: E501

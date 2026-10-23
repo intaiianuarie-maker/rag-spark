@@ -11,7 +11,12 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends curl \
+    && apt-get install -y --no-install-recommends \
+        curl \
+        tesseract-ocr \
+        tesseract-ocr-eng \
+        tesseract-ocr-ron \
+        tesseract-ocr-por \
     && rm -rf /var/lib/apt/lists/*
 
 COPY apps/worker/requirements.txt ./apps/worker/requirements.txt

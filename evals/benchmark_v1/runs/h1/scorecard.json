@@ -1,0 +1,90 @@
+{
+  "scored": "DETERMINISTIC ONLY (answer EM/F1, abstention, citation validity/resolution, paragraph-level support F1)",
+  "not_scored": [
+    "strict_gsr (rubric PROPOSAL \u2014 T-P01)",
+    "supporting_fact_*",
+    "joint_*"
+  ],
+  "sentence_id_rule": "NOT-EMITTED: pipeline cites (title, paragraph), not (title, sentence_id); sentence hits never inferred",
+  "n_attempts": 348,
+  "comparability_caveat": "The draft prompt elicits a full-sentence answer while HotpotQA gold answers are short spans, so absolute EM is structurally near zero and F1 is depressed. The OFF/ON contrast is valid (identical shared drafts); these absolutes are NOT comparable to published HotpotQA leaderboards.",
+  "shared_draft_check": {
+    "attempts": 348,
+    "attempts_with_one_draft_hash": 348,
+    "item_repeat_pairs": 348,
+    "pairs_with_multiple_distinct_draft_hashes": 0,
+    "arms_with_differing_input_claim_count": 0,
+    "arm_input_size_mismatch_ids": [],
+    "note": "One draft is generated per (item, repeat) before the fork and both arms consume it; final_answer divergence is the treatment effect, not a draft divergence."
+  },
+  "not_run": {
+    "certified-negative abstention slice (25 items)": "BLOCKED: the negative manifest carries no question text, and none of the 25 ids appear in any local 2wiki split (validation/test/train-0/train-1 all 0/25 matched), so the questions are unrecoverable locally. Their snapshot FILES loaded fine (8 paragraphs each) but a snapshot without its question cannot exercise abstention. Questions were NOT fabricated."
+  },
+  "arms": {
+    "off": {
+      "n_attempts": 348,
+      "n_errors": 0,
+      "answer_em": 0.0086,
+      "answer_f1": 0.0702,
+      "citation_validity": 0.3132,
+      "paragraph_support_f1": 0.2284,
+      "abstention_rate": 0.1839,
+      "answers_with_zero_citations": 239,
+      "strict_gsr": "",
+      "supporting_fact_em_official": "",
+      "supporting_fact_f1_official": "",
+      "joint_em_official": "",
+      "joint_f1_official": ""
+    },
+    "on": {
+      "n_attempts": 348,
+      "n_errors": 0,
+      "answer_em": 0.0201,
+      "answer_f1": 0.2157,
+      "citation_validity": 0.8075,
+      "paragraph_support_f1": 0.7174,
+      "abstention_rate": 0.1839,
+      "answers_with_zero_citations": 67,
+      "strict_gsr": "",
+      "supporting_fact_em_official": "",
+      "supporting_fact_f1_official": "",
+      "joint_em_official": "",
+      "joint_f1_official": ""
+    }
+  },
+  "by_slice": {
+    "2wikimultihopqa": {
+      "n_attempts": 48,
+      "off": {
+        "answer_em": 0.0,
+        "answer_f1": 0.0809,
+        "citation_validity": 0.2292
+      },
+      "on": {
+        "answer_em": 0.0,
+        "answer_f1": 0.2337,
+        "citation_validity": 0.7083
+      }
+    },
+    "hotpotqa-distractor": {
+      "n_attempts": 300,
+      "off": {
+        "answer_em": 0.01,
+        "answer_f1": 0.0685,
+        "citation_validity": 0.3267
+      },
+      "on": {
+        "answer_em": 0.0233,
+        "answer_f1": 0.2129,
+        "citation_validity": 0.8233
+      }
+    }
+  },
+  "delta_on_minus_off": {
+    "answer_em": 0.0115,
+    "answer_f1": 0.1455,
+    "citation_validity": 0.4943,
+    "paragraph_support_f1": 0.489,
+    "abstention_rate": 0.0
+  }
+}

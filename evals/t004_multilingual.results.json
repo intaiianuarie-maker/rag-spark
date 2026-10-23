@@ -1,0 +1,2949 @@
+{
+  "ticket": "T-EVAL-004",
+  "title": "Multilingual Retrieval Eval (STEER applied)",
+  "steer_rule": "b (scratch-only; never knowledge__serving, even with purge/verify)",
+  "eval_embedder": "google/gemini-embedding-2 (GeminiEmbedding2, 3072-d)",
+  "prod_embedder": "BAAI/bge-m3 @ 127.0.0.1:7997 -- UNTOUCHED by this run (T-069 no-stub trap)",
+  "generator": "google/gemma-4-26b-a4b-it:free (metered paid fallback on HTTP 429/402 exhaustion)",
+  "scratch_collection_used": "eval_scratch_teval004_01",
+  "assert_knowledge__serving_not_accessed": true,
+  "assert_collection_is_scratch": true,
+  "frozen_corpus": {
+    "split": "holdout",
+    "n_total": 30,
+    "n_answerable": 25,
+    "n_unanswerable": 5,
+    "multilingual_n": 15,
+    "multilingual_slices": [
+      "en",
+      "ro",
+      "pt"
+    ],
+    "note": "Frozen corpus n=30 holdout; multilingual (en+ro+pt) n=15 (5 per slice). n=100 RO/PT/EN is unreachable: source parquet corpora (xquad-en-ro-v1, pira-v1) are absent locally and carry no license files here; rebuilding would violate the frozen-corpus-pinned + license-first rules. Results are reported on the loaded frozen n, with no accuracy claims beyond it."
+  },
+  "multilingual_subset": {
+    "n": 15,
+    "recall_at_20": 1.0,
+    "grounded_success": 0.4,
+    "faithfulness": 0.6867,
+    "citation_validity": 0.4,
+    "factual_precision": 1.0,
+    "per_language": {
+      "en": {
+        "n": 5,
+        "recall_at_20": 1.0,
+        "faithfulness": 0.8,
+        "citation_validity": 0.6,
+        "factual_precision": 1.0,
+        "grounded_success": 0.6
+      },
+      "ro": {
+        "n": 5,
+        "recall_at_20": 1.0,
+        "faithfulness": 0.56,
+        "citation_validity": 0.2,
+        "factual_precision": 1.0,
+        "grounded_success": 0.2
+      },
+      "pt": {
+        "n": 5,
+        "recall_at_20": 1.0,
+        "faithfulness": 0.7,
+        "citation_validity": 0.4,
+        "factual_precision": 1.0,
+        "grounded_success": 0.4
+      }
+    }
+  },
+  "per_item_spans": [
+    {
+      "slice": "en",
+      "source_id": "xquad-en-5730d26fb54a4f140068cc96",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.en/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Elders in full connection are each a member of what?",
+      "gold_answer": "Annual Conference Order of Elders",
+      "gold_chunk_ids": [
+        "af0088d3-3420-484a-8451-6a994cc8a1ad"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "157b1085-1238-4af1-be41-3da0df352a7e",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "c8169c58-d960-4faa-a898-86f819ca6723",
+          "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "fccffb53-a56d-46a4-854f-b3d16a378490"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "af0088d3-3420-484a-8451-6a994cc8a1ad",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "af0088d3-3420-484a-8451-6a994cc8a1ad",
+          "score": 0.0328,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "157b1085-1238-4af1-be41-3da0df352a7e",
+          "content_snippet": "The first Methodist clergy were ordained by John Wesley, a priest of the Church of England, because of the crisis caused by the American Revolution which isolat..."
+        },
+        {
+          "chunk_id": "17fc00f6-36a6-423d-89ee-192c7ebf3c6c",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, pension obligations due in more than 5 years represent the expected pension payments from 2025 through 2029. It excludes pension obl..."
+        },
+        {
+          "chunk_id": "d744d051-cf81-488e-a359-29b08190f8c4",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 senior convertible debt will be paid on February 15, 2027, which is the maturity date..."
+        },
+        {
+          "chunk_id": "1b58a0e9-ffcc-4684-b5f4-888f4d52bb3b",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Long-term debt was comprised of the following:..."
+        },
+        {
+          "chunk_id": "3d97dfc9-eee3-4df0-ad22-9d7528b6582f",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "Refer to Note 1 to our consolidated financial statements regarding recently issued accounting pronouncements...."
+        },
+        {
+          "chunk_id": "03996e4c-02bc-46fc-be85-fdcd5212f5da",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Severance costs consist of charges related to involuntary and voluntary employee terminations. In 2018, severance costs include a 4% reduction in management wor..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        },
+        {
+          "chunk_id": "bbc92524-c08e-41c2-9c22-e2d7c0087893",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "fccffb53-a56d-46a4-854f-b3d16a378490",
+          "content_snippet": "The accompanying notes describe the basis of preparation, including the adoption of recently issued accounting standards. All amounts are presented in thousands..."
+        },
+        {
+          "chunk_id": "88109a5e-be43-46f4-a2ca-52496a7d3430",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average remaining lease terms (years)..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "695952f3-4878-4a99-8d23-efb40531f303",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 Junior Convertible Debt will be paid on February 15, 2037, which is the maturity date..."
+        },
+        {
+          "chunk_id": "703980e8-9b4e-4f70-96f0-e7332131ac81",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2023 revolving loans outstanding at March 31, 2019 will be paid on May 18, 2023, which is ..."
+        },
+        {
+          "chunk_id": "5f1f0856-db36-4669-8304-4b54cee91a90",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average discount rate..."
+        },
+        {
+          "chunk_id": "5709a6e4-02fd-4133-9584-b0f5dc111a60",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The Term Loan Facility matures on May 29, 2025...."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "3431fb79-0295-4d70-a686-101aa8c7178b",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "c8169c58-d960-4faa-a898-86f819ca6723",
+          "content_snippet": "Restructuring liabilities consist of (in thousands): current portion $1,204, non-current portion $963, total $2,167 as of the balance sheet date. Operating segm..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "61003a1b-6d71-420d-adb8-a2b681e663f1",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "content_snippet": "Śivarāma Swami (born 30 March 1949, Budapest, Hungary) is a Vaishnava guru and a religious leader for the International Society for Krishna Consciousness (ISKCO..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 1.0,
+        "citation_validity": 1.0,
+        "factual_precision": 1.0,
+        "grounded_success": true,
+        "correct_abstention": null
+      },
+      "answer_text": "Elders in full connection are each a member of their Annual Conference Order of Elders."
+    },
+    {
+      "slice": "en",
+      "source_id": "xquad-en-572ff932a23a5019007fcbd7",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.en/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "The idea that Islam can be apolitical isn't able to be embraced by whom?",
+      "gold_answer": "its supporters",
+      "gold_chunk_ids": [
+        "98373ed5-9b41-4f82-9a68-18d4eb18a172"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "157b1085-1238-4af1-be41-3da0df352a7e",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "4704bc24-3b96-49d3-a99d-245add9455b0",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "fccffb53-a56d-46a4-854f-b3d16a378490"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "98373ed5-9b41-4f82-9a68-18d4eb18a172",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "98373ed5-9b41-4f82-9a68-18d4eb18a172",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "4704bc24-3b96-49d3-a99d-245add9455b0",
+          "content_snippet": "Islamism is a controversial concept not just because it posits a political role for Islam but also because its supporters believe their views merely reflect Isl..."
+        },
+        {
+          "chunk_id": "9291cfd0-2097-46d9-938d-f829c6cdcafa",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "A global warming conspiracy theory invokes claims that the scientific consensus on global warming is based on conspiracies to produce false data or suppress dis..."
+        },
+        {
+          "chunk_id": "1b8485bf-6f4c-46b8-a898-3fa0e2a05582",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The contractual obligations do not include amounts related to uncertain tax positions because reasonable estimates cannot be made...."
+        },
+        {
+          "chunk_id": "61003a1b-6d71-420d-adb8-a2b681e663f1",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "content_snippet": "Śivarāma Swami (born 30 March 1949, Budapest, Hungary) is a Vaishnava guru and a religious leader for the International Society for Krishna Consciousness (ISKCO..."
+        },
+        {
+          "chunk_id": "af0088d3-3420-484a-8451-6a994cc8a1ad",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "157b1085-1238-4af1-be41-3da0df352a7e",
+          "content_snippet": "The first Methodist clergy were ordained by John Wesley, a priest of the Church of England, because of the crisis caused by the American Revolution which isolat..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "d85a2439-8314-4253-91fc-fd3f5fe9de89",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "The Fight of the Century (also known as The Fight) is the title boxing writers and historians have given to the boxing match between WBC/WBA heavyweight champio..."
+        },
+        {
+          "chunk_id": "17fc00f6-36a6-423d-89ee-192c7ebf3c6c",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, pension obligations due in more than 5 years represent the expected pension payments from 2025 through 2029. It excludes pension obl..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "b0ae2dd6-62a7-411c-97f3-5be127f6d7f3",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "(2) Capital purchase obligations represent commitments for construction or purchases of property, plant and equipment. These obligations were not recorded as li..."
+        },
+        {
+          "chunk_id": "703980e8-9b4e-4f70-96f0-e7332131ac81",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2023 revolving loans outstanding at March 31, 2019 will be paid on May 18, 2023, which is ..."
+        },
+        {
+          "chunk_id": "294eeb6e-410a-4c21-8861-6ffab9ba0286",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "Fight of the Century usually refers to the 1971 boxing match between Muhammad Ali and Joe Frazier...."
+        },
+        {
+          "chunk_id": "bbc92524-c08e-41c2-9c22-e2d7c0087893",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "fccffb53-a56d-46a4-854f-b3d16a378490",
+          "content_snippet": "The accompanying notes describe the basis of preparation, including the adoption of recently issued accounting standards. All amounts are presented in thousands..."
+        },
+        {
+          "chunk_id": "4a5110c8-1548-43c3-8665-f1d1d92480e6",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Acquisition and other costs consist of transaction costs, such as legal and financial advisory fees, related to completed or potential acquisitions, employee se..."
+        },
+        {
+          "chunk_id": "08806149-055f-4ab8-859d-f7f344d2ee76",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "content_snippet": "When considering computational problems, a problem instance is a string over an alphabet. Usually, the alphabet is taken to be the binary alphabet (i.e., the se..."
+        },
+        {
+          "chunk_id": "5a94256a-3245-423f-86d9-7706a5fd0024",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "content_snippet": "Srila Bhakti Ballabh Tirtha Maharaj (13 April 1924 - 20 April 2017) is a disciple of Bhakti Dayita Madhava Goswami Maharaj and an acharya and initiating spiritu..."
+        },
+        {
+          "chunk_id": "d744d051-cf81-488e-a359-29b08190f8c4",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 senior convertible debt will be paid on February 15, 2027, which is the maturity date..."
+        },
+        {
+          "chunk_id": "bbb6ef7f-4fcb-489b-83d7-18fb9827f9b1",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Linda Lingle (\"née\" Cutter; June 4, 1953) is an American politician, who was the sixth Governor of Hawaii from 2002 until 2010. She was the first Republican ele..."
+        },
+        {
+          "chunk_id": "695952f3-4878-4a99-8d23-efb40531f303",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 Junior Convertible Debt will be paid on February 15, 2037, which is the maturity date..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.6,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "en",
+      "source_id": "xquad-en-56e181d9e3433e1400422fa2",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.en/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "What is another term for the string of a problem instance?",
+      "gold_answer": "bitstrings",
+      "gold_chunk_ids": [
+        "08806149-055f-4ab8-859d-f7f344d2ee76"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "08806149-055f-4ab8-859d-f7f344d2ee76",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "08806149-055f-4ab8-859d-f7f344d2ee76",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "content_snippet": "When considering computational problems, a problem instance is a string over an alphabet. Usually, the alphabet is taken to be the binary alphabet (i.e., the se..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "03996e4c-02bc-46fc-be85-fdcd5212f5da",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Severance costs consist of charges related to involuntary and voluntary employee terminations. In 2018, severance costs include a 4% reduction in management wor..."
+        },
+        {
+          "chunk_id": "5f1f0856-db36-4669-8304-4b54cee91a90",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average discount rate..."
+        },
+        {
+          "chunk_id": "ad4013af-742e-42ab-b99f-d137e42eefab",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Commitment fee percentage per annum..."
+        },
+        {
+          "chunk_id": "4a5110c8-1548-43c3-8665-f1d1d92480e6",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Acquisition and other costs consist of transaction costs, such as legal and financial advisory fees, related to completed or potential acquisitions, employee se..."
+        },
+        {
+          "chunk_id": "787d363f-4d6a-4bf1-b5c7-7154f3c53044",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 6  Interest expense..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b303b4a0-0329-48a5-bb24-deb5ade59c45",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "(1) We have reclassified amounts from the previous period to make them consistent with the presentation for the current period.\n(2) Other labour costs include c..."
+        },
+        {
+          "chunk_id": "6deed2e7-fdda-4872-acd4-31020b8c713e",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "#### SEVERANCE COSTS..."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "fb1d03a3-ecf0-43dc-98c9-b02239dd5ec5",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "We have debt issuance costs related to our long-term debt that are being amortized using the straight-line method over the life of the debt. Amortization expens..."
+        },
+        {
+          "chunk_id": "de653d50-c6a6-4abe-9f25-38d2de0f99d9",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 5  Severance, acquisition and other costs..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "7c1e84a2-823f-4807-bce8-796d2742213e",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Inventory and supply chain management remain areas of focus as we balance the need to maintain supply chain flexibility to help ensure competitive lead times wi..."
+        },
+        {
+          "chunk_id": "59a0ee02-6a63-48af-9f03-8caa33cfe684",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 4  Operating costs..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 1.0,
+        "citation_validity": 1.0,
+        "factual_precision": 1.0,
+        "grounded_success": true,
+        "correct_abstention": null
+      },
+      "answer_text": "When considering computational problems, a problem instance is a string over an alphabet. Usually, the alphabet is taken to be the binary alphabet (i.e., the set {0,1}), and thus the strings are bitstrings."
+    },
+    {
+      "slice": "en",
+      "source_id": "xquad-en-572a0bebaf94a219006aa76f",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.en/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "In what year did the Amazon experience a drought that may have been more extreme than in 2005?",
+      "gold_answer": "2010",
+      "gold_chunk_ids": [
+        "39eb28f4-b0b5-4be9-9252-13de3e5822fb"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "371d7ac3-b4a0-457b-818a-40e76e15ed50",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "39eb28f4-b0b5-4be9-9252-13de3e5822fb",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "39eb28f4-b0b5-4be9-9252-13de3e5822fb",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "371d7ac3-b4a0-457b-818a-40e76e15ed50",
+          "content_snippet": "In 2010 the Amazon rainforest experienced another severe drought, in some ways more extreme than the 2005 drought. The affected region was approximate 1,160,000..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "3ab2af27-39ac-4e5b-ad92-5c6f04ad5227",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Hawaii Governor Linda Lingle has approved a number of energy-related bills to address climate change and promote local renewable energy production. The governor..."
+        },
+        {
+          "chunk_id": "17fc00f6-36a6-423d-89ee-192c7ebf3c6c",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, pension obligations due in more than 5 years represent the expected pension payments from 2025 through 2029. It excludes pension obl..."
+        },
+        {
+          "chunk_id": "88109a5e-be43-46f4-a2ca-52496a7d3430",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average remaining lease terms (years)..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "42bf6c99-f333-4f54-af26-5ef8888ef541",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "content_snippet": "Jacksonville a suferit mai puține pagube în urma uraganelor decât majoritatea orașelor de pe coasta de est, deși există pericolul ca acesta să fie lovit direct ..."
+        },
+        {
+          "chunk_id": "294eeb6e-410a-4c21-8861-6ffab9ba0286",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "Fight of the Century usually refers to the 1971 boxing match between Muhammad Ali and Joe Frazier...."
+        },
+        {
+          "chunk_id": "5709a6e4-02fd-4133-9584-b0f5dc111a60",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The Term Loan Facility matures on May 29, 2025...."
+        },
+        {
+          "chunk_id": "d85a2439-8314-4253-91fc-fd3f5fe9de89",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "The Fight of the Century (also known as The Fight) is the title boxing writers and historians have given to the boxing match between WBC/WBA heavyweight champio..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "9291cfd0-2097-46d9-938d-f829c6cdcafa",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "A global warming conspiracy theory invokes claims that the scientific consensus on global warming is based on conspiracies to produce false data or suppress dis..."
+        },
+        {
+          "chunk_id": "893c7b17-401c-457b-a358-75e638b73024",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "### NOTE 12 — Debt..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "43c72319-658c-402b-92b5-99da5ef0f9ac",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "## Supplemental cash flow information related to leases:..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 1.0,
+        "citation_validity": 1.0,
+        "factual_precision": 1.0,
+        "grounded_success": true,
+        "correct_abstention": null
+      },
+      "answer_text": "In 2010 the Amazon rainforest experienced another severe drought, in some ways more extreme than the 2005 drought."
+    },
+    {
+      "slice": "en",
+      "source_id": "xquad-en-5727aec03acd2414000de991",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.en/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "What is the major US city that the is the university located?",
+      "gold_answer": "Boston",
+      "gold_chunk_ids": [
+        "9df5a3bd-31f0-4154-88ad-a28d2ad31947"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "157b1085-1238-4af1-be41-3da0df352a7e",
+          "2a439069-db18-4709-930a-9caae87b08a2",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "fccffb53-a56d-46a4-854f-b3d16a378490"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "9df5a3bd-31f0-4154-88ad-a28d2ad31947",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "9df5a3bd-31f0-4154-88ad-a28d2ad31947",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2a439069-db18-4709-930a-9caae87b08a2",
+          "content_snippet": "The University is organized into eleven separate academic units—ten faculties and the Radcliffe Institute for Advanced Study—with campuses throughout the Boston..."
+        },
+        {
+          "chunk_id": "d3790fd4-3a6b-4397-99b5-73cd0f9db2f8",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "content_snippet": "Jacksonville se afla in regiunea First Coast din nord-estul Floridei, situat pe ambele maluri ale fluviului Saint Johns. Comunitatile din Jacksonville Beaches s..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "5709a6e4-02fd-4133-9584-b0f5dc111a60",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The Term Loan Facility matures on May 29, 2025...."
+        },
+        {
+          "chunk_id": "d744d051-cf81-488e-a359-29b08190f8c4",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 senior convertible debt will be paid on February 15, 2027, which is the maturity date..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "bbc92524-c08e-41c2-9c22-e2d7c0087893",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "fccffb53-a56d-46a4-854f-b3d16a378490",
+          "content_snippet": "The accompanying notes describe the basis of preparation, including the adoption of recently issued accounting standards. All amounts are presented in thousands..."
+        },
+        {
+          "chunk_id": "6acb030e-408a-48e3-8b49-b15a921a9c0b",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Research and development expenses of $109 million and $106 million are included in operating costs for 2019 and 2018, respectively...."
+        },
+        {
+          "chunk_id": "695952f3-4878-4a99-8d23-efb40531f303",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 Junior Convertible Debt will be paid on February 15, 2037, which is the maturity date..."
+        },
+        {
+          "chunk_id": "126eaa5e-cb60-4653-a666-ddaf9a9e8e8d",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The following table summarizes our significant contractual obligations at March 31, 2019, and the effect such obligations are expected to have on our liquidity ..."
+        },
+        {
+          "chunk_id": "af0088d3-3420-484a-8451-6a994cc8a1ad",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "157b1085-1238-4af1-be41-3da0df352a7e",
+          "content_snippet": "The first Methodist clergy were ordained by John Wesley, a priest of the Church of England, because of the crisis caused by the American Revolution which isolat..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        },
+        {
+          "chunk_id": "703980e8-9b4e-4f70-96f0-e7332131ac81",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2023 revolving loans outstanding at March 31, 2019 will be paid on May 18, 2023, which is ..."
+        },
+        {
+          "chunk_id": "3ac92251-ff92-4068-a076-6e5da053abf2",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "(1) Operating lease obligations include $18.1 million of future lease payments which is recorded as a liability on the balance sheet as of March 31, 2019. This ..."
+        },
+        {
+          "chunk_id": "8b5fa0de-8c4c-4ba2-a143-05b240d9b8f4",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "The following table summarizes our purchase commitments with contract manufacturers and suppliers as of the respective period ends (in millions):..."
+        },
+        {
+          "chunk_id": "d85a2439-8314-4253-91fc-fd3f5fe9de89",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "The Fight of the Century (also known as The Fight) is the title boxing writers and historians have given to the boxing match between WBC/WBA heavyweight champio..."
+        },
+        {
+          "chunk_id": "42bf6c99-f333-4f54-af26-5ef8888ef541",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "content_snippet": "Jacksonville a suferit mai puține pagube în urma uraganelor decât majoritatea orașelor de pe coasta de est, deși există pericolul ca acesta să fie lovit direct ..."
+        },
+        {
+          "chunk_id": "346b4a4d-5681-4aba-a66a-ec36e0e72d62",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "The following table summarizes our financing receivables (in millions):..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.4,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "ro",
+      "source_id": "xquad-ro-56f8ca289b226e1400dd1008",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.ro/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "În ce limbă era scrisă mare parte din document?",
+      "gold_answer": "latină",
+      "gold_chunk_ids": [
+        "ecad7f56-f780-495e-ac30-a6e9c7a7f75b"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "fccffb53-a56d-46a4-854f-b3d16a378490"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "ecad7f56-f780-495e-ac30-a6e9c7a7f75b",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "ecad7f56-f780-495e-ac30-a6e9c7a7f75b",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "content_snippet": "Ulterior s-a găsit o bucată de hârtie pe care Luther își scrisese ultima declarație. Declarația era formulată în limba latină, cu excepția „Suntem cerșetori” ca..."
+        },
+        {
+          "chunk_id": "1b58a0e9-ffcc-4684-b5f4-888f4d52bb3b",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Long-term debt was comprised of the following:..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "3dba695e-fa48-4c8f-a771-3552fe553a65",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "content_snippet": "Tesla era renumit pentru realizările sale și talentul său de bun animator, care în cele din urmă, i-a adus reputația de „cercetător nebun” arhetipal în cultura ..."
+        },
+        {
+          "chunk_id": "77e69abc-0409-4c7a-95a2-436e890aa9c1",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 6. SELECTED FINANCIAL DATA..."
+        },
+        {
+          "chunk_id": "787d363f-4d6a-4bf1-b5c7-7154f3c53044",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 6  Interest expense..."
+        },
+        {
+          "chunk_id": "bbc92524-c08e-41c2-9c22-e2d7c0087893",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "fccffb53-a56d-46a4-854f-b3d16a378490",
+          "content_snippet": "The accompanying notes describe the basis of preparation, including the adoption of recently issued accounting standards. All amounts are presented in thousands..."
+        },
+        {
+          "chunk_id": "de653d50-c6a6-4abe-9f25-38d2de0f99d9",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 5  Severance, acquisition and other costs..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "59a0ee02-6a63-48af-9f03-8caa33cfe684",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 4  Operating costs..."
+        },
+        {
+          "chunk_id": "893c7b17-401c-457b-a358-75e638b73024",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "### NOTE 12 — Debt..."
+        },
+        {
+          "chunk_id": "d3790fd4-3a6b-4397-99b5-73cd0f9db2f8",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "content_snippet": "Jacksonville se afla in regiunea First Coast din nord-estul Floridei, situat pe ambele maluri ale fluviului Saint Johns. Comunitatile din Jacksonville Beaches s..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "d1aba765-2cb9-4a56-bc36-11f23b7cd7bc",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "Off-Balance Sheet Arrangements (Including Guarantees)..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b303b4a0-0329-48a5-bb24-deb5ade59c45",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "(1) We have reclassified amounts from the previous period to make them consistent with the presentation for the current period.\n(2) Other labour costs include c..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.4,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "ro",
+      "source_id": "xquad-ro-572824f13acd2414000df592",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.ro/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Ce scară se folosește pentru măsurarea puterii unui uragan?",
+      "gold_answer": "Scara Saffir-Simpson",
+      "gold_chunk_ids": [
+        "42bf6c99-f333-4f54-af26-5ef8888ef541"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "157b1085-1238-4af1-be41-3da0df352a7e",
+          "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "371d7ac3-b4a0-457b-818a-40e76e15ed50",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "e6c720aa-6592-494d-b714-f805fd8783cd"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "42bf6c99-f333-4f54-af26-5ef8888ef541",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "42bf6c99-f333-4f54-af26-5ef8888ef541",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "content_snippet": "Jacksonville a suferit mai puține pagube în urma uraganelor decât majoritatea orașelor de pe coasta de est, deși există pericolul ca acesta să fie lovit direct ..."
+        },
+        {
+          "chunk_id": "3dba695e-fa48-4c8f-a771-3552fe553a65",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "content_snippet": "Tesla era renumit pentru realizările sale și talentul său de bun animator, care în cele din urmă, i-a adus reputația de „cercetător nebun” arhetipal în cultura ..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "a7da0ff0-bcfc-449b-a044-09e45913b477",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "content_snippet": "Cu dimensiuni cuprinse între 1 milimetru (0,039 in) și 1.5 metri (4,9 ft), ctenoforii sunt cele mai mari animale care nu trăiesc în colonii și care se folosesc ..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "ecad7f56-f780-495e-ac30-a6e9c7a7f75b",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "content_snippet": "Ulterior s-a găsit o bucată de hârtie pe care Luther își scrisese ultima declarație. Declarația era formulată în limba latină, cu excepția „Suntem cerșetori” ca..."
+        },
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "39eb28f4-b0b5-4be9-9252-13de3e5822fb",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "371d7ac3-b4a0-457b-818a-40e76e15ed50",
+          "content_snippet": "In 2010 the Amazon rainforest experienced another severe drought, in some ways more extreme than the 2005 drought. The affected region was approximate 1,160,000..."
+        },
+        {
+          "chunk_id": "d3790fd4-3a6b-4397-99b5-73cd0f9db2f8",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "content_snippet": "Jacksonville se afla in regiunea First Coast din nord-estul Floridei, situat pe ambele maluri ale fluviului Saint Johns. Comunitatile din Jacksonville Beaches s..."
+        },
+        {
+          "chunk_id": "3ab2af27-39ac-4e5b-ad92-5c6f04ad5227",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Hawaii Governor Linda Lingle has approved a number of energy-related bills to address climate change and promote local renewable energy production. The governor..."
+        },
+        {
+          "chunk_id": "9291cfd0-2097-46d9-938d-f829c6cdcafa",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "A global warming conspiracy theory invokes claims that the scientific consensus on global warming is based on conspiracies to produce false data or suppress dis..."
+        },
+        {
+          "chunk_id": "d85a2439-8314-4253-91fc-fd3f5fe9de89",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "The Fight of the Century (also known as The Fight) is the title boxing writers and historians have given to the boxing match between WBC/WBA heavyweight champio..."
+        },
+        {
+          "chunk_id": "af0088d3-3420-484a-8451-6a994cc8a1ad",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "157b1085-1238-4af1-be41-3da0df352a7e",
+          "content_snippet": "The first Methodist clergy were ordained by John Wesley, a priest of the Church of England, because of the crisis caused by the American Revolution which isolat..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "77e69abc-0409-4c7a-95a2-436e890aa9c1",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 6. SELECTED FINANCIAL DATA..."
+        },
+        {
+          "chunk_id": "ec7059cf-b579-482c-b7b0-81fc0660e668",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "We use interest rate swaps to convert the revolving credit facility’s variable rate of interest into a fixed rate on a portion of the debt as described more ful..."
+        },
+        {
+          "chunk_id": "294eeb6e-410a-4c21-8861-6ffab9ba0286",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e07dc2f3-2ab0-45c3-8e4e-56502b41d42e",
+          "content_snippet": "Fight of the Century usually refers to the 1971 boxing match between Muhammad Ali and Joe Frazier...."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.5,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "ro",
+      "source_id": "xquad-ro-56e0bb9f7aa994140058e6cb",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.ro/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Cum își finanța Tesla lucrările?",
+      "gold_answer": "Brevetele sale",
+      "gold_chunk_ids": [
+        "3dba695e-fa48-4c8f-a771-3552fe553a65"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "3dba695e-fa48-4c8f-a771-3552fe553a65",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "3dba695e-fa48-4c8f-a771-3552fe553a65",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "content_snippet": "Tesla era renumit pentru realizările sale și talentul său de bun animator, care în cele din urmă, i-a adus reputația de „cercetător nebun” arhetipal în cultura ..."
+        },
+        {
+          "chunk_id": "4c8b43ed-297a-48c0-93cb-40365a6bff8e",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "In December 2016, we acquired the 67% remaining interest in Inotera and began consolidating Inotera's operating results. In the periods presented above through ..."
+        },
+        {
+          "chunk_id": "ecad7f56-f780-495e-ac30-a6e9c7a7f75b",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "content_snippet": "Ulterior s-a găsit o bucată de hârtie pe care Luther își scrisese ultima declarație. Declarația era formulată în limba latină, cu excepția „Suntem cerșetori” ca..."
+        },
+        {
+          "chunk_id": "170bfe62-a03f-442a-bead-375ced79944b",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "**Financing Guarantees** In the normal course of business, third parties may provide financing arrangements to our customers and channel partners under financin..."
+        },
+        {
+          "chunk_id": "893c7b17-401c-457b-a358-75e638b73024",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "### NOTE 12 — Debt..."
+        },
+        {
+          "chunk_id": "04a1ac64-84ac-438f-9246-88620ba496e9",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "**Financing Receivables** Our financing arrangements include leases, loans, and financed service contracts. Lease receivables include sales-type and direct-fina..."
+        },
+        {
+          "chunk_id": "54b8ca3a-e219-4067-8ba6-dea6cd98ed20",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Financing Receivables..."
+        },
+        {
+          "chunk_id": "59a0ee02-6a63-48af-9f03-8caa33cfe684",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 4  Operating costs..."
+        },
+        {
+          "chunk_id": "787d363f-4d6a-4bf1-b5c7-7154f3c53044",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 6  Interest expense..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "6a50ef12-0865-4533-9a23-10b8f5bd13a5",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Financing Receivables and Guarantees..."
+        },
+        {
+          "chunk_id": "455c5e46-96a3-476f-8a41-305a6ff568b6",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "The volume of channel partner financing was $29.6 billion, $28.2 billion, and $27.0 billion in fiscal 2019, 2018, and 2017, respectively. These financing arrang..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "60e09c6a-cc7a-465c-9647-0a9a01daf15a",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "|                          | 2019 | 2018 |\n|--------------------------|------|------|\n| Interest expense on long-term debt | (1,024) | (918) |\n| Interest expens..."
+        },
+        {
+          "chunk_id": "3ab2af27-39ac-4e5b-ad92-5c6f04ad5227",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Hawaii Governor Linda Lingle has approved a number of energy-related bills to address climate change and promote local renewable energy production. The governor..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "de653d50-c6a6-4abe-9f25-38d2de0f99d9",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "### Note 5  Severance, acquisition and other costs..."
+        },
+        {
+          "chunk_id": "34da13fc-cc65-4bc8-9e3a-1a1ae96c2460",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Included in interest expense on long-term debt is interest on lease liabilities of $220 million for 2019 and interest on finance leases of $142 million for 2018..."
+        },
+        {
+          "chunk_id": "b303b4a0-0329-48a5-bb24-deb5ade59c45",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "(1) We have reclassified amounts from the previous period to make them consistent with the presentation for the current period.\n(2) Other labour costs include c..."
+        },
+        {
+          "chunk_id": "e0f2e81f-6c6f-486e-80ea-ecb008d5666d",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "|                                          | 2019      | 2018      |\n|-----------------------------------------|-----------|-----------|\n| Total credit facility..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.5,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "ro",
+      "source_id": "xquad-ro-572648e8dd62a815002e8079",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.ro/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Ce înseamnă ctenofor în greacă?",
+      "gold_answer": "purtător de piepteni",
+      "gold_chunk_ids": [
+        "a7da0ff0-bcfc-449b-a044-09e45913b477"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "157b1085-1238-4af1-be41-3da0df352a7e",
+          "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "a7da0ff0-bcfc-449b-a044-09e45913b477",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "a7da0ff0-bcfc-449b-a044-09e45913b477",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "content_snippet": "Cu dimensiuni cuprinse între 1 milimetru (0,039 in) și 1.5 metri (4,9 ft), ctenoforii sunt cele mai mari animale care nu trăiesc în colonii și care se folosesc ..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "ecad7f56-f780-495e-ac30-a6e9c7a7f75b",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "content_snippet": "Ulterior s-a găsit o bucată de hârtie pe care Luther își scrisese ultima declarație. Declarația era formulată în limba latină, cu excepția „Suntem cerșetori” ca..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "61003a1b-6d71-420d-adb8-a2b681e663f1",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "content_snippet": "Śivarāma Swami (born 30 March 1949, Budapest, Hungary) is a Vaishnava guru and a religious leader for the International Society for Krishna Consciousness (ISKCO..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "d3790fd4-3a6b-4397-99b5-73cd0f9db2f8",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "d37fc713-4303-431d-b2d8-5198a1bd2a45",
+          "content_snippet": "Jacksonville se afla in regiunea First Coast din nord-estul Floridei, situat pe ambele maluri ale fluviului Saint Johns. Comunitatile din Jacksonville Beaches s..."
+        },
+        {
+          "chunk_id": "3dba695e-fa48-4c8f-a771-3552fe553a65",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e2f7a95a-e62f-455d-a1e3-9ce0c64771bc",
+          "content_snippet": "Tesla era renumit pentru realizările sale și talentul său de bun animator, care în cele din urmă, i-a adus reputația de „cercetător nebun” arhetipal în cultura ..."
+        },
+        {
+          "chunk_id": "b303b4a0-0329-48a5-bb24-deb5ade59c45",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "(1) We have reclassified amounts from the previous period to make them consistent with the presentation for the current period.\n(2) Other labour costs include c..."
+        },
+        {
+          "chunk_id": "42bf6c99-f333-4f54-af26-5ef8888ef541",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "content_snippet": "Jacksonville a suferit mai puține pagube în urma uraganelor decât majoritatea orașelor de pe coasta de est, deși există pericolul ca acesta să fie lovit direct ..."
+        },
+        {
+          "chunk_id": "08806149-055f-4ab8-859d-f7f344d2ee76",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "content_snippet": "When considering computational problems, a problem instance is a string over an alphabet. Usually, the alphabet is taken to be the binary alphabet (i.e., the se..."
+        },
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "3d97dfc9-eee3-4df0-ad22-9d7528b6582f",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "Refer to Note 1 to our consolidated financial statements regarding recently issued accounting pronouncements...."
+        },
+        {
+          "chunk_id": "04a1ac64-84ac-438f-9246-88620ba496e9",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "**Financing Receivables** Our financing arrangements include leases, loans, and financed service contracts. Lease receivables include sales-type and direct-fina..."
+        },
+        {
+          "chunk_id": "af0088d3-3420-484a-8451-6a994cc8a1ad",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "157b1085-1238-4af1-be41-3da0df352a7e",
+          "content_snippet": "The first Methodist clergy were ordained by John Wesley, a priest of the Church of England, because of the crisis caused by the American Revolution which isolat..."
+        },
+        {
+          "chunk_id": "4a5110c8-1548-43c3-8665-f1d1d92480e6",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Acquisition and other costs consist of transaction costs, such as legal and financial advisory fees, related to completed or potential acquisitions, employee se..."
+        },
+        {
+          "chunk_id": "1b58a0e9-ffcc-4684-b5f4-888f4d52bb3b",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Long-term debt was comprised of the following:..."
+        },
+        {
+          "chunk_id": "03996e4c-02bc-46fc-be85-fdcd5212f5da",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Severance costs consist of charges related to involuntary and voluntary employee terminations. In 2018, severance costs include a 4% reduction in management wor..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.4,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "ro",
+      "source_id": "xquad-ro-56e1ee4de3433e1400423211",
+      "source_path": "datasets/rag-eval/xquad-en-ro-v1/xquad.ro/validation-00000-of-00001.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Care expresie se poate folosi pentru a ilustra inegalitatea presupusă a claselor de complexitate?",
+      "gold_answer": "P ⊆ NP ⊆ PP ⊆ PSPACE",
+      "gold_chunk_ids": [
+        "ceff0376-f914-4e54-a890-0075d841643f"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "4704bc24-3b96-49d3-a99d-245add9455b0",
+          "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "7ad58d8b-b75e-4da7-baf3-3e763d70019a"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "08806149-055f-4ab8-859d-f7f344d2ee76",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "content_snippet": "When considering computational problems, a problem instance is a string over an alphabet. Usually, the alphabet is taken to be the binary alphabet (i.e., the se..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        },
+        {
+          "chunk_id": "d744d051-cf81-488e-a359-29b08190f8c4",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 senior convertible debt will be paid on February 15, 2027, which is the maturity date..."
+        },
+        {
+          "chunk_id": "695952f3-4878-4a99-8d23-efb40531f303",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 Junior Convertible Debt will be paid on February 15, 2037, which is the maturity date..."
+        },
+        {
+          "chunk_id": "ecad7f56-f780-495e-ac30-a6e9c7a7f75b",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "5bc1e822-bda6-4a30-942b-08fca33fc348",
+          "content_snippet": "Ulterior s-a găsit o bucată de hârtie pe care Luther își scrisese ultima declarație. Declarația era formulată în limba latină, cu excepția „Suntem cerșetori” ca..."
+        },
+        {
+          "chunk_id": "703980e8-9b4e-4f70-96f0-e7332131ac81",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2023 revolving loans outstanding at March 31, 2019 will be paid on May 18, 2023, which is ..."
+        },
+        {
+          "chunk_id": "b0ae2dd6-62a7-411c-97f3-5be127f6d7f3",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "(2) Capital purchase obligations represent commitments for construction or purchases of property, plant and equipment. These obligations were not recorded as li..."
+        },
+        {
+          "chunk_id": "1b8485bf-6f4c-46b8-a898-3fa0e2a05582",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The contractual obligations do not include amounts related to uncertain tax positions because reasonable estimates cannot be made...."
+        },
+        {
+          "chunk_id": "743474a6-e313-432d-b66c-f67ae3045da3",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The expected timing of payment of the obligations discussed above is estimated based on current information. Timing of payments and actual amounts paid may be d..."
+        },
+        {
+          "chunk_id": "126eaa5e-cb60-4653-a666-ddaf9a9e8e8d",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The following table summarizes our significant contractual obligations at March 31, 2019, and the effect such obligations are expected to have on our liquidity ..."
+        },
+        {
+          "chunk_id": "7c1e84a2-823f-4807-bce8-796d2742213e",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Inventory and supply chain management remain areas of focus as we balance the need to maintain supply chain flexibility to help ensure competitive lead times wi..."
+        },
+        {
+          "chunk_id": "98373ed5-9b41-4f82-9a68-18d4eb18a172",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "4704bc24-3b96-49d3-a99d-245add9455b0",
+          "content_snippet": "Islamism is a controversial concept not just because it posits a political role for Islam but also because its supporters believe their views merely reflect Isl..."
+        },
+        {
+          "chunk_id": "a7da0ff0-bcfc-449b-a044-09e45913b477",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "content_snippet": "Cu dimensiuni cuprinse între 1 milimetru (0,039 in) și 1.5 metri (4,9 ft), ctenoforii sunt cele mai mari animale care nu trăiesc în colonii și care se folosesc ..."
+        },
+        {
+          "chunk_id": "660dfe9b-fc6a-404e-a7f4-5ee4258893de",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Purchase commitments with contract manufacturers and suppliers decreased by approximately 23% compared to the end of fiscal 2018. On a combined basis, inventori..."
+        },
+        {
+          "chunk_id": "17fc00f6-36a6-423d-89ee-192c7ebf3c6c",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, pension obligations due in more than 5 years represent the expected pension payments from 2025 through 2029. It excludes pension obl..."
+        },
+        {
+          "chunk_id": "9291cfd0-2097-46d9-938d-f829c6cdcafa",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "A global warming conspiracy theory invokes claims that the scientific consensus on global warming is based on conspiracies to produce false data or suppress dis..."
+        },
+        {
+          "chunk_id": "5d9ec473-b2c5-4aea-89e1-26731ac424bd",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "## Balance Sheet Classification:..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "5f1f0856-db36-4669-8304-4b54cee91a90",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average discount rate..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 1.0,
+        "citation_validity": 1.0,
+        "factual_precision": 1.0,
+        "grounded_success": true,
+        "correct_abstention": null
+      },
+      "answer_text": "Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posibil ca P = PSPACE."
+    },
+    {
+      "slice": "pt",
+      "source_id": "pira-pt-A254",
+      "source_path": "datasets/rag-eval/pira-v1/test.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Em que períodos do ano as mithraculus forceps da Ilha de Anchieta botam ovos?",
+      "gold_answer": "Durante todas as estações.",
+      "gold_chunk_ids": [
+        "bffa7028-c918-4d03-a5ac-5c509f767795"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "64315a16-0cc1-4972-84b7-f2158d0b47bc",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "content_snippet": "Os campos de petróleo marginais são referenciados como esses campos de petróleo que dificilmente são desenvolvidos eficientemente com condições técnicas e ecomô..."
+        },
+        {
+          "chunk_id": "77e69abc-0409-4c7a-95a2-436e890aa9c1",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 6. SELECTED FINANCIAL DATA..."
+        },
+        {
+          "chunk_id": "a7da0ff0-bcfc-449b-a044-09e45913b477",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "187f2cb0-ffb3-4cd7-8469-b9ea78644aa8",
+          "content_snippet": "Cu dimensiuni cuprinse între 1 milimetru (0,039 in) și 1.5 metri (4,9 ft), ctenoforii sunt cele mai mari animale care nu trăiesc în colonii și care se folosesc ..."
+        },
+        {
+          "chunk_id": "17fc00f6-36a6-423d-89ee-192c7ebf3c6c",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, pension obligations due in more than 5 years represent the expected pension payments from 2025 through 2029. It excludes pension obl..."
+        },
+        {
+          "chunk_id": "3ab2af27-39ac-4e5b-ad92-5c6f04ad5227",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Hawaii Governor Linda Lingle has approved a number of energy-related bills to address climate change and promote local renewable energy production. The governor..."
+        },
+        {
+          "chunk_id": "03476092-65ee-422c-aa2a-81bf891aaf74",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "0d8053df-3853-4cda-9e7a-fb09a5b26d80",
+          "content_snippet": "Govinda Bhashya is a Gaudiya Vaishnava commentary on Vedanta Sutra. It was written in the year 1628 Sakabda (1718 CE) at Galtaji (Galta) near the present city o..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "695952f3-4878-4a99-8d23-efb40531f303",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 Junior Convertible Debt will be paid on February 15, 2037, which is the maturity date..."
+        },
+        {
+          "chunk_id": "d744d051-cf81-488e-a359-29b08190f8c4",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 senior convertible debt will be paid on February 15, 2027, which is the maturity date..."
+        },
+        {
+          "chunk_id": "8b5fa0de-8c4c-4ba2-a143-05b240d9b8f4",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "The following table summarizes our purchase commitments with contract manufacturers and suppliers as of the respective period ends (in millions):..."
+        },
+        {
+          "chunk_id": "88109a5e-be43-46f4-a2ca-52496a7d3430",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average remaining lease terms (years)..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 1.0,
+        "citation_validity": 1.0,
+        "factual_precision": 1.0,
+        "grounded_success": true,
+        "correct_abstention": null
+      },
+      "answer_text": "As fêmeas ovígadas foram capturadas durante todas as estações."
+    },
+    {
+      "slice": "pt",
+      "source_id": "pira-pt-A184",
+      "source_path": "datasets/rag-eval/pira-v1/test.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Qual efeito global aumentará a temperatura e o nível do mar na maior parte do mundo?",
+      "gold_answer": "O efeito estufa.",
+      "gold_chunk_ids": [
+        "fd5ff250-35ad-431f-880c-58444e9acce8"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "371d7ac3-b4a0-457b-818a-40e76e15ed50",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "fccffb53-a56d-46a4-854f-b3d16a378490"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "9291cfd0-2097-46d9-938d-f829c6cdcafa",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "A global warming conspiracy theory invokes claims that the scientific consensus on global warming is based on conspiracies to produce false data or suppress dis..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "39eb28f4-b0b5-4be9-9252-13de3e5822fb",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "371d7ac3-b4a0-457b-818a-40e76e15ed50",
+          "content_snippet": "In 2010 the Amazon rainforest experienced another severe drought, in some ways more extreme than the 2005 drought. The affected region was approximate 1,160,000..."
+        },
+        {
+          "chunk_id": "3ab2af27-39ac-4e5b-ad92-5c6f04ad5227",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Hawaii Governor Linda Lingle has approved a number of energy-related bills to address climate change and promote local renewable energy production. The governor..."
+        },
+        {
+          "chunk_id": "64315a16-0cc1-4972-84b7-f2158d0b47bc",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "content_snippet": "Os campos de petróleo marginais são referenciados como esses campos de petróleo que dificilmente são desenvolvidos eficientemente com condições técnicas e ecomô..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "126eaa5e-cb60-4653-a666-ddaf9a9e8e8d",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The following table summarizes our significant contractual obligations at March 31, 2019, and the effect such obligations are expected to have on our liquidity ..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "bbc92524-c08e-41c2-9c22-e2d7c0087893",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "fccffb53-a56d-46a4-854f-b3d16a378490",
+          "content_snippet": "The accompanying notes describe the basis of preparation, including the adoption of recently issued accounting standards. All amounts are presented in thousands..."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "77e69abc-0409-4c7a-95a2-436e890aa9c1",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 6. SELECTED FINANCIAL DATA..."
+        },
+        {
+          "chunk_id": "c6c33b77-8361-4204-843c-f50389e35b4a",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "2f1a500e-f5e5-4fb8-bddb-1a61c8c7fbb4",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "b9c810b9-76d6-46ed-a17e-01064e69577a",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "**FOR THE YEAR ENDED DECEMBER 31**..."
+        },
+        {
+          "chunk_id": "42bf6c99-f333-4f54-af26-5ef8888ef541",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "b331f777-9f34-404a-bcf7-522d6b461d52",
+          "content_snippet": "Jacksonville a suferit mai puține pagube în urma uraganelor decât majoritatea orașelor de pe coasta de est, deși există pericolul ca acesta să fie lovit direct ..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 1.0,
+        "citation_validity": 1.0,
+        "factual_precision": 1.0,
+        "grounded_success": true,
+        "correct_abstention": null
+      },
+      "answer_text": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar."
+    },
+    {
+      "slice": "pt",
+      "source_id": "pira-pt-A449",
+      "source_path": "datasets/rag-eval/pira-v1/test.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Qual é o papel do programa de computador na pesquisa?",
+      "gold_answer": "É usado para converter os sinais de pressão e formação em curvas, para que os técnicos possam analisar e aprender.",
+      "gold_chunk_ids": [
+        "64315a16-0cc1-4972-84b7-f2158d0b47bc"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2a439069-db18-4709-930a-9caae87b08a2",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "4704bc24-3b96-49d3-a99d-245add9455b0",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "08806149-055f-4ab8-859d-f7f344d2ee76",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "7ad58d8b-b75e-4da7-baf3-3e763d70019a",
+          "content_snippet": "When considering computational problems, a problem instance is a string over an alphabet. Usually, the alphabet is taken to be the binary alphabet (i.e., the se..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "ccbbdfb4-8255-4e43-9433-21d36117f772",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Several motivations underlie the project. The primary ambition of MOM is to preserve an image of our era, created by numerous participants all over the planet. ..."
+        },
+        {
+          "chunk_id": "64315a16-0cc1-4972-84b7-f2158d0b47bc",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "content_snippet": "Os campos de petróleo marginais são referenciados como esses campos de petróleo que dificilmente são desenvolvidos eficientemente com condições técnicas e ecomô..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "ceff0376-f914-4e54-a890-0075d841643f",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "46dfdcc3-cb57-4fa0-acff-595aed1abf8d",
+          "content_snippet": "Numeroase clase de complexitate cunoscute se presupune că nu ar fi egale, însă acest lucru nu a fost dovedit. Spre exemplu, P ⊆ NP ⊆ PP ⊆ PSPACE, însă este posi..."
+        },
+        {
+          "chunk_id": "5f1f0856-db36-4669-8304-4b54cee91a90",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average discount rate..."
+        },
+        {
+          "chunk_id": "04a1ac64-84ac-438f-9246-88620ba496e9",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "**Financing Receivables** Our financing arrangements include leases, loans, and financed service contracts. Lease receivables include sales-type and direct-fina..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "7c1e84a2-823f-4807-bce8-796d2742213e",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Inventory and supply chain management remain areas of focus as we balance the need to maintain supply chain flexibility to help ensure competitive lead times wi..."
+        },
+        {
+          "chunk_id": "9df5a3bd-31f0-4154-88ad-a28d2ad31947",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2a439069-db18-4709-930a-9caae87b08a2",
+          "content_snippet": "The University is organized into eleven separate academic units—ten faculties and the Radcliffe Institute for Advanced Study—with campuses throughout the Boston..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "6acb030e-408a-48e3-8b49-b15a921a9c0b",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "Research and development expenses of $109 million and $106 million are included in operating costs for 2019 and 2018, respectively...."
+        },
+        {
+          "chunk_id": "98373ed5-9b41-4f82-9a68-18d4eb18a172",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "4704bc24-3b96-49d3-a99d-245add9455b0",
+          "content_snippet": "Islamism is a controversial concept not just because it posits a political role for Islam but also because its supporters believe their views merely reflect Isl..."
+        },
+        {
+          "chunk_id": "660dfe9b-fc6a-404e-a7f4-5ee4258893de",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Purchase commitments with contract manufacturers and suppliers decreased by approximately 23% compared to the end of fiscal 2018. On a combined basis, inventori..."
+        },
+        {
+          "chunk_id": "170bfe62-a03f-442a-bead-375ced79944b",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "**Financing Guarantees** In the normal course of business, third parties may provide financing arrangements to our customers and channel partners under financin..."
+        },
+        {
+          "chunk_id": "9291cfd0-2097-46d9-938d-f829c6cdcafa",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "A global warming conspiracy theory invokes claims that the scientific consensus on global warming is based on conspiracies to produce false data or suppress dis..."
+        },
+        {
+          "chunk_id": "01ec5db8-d5db-476d-8e2b-2892d6ea33fc",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average interest rate..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.6,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "pt",
+      "source_id": "pira-pt-A1158",
+      "source_path": "datasets/rag-eval/pira-v1/test.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "O que este artigo aborda?",
+      "gold_answer": "Como a produção nacional pode ou não alavancar seus negócios e promover o crescimento sustentável da indústria naval nacional.",
+      "gold_chunk_ids": [
+        "ec561db8-43b6-4439-891a-b997d15f1a65"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "e6c720aa-6592-494d-b714-f805fd8783cd"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0328,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "d1aba765-2cb9-4a56-bc36-11f23b7cd7bc",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "Off-Balance Sheet Arrangements (Including Guarantees)..."
+        },
+        {
+          "chunk_id": "64315a16-0cc1-4972-84b7-f2158d0b47bc",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "content_snippet": "Os campos de petróleo marginais são referenciados como esses campos de petróleo que dificilmente são desenvolvidos eficientemente com condições técnicas e ecomô..."
+        },
+        {
+          "chunk_id": "8b5fa0de-8c4c-4ba2-a143-05b240d9b8f4",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "The following table summarizes our purchase commitments with contract manufacturers and suppliers as of the respective period ends (in millions):..."
+        },
+        {
+          "chunk_id": "77e69abc-0409-4c7a-95a2-436e890aa9c1",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 6. SELECTED FINANCIAL DATA..."
+        },
+        {
+          "chunk_id": "126eaa5e-cb60-4653-a666-ddaf9a9e8e8d",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "The following table summarizes our significant contractual obligations at March 31, 2019, and the effect such obligations are expected to have on our liquidity ..."
+        },
+        {
+          "chunk_id": "d744d051-cf81-488e-a359-29b08190f8c4",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2017 senior convertible debt will be paid on February 15, 2027, which is the maturity date..."
+        },
+        {
+          "chunk_id": "7c1e84a2-823f-4807-bce8-796d2742213e",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Inventory and supply chain management remain areas of focus as we balance the need to maintain supply chain flexibility to help ensure competitive lead times wi..."
+        },
+        {
+          "chunk_id": "703980e8-9b4e-4f70-96f0-e7332131ac81",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2023 revolving loans outstanding at March 31, 2019 will be paid on May 18, 2023, which is ..."
+        },
+        {
+          "chunk_id": "5f1f0856-db36-4669-8304-4b54cee91a90",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average discount rate..."
+        },
+        {
+          "chunk_id": "9837eded-5972-4d0c-b833-098253342936",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "Recently Issued Accounting Pronouncements..."
+        },
+        {
+          "chunk_id": "88109a5e-be43-46f4-a2ca-52496a7d3430",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average remaining lease terms (years)..."
+        },
+        {
+          "chunk_id": "eff16735-ddc7-4706-ae23-4a7ba7a0a538",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, we have assumed that the principal of our 2015 Senior Convertible Debt will be paid on February 15, 2025, which is the maturity date..."
+        },
+        {
+          "chunk_id": "17fc00f6-36a6-423d-89ee-192c7ebf3c6c",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "For purposes of this table, pension obligations due in more than 5 years represent the expected pension payments from 2025 through 2029. It excludes pension obl..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.4,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    },
+    {
+      "slice": "pt",
+      "source_id": "pira-pt-A1044",
+      "source_path": "datasets/rag-eval/pira-v1/test.parquet",
+      "split": "holdout",
+      "is_answerable": true,
+      "question": "Onde a Baker já instalou sistemas de poços inteligentes hidráulicos bem-sucedidos?",
+      "gold_answer": "No Mar do Norte, Oriente Médio e Extremo Oriente.",
+      "gold_chunk_ids": [
+        "25fe4064-023c-4d26-8c4d-fd45c78d8649"
+      ],
+      "chunk_mapping_provenance": {
+        "indexed_document_ids": [
+          "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "f9757374-9653-4d6a-8f6f-af01982477c6"
+        ],
+        "retrieved_chunk_count": 20,
+        "top_chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+        "gold_recalled_at_20": true,
+        "recall_at_20": 1.0
+      },
+      "retrieved_spans": [
+        {
+          "chunk_id": "25fe4064-023c-4d26-8c4d-fd45c78d8649",
+          "score": 0.0164,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2795e4c3-9b62-459f-9d16-90919a13488b",
+          "content_snippet": "Norsk Hydro Felicitou ferramentas de padeiro padeiro para sua instalação do Inforce Intelligent Well System no campo de Snorre no Mar do Norte, que é a primeira..."
+        },
+        {
+          "chunk_id": "64315a16-0cc1-4972-84b7-f2158d0b47bc",
+          "score": 0.0161,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "6ed2ab2b-36eb-4117-9f91-6bb26758ab17",
+          "content_snippet": "Os campos de petróleo marginais são referenciados como esses campos de petróleo que dificilmente são desenvolvidos eficientemente com condições técnicas e ecomô..."
+        },
+        {
+          "chunk_id": "ec561db8-43b6-4439-891a-b997d15f1a65",
+          "score": 0.0159,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "31b2d211-8ecc-4991-8982-3fe80113167b",
+          "content_snippet": "Este artigo tem como objetivo relatar o gerenciamento de produção de estaleiros domésticos, com a inclusão do Programa Nacional de Renovação da Frota. O estudo ..."
+        },
+        {
+          "chunk_id": "fd5ff250-35ad-431f-880c-58444e9acce8",
+          "score": 0.0156,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "2bbee279-9f6b-4af3-a6a2-c807d4beb207",
+          "content_snippet": "O efeito de estufa e o aumento resultante da temperatura da Terra podem acelerar o aumento médio do nível do mar. A resposta natural de baias e estuários a este..."
+        },
+        {
+          "chunk_id": "3ab2af27-39ac-4e5b-ad92-5c6f04ad5227",
+          "score": 0.0154,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "08d6b6a7-d5cb-4ea7-8d7f-1ddda9a314d8",
+          "content_snippet": "Hawaii Governor Linda Lingle has approved a number of energy-related bills to address climate change and promote local renewable energy production. The governor..."
+        },
+        {
+          "chunk_id": "c0596cb3-4547-42cc-9f6d-ab2b5a800765",
+          "score": 0.0152,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 7. MANAGEMENT'S DISCUSSION AND ANALYSIS OF FINANCIAL CONDITION AND RESULTS OF OPERATIONS..."
+        },
+        {
+          "chunk_id": "77e69abc-0409-4c7a-95a2-436e890aa9c1",
+          "score": 0.0149,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "ITEM 6. SELECTED FINANCIAL DATA..."
+        },
+        {
+          "chunk_id": "e6bb632a-89c7-4b23-a27b-b7a48fa4c68a",
+          "score": 0.0147,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "On February 12, 2019, we entered into an amended and restated five-year Credit Agreement with a group of banks (the \"Credit Agreement\") to extend the term of th..."
+        },
+        {
+          "chunk_id": "7c1e84a2-823f-4807-bce8-796d2742213e",
+          "score": 0.0145,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Inventory and supply chain management remain areas of focus as we balance the need to maintain supply chain flexibility to help ensure competitive lead times wi..."
+        },
+        {
+          "chunk_id": "88109a5e-be43-46f4-a2ca-52496a7d3430",
+          "score": 0.0143,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "Weighted-average remaining lease terms (years)..."
+        },
+        {
+          "chunk_id": "5675e727-df3e-4cf9-b39f-2f4c4acbfd55",
+          "score": 0.0141,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "e6c720aa-6592-494d-b714-f805fd8783cd",
+          "content_snippet": "O objetivo deste trabalho e descrever o clima da regiao e a sua variabilidade interanual. A precipitacao concentra-se no verao austral, com uma estacao seca pro..."
+        },
+        {
+          "chunk_id": "ec7059cf-b579-482c-b7b0-81fc0660e668",
+          "score": 0.0139,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "We use interest rate swaps to convert the revolving credit facility’s variable rate of interest into a fixed rate on a portion of the debt as described more ful..."
+        },
+        {
+          "chunk_id": "bffa7028-c918-4d03-a5ac-5c509f767795",
+          "score": 0.0137,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "327c3aae-1695-43f3-95ea-daf1fdb5d21e",
+          "content_snippet": "A estrutura populacional do Mithraculus Forceps amostradas mensalmente na Ilha Anchieta de janeiro de 1999 a dezembro de 2000 foi estudada. Um total de 68 indiv..."
+        },
+        {
+          "chunk_id": "fc891b33-02c6-4ee6-a6fd-b7d269f4c21d",
+          "score": 0.0135,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "During fiscal 2018, we recognized a provisionary one-time transition tax on accumulated unrepatriated foreign earnings, estimated at $644.7 million, as a result..."
+        },
+        {
+          "chunk_id": "4bd378bf-027e-4b6a-a58f-c4fe972b73bc",
+          "score": 0.0133,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "For an overview of our business, see \"Part I – Item 1. Business – Overview.\"..."
+        },
+        {
+          "chunk_id": "a1350fdb-7ce2-4b24-af78-d7de29ebeabb",
+          "score": 0.0132,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "66552e79-f608-40e5-ae06-733c74bc3e31",
+          "content_snippet": "The Revolving Credit Facility requires, among other things, that we comply with a maximum total leverage ratio and a minimum fixed charge coverage ratio. Failur..."
+        },
+        {
+          "chunk_id": "b303b4a0-0329-48a5-bb24-deb5ade59c45",
+          "score": 0.013,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "f9757374-9653-4d6a-8f6f-af01982477c6",
+          "content_snippet": "(1) We have reclassified amounts from the previous period to make them consistent with the presentation for the current period.\n(2) Other labour costs include c..."
+        },
+        {
+          "chunk_id": "660dfe9b-fc6a-404e-a7f4-5ee4258893de",
+          "score": 0.0128,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "610cace0-2f0b-4321-b97a-4dd8b3c9cb68",
+          "content_snippet": "Purchase commitments with contract manufacturers and suppliers decreased by approximately 23% compared to the end of fiscal 2018. On a combined basis, inventori..."
+        },
+        {
+          "chunk_id": "3ac92251-ff92-4068-a076-6e5da053abf2",
+          "score": 0.0127,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "71ef91d7-bea2-41ef-becf-cabcd8993caa",
+          "content_snippet": "(1) Operating lease obligations include $18.1 million of future lease payments which is recorded as a liability on the balance sheet as of March 31, 2019. This ..."
+        },
+        {
+          "chunk_id": "4c8b43ed-297a-48c0-93cb-40365a6bff8e",
+          "score": 0.0125,
+          "workspace_id": "5a23cc54-d24c-4427-876f-0eceda6bd1fd",
+          "document_id": "aa35e421-509a-4911-bb37-7cd2f7a1f68a",
+          "content_snippet": "In December 2016, we acquired the 67% remaining interest in Inotera and began consolidating Inotera's operating results. In the periods presented above through ..."
+        }
+      ],
+      "metrics": {
+        "recall_at_20": 1.0,
+        "faithfulness": 0.5,
+        "citation_validity": 0.0,
+        "factual_precision": 1.0,
+        "grounded_success": false,
+        "correct_abstention": null
+      },
+      "answer_text": "I cannot answer this question based on the provided documents."
+    }
+  ],
+  "authenticity_census": {
+    "overall": {
+      "evidence_recall_at_20": 1.0,
+      "grounded_answer_rate": 0.4,
+      "factual_precision": 1.0,
+      "citation_validity": 0.52,
+      "correct_abstention": 1.0
+    },
+    "ci_recall": [
+      0.8668035060468213,
+      1.0
+    ],
+    "ci_grounded": [
+      0.23403057664190918,
+      0.5926087221487266
+    ],
+    "ci_factual": [
+      0.8668035060468213,
+      1.0
+    ],
+    "ci_citation": [
+      0.334982179531473,
+      0.6996899607103998
+    ],
+    "ci_abstention": [
+      0.5655085052479191,
+      1.0
+    ],
+    "per_slice": {
+      "en": {
+        "n": 5,
+        "recall": 1.0,
+        "grounded": 0.6,
+        "factual": 1.0,
+        "citation": 0.6,
+        "abstention": null
+      },
+      "ro": {
+        "n": 5,
+        "recall": 1.0,
+        "grounded": 0.2,
+        "factual": 1.0,
+        "citation": 0.2,
+        "abstention": null
+      },
+      "pt": {
+        "n": 5,
+        "recall": 1.0,
+        "grounded": 0.4,
+        "factual": 1.0,
+        "citation": 0.4,
+        "abstention": null
+      },
+      "tables": {
+        "n": 5,
+        "recall": 1.0,
+        "grounded": 0.4,
+        "factual": 1.0,
+        "citation": 0.6,
+        "abstention": null
+      },
+      "multi": {
+        "n": 5,
+        "recall": 1.0,
+        "grounded": 0.4,
+        "factual": 1.0,
+        "citation": 0.8,
+        "abstention": null
+      },
+      "unanswerable": {
+        "n": 5,
+        "recall": 1.0,
+        "grounded": 1.0,
+        "factual": 1.0,
+        "citation": 1.0,
+        "abstention": 1.0
+      }
+    }
+  },
+  "acceptance_flows": [
+    {
+      "flow_number": 1,
+      "name": "Golden Path",
+      "scenario": "Live ingest -> 3072-d embed -> hybrid retrieve -> Gemma generate -> verified citation",
+      "passed": true,
+      "details": "status=answered, citations=1, faith=1.00"
+    },
+    {
+      "flow_number": 2,
+      "name": "ACL Workspace Isolation",
+      "scenario": "Query in workspace B attempts to retrieve content indexed in workspace A",
+      "passed": true,
+      "details": "0 items returned across workspace boundary; leak rate = 0.0%"
+    },
+    {
+      "flow_number": 3,
+      "name": "Deletion Propagation",
+      "scenario": "Soft-delete in Postgres (deleted_at set) stops retrieval immediately",
+      "passed": true,
+      "details": "Active-version check dropped candidate before evidence; 0 items retrieved"
+    },
+    {
+      "flow_number": 4,
+      "name": "Fabricated Citation Rejection",
+      "scenario": "Hallucinated chunk ID + false claim citing valid chunk",
+      "passed": true,
+      "details": "Both claims rejected; 0 surviving claims, 0 surviving citations"
+    },
+    {
+      "flow_number": 5,
+      "name": "Multilingual (EN / RO / PT)",
+      "scenario": "Native language retrieval and extractive verification in RO and PT",
+      "passed": true,
+      "details": "RO recall=1.0, faith=1.00; PT recall=1.0, faith=1.00"
+    }
+  ],
+  "spend_meter": {
+    "call_site": "live_v1_gate",
+    "calls": 33,
+    "failed_calls": 0,
+    "retries": 0,
+    "free_calls": 1,
+    "paid_calls": 32,
+    "fallbacks": 32,
+    "vectors": 0,
+    "prompt_tokens": 35036,
+    "completion_tokens": 3937,
+    "total_tokens": 38973,
+    "cost_usd": 0.0022872,
+    "cost_is_metered": true,
+    "failure_rate": 0.0,
+    "free_pool_exhaustion_429s": 32,
+    "failed_calls_429_no_recovery": 0,
+    "usd": 0.0022872
+  },
+  "gate": {
+    "all_targets_met": false,
+    "targets": {
+      "grounded_answer_rate": 0.9,
+      "factual_precision": 0.98,
+      "citation_validity": 1.0,
+      "evidence_recall_at_20": 0.95,
+      "correct_abstention": 0.95
+    }
+  },
+  "belebele_excluded": true
+}

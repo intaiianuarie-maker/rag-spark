@@ -1,0 +1,3 @@
+Namco Pac-Man
+
+The Namco Pac-Man was an 8-bit arcade game system board that was first used by Namco in 1980; the second and third games to run on it, "Rally-X" and "New Rally-X", were modified to support a larger color palette and scrolling.  Three unauthorized "Pac-Man" sequels were later developed by Bally Midway, Namco's old US distributor, on this board between 1981 and 1983 - and after Namco ended its partnership with Bally Midway after the release of "Pac-Land" in 1984, it developed "Jump Shot" (a basketball simulation) and "Shoot the Bull" (a darts game) on it, in the following year.

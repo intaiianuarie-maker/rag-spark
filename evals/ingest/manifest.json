@@ -1,0 +1,1087 @@
+{
+  "dataset": "2wikimultihopqa",
+  "split": "validation",
+  "n": 48,
+  "items": [
+    {
+      "id": "3d03e0260bde11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "Where did George Lane-Fox (Mp)'s father study?",
+      "expected_answer": "Christ's College, Cambridge",
+      "gold_doc_ids": [
+        "3d03e0260bde11eba7f7acde48001122_ctx4",
+        "3d03e0260bde11eba7f7acde48001122_ctx8"
+      ],
+      "all_doc_ids": [
+        "3d03e0260bde11eba7f7acde48001122_ctx0",
+        "3d03e0260bde11eba7f7acde48001122_ctx1",
+        "3d03e0260bde11eba7f7acde48001122_ctx2",
+        "3d03e0260bde11eba7f7acde48001122_ctx3",
+        "3d03e0260bde11eba7f7acde48001122_ctx4",
+        "3d03e0260bde11eba7f7acde48001122_ctx5",
+        "3d03e0260bde11eba7f7acde48001122_ctx6",
+        "3d03e0260bde11eba7f7acde48001122_ctx7",
+        "3d03e0260bde11eba7f7acde48001122_ctx8",
+        "3d03e0260bde11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "962889100baf11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is Wang Xijie's father-in-law?",
+      "expected_answer": "Longqing",
+      "gold_doc_ids": [
+        "962889100baf11ebab90acde48001122_ctx4",
+        "962889100baf11ebab90acde48001122_ctx7"
+      ],
+      "all_doc_ids": [
+        "962889100baf11ebab90acde48001122_ctx0",
+        "962889100baf11ebab90acde48001122_ctx1",
+        "962889100baf11ebab90acde48001122_ctx2",
+        "962889100baf11ebab90acde48001122_ctx3",
+        "962889100baf11ebab90acde48001122_ctx4",
+        "962889100baf11ebab90acde48001122_ctx5",
+        "962889100baf11ebab90acde48001122_ctx6",
+        "962889100baf11ebab90acde48001122_ctx7",
+        "962889100baf11ebab90acde48001122_ctx8",
+        "962889100baf11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "e765d558090911ebbdadac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film was released more recently, How Poets Are Enjoying Their Lives or Os Faroleiros?",
+      "expected_answer": "How Poets Are Enjoying Their Lives",
+      "gold_doc_ids": [
+        "e765d558090911ebbdadac1f6bf848b6_ctx4",
+        "e765d558090911ebbdadac1f6bf848b6_ctx5"
+      ],
+      "all_doc_ids": [
+        "e765d558090911ebbdadac1f6bf848b6_ctx0",
+        "e765d558090911ebbdadac1f6bf848b6_ctx1",
+        "e765d558090911ebbdadac1f6bf848b6_ctx2",
+        "e765d558090911ebbdadac1f6bf848b6_ctx3",
+        "e765d558090911ebbdadac1f6bf848b6_ctx4",
+        "e765d558090911ebbdadac1f6bf848b6_ctx5",
+        "e765d558090911ebbdadac1f6bf848b6_ctx6",
+        "e765d558090911ebbdadac1f6bf848b6_ctx7",
+        "e765d558090911ebbdadac1f6bf848b6_ctx8",
+        "e765d558090911ebbdadac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "e3333830088111ebbd6dac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the producer who was born earlier, Term Life or Housefull 2?",
+      "expected_answer": "Housefull 2",
+      "gold_doc_ids": [
+        "e3333830088111ebbd6dac1f6bf848b6_ctx1",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx3",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx6",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx8"
+      ],
+      "all_doc_ids": [
+        "e3333830088111ebbd6dac1f6bf848b6_ctx0",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx1",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx2",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx3",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx4",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx5",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx6",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx7",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx8",
+        "e3333830088111ebbd6dac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "76cacca20bde11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "Which award the performer of song In 20-0-3 earned?",
+      "expected_answer": "Grammy",
+      "gold_doc_ids": [
+        "76cacca20bde11eba7f7acde48001122_ctx0",
+        "76cacca20bde11eba7f7acde48001122_ctx2"
+      ],
+      "all_doc_ids": [
+        "76cacca20bde11eba7f7acde48001122_ctx0",
+        "76cacca20bde11eba7f7acde48001122_ctx1",
+        "76cacca20bde11eba7f7acde48001122_ctx2",
+        "76cacca20bde11eba7f7acde48001122_ctx3",
+        "76cacca20bde11eba7f7acde48001122_ctx4",
+        "76cacca20bde11eba7f7acde48001122_ctx5",
+        "76cacca20bde11eba7f7acde48001122_ctx6",
+        "76cacca20bde11eba7f7acde48001122_ctx7",
+        "76cacca20bde11eba7f7acde48001122_ctx8",
+        "76cacca20bde11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "04a065a60bde11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "Where was the place of death of Nancy Kassebaum's father?",
+      "expected_answer": "Topeka",
+      "gold_doc_ids": [
+        "04a065a60bde11eba7f7acde48001122_ctx3",
+        "04a065a60bde11eba7f7acde48001122_ctx8"
+      ],
+      "all_doc_ids": [
+        "04a065a60bde11eba7f7acde48001122_ctx0",
+        "04a065a60bde11eba7f7acde48001122_ctx1",
+        "04a065a60bde11eba7f7acde48001122_ctx2",
+        "04a065a60bde11eba7f7acde48001122_ctx3",
+        "04a065a60bde11eba7f7acde48001122_ctx4",
+        "04a065a60bde11eba7f7acde48001122_ctx5",
+        "04a065a60bde11eba7f7acde48001122_ctx6",
+        "04a065a60bde11eba7f7acde48001122_ctx7",
+        "04a065a60bde11eba7f7acde48001122_ctx8",
+        "04a065a60bde11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "6a953aae0bb011ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the child of Graziano Rossi?",
+      "expected_answer": "Luca Marini",
+      "gold_doc_ids": [
+        "6a953aae0bb011ebab90acde48001122_ctx1",
+        "6a953aae0bb011ebab90acde48001122_ctx6"
+      ],
+      "all_doc_ids": [
+        "6a953aae0bb011ebab90acde48001122_ctx0",
+        "6a953aae0bb011ebab90acde48001122_ctx1",
+        "6a953aae0bb011ebab90acde48001122_ctx2",
+        "6a953aae0bb011ebab90acde48001122_ctx3",
+        "6a953aae0bb011ebab90acde48001122_ctx4",
+        "6a953aae0bb011ebab90acde48001122_ctx5",
+        "6a953aae0bb011ebab90acde48001122_ctx6",
+        "6a953aae0bb011ebab90acde48001122_ctx7",
+        "6a953aae0bb011ebab90acde48001122_ctx8",
+        "6a953aae0bb011ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "15f03853087011ebbd62ac1f6bf848b6",
+      "type": "comparison",
+      "question": "Do the bands Bbc Philharmonic and Torch Song (Band), originate from the same country?",
+      "expected_answer": "yes",
+      "gold_doc_ids": [
+        "15f03853087011ebbd62ac1f6bf848b6_ctx2",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "15f03853087011ebbd62ac1f6bf848b6_ctx0",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx1",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx2",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx3",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx4",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx5",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx6",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx7",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx8",
+        "15f03853087011ebbd62ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "62a9691e0bb011ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the maternal grandfather of Count Michael Mikhailovich Of Torby?",
+      "expected_answer": "Prince Nikolaus Wilhelm of Nassau",
+      "gold_doc_ids": [
+        "62a9691e0bb011ebab90acde48001122_ctx4",
+        "62a9691e0bb011ebab90acde48001122_ctx8"
+      ],
+      "all_doc_ids": [
+        "62a9691e0bb011ebab90acde48001122_ctx0",
+        "62a9691e0bb011ebab90acde48001122_ctx1",
+        "62a9691e0bb011ebab90acde48001122_ctx2",
+        "62a9691e0bb011ebab90acde48001122_ctx3",
+        "62a9691e0bb011ebab90acde48001122_ctx4",
+        "62a9691e0bb011ebab90acde48001122_ctx5",
+        "62a9691e0bb011ebab90acde48001122_ctx6",
+        "62a9691e0bb011ebab90acde48001122_ctx7",
+        "62a9691e0bb011ebab90acde48001122_ctx8",
+        "62a9691e0bb011ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "9558f80608cf11ebbd95ac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film was released earlier, Payaso or Driving Miss Wealthy?",
+      "expected_answer": "Payaso",
+      "gold_doc_ids": [
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx5",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx7"
+      ],
+      "all_doc_ids": [
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx0",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx1",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx2",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx3",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx4",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx5",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx6",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx7",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx8",
+        "9558f80608cf11ebbd95ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "dab62b000baf11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is Duke Siegfried August In Bavaria's maternal grandmother?",
+      "expected_answer": "Princess Clémentine of Orléans",
+      "gold_doc_ids": [
+        "dab62b000baf11ebab90acde48001122_ctx4",
+        "dab62b000baf11ebab90acde48001122_ctx8"
+      ],
+      "all_doc_ids": [
+        "dab62b000baf11ebab90acde48001122_ctx0",
+        "dab62b000baf11ebab90acde48001122_ctx1",
+        "dab62b000baf11ebab90acde48001122_ctx2",
+        "dab62b000baf11ebab90acde48001122_ctx3",
+        "dab62b000baf11ebab90acde48001122_ctx4",
+        "dab62b000baf11ebab90acde48001122_ctx5",
+        "dab62b000baf11ebab90acde48001122_ctx6",
+        "dab62b000baf11ebab90acde48001122_ctx7",
+        "dab62b000baf11ebab90acde48001122_ctx8",
+        "dab62b000baf11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "2839db3e087b11ebbd67ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director who died later, Anantana Avantara or Them!?",
+      "expected_answer": "Anantana Avantara",
+      "gold_doc_ids": [
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx2",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx5",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx8",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx0",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx1",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx2",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx3",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx4",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx5",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx6",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx7",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx8",
+        "2839db3e087b11ebbd67ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "77f0ff4e0bb011ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is Thomas Cromwell, 1St Earl Of Ardglass's paternal grandfather?",
+      "expected_answer": "Henry Cromwell, 2nd Baron Cromwell",
+      "gold_doc_ids": [
+        "77f0ff4e0bb011ebab90acde48001122_ctx3",
+        "77f0ff4e0bb011ebab90acde48001122_ctx8"
+      ],
+      "all_doc_ids": [
+        "77f0ff4e0bb011ebab90acde48001122_ctx0",
+        "77f0ff4e0bb011ebab90acde48001122_ctx1",
+        "77f0ff4e0bb011ebab90acde48001122_ctx2",
+        "77f0ff4e0bb011ebab90acde48001122_ctx3",
+        "77f0ff4e0bb011ebab90acde48001122_ctx4",
+        "77f0ff4e0bb011ebab90acde48001122_ctx5",
+        "77f0ff4e0bb011ebab90acde48001122_ctx6",
+        "77f0ff4e0bb011ebab90acde48001122_ctx7",
+        "77f0ff4e0bb011ebab90acde48001122_ctx8",
+        "77f0ff4e0bb011ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "7fe79ad1096911ebbdafac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film came out earlier, Let The Bullets Fly or Twilight'S Last Gleaming?",
+      "expected_answer": "Twilight'S Last Gleaming",
+      "gold_doc_ids": [
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx5",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx6"
+      ],
+      "all_doc_ids": [
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx0",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx1",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx2",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx3",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx4",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx5",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx6",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx7",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx8",
+        "7fe79ad1096911ebbdafac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "1948b12e0bda11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "Where did the performer of song I Can Sing A Rainbow die?",
+      "expected_answer": "Branson, Missouri",
+      "gold_doc_ids": [
+        "1948b12e0bda11eba7f7acde48001122_ctx3",
+        "1948b12e0bda11eba7f7acde48001122_ctx6"
+      ],
+      "all_doc_ids": [
+        "1948b12e0bda11eba7f7acde48001122_ctx0",
+        "1948b12e0bda11eba7f7acde48001122_ctx1",
+        "1948b12e0bda11eba7f7acde48001122_ctx2",
+        "1948b12e0bda11eba7f7acde48001122_ctx3",
+        "1948b12e0bda11eba7f7acde48001122_ctx4",
+        "1948b12e0bda11eba7f7acde48001122_ctx5",
+        "1948b12e0bda11eba7f7acde48001122_ctx6",
+        "1948b12e0bda11eba7f7acde48001122_ctx7",
+        "1948b12e0bda11eba7f7acde48001122_ctx8",
+        "1948b12e0bda11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "e525d2da0bae11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the father of Joe Hill (Writer)?",
+      "expected_answer": "Stephen King",
+      "gold_doc_ids": [
+        "e525d2da0bae11ebab90acde48001122_ctx6",
+        "e525d2da0bae11ebab90acde48001122_ctx9"
+      ],
+      "all_doc_ids": [
+        "e525d2da0bae11ebab90acde48001122_ctx0",
+        "e525d2da0bae11ebab90acde48001122_ctx1",
+        "e525d2da0bae11ebab90acde48001122_ctx2",
+        "e525d2da0bae11ebab90acde48001122_ctx3",
+        "e525d2da0bae11ebab90acde48001122_ctx4",
+        "e525d2da0bae11ebab90acde48001122_ctx5",
+        "e525d2da0bae11ebab90acde48001122_ctx6",
+        "e525d2da0bae11ebab90acde48001122_ctx7",
+        "e525d2da0bae11ebab90acde48001122_ctx8",
+        "e525d2da0bae11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "2bb5d08c089f11ebbd78ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director who died earlier, The King Of The Wild Horses or The Great Warrior Skanderbeg?",
+      "expected_answer": "The King Of The Wild Horses",
+      "gold_doc_ids": [
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx1",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx3",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx7",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx0",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx1",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx2",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx3",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx4",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx5",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx6",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx7",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx8",
+        "2bb5d08c089f11ebbd78ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "0b3b00db091111ebbdadac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film has more directors, Bad Times At The El Royale or The Immortal Garrison?",
+      "expected_answer": "The Immortal Garrison",
+      "gold_doc_ids": [
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx1",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx2"
+      ],
+      "all_doc_ids": [
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx0",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx1",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx2",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx3",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx4",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx5",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx6",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx7",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx8",
+        "0b3b00db091111ebbdadac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "fd201cb6085b11ebbd5cac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film whose director was born first, Tout De Suite Maintenant or The Haunted House Of Horror?",
+      "expected_answer": "The Haunted House Of Horror",
+      "gold_doc_ids": [
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx0",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx1",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx8",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx0",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx1",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx2",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx3",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx4",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx5",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx6",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx7",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx8",
+        "fd201cb6085b11ebbd5cac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "0bc0459808e311ebbda4ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Are both director of film Marie-Francine and director of film The Thief Of Paris from the same country?",
+      "expected_answer": "yes",
+      "gold_doc_ids": [
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx2",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx5",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx6",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx0",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx1",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx2",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx3",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx4",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx5",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx6",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx7",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx8",
+        "0bc0459808e311ebbda4ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "164376040bde11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "What is the date of birth of Louis I, Count Of Nassau-Weilburg's father?",
+      "expected_answer": "27 June 1441",
+      "gold_doc_ids": [
+        "164376040bde11eba7f7acde48001122_ctx0",
+        "164376040bde11eba7f7acde48001122_ctx2"
+      ],
+      "all_doc_ids": [
+        "164376040bde11eba7f7acde48001122_ctx0",
+        "164376040bde11eba7f7acde48001122_ctx1",
+        "164376040bde11eba7f7acde48001122_ctx2",
+        "164376040bde11eba7f7acde48001122_ctx3",
+        "164376040bde11eba7f7acde48001122_ctx4",
+        "164376040bde11eba7f7acde48001122_ctx5",
+        "164376040bde11eba7f7acde48001122_ctx6",
+        "164376040bde11eba7f7acde48001122_ctx7",
+        "164376040bde11eba7f7acde48001122_ctx8",
+        "164376040bde11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "e1d7b56c0bae11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the mother-in-law of Jacopo Salviati?",
+      "expected_answer": "Clarice Orsini",
+      "gold_doc_ids": [
+        "e1d7b56c0bae11ebab90acde48001122_ctx0",
+        "e1d7b56c0bae11ebab90acde48001122_ctx1"
+      ],
+      "all_doc_ids": [
+        "e1d7b56c0bae11ebab90acde48001122_ctx0",
+        "e1d7b56c0bae11ebab90acde48001122_ctx1",
+        "e1d7b56c0bae11ebab90acde48001122_ctx2",
+        "e1d7b56c0bae11ebab90acde48001122_ctx3",
+        "e1d7b56c0bae11ebab90acde48001122_ctx4",
+        "e1d7b56c0bae11ebab90acde48001122_ctx5",
+        "e1d7b56c0bae11ebab90acde48001122_ctx6",
+        "e1d7b56c0bae11ebab90acde48001122_ctx7",
+        "e1d7b56c0bae11ebab90acde48001122_ctx8",
+        "e1d7b56c0bae11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "2000538808bb11ebbd88ac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film came out first, Ayat-Ayat Cinta 2 or Lost Kisses?",
+      "expected_answer": "Lost Kisses",
+      "gold_doc_ids": [
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx2",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx3"
+      ],
+      "all_doc_ids": [
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx0",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx1",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx2",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx3",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx4",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx5",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx6",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx7",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx8",
+        "2000538808bb11ebbd88ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "14c0d745089711ebbd76ac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film was released first, Vacations In Majorca or Dr. Socrates?",
+      "expected_answer": "Dr. Socrates",
+      "gold_doc_ids": [
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx3",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx6"
+      ],
+      "all_doc_ids": [
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx0",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx1",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx2",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx3",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx4",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx5",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx6",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx7",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx8",
+        "14c0d745089711ebbd76ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "eb3ff1900baf11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is Thomas Lloyd-Mostyn's paternal grandfather?",
+      "expected_answer": "Edward Lloyd, 1st Baron Mostyn",
+      "gold_doc_ids": [
+        "eb3ff1900baf11ebab90acde48001122_ctx3",
+        "eb3ff1900baf11ebab90acde48001122_ctx6"
+      ],
+      "all_doc_ids": [
+        "eb3ff1900baf11ebab90acde48001122_ctx0",
+        "eb3ff1900baf11ebab90acde48001122_ctx1",
+        "eb3ff1900baf11ebab90acde48001122_ctx2",
+        "eb3ff1900baf11ebab90acde48001122_ctx3",
+        "eb3ff1900baf11ebab90acde48001122_ctx4",
+        "eb3ff1900baf11ebab90acde48001122_ctx5",
+        "eb3ff1900baf11ebab90acde48001122_ctx6",
+        "eb3ff1900baf11ebab90acde48001122_ctx7",
+        "eb3ff1900baf11ebab90acde48001122_ctx8",
+        "eb3ff1900baf11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "cafd9a02089b11ebbd78ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director who is older than the other, Ebar Shabor or Circle Of Deception? ",
+      "expected_answer": "Circle Of Deception",
+      "gold_doc_ids": [
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx0",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx3",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx8",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx0",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx1",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx2",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx3",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx4",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx5",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx6",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx7",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx8",
+        "cafd9a02089b11ebbd78ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "e3ca509e093511ebbdaeac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which album was released first, 6 Feet Deep or Uncle Sam'S Curse?",
+      "expected_answer": "Uncle Sam'S Curse",
+      "gold_doc_ids": [
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx0",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx4"
+      ],
+      "all_doc_ids": [
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx0",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx1",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx2",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx3",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx4",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx5",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx6",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx7",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx8",
+        "e3ca509e093511ebbdaeac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "8d0836540bdd11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "What nationality is the composer of song Água De Beber?",
+      "expected_answer": "Brasileiro",
+      "gold_doc_ids": [
+        "8d0836540bdd11eba7f7acde48001122_ctx5",
+        "8d0836540bdd11eba7f7acde48001122_ctx6"
+      ],
+      "all_doc_ids": [
+        "8d0836540bdd11eba7f7acde48001122_ctx0",
+        "8d0836540bdd11eba7f7acde48001122_ctx1",
+        "8d0836540bdd11eba7f7acde48001122_ctx2",
+        "8d0836540bdd11eba7f7acde48001122_ctx3",
+        "8d0836540bdd11eba7f7acde48001122_ctx4",
+        "8d0836540bdd11eba7f7acde48001122_ctx5",
+        "8d0836540bdd11eba7f7acde48001122_ctx6",
+        "8d0836540bdd11eba7f7acde48001122_ctx7",
+        "8d0836540bdd11eba7f7acde48001122_ctx8",
+        "8d0836540bdd11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "c5114ec8089011ebbd72ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director who was born later, Know Thy Wife or Pardon My Backfire?",
+      "expected_answer": "Pardon My Backfire",
+      "gold_doc_ids": [
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx0",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx5",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx7",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx8"
+      ],
+      "all_doc_ids": [
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx0",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx1",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx2",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx3",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx4",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx5",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx6",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx7",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx8",
+        "c5114ec8089011ebbd72ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "745fe50c089011ebbd72ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director who died later, 5 Rifles or Undercover Blues?",
+      "expected_answer": "Undercover Blues",
+      "gold_doc_ids": [
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx0",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx3",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx6",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx0",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx1",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx2",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx3",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx4",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx5",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx6",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx7",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx8",
+        "745fe50c089011ebbd72ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "faedda9a0bdb11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "What is the place of birth of Ray Hutchison's wife?",
+      "expected_answer": "Galveston, Texas",
+      "gold_doc_ids": [
+        "faedda9a0bdb11eba7f7acde48001122_ctx5",
+        "faedda9a0bdb11eba7f7acde48001122_ctx7"
+      ],
+      "all_doc_ids": [
+        "faedda9a0bdb11eba7f7acde48001122_ctx0",
+        "faedda9a0bdb11eba7f7acde48001122_ctx1",
+        "faedda9a0bdb11eba7f7acde48001122_ctx2",
+        "faedda9a0bdb11eba7f7acde48001122_ctx3",
+        "faedda9a0bdb11eba7f7acde48001122_ctx4",
+        "faedda9a0bdb11eba7f7acde48001122_ctx5",
+        "faedda9a0bdb11eba7f7acde48001122_ctx6",
+        "faedda9a0bdb11eba7f7acde48001122_ctx7",
+        "faedda9a0bdb11eba7f7acde48001122_ctx8",
+        "faedda9a0bdb11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "9e63943b085811ebbd5bac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director died later, Garde À Vue or Ivide Thudangunnu?",
+      "expected_answer": "Ivide Thudangunnu",
+      "gold_doc_ids": [
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx0",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx2",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx4",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx6"
+      ],
+      "all_doc_ids": [
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx0",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx1",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx2",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx3",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx4",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx5",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx6",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx7",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx8",
+        "9e63943b085811ebbd5bac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "e1d634920bdd11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "Where did the performer of song Voi Voi die?",
+      "expected_answer": "Oslo",
+      "gold_doc_ids": [
+        "e1d634920bdd11eba7f7acde48001122_ctx2",
+        "e1d634920bdd11eba7f7acde48001122_ctx5"
+      ],
+      "all_doc_ids": [
+        "e1d634920bdd11eba7f7acde48001122_ctx0",
+        "e1d634920bdd11eba7f7acde48001122_ctx1",
+        "e1d634920bdd11eba7f7acde48001122_ctx2",
+        "e1d634920bdd11eba7f7acde48001122_ctx3",
+        "e1d634920bdd11eba7f7acde48001122_ctx4",
+        "e1d634920bdd11eba7f7acde48001122_ctx5",
+        "e1d634920bdd11eba7f7acde48001122_ctx6",
+        "e1d634920bdd11eba7f7acde48001122_ctx7",
+        "e1d634920bdd11eba7f7acde48001122_ctx8",
+        "e1d634920bdd11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "0f241f7e0baf11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the paternal grandfather of Trịnh Doanh?",
+      "expected_answer": "Trịnh Bính",
+      "gold_doc_ids": [
+        "0f241f7e0baf11ebab90acde48001122_ctx5",
+        "0f241f7e0baf11ebab90acde48001122_ctx6"
+      ],
+      "all_doc_ids": [
+        "0f241f7e0baf11ebab90acde48001122_ctx0",
+        "0f241f7e0baf11ebab90acde48001122_ctx1",
+        "0f241f7e0baf11ebab90acde48001122_ctx2",
+        "0f241f7e0baf11ebab90acde48001122_ctx3",
+        "0f241f7e0baf11ebab90acde48001122_ctx4",
+        "0f241f7e0baf11ebab90acde48001122_ctx5",
+        "0f241f7e0baf11ebab90acde48001122_ctx6",
+        "0f241f7e0baf11ebab90acde48001122_ctx7",
+        "0f241f7e0baf11ebab90acde48001122_ctx8",
+        "0f241f7e0baf11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "23d9667a085011ebbd56ac1f6bf848b6",
+      "type": "comparison",
+      "question": "Who was born later, Slavko Kvaternik or Marguerite Deval?",
+      "expected_answer": "Slavko Kvaternik",
+      "gold_doc_ids": [
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx2",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx8"
+      ],
+      "all_doc_ids": [
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx0",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx1",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx2",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx3",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx4",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx5",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx6",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx7",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx8",
+        "23d9667a085011ebbd56ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "584ec9960bdd11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "What is the award that the director of film Bangalore Naatkal earned?",
+      "expected_answer": "Nandi Awards",
+      "gold_doc_ids": [
+        "584ec9960bdd11eba7f7acde48001122_ctx6",
+        "584ec9960bdd11eba7f7acde48001122_ctx7"
+      ],
+      "all_doc_ids": [
+        "584ec9960bdd11eba7f7acde48001122_ctx0",
+        "584ec9960bdd11eba7f7acde48001122_ctx1",
+        "584ec9960bdd11eba7f7acde48001122_ctx2",
+        "584ec9960bdd11eba7f7acde48001122_ctx3",
+        "584ec9960bdd11eba7f7acde48001122_ctx4",
+        "584ec9960bdd11eba7f7acde48001122_ctx5",
+        "584ec9960bdd11eba7f7acde48001122_ctx6",
+        "584ec9960bdd11eba7f7acde48001122_ctx7",
+        "584ec9960bdd11eba7f7acde48001122_ctx8",
+        "584ec9960bdd11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "0cc648c80bb011ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the uncle of Nicaea Of Macedon?",
+      "expected_answer": "Cassander",
+      "gold_doc_ids": [
+        "0cc648c80bb011ebab90acde48001122_ctx0",
+        "0cc648c80bb011ebab90acde48001122_ctx6"
+      ],
+      "all_doc_ids": [
+        "0cc648c80bb011ebab90acde48001122_ctx0",
+        "0cc648c80bb011ebab90acde48001122_ctx1",
+        "0cc648c80bb011ebab90acde48001122_ctx2",
+        "0cc648c80bb011ebab90acde48001122_ctx3",
+        "0cc648c80bb011ebab90acde48001122_ctx4",
+        "0cc648c80bb011ebab90acde48001122_ctx5",
+        "0cc648c80bb011ebab90acde48001122_ctx6",
+        "0cc648c80bb011ebab90acde48001122_ctx7",
+        "0cc648c80bb011ebab90acde48001122_ctx8",
+        "0cc648c80bb011ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "2f6c960c0bb011ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is Mansur Ad-Din Of Adal's uncle?",
+      "expected_answer": "Haqq ad-Din II",
+      "gold_doc_ids": [
+        "2f6c960c0bb011ebab90acde48001122_ctx4",
+        "2f6c960c0bb011ebab90acde48001122_ctx8"
+      ],
+      "all_doc_ids": [
+        "2f6c960c0bb011ebab90acde48001122_ctx0",
+        "2f6c960c0bb011ebab90acde48001122_ctx1",
+        "2f6c960c0bb011ebab90acde48001122_ctx2",
+        "2f6c960c0bb011ebab90acde48001122_ctx3",
+        "2f6c960c0bb011ebab90acde48001122_ctx4",
+        "2f6c960c0bb011ebab90acde48001122_ctx5",
+        "2f6c960c0bb011ebab90acde48001122_ctx6",
+        "2f6c960c0bb011ebab90acde48001122_ctx7",
+        "2f6c960c0bb011ebab90acde48001122_ctx8",
+        "2f6c960c0bb011ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "9682ccf8087c11ebbd6aac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director born first, A Cock And Bull Story or Fish And Elephant?",
+      "expected_answer": "A Cock And Bull Story",
+      "gold_doc_ids": [
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx2",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx5",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx6",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx0",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx1",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx2",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx3",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx4",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx5",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx6",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx7",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx8",
+        "9682ccf8087c11ebbd6aac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "c4c544bd091211ebbdadac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which album was released earlier, Ngrtd or Everything I Love?",
+      "expected_answer": "Everything I Love",
+      "gold_doc_ids": [
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx6",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx7"
+      ],
+      "all_doc_ids": [
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx0",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx1",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx2",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx3",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx4",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx5",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx6",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx7",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx8",
+        "c4c544bd091211ebbdadac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "960f40120bdd11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "Where was the place of death of Ashraf Hotak's father?",
+      "expected_answer": "Kandahar",
+      "gold_doc_ids": [
+        "960f40120bdd11eba7f7acde48001122_ctx4",
+        "960f40120bdd11eba7f7acde48001122_ctx7"
+      ],
+      "all_doc_ids": [
+        "960f40120bdd11eba7f7acde48001122_ctx0",
+        "960f40120bdd11eba7f7acde48001122_ctx1",
+        "960f40120bdd11eba7f7acde48001122_ctx2",
+        "960f40120bdd11eba7f7acde48001122_ctx3",
+        "960f40120bdd11eba7f7acde48001122_ctx4",
+        "960f40120bdd11eba7f7acde48001122_ctx5",
+        "960f40120bdd11eba7f7acde48001122_ctx6",
+        "960f40120bdd11eba7f7acde48001122_ctx7",
+        "960f40120bdd11eba7f7acde48001122_ctx8",
+        "960f40120bdd11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "36979dce0bdc11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "What is the place of birth of the editor of magazine Love (Magazine)?",
+      "expected_answer": "Leeds",
+      "gold_doc_ids": [
+        "36979dce0bdc11eba7f7acde48001122_ctx3",
+        "36979dce0bdc11eba7f7acde48001122_ctx7"
+      ],
+      "all_doc_ids": [
+        "36979dce0bdc11eba7f7acde48001122_ctx0",
+        "36979dce0bdc11eba7f7acde48001122_ctx1",
+        "36979dce0bdc11eba7f7acde48001122_ctx2",
+        "36979dce0bdc11eba7f7acde48001122_ctx3",
+        "36979dce0bdc11eba7f7acde48001122_ctx4",
+        "36979dce0bdc11eba7f7acde48001122_ctx5",
+        "36979dce0bdc11eba7f7acde48001122_ctx6",
+        "36979dce0bdc11eba7f7acde48001122_ctx7",
+        "36979dce0bdc11eba7f7acde48001122_ctx8",
+        "36979dce0bdc11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "f4d06fc9088011ebbd6dac1f6bf848b6",
+      "type": "comparison",
+      "question": "Are Gabrielle Robinne and Nicolas François Vuillaume both from the same country?",
+      "expected_answer": "yes",
+      "gold_doc_ids": [
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx2",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx4"
+      ],
+      "all_doc_ids": [
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx0",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx1",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx2",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx3",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx4",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx5",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx6",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx7",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx8",
+        "f4d06fc9088011ebbd6dac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "49774ef8085511ebbd59ac1f6bf848b6",
+      "type": "comparison",
+      "question": "Which film was released first, Raadha Aur Seeta or The Fate Of The Furious?",
+      "expected_answer": "Raadha Aur Seeta",
+      "gold_doc_ids": [
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx4",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx9"
+      ],
+      "all_doc_ids": [
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx0",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx1",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx2",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx3",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx4",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx5",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx6",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx7",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx8",
+        "49774ef8085511ebbd59ac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "9c145b7b086b11ebbd5fac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film whose director was born first, The Unstoppable Man or Life Dances On?",
+      "expected_answer": "Life Dances On",
+      "gold_doc_ids": [
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx0",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx6",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx7",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx8"
+      ],
+      "all_doc_ids": [
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx0",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx1",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx2",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx3",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx4",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx5",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx6",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx7",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx8",
+        "9c145b7b086b11ebbd5fac1f6bf848b6_ctx9"
+      ]
+    },
+    {
+      "id": "aa9d6da20baf11ebab90acde48001122",
+      "type": "inference",
+      "question": "Who is the sibling-in-law of Favila Of Asturias?",
+      "expected_answer": "Alfonso I of Asturias",
+      "gold_doc_ids": [
+        "aa9d6da20baf11ebab90acde48001122_ctx5",
+        "aa9d6da20baf11ebab90acde48001122_ctx9"
+      ],
+      "all_doc_ids": [
+        "aa9d6da20baf11ebab90acde48001122_ctx0",
+        "aa9d6da20baf11ebab90acde48001122_ctx1",
+        "aa9d6da20baf11ebab90acde48001122_ctx2",
+        "aa9d6da20baf11ebab90acde48001122_ctx3",
+        "aa9d6da20baf11ebab90acde48001122_ctx4",
+        "aa9d6da20baf11ebab90acde48001122_ctx5",
+        "aa9d6da20baf11ebab90acde48001122_ctx6",
+        "aa9d6da20baf11ebab90acde48001122_ctx7",
+        "aa9d6da20baf11ebab90acde48001122_ctx8",
+        "aa9d6da20baf11ebab90acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "4f84536c0bdd11eba7f7acde48001122",
+      "type": "compositional",
+      "question": "What is the date of death of Princess Isabelle Of Orléans (1900–1983)'s father?",
+      "expected_answer": "25 August 1940",
+      "gold_doc_ids": [
+        "4f84536c0bdd11eba7f7acde48001122_ctx2",
+        "4f84536c0bdd11eba7f7acde48001122_ctx5"
+      ],
+      "all_doc_ids": [
+        "4f84536c0bdd11eba7f7acde48001122_ctx0",
+        "4f84536c0bdd11eba7f7acde48001122_ctx1",
+        "4f84536c0bdd11eba7f7acde48001122_ctx2",
+        "4f84536c0bdd11eba7f7acde48001122_ctx3",
+        "4f84536c0bdd11eba7f7acde48001122_ctx4",
+        "4f84536c0bdd11eba7f7acde48001122_ctx5",
+        "4f84536c0bdd11eba7f7acde48001122_ctx6",
+        "4f84536c0bdd11eba7f7acde48001122_ctx7",
+        "4f84536c0bdd11eba7f7acde48001122_ctx8",
+        "4f84536c0bdd11eba7f7acde48001122_ctx9"
+      ]
+    },
+    {
+      "id": "20e9c822086d11ebbd61ac1f6bf848b6",
+      "type": "bridge_comparison",
+      "question": "Which film has the director born later, Some Boy! or The Lucky Corner?",
+      "expected_answer": "The Lucky Corner",
+      "gold_doc_ids": [
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx0",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx2",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx4",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx5"
+      ],
+      "all_doc_ids": [
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx0",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx1",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx2",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx3",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx4",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx5",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx6",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx7",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx8",
+        "20e9c822086d11ebbd61ac1f6bf848b6_ctx9"
+      ]
+    }
+  ]
+}

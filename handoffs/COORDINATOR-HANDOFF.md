@@ -55,6 +55,11 @@
 - **W2 card final state:** W2-1 R3 ✅ ACCEPTED, W2-2 R2 ✅ ACCEPTED, W2-3 R4 ✅ ACCEPTED — **Langflow compatibility spike slices all accepted through rew2's gate.** Detail: `handoffs/REW2-V4-W2-3-R4.md` + ledger rows in `handoffs/REW2-REVIEW-HANDOFF.md`.
 - **Carried-forward advisories:** B-1 (config value-type/vetted-model validation unowned — needs coordinator ownership before production execution of imported flows); B-2 (per-port descriptions); A-1 (scan is defense-in-depth only — future config mapping must keep allowlist-field reads). Merge/scheduling remains coordinator's call per `AGENTS.md`.
 
+### 2026-10-12 — rew2 (`w4:p1E`) → museR: ❌ REJECT B-slice R1 (Stream B / V4, dev21)
+- **Slice:** B-1 config value-type/vetted-model validation + B-2 per-port descriptions (advisories addressed). 232 suite tests pass; ruff + mypy clean; B-2 fully verified (34/34 ports, 20 distinct descriptions).
+- **Blocking findings (full report: `handoffs/REW2-V4-B-R1.md`):** B-R1-1 HIGH — 100k-digit config value crashes import with raw `ValueError` (unbounded `{value!r}` echo hits Python's int-string conversion limit; never-crash invariant); B-R1-2 HIGH — NaN temperature ACCEPTED into config + revision hash (range checks bypassed by NaN comparison semantics); B-R1-3 MEDIUM — routes list elements unvalidated (10 MB string element enters config + hash — F-5 resource class); B-R1-4 LOW — dict-valued tool_metadata silently dropped, dict rule unreachable via import.
+- **Note:** per new protocol this entry records the REJECT verdict; dev21 feedback delivered via `handoffs/REW2-V4-B-R1.md`; resubmission expected as R2. Regression guard earlier today: PASS (`handoffs/REW2-REGRESSION-2026-10-12.md`).
+
 ### 2026-10-12 — dev11 (G2 cross-stream review) → museR: ✅ APPROVE V1/V2 P1 diff (unmerged)
 - **Slice:** independent cross-stream review of the unmerged V1/V2 P1 diff. First pass returned **CHANGES** with 2 blocking silent-failure defects; both fixed and re-verified to APPROVED.
 - **C1 (CRITICAL, fixed):** `apps/worker/jobs/ingest_pipeline.py:322` called `extractor.extract_batch(...)`, which does not exist (extractor implements only `extract`). With `GRAPH_MODE=rule|llm` every job raised `AttributeError`, swallowed by a bare `except`, then reported `READY` — graph extraction never ran while jobs reported success. Now calls `extractor.extract(...)`.
@@ -70,3 +75,34 @@
 - **Coordinator is now museR.** From this point dev11 reports status/verdicts by (a) replying to prompts and (b) appending a dated entry to this file, section 4.
 - **Reviewer contact is via handoff files, not prompts:** dev11 <-> rew1 (`w4:p1D`) exchange through `handoffs/DEV11-V3-HANDOFF.md` <-> `handoffs/REW1-REVIEW-HANDOFF.md`.
 - **Only museR dispatches new tasks to dev11.** Standing by.
+
+### 2026-10-12 — rew1 (`w4:p1D`) → museR: ✅ Stream A regression guard PASS (V3 agents + research)
+- **Protocol ack:** rew1 now reports to museR (dated entries here, §4) and exchanges with dev11 via handoff files only. Full audit trail: `handoffs/REW1-REVIEW-HANDOFF.md`.
+- **Scope:** read-only regression guard on HEAD `dd9ce11` while the tree carries dirty V1/V2 + Stream B edits.
+- **Gates:** pytest `tests/unit/test_agents.py` + `test_research.py` + `test_research_contracts.py` → **47 passed** (exact accepted count); `ruff check packages/agents packages/research` → clean; `mypy` → clean (10 files).
+- **Cross-stream isolation:** all Stream A files byte-identical to HEAD; dirty paths belong to V1/V2 (`packages/answer`, `packages/ingestion`, worker, scripts) and Stream B (`workflow_engine/adapters/langflow_adapter.py`); Stream A's only cross-package import is `models.interfaces` (`packages/models`, clean vs HEAD) — no coupling to the dirty surface.
+- **Verdict unchanged:** V3 Stream A remains ✅ ACCEPTED (`handoffs/REW1-REVIEW-HANDOFF.md` §0c/§0d). Detail: `handoffs/REW1-REGRESSION-2026-10-12.md`. No code edits, no commits.
+
+### 2026-10-12 — dev11 → museR: HF-BENCH paired V1 vs V2 — ⚠️ PARTIAL (bounded, CPU-only)
+- **Dispatch:** paired V1 (GRAPH_MODE=off) vs V2 (+graph) on xquad-en-ro-v1, belebele-v1, ragbench-tests-v1 (HotpotQA), t2-finance-tests-v1. Metrics: EvidenceRecall@20, grounded-answer rate, citation validity, latency delta. 60-min cap.
+- **Deliverable:** `handoffs/HF-BENCH-2026-10-12.md`.
+- **Retrieval (paired, equal K=20, FAKE runtime):** multi/HotpotQA n=10 corpus=40 — Recall@20 V1 0.375 → V2 0.625 (**+0.250**); xquad en+ro n=20 corpus=20 — 0.900 → 0.900 (**+0.000**, corpus==K so baseline already saturates; test has no discriminative power); tables/TAT-DQA n=10 corpus=110 — 0.150 → 0.069 (**−0.081**, oracle 0.300→0.100 **−0.200**).
+- **Key honest caveats (harness-enforced):** runtime is **fake** (one-hot embed/fake stores/token-overlap rerank), never production; arms are `HYBRID` vs `HYBRID_GRAPH` (harness never reads `GRAPH_MODE`); **grounded-answer rate is UNMEASURED** — neither harness invokes an answer engine (only oracle gold-answer availability, a retrieval diagnostic, which would read 1.0 even if the system always answered wrong). Not claimed.
+- **Real negative result:** the graph leg **hurts** TAT-DQA tables (recall −0.081, oracle −0.200). Opposite of the multi-hop win — graph is not a uniform improvement; recommend follow-up.
+- **Q9 gate (real product code, V1 only, gold-context oracle, n=50):** groundedness **0.9888** (en 1.0 / ro 1.0 / pt 0.9853 / tables 1.0 / multi 0.9586), citation_validity **1.0000**. **GATE PASS** — matches accepted V1 Q9. No graph arm here.
+- **Latency:** harness wall-clock (fake) 254/188/133 ms (multi/xquad/tables); per-arm delta **not** separated by harness, no production latency claim.
+- **belebele-v1: NOT COVERED** — absent from pinned Q8 slices (pt slice uses pira-v1); belebele is MC-comprehension schema with **no gold span / no chunk refs**; building chunk refs would fabricate labels. Declined; recommend pinning a belebele slice with real refs or a separate MC eval.
+- **No sampling needed** (~10 min runtime, all questions evaluated). No product-code edits; one throwaway data-prep script `evals/_bench_prepare_paired.py`. Read-only w.r.t. product code.
+
+[HF-BENCH] partial path=handoffs/HF-BENCH-2026-10-12.md
+
+### 2026-10-12 — rew1 (`w4:p1D`) → museR: ✅ FINAL V3 PASS (Stream A, merged HEAD `46fbf67`)
+- **Final read-only verification on merged HEAD:** pytest (3 mandated Stream A files: `test_agents.py` + `test_research.py` + `test_research_contracts.py`) → **47 passed**; `ruff check packages/agents packages/research` → clean; `mypy` → clean (10 files).
+- **Merge integrity:** `dd9ce11..46fbf67` touched no `packages/agents`, `packages/research` or `packages/models` files; all Stream A files byte-identical to the accepted state (hashes pinned in the final file).
+- **Ledger state:** ACCEPTED (round 3) + all 3 follow-ups closed (round 4) + regression guard PASS (round 5) — zero open findings. Full trail: `handoffs/REW1-REVIEW-HANDOFF.md`.
+- **Detail:** `handoffs/REW1-FINAL-2026-10-12.md`. No code edits, no commits.
+
+### 2026-10-13 — opencode coordinator: post-restart verification (read-only, no merge/deploy)
+- Verified round2 artifacts present in tree (delete 207, infinity_probe, strict dims, trace graph key); HEAD detached (museR loop active, T-V1-xxx landing). No files touched, no commits, no restarts.
+- Reporter upgraded to v2 (micro-ticket aware). V1 plan-basis 52.3% static (+0.0 correct, no DONE transitions); MICRO 44/115 DONE (ungated 44/53 = 83.0%).
+- Deconfliction: museR holds sole merge/deploy per 2026-10-12 directive; I will not dispatch competing coders on shared paths. Awaiting user confirm on single-coordinator vs split ownership.

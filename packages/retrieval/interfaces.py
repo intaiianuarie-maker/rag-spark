@@ -126,6 +126,7 @@ class VectorStore(ABC):
         vector: list[float],
         top_k: int,
         query_filter: SearchFilter,
+        query_identity: Any | None = None,
     ) -> list[RetrievedItem]:
         """Nearest-neighbour search restricted by ``query_filter``."""
         raise NotImplementedError

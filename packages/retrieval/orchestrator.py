@@ -48,11 +48,13 @@ from collections.abc import Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, Final, Protocol, runtime_checkable
+from typing import Any, ClassVar, Final, Protocol, runtime_checkable
 
 from core.auth import ACLScope
 from core.errors import ReasonCode, spec_for
 from core.logging import new_request_id, request_id_ctx
+
+from retrieval.embedding_identity import provider_identity
 
 from .interfaces import (
     DEFAULT_CONTEXT_TOP_K,
@@ -85,6 +87,21 @@ TRACE_KEYS = ("dense", "sparse", "lexical", "graph", "rrf", "rerank")
 DENSE_ONLY_DISCLOSURE: Final[str] = (
     "local reranker deleted per user order, dense-only until LLM-rerank follow-up proves need"
 )
+
+# --- T-K08: per-mode graph damping -----------------------------------------
+# The graph leg is an *optional* supplement in HYBRID_GRAPH mode, never a
+# dominant vote. Damping caps the graph leg's RRF weight per mode so a
+# table-QA flood of graph refs cannot outrank dense/lexical evidence.
+# GRAPH mode (graph-only) keeps full weight — it is the only leg.
+GRAPH_LEG_WEIGHT: Final[dict[RetrievalMode, float]] = {
+    RetrievalMode.GRAPH: 1.0,
+    RetrievalMode.HYBRID_GRAPH: 0.5,
+}
+
+# Cap on how many graph items may enter fusion in HYBRID_GRAPH mode. Bounds
+# the total graph vote mass regardless of how many chunks the graph leg
+# surfaced (the "table-mode graph capped" proof).
+GRAPH_FUSION_CAP: Final[int] = 10
 
 
 # --- T-V1-026: honest per-leg failure statuses ------------------------------
@@ -136,6 +153,9 @@ class RetrievalResult:
     trace_id: str = ""
     legs_failed: tuple[LegFailure, ...] = field(default_factory=tuple)
     rerank_disclosure: str = ""
+    #: T-A11: explicit graph leg omission disclosure (never a silent empty).
+    graph_disclosure: str = ""
+    graph_omitted: bool = False
 
     @property
     def reason(self) -> str:
@@ -231,19 +251,31 @@ class SparseRetriever(Protocol):
 
 
 def reciprocal_rank_fusion(
-    rankings: Sequence[Sequence[str]], *, k: int = RRF_K
+    rankings: Sequence[Sequence[str]],
+    *,
+    k: int = RRF_K,
+    weights: Sequence[float] | None = None,
 ) -> dict[str, float]:
-    """RRF: ``score(d) = Σ 1/(k + rank)`` over the rankings that contain ``d``.
+    """RRF: ``score(d) = Σ w_i / (k + rank_i)`` over the rankings that contain ``d``.
 
     ``math.fsum`` makes the accumulation exactly rounded and independent of the
     order of the rankings, satisfying `check_rrf_determinism`.
+
+    ``weights`` optionally scales each ranking's contribution (default 1.0 for
+    every ranking). T-K08 uses this to damp the optional graph leg in
+    ``HYBRID_GRAPH`` mode so graph evidence supplements — never dominates —
+    the dense/lexical legs. The default ``HYBRID`` mode is byte-identical
+    because its graph ranking is empty (weight never applied).
     """
     if k < 1:
         raise ValueError(f"k must be >= 1, got {k}")
+    if weights is not None and len(weights) != len(rankings):
+        raise ValueError("weights must match rankings length")
     contributions: dict[str, list[float]] = {}
-    for ranking in rankings:
+    for idx, ranking in enumerate(rankings):
+        w = 1.0 if weights is None else float(weights[idx])
         for rank, doc_id in enumerate(ranking, start=1):
-            contributions.setdefault(doc_id, []).append(1.0 / (k + rank))
+            contributions.setdefault(doc_id, []).append(w / (k + rank))
     return {doc_id: math.fsum(values) for doc_id, values in contributions.items()}
 
 
@@ -254,6 +286,36 @@ def sort_fused(scores: dict[str, float]) -> list[str]:
 
 def _item_key(item: RetrievedItem) -> str:
     return item.chunk_id or item.content
+
+
+class CloudEmbeddingEgressRefused(RuntimeError):
+    """Fail-closed: a sensitive/local-only workspace cannot use a cloud embedder.
+
+    Raised conceptually (without network contact) when a sensitive workspace
+    asks for semantic or hybrid retrieval. Keyword-only retrieval keeps working.
+    """
+
+    def __init__(self, message: str = "embedding egress refused for local-only workspace"):
+        super().__init__(message)
+
+
+
+class RefusingEmbeddingProvider(EmbeddingProvider):
+    """Embedding provider that refuses before any network contact (T-A01)."""
+
+    model_name: ClassVar[str] = "local-only-refused"
+    dimension: ClassVar[int] = 0
+    revision: ClassVar[str] = "local-only-refused"
+
+    async def embed_documents(self, texts):
+        raise CloudEmbeddingEgressRefused(
+            "embedding egress refused for local-only workspace"
+        )
+
+    async def embed_query(self, text):
+        raise CloudEmbeddingEgressRefused(
+            "embedding egress refused for local-only workspace"
+        )
 
 
 class HybridRetrievalOrchestrator(RetrievalOrchestrator):
@@ -271,6 +333,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         rerank_enabled: bool = True,
         rrf_k: int = RRF_K,
         graph: Any | None = None,
+        sensitive: bool = False,
+        local_only: bool = False,
+        workspace_sensitive: bool = False,
     ) -> None:
         self.dense = dense
         self.embedding = embedding
@@ -281,6 +346,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         self.rerank_enabled = rerank_enabled
         self.rrf_k = rrf_k
         self.graph = graph
+        self.sensitive = bool(sensitive or local_only or workspace_sensitive)
 
     # --- fan-out ----------------------------------------------------------
 
@@ -306,12 +372,17 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 raise
             report.record("embedding", exc, LEG_REASON_CODES["embedding"])
             return []
+        # T-A05: production dense search derives identity from the provider
+        # plus the observed vector dimension and threads it through the store
+        # boundary. observed dimension means we catch provider/dimension lies.
+        query_identity = provider_identity(self.embedding, len(vector))
         try:
             return await self.dense.search(
                 collection=self.collection,
                 vector=vector,
                 top_k=top_k,
                 query_filter=query_filter,
+                query_identity=query_identity,
             )
         except Exception as exc:
             if report is None:
@@ -383,9 +454,18 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         for ws_id in workspace_ids:
             try:
                 local_res = await self.graph.local_search(workspace_id=ws_id, query=query)
-                items.extend(self.graph.to_retrieved_items(local_res, workspace_id=ws_id))
+                local_items = self.graph.to_retrieved_items(local_res, workspace_id=ws_id)
                 global_res = await self.graph.global_search(workspace_id=ws_id, query=query)
-                items.extend(self.graph.to_retrieved_items(global_res, workspace_id=ws_id))
+                global_items = self.graph.to_retrieved_items(global_res, workspace_id=ws_id)
+                # Each graph retrieval mode contributes each chunk ref at most once,
+                # so the same evidence cannot double-vote during RRF fusion.
+                seen: set[str] = set()
+                for item in local_items + global_items:
+                    key = item.chunk_id or item.content
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    items.append(item)
             except Exception as exc:
                 report.record("graph", exc, LEG_REASON_CODES["graph"])
         return items
@@ -432,6 +512,37 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         if not query.strip():
             return RetrievalResult(items=[], trace_id=trace_id)
 
+        # T-A01: sensitive/local-only workspaces must not egress query
+        # embeddings. Refuse semantic/hybrid retrieval BEFORE any embedding
+        # request (keyword/graph paths keep working). Typed + logged; empty
+        # result, never a silent fallback.
+        if self.sensitive and mode in (
+            RetrievalMode.SEMANTIC,
+            RetrievalMode.HYBRID,
+            RetrievalMode.HYBRID_GRAPH,
+        ):
+            logger.warning(
+                "retrieval_egress_refused",
+                extra={
+                    "event": "retrieval_egress_refused",
+                    "leg": "embedding",
+                    "reason": "local-only workspace refused cloud embedding transport",
+                    "mode": mode.value,
+                    "trace_id": trace_id,
+                },
+            )
+            failure = LegFailure(
+                leg="embedding",
+                error_type="CloudEmbeddingEgressRefused",
+                reason_code=ReasonCode.EMBED_UNAVAILABLE,
+            )
+            return RetrievalResult(
+                items=[],
+                status=RetrievalStatus.UNAVAILABLE,
+                reason_code=ReasonCode.EMBED_UNAVAILABLE,
+                trace_id=trace_id,
+                legs_failed=(failure,),
+            )
         allowed = set(acl_scope.workspace_ids)
         query_filter = SearchFilter(workspace_ids=list(acl_scope.workspace_ids))
         if extra_filter is not None:
@@ -441,6 +552,29 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 query_filter.metadata[_k] = _v
             if extra_filter.document_ids:
                 query_filter.document_ids = list(extra_filter.document_ids)
+        graph_disclosure = ""
+        # T-A11: an explicit graph/graph-only request must not become a silent
+        # empty success when the graph retriever is unavailable. Refuse loudly.
+        if mode is RetrievalMode.GRAPH and self.graph is None:
+            failure = LegFailure(
+                leg="graph",
+                error_type="GraphUnavailable",
+                reason_code=ReasonCode.GRAPH_UNAVAILABLE,
+            )
+            return RetrievalResult(
+                items=[],
+                status=RetrievalStatus.UNAVAILABLE,
+                reason_code=ReasonCode.GRAPH_UNAVAILABLE,
+                trace_id=trace_id,
+                legs_failed=(failure,),
+                graph_disclosure="graph retrieval unavailable: graph retriever is disabled",
+                graph_omitted=True,
+            )
+        if mode is RetrievalMode.HYBRID_GRAPH and self.graph is None:
+            graph_disclosure = (
+                "graph leg omitted: graph retriever disabled/unavailable; baseline hybrid returned"
+            )
+
         # Mode selector: keyword = lexical-only (M3-003 FTS), semantic = dense-only
         # (M3-001 Qdrant), hybrid = default (existing RRF fusion, unchanged),
         # graph = graph-only, hybrid_graph = dense + lexical + graph fusion.
@@ -497,22 +631,66 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             "graph": [i for i in graph_items if self._in_scope(i, allowed, public)],
         }
 
-        # Raw per-leg scores for the trace (item key -> {leg: score}). A leg that
-        # did not surface an item simply has no key (documented trace rule).
+        # T-K08 cross-leg dedup: a graph chunk ref already surfaced by a
+        # dense/sparse/lexical leg must contribute ONCE across the whole fusion,
+        # not a second full-strength RRF vote. The graph leg still records its
+        # score in the trace (so the item carries ``graph`` in ``scores``), but
+        # the duplicate is excluded from the graph ranking so it cannot
+        # double-count. Chunks surfaced ONLY by the graph leg get a full graph
+        # vote. Default HYBRID has no graph items → no-op (byte-identical).
         trace: dict[str, dict[str, float]] = {}
         by_key: dict[str, RetrievedItem] = {}
+        non_graph_keys = {
+            _item_key(item)
+            for leg_name in ("dense", "sparse", "lexical")
+            for item in legs[leg_name]
+        }
+        graph_ranking_items: list[RetrievedItem] = []
+        for item in legs["graph"]:
+            key = _item_key(item)
+            if key in non_graph_keys:
+                # Record the graph score in the trace but do NOT add a second
+                # RRF vote — the chunk already contributes via its primary leg.
+                trace.setdefault(key, {}).setdefault("graph", item.score)
+                by_key.setdefault(key, item)
+            else:
+                graph_ranking_items.append(item)
+
+        # T-K08 per-mode graph damping: cap the number of graph-only items
+        # entering fusion and damp the graph leg's RRF weight so graph evidence
+        # supplements rather than dominates. GRAPH mode keeps full weight.
+        graph_weight = GRAPH_LEG_WEIGHT.get(mode, 1.0)
+        if mode == RetrievalMode.HYBRID_GRAPH and len(graph_ranking_items) > GRAPH_FUSION_CAP:
+            graph_ranking_items = graph_ranking_items[:GRAPH_FUSION_CAP]
+
+        # Raw per-leg scores for the trace (item key -> {leg: score}). A leg that
+        # did not surface an item simply has no key (documented trace rule).
+        # trace/by_key already contain graph-dedup records from above.
         rankings: list[list[str]] = []
-        for leg_name in ("dense", "sparse", "lexical", "graph"):
+        leg_order = ("dense", "sparse", "lexical")
+        leg_weights: list[float] = []
+        for leg_name in leg_order:
             items = legs[leg_name]
             if not items:
                 continue
             rankings.append([_item_key(item) for item in items])
+            leg_weights.append(1.0)
             for item in items:
                 key = _item_key(item)
                 trace.setdefault(key, {}).setdefault(leg_name, item.score)
                 by_key.setdefault(key, item)
 
-        fused = reciprocal_rank_fusion(rankings, k=self.rrf_k)
+        # Graph ranking: only graph-only items get an RRF vote (duplicates were
+        # traced above). Apply per-mode damping weight.
+        if graph_ranking_items:
+            rankings.append([_item_key(item) for item in graph_ranking_items])
+            leg_weights.append(graph_weight)
+            for item in graph_ranking_items:
+                key = _item_key(item)
+                trace.setdefault(key, {}).setdefault("graph", item.score)
+                by_key.setdefault(key, item)
+
+        fused = reciprocal_rank_fusion(rankings, k=self.rrf_k, weights=leg_weights)
         ranked_keys = sort_fused(fused)[:fusion_top_k]
 
         fused_items: list[RetrievedItem] = []
@@ -597,6 +775,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             if rerank_disclosure:
                 item.metadata["rerank_disclosure"] = rerank_disclosure
 
+        if mode is RetrievalMode.HYBRID_GRAPH and any(f.leg == "graph" for f in report.failures):
+            graph_disclosure = "graph leg unavailable; baseline hybrid returned"
+
         # Optional-leg verdict: the items stand, the degradation is disclosed.
         # The top-level code is the STATUS-level one (``RERANK_UNAVAILABLE`` or
         # the generic ``DEGRADED_RESULT``) so it always satisfies
@@ -618,6 +799,8 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             trace_id=trace_id,
             legs_failed=tuple(report.failures),
             rerank_disclosure=rerank_disclosure,
+            graph_disclosure=graph_disclosure,
+            graph_omitted=bool(graph_disclosure),
         )
 
     async def retrieve(

@@ -125,7 +125,10 @@ async def test_workflow_with_llm_node() -> None:
             WorkflowNode(
                 id="classifier",
                 type=NodeType.LLM,
-                config={"system_prompt": "Classify text", "model": "gpt-4o-mini"},
+                config={
+                    "system_prompt": "Classify text",
+                    "model": "google/gemma-4-26b-a4b-it:free",
+                },
             ),
             WorkflowNode(id="finish", type=NodeType.OUTPUT),
         ],

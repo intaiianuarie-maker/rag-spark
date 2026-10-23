@@ -1,0 +1,151 @@
+{
+  "run_id": "eval-31712164ff0a",
+  "corpus_checksum_sha256": "89a8dcb7cc0b2d87fa7613c550b4905d7f8bfc4e76a1f6a12eeb83b2f54ed63e",
+  "n_loaded": 48,
+  "n_evaluated": 48,
+  "models": {
+    "embedding": "google/gemini-embedding-2",
+    "generation": "google/gemma-4-26b-a4b-it:free"
+  },
+  "spend": {
+    "call_site": "TOTAL",
+    "calls": 624,
+    "failed_calls": 0,
+    "retries": 0,
+    "free_calls": 0,
+    "paid_calls": 624,
+    "fallbacks": 48,
+    "vectors": 593,
+    "prompt_tokens": 101650,
+    "completion_tokens": 7223,
+    "total_tokens": 108873,
+    "cost_usd": 0.01419043,
+    "cost_is_metered": true,
+    "failure_rate": 0.0
+  },
+  "overall": {
+    "n_total": 48,
+    "n_answerable": 48,
+    "n_unanswerable": 0,
+    "rates": {
+      "evidence_recall_at_20": 1.0,
+      "grounded_answer_rate": 0.20833333333333334,
+      "factual_precision": 1.0,
+      "citation_validity": 0.4583333333333333,
+      "correct_abstention": 0.0
+    },
+    "wilson_95": {
+      "evidence_recall_at_20": [
+        0.9258973488472576,
+        0.9999999999999999
+      ],
+      "grounded_answer_rate": [
+        0.11730147795889813,
+        0.3425917352135348
+      ],
+      "factual_precision": [
+        0.9258973488472576,
+        0.9999999999999999
+      ],
+      "citation_validity": [
+        0.3257502185455351,
+        0.5970916690505266
+      ],
+      "correct_abstention": [
+        0.0,
+        0.0
+      ]
+    },
+    "targets": {
+      "evidence_recall_at_20": 0.95,
+      "grounded_answer_rate": 0.9,
+      "factual_precision": 0.98,
+      "citation_validity": 1.0
+    },
+    "pass": {
+      "evidence_recall_at_20": true,
+      "grounded_answer_rate": false,
+      "factual_precision": true,
+      "citation_validity": false
+    },
+    "latency_ms": {
+      "p50": 1644.0,
+      "p95": 4793.75
+    },
+    "mean_faithfulness": 0.6708333333333334,
+    "citations_canonical": 30
+  },
+  "strata": {
+    "multi-hop": {
+      "n_total": 48,
+      "n_answerable": 48,
+      "n_unanswerable": 0,
+      "rates": {
+        "evidence_recall_at_20": 1.0,
+        "grounded_answer_rate": 0.20833333333333334,
+        "factual_precision": 1.0,
+        "citation_validity": 0.4583333333333333,
+        "correct_abstention": 0.0
+      },
+      "wilson_95": {
+        "evidence_recall_at_20": [
+          0.9258973488472576,
+          0.9999999999999999
+        ],
+        "grounded_answer_rate": [
+          0.11730147795889813,
+          0.3425917352135348
+        ],
+        "factual_precision": [
+          0.9258973488472576,
+          0.9999999999999999
+        ],
+        "citation_validity": [
+          0.3257502185455351,
+          0.5970916690505266
+        ],
+        "correct_abstention": [
+          0.0,
+          0.0
+        ]
+      },
+      "targets": {
+        "evidence_recall_at_20": 0.95,
+        "grounded_answer_rate": 0.9,
+        "factual_precision": 0.98,
+        "citation_validity": 1.0
+      },
+      "pass": {
+        "evidence_recall_at_20": true,
+        "grounded_answer_rate": false,
+        "factual_precision": true,
+        "citation_validity": false
+      },
+      "latency_ms": {
+        "p50": 1644.0,
+        "p95": 4793.75
+      },
+      "mean_faithfulness": 0.6708333333333334,
+      "citations_canonical": 30
+    }
+  },
+  "partial": {
+    "cleanup": {
+      "purged": {
+        "chunks": 497,
+        "ingestion_jobs": 480,
+        "documents": 480,
+        "vectors": 1
+      },
+      "scratch_collection": "eval_scratch_882a4605",
+      "collection_dropped": true,
+      "net_zero": true
+    }
+  },
+  "metered_calls_during_run": {
+    "n_calls": 624,
+    "n_paid_calls": 624,
+    "total_tokens": 108873,
+    "cost_usd": 0.01419043
+  }
+}

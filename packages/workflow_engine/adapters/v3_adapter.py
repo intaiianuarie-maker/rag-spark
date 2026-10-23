@@ -35,6 +35,8 @@ from typing import Any, Protocol, runtime_checkable
 
 from workflow_engine.interfaces import CapabilityManifest, NodeExecutor, NodeSpec
 
+from .v3_contract import V3ContractError, V3NodeRequest, V3NodeResponse, map_response
+
 #: Environment variable that enables the adapter. Default off: the flag must be
 #: flipped deliberately, never inherited from an unset environment.
 ADAPTER_FLAG_ENV = "WORKFLOW_V3_ADAPTER"
@@ -138,17 +140,28 @@ class V3NodeExecutor:
                 f"{sorted(self._manifest.enabled_capabilities)})"
             )
 
-        # Delegate: hand the whole node request to the V3 authority unchanged.
-        request: dict[str, Any] = {
-            "node_id": node.id,
-            "node_type": str(node.type),
-            "node_config": dict(node.config),
-            "workspace_id": workspace_id,
-            "input_data": input_data,
-            "required_capabilities": list(node.required_capabilities),
-        }
+        # Validate the request at the boundary before any dispatch.
+        request_obj = V3NodeRequest.from_node(node, input_data, workspace_id)
+        request = request_obj.model_dump(mode="json")
+
         self.dispatches += 1
-        return await self._agent_runner(request)
+        raw = await self._agent_runner(request)
+        # Validate the response at the boundary: malformed shapes must not
+        # become workflow outputs.
+        response = V3NodeResponse.model_validate(raw)
+        outcome, mapped = map_response(response, node_id=node.id)
+        if outcome == "cancelled":
+            import asyncio
+
+            raise asyncio.CancelledError(
+                f"v3 node {node.id!r} cancelled"
+            )
+        if outcome != "succeeded":
+            message = mapped.message if mapped is not None else "v3 node did not succeed"
+            raise V3ContractError(
+                f"v3 node {node.id!r} failed: {message}"
+            )
+        return dict(response.output_data)
 
 
 def resolve_node_executor(

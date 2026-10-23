@@ -23,9 +23,9 @@ import logging
 import os
 import uuid
 
-from graph.dispatch import create_graph_extractor
+from graph.dispatch import create_graph_extractor, llm_model_name
 from graph.extractor import GraphChunk
-from graph.factory import graph_db_path, graph_mode
+from graph.factory import create_graph_store, graph_mode
 from graph.queue import (
     Claim,
     GraphQueueUnavailable,
@@ -37,7 +37,6 @@ from graph.queue import (
     renew,
     schedule_retry,
 )
-from graph.sqlite_store import SQLiteGraphStore
 from ingestion.persistence import ChunkRow, get_session_factory
 from sqlalchemy import select
 
@@ -46,6 +45,12 @@ logger = logging.getLogger("knowledge_os.worker.graph")
 _BACKOFF_CAP_SECONDS = 30
 _DEFAULT_MAX_ATTEMPTS = 3
 _GRAPH_ERROR_CODE = "GRAPH_EXTRACTION_FAILED"
+
+
+class GraphJobDisposition(str):
+    SUCCESS = "success"
+    RETRY = "retry"
+    PARKED = "parked"
 
 
 def _is_graph_enabled() -> bool:
@@ -157,16 +162,32 @@ async def process_graph_job(job_id: str) -> dict:
     # (T-R12b). Previously this hardcoded RuleBasedGraphExtractor, so
     # GRAPH_MODE=llm silently ran the rule extractor and reported success.
     # The dispatch refuses an unknown mode and refuses llm mode with no
-    # provider rather than degrading to rule.
+    # provider rather than degrading to rule. Under GRAPH_MODE=llm the
+    # dispatch resolves to the Gemma LLM extractor (free-first with paid
+    # fallback handled by the transport); log the resolved route for
+    # observability.
+    if graph_mode() == "llm":
+        logger.info(
+            "graph_extraction_llm_route",
+            extra={
+                "event": "graph_extraction_llm_route",
+                "job_id": job_id,
+                "graph_mode": "llm",
+                "model": llm_model_name(),
+                "route": "gemma-4-26b-a4b-it:free (paid fallback on exhaustion)",
+            },
+        )
     extractor = create_graph_extractor()
     try:
         extraction_result = await extractor.extract(graph_chunks)
     except Exception as exc:
         raise RuntimeError(f"graph extraction failed: {exc}") from exc
 
+    failed_chunks = list(getattr(extraction_result, "failed_chunk_ids", []))
     if extraction_result.errors:
-        # Per-chunk errors are already recorded on result, but extraction as a
-        # whole still succeeds for other chunks. Log and continue.
+        # Per-chunk errors are recorded; log them but keep distinct outcomes:
+        # a completely failed extraction is retried, partial extraction persists
+        # with an explicit retryable failed-chunk set.
         for err in extraction_result.errors:
             logger.warning(
                 "graph_chunk_extraction_error",
@@ -174,7 +195,14 @@ async def process_graph_job(job_id: str) -> dict:
                     "event": "graph_chunk_extraction_error",
                     "job_id": job_id,
                     "error": err.reason_code,
+                    "failed_chunks": failed_chunks,
                 },
+            )
+        # Total failure — no successful chunk — must not look like success.
+        if not extraction_result.chunk_ids and failed_chunks:
+            raise RuntimeError(
+                f"graph extraction failed for all {len(failed_chunks)} chunks: "
+                + ",".join(failed_chunks)
             )
 
     # Community detection (T-V2-007): connected components, deterministic,
@@ -223,16 +251,53 @@ async def process_graph_job(job_id: str) -> dict:
         )
         communities = list(extraction_result.communities)
 
-    # Idempotent, atomically visible upsert (T-V2-002): single transaction
+        # Idempotent, atomically visible upsert (T-V2-002): single transaction
     # so a concurrent reader never sees a half-written extraction.
     # Communities now include detected + summarized, with provenance.
-    store = SQLiteGraphStore(graph_db_path())
+    #
+    # T-IMP-005: Lifecycle fence — before publishing, re-check that the document
+    # has not been deleted or superseded during the (potentially slow) extraction
+    # + LLM summarization phase. The worker loaded chunks in one DB session,
+    # released it, and extraction/community summarization may take seconds. If the
+    # document was tombstoned in the meantime, we must NOT write the entities
+    # back — that would resurrect deleted graph rows.
+    # upsert_extraction also carries its own tombstone check on the document_id
+    # parameter as a defense-in-depth barrier against resurrection, but the
+    # early check here avoids wasted computation and logs the event explicitly.
+    store = create_graph_store()
     try:
+        if await store.is_document_tombstoned(workspace_id, document_id):
+            logger.warning(
+                "graph_extraction_skipped_tombstoned_document",
+                extra={
+                    "event": "graph_extraction_skipped_tombstoned_document",
+                    "job_id": job_id,
+                    "workspace_id": workspace_id,
+                    "document_id": document_id,
+                    "entities": len(extraction_result.entities),
+                    "relationships": len(extraction_result.relationships),
+                    "communities": len(communities),
+                    "reason": (
+                        "document tombstoned (deleted/superseded) while extraction was in-flight"
+                    ),
+                },
+            )
+            return {
+                "entities": 0,
+                "relationships": 0,
+                "communities": 0,
+                "failed_chunks": failed_chunks,
+                "partial": False,
+                "skipped": True,
+                "skip_reason": "document_tombstoned_during_extraction",
+            }
+
         await store.upsert_extraction(
             workspace_id,
             extraction_result.entities,
             extraction_result.relationships,
             communities,
+            document_id=document_id,  # T-IMP-005: tombstone fence on upsert too
         )
     finally:
         store.close()
@@ -246,12 +311,15 @@ async def process_graph_job(job_id: str) -> dict:
             "entities": len(extraction_result.entities),
             "relationships": len(extraction_result.relationships),
             "communities": len(extraction_result.communities),
+            "failed_chunks": failed_chunks,
         },
     )
     return {
         "entities": len(extraction_result.entities),
         "relationships": len(extraction_result.relationships),
         "communities": len(extraction_result.communities),
+        "failed_chunks": failed_chunks,
+        "partial": bool(failed_chunks),
     }
 
 
@@ -294,12 +362,11 @@ async def _set_job_failed(job_id: str, error_code: str, message: str) -> None:
         pass
 
 
-async def handle_graph_job(job_id: str) -> None:
-    """Process one graph job with retry/park logic (T-V1-020 style)."""
+async def handle_graph_job(job_id: str) -> str:
+    """Process one graph job and return a typed durable disposition."""
     attempts = await _inc_attempts(job_id)
     try:
         await process_graph_job(job_id)
-        # Success: clean up payload and state
         await delete_payload(job_id)
         from graph.queue import _prefix, get_client
 
@@ -313,8 +380,12 @@ async def handle_graph_job(job_id: str) -> None:
             )
         except Exception:
             pass
+        logger.info(
+            "graph_job_success",
+            extra={"event": "graph_job_success", "job_id": job_id, "attempts": attempts},
+        )
+        return GraphJobDisposition.SUCCESS
     except Exception as exc:
-        # Retryable if attempts < max_attempts, else park as failed loud
         max_attempts = int(
             os.environ.get("GRAPH_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS))
         )
@@ -337,32 +408,24 @@ async def handle_graph_job(job_id: str) -> None:
             except GraphQueueUnavailable:
                 logger.warning(
                     "graph_requeue_failed",
-                    extra={
-                        "event": "graph_requeue_failed",
-                        "job_id": job_id,
-                    },
+                    extra={"event": "graph_requeue_failed", "job_id": job_id},
                 )
                 raise
-        else:
-            await _set_job_failed(job_id, error_code, message)
-            logger.warning(
-                "graph_job_failed",
-                extra={
-                    "event": "graph_job_failed",
-                    "job_id": job_id,
-                    "attempts": attempts,
-                    "error": error_code,
-                },
-            )
-            # Do not re-queue; job will be acked and left as failed
-            # The failure is LOUD: status failed, error_code visible,
-            # not silent READY
-            raise RuntimeError(
-                f"graph job {job_id} parked as failed after "
-                f"{attempts} attempts: {message}"
-            ) from exc
-        raise
-
+            return GraphJobDisposition.RETRY
+        await _set_job_failed(job_id, error_code, message)
+        logger.warning(
+            "graph_job_failed",
+            extra={
+                "event": "graph_job_failed",
+                "job_id": job_id,
+                "attempts": attempts,
+                "error": error_code,
+            },
+        )
+        raise RuntimeError(
+            f"graph job {job_id} parked as failed after "
+            f"{attempts} attempts: {message}"
+        ) from exc
 
 async def _keep_alive(claimed: Claim) -> None:
     interval = max(2.0, 5.0)  # simple fixed interval, lease is 120s default
@@ -423,15 +486,10 @@ async def run_graph_worker(stop_event: asyncio.Event) -> None:
         heartbeat = asyncio.create_task(_keep_alive(claimed))
         try:
             job_id = str(claimed)
+            disposition = None
             try:
-                await handle_graph_job(job_id)
+                disposition = await handle_graph_job(job_id)
             except Exception as exc:
-                # If handle_graph_job parked as failed, it raised; we still need to
-                # decide whether to ack or requeue. It already scheduled retry if
-                # attempts < max, else it set failed state. In both cases we ack
-                # the claim after durable outcome (retry queued or failed parked).
-                # For retry case, the job is already in delayed zset, so ack is correct.
-                # For park case, ack removes claim and leaves failed state.
                 logger.error(
                     "graph_worker_error",
                     extra={
@@ -440,32 +498,30 @@ async def run_graph_worker(stop_event: asyncio.Event) -> None:
                         "error": f"{type(exc).__name__}: {exc}",
                     },
                 )
-                # If it was a retry, handle_graph_job already scheduled retry
-                # If it was a park, we still ack to remove claim
-                # Check if retry was scheduled: if attempts < max, job is in delayed
-                # For now always ack after handle (retry already queued or parked)
-                pass
-            # Ack after durable outcome
-            try:
-                from graph.queue import ack as graph_ack
+                disposition = None
+            # Ack only on confirmed durable dispositions. A failed retry / park
+            # write leaves the lease unreleased for expired-claim recovery.
+            if disposition in (
+                GraphJobDisposition.SUCCESS,
+                GraphJobDisposition.RETRY,
+                GraphJobDisposition.PARKED,
+            ):
+                try:
+                    from graph.queue import ack as graph_ack
 
-                await graph_ack(claimed)
-                # Clean up payload if not already (success case already deleted)
-                # For retry case, payload should remain for redelivery; but our
-                # handle_graph_job for retry leaves payload intact and adds to delayed.
-                # Ack will remove claim but payload stays; promote_due will requeue.
-                # For success, payload already deleted.
-                # For park, payload should be deleted? Currently not deleted on park,
-                # but we should delete to avoid leaking.
-                max_attempts = int(
-                    os.environ.get(
-                        "GRAPH_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS)
+                    await graph_ack(claimed)
+                    if (
+                        disposition is GraphJobDisposition.PARKED
+                        or await _get_attempts(job_id) >= int(
+                            os.environ.get("GRAPH_MAX_ATTEMPTS", str(_DEFAULT_MAX_ATTEMPTS))
+                        )
+                    ):
+                        await delete_payload(job_id)
+                except GraphQueueUnavailable:
+                    logger.warning(
+                        "graph_ack_failed",
+                        extra={"event": "graph_ack_failed", "job_id": job_id},
                     )
-                )
-                if await _get_attempts(job_id) >= max_attempts:
-                    await delete_payload(job_id)
-            except GraphQueueUnavailable:
-                pass
         finally:
             heartbeat.cancel()
             try:

@@ -1,0 +1,109 @@
+"""Offline review probes: real runtime code, temporary SQLite, fake I/O boundaries."""
+import asyncio
+import json
+from pathlib import Path
+import sqlite3
+import sys
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, patch
+import uuid
+
+REPO = Path('/root/code/Super Rag/knowledge-os')
+for path in (REPO / 'packages', REPO / 'apps' / 'worker', REPO / 'apps' / 'api'):
+    sys.path.insert(0, str(path))
+
+from graph.extractor import GraphChunk, RuleBasedGraphExtractor
+from graph.sqlite_store import SQLiteGraphStore
+from models.interfaces import GenerationResult
+from workflow_engine.interfaces import NodeSpec, NodeType, PortSpec
+from workflow_engine.production_executor import ProductionNodeExecutor
+from jobs import graph_extraction as worker
+
+async def workflow_badge():
+    provider = AsyncMock()
+    provider.generate.return_value = GenerationResult(
+        text='The moon is made of cheese.', model='google/gemma-4-26b-a4b-it:free')
+    node = NodeSpec(id='llm', type=NodeType.LLM,
+        config={'requires_verification': True}, required_capabilities=['llm'],
+        input_ports=[PortSpec(name='input', type='any')],
+        output_ports=[PortSpec(name='output', type='any')])
+    result = await ProductionNodeExecutor(llm_provider=provider).execute_node(
+        node, 'Make a factual claim. No evidence supplied.', 'review-workspace')
+    return {'result': result, 'provider_calls': provider.generate.await_count}
+
+async def graph_provenance(path):
+    store = SQLiteGraphStore(path)
+    extractor = RuleBasedGraphExtractor()
+    ws = 'review-workspace'
+    try:
+        rows = []
+        for n in (1, 2):
+            extracted = await extractor.extract([GraphChunk(
+                chunk_id=f'chunk-{n}', document_id=f'doc-{n}', workspace_id=ws,
+                text='Alice Smith works at Acme Corp.')])
+            await store.upsert_extraction(ws, extracted.entities, extracted.relationships, [])
+            entity_id = next(e.id for e in extracted.entities if e.name == 'Alice Smith')
+            entity = await store.get_entity(ws, entity_id)
+            rows.append({'document_ids': entity.document_ids, 'chunk_ids': entity.chunk_ids})
+        await store.tombstone_document(ws, 'doc-2')
+        surviving = await store.get_entity(ws, entity_id)
+        return {'after_each_document': rows, 'entity_survives_delete_of_doc_2': surviving is not None}
+    finally:
+        store.close()
+
+async def graph_delete_during_extraction(path):
+    ws = 'review-race'
+    doc, version, cid = str(uuid.uuid4()), str(uuid.uuid4()), str(uuid.uuid4())
+    row = SimpleNamespace(id=uuid.UUID(cid), text='Alice Smith works at Acme Corp.',
+                          page=1, section='People', language='en')
+    chunks = [GraphChunk(chunk_id=cid, text=row.text, workspace_id=ws, document_id=doc,
+                         page=1, section='People', language='en')]
+    initial = await RuleBasedGraphExtractor().extract(chunks)
+    seed = SQLiteGraphStore(path)
+    await seed.upsert_extraction(ws, initial.entities, initial.relationships, [])
+    seed.close()
+    state = {'database_queries': 0}
+    class Session:
+        async def __aenter__(self):
+            return self
+        async def __aexit__(self, *args):
+            return False
+        async def execute(self, query):
+            state['database_queries'] += 1
+            return SimpleNamespace(scalars=lambda: SimpleNamespace(all=lambda: [row]))
+    class DelayedExtractor:
+        async def extract(self, loaded):
+            result = await RuleBasedGraphExtractor().extract(loaded)
+            deleting = SQLiteGraphStore(path)
+            try:
+                await deleting.tombstone_document(ws, doc)
+                state['absent_after_delete'] = await deleting.get_entity(ws, initial.entities[0].id) is None
+            finally:
+                deleting.close()
+            return result
+    with patch.object(worker, 'get_payload', AsyncMock(return_value={
+        'workspace_id': ws, 'document_id': doc, 'version_id': version})), \
+        patch.object(worker, 'get_session_factory', return_value=Session), \
+        patch.object(worker, 'create_graph_extractor', return_value=DelayedExtractor()), \
+        patch.object(worker, 'graph_mode', return_value='rule'), \
+        patch.object(worker, 'create_graph_store', side_effect=lambda: SQLiteGraphStore(path)), \
+        patch('graph.communities.summarize_community', AsyncMock(return_value='Synthetic summary')):
+        state['worker_result'] = await worker.process_graph_job('review-job')
+    with sqlite3.connect(path) as con:
+        state['live_entities_after_worker_finishes'] = con.execute(
+            'SELECT COUNT(*) FROM graph_entities WHERE tombstoned=0').fetchone()[0]
+    return state
+
+async def main():
+    with tempfile.TemporaryDirectory(prefix='super-rag-followup-') as temp:
+        root = Path(temp)
+        result = {
+            'workflow_verification': await workflow_badge(),
+            'graph_cross_document_provenance': await graph_provenance(root/'provenance.sqlite'),
+            'graph_delete_race': await graph_delete_during_extraction(root/'race.sqlite'),
+        }
+        print(json.dumps(result, indent=2))
+
+with patch('socket.socket.connect', side_effect=AssertionError('Network forbidden in review probe')):
+    asyncio.run(main())

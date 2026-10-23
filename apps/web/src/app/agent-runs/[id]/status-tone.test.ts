@@ -21,8 +21,8 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
-import { runStatusTone, type ChipTone } from "../page";
-import { runStatusTone as runStatusToneDetail } from "./page";
+import { runStatusTone, type ChipTone } from "../agent-runs";
+import { runStatusTone as runStatusToneDetail } from "./run-detail";
 
 /** The statuses the detail page declares terminal (mirrored from its source). */
 const TERMINAL = [
@@ -83,7 +83,7 @@ describe("terminal statuses all carry a terminal tone (F-2)", () => {
     // The tone name is only useful if it maps to real CSS classes; asserted
     // through the page source (no DOM harness in this repo).
     const page = readFileSync(
-      fileURLToPath(new URL("./page.tsx", import.meta.url)),
+      fileURLToPath(new URL("./run-detail.tsx", import.meta.url)),
       "utf8",
     );
     expect(page).toContain('partial: "border-violet-600/30 bg-violet-100 text-violet-900');

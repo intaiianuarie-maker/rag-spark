@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Search as SearchIcon } from "lucide-react";
 
 import { useWorkspaces } from "@/components/workspace/workspace-provider";
@@ -20,38 +20,109 @@ import { FilterBar } from "./components/filter-bar";
 import { ResultList } from "./components/result-list";
 import { ResultDetail } from "./components/result-detail";
 
+/**
+ * A published value together with the workspace it belongs to.
+ *
+ * Publication is workspace-scoped on purpose: a response/error produced for
+ * workspace A can only ever be *shown* under workspace A. The identity is
+ * captured when the request is made, so the value is not re-stamped with
+ * whatever workspace happens to be active when it lands — that is what closes
+ * the commit window (a stale A resolution landing between B's render and B's
+ * passive effect can no longer paint under B, in any commit ordering).
+ */
+type Scoped<T> = { workspaceId: string; value: T };
+
 export default function SearchPage() {
   const { active } = useWorkspaces();
   const [query, setQuery] = useState("");
   const [mode, setMode] = useState<SearchMode>(DEFAULT_SEARCH_MODE);
   const [filters, setFilters] = useState<SearchFilters>(EMPTY_SEARCH_FILTERS);
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [response, setResponse] = useState<SearchResponse | null>(null);
-  const [selected, setSelected] = useState<SearchResultItem | null>(null);
+  const [error, setError] = useState<Scoped<string> | null>(null);
+  const [response, setResponse] = useState<Scoped<SearchResponse> | null>(null);
+  const [selected, setSelected] = useState<Scoped<SearchResultItem> | null>(null);
+  const runIdRef = useRef(0);
+  const lastRunRef = useRef<{ workspaceId: string; runId: number } | null>(null);
+  const activeId = active?.id;
+  const scopeId = activeId ?? "";
+  const [lastActiveId, setLastActiveId] = useState(activeId);
+
+  useEffect(() => {
+    // Invalidate work started for a workspace that is no longer active, so a
+    // delayed result/error can never land under the new workspace.
+    //
+    // Only OLD-workspace work is invalidated: a run started for the
+    // workspace that is ALREADY active — e.g. a request submitted during
+    // this workspace's own commit window — belongs to the workspace the
+    // caller is looking at and must not be superseded here. (A request
+    // started for the old workspace is superseded anyway by the newer run
+    // id, so no data of the old workspace is published either way.)
+    const lastRun = lastRunRef.current;
+    if (lastRun && lastRun.workspaceId !== (activeId ?? "")) {
+      runIdRef.current += 1;
+    }
+  }, [activeId]);
+
+  // Reset the result surface when the active workspace changes. Adjusted
+  // during render (React's "adjust state when a prop changes" pattern)
+  // instead of from an effect: an effect that resets state synchronously
+  // cascades an extra render pass on every workspace switch.
+  if (lastActiveId !== activeId) {
+    setLastActiveId(activeId);
+    setResponse(null);
+    setSelected(null);
+    setError(null);
+    setLoading(false);
+  }
 
   const dateError = !isValidDateFilter(filters.date);
+
+  // Workspace-scoped visibility: a value published for another workspace is
+  // never shown under this one. This is the identity fence — it holds in ANY
+  // commit ordering, including the window between the render that switches
+  // the workspace and the passive effect that invalidates the in-flight run.
+  const visibleError = error && error.workspaceId === scopeId ? error.value : null;
+  const visibleResponse =
+    response && response.workspaceId === scopeId ? response.value : null;
+  const visibleSelected =
+    selected && selected.workspaceId === scopeId ? selected.value : null;
 
   const runSearch = useCallback(
     async (q: string, m: SearchMode, f: SearchFilters) => {
       if (!active?.id) return;
+      const workspaceId = active.id;
+      const thisRun = ++runIdRef.current;
+      // Remember which workspace this run belongs to: the workspace-change
+      // invalidation must supersede old-workspace work only, never a run
+      // started for the workspace that is already active.
+      lastRunRef.current = { workspaceId, runId: thisRun };
       if (q.trim().length === 0) {
-        setError("Enter a query to search.");
+        if (runIdRef.current === thisRun) {
+          setError({ workspaceId, value: "Enter a query to search." });
+        }
         return;
       }
+      if (runIdRef.current !== thisRun) return;
       setLoading(true);
       setError(null);
       setSelected(null);
       try {
         const body = buildSearchBody(q, m, f);
-        const result = await searchDocuments(active.id, body);
-        setResponse(result);
+        const result = await searchDocuments(workspaceId, body);
+        if (runIdRef.current !== thisRun) return;
+        // Published with the identity of the workspace the request was made
+        // for — NOT with the workspace that happens to be active when it
+        // lands. A late A resolution can therefore never paint under B.
+        setResponse({ workspaceId, value: result });
       } catch (err) {
         const msg = err instanceof Error ? err.message : "Search failed.";
-        setError(msg);
+        if (runIdRef.current !== thisRun) return;
+        setError({ workspaceId, value: msg });
         setResponse(null);
       } finally {
-        setLoading(false);
+        if (runIdRef.current === thisRun) {
+          setLoading(false);
+        }
       }
     },
     [active],
@@ -110,28 +181,28 @@ export default function SearchPage() {
               Searching…
             </div>
           )}
-          {!loading && error && (
+          {!loading && visibleError && (
             <div className="px-6 py-16 text-center text-sm text-red-500 md:px-8">
-              {error}
+              {visibleError}
             </div>
           )}
-          {!loading && !error && !response && (
+          {!loading && !visibleError && !visibleResponse && (
             <div className="px-6 py-16 text-center text-sm text-neutral-500 md:px-8 dark:text-neutral-400">
               {active?.id
                 ? "Enter a query to begin searching."
                 : "Select a workspace to search."}
             </div>
           )}
-          {!loading && !error && response && (
+          {!loading && !visibleError && visibleResponse && (
             <ResultList
-              results={response.results}
-              onOpenSource={setSelected}
+              results={visibleResponse.results}
+              onOpenSource={(item) => setSelected({ workspaceId: scopeId, value: item })}
             />
           )}
         </div>
       </div>
 
-      <ResultDetail item={selected} onClose={() => setSelected(null)} />
+      <ResultDetail item={visibleSelected} onClose={() => setSelected(null)} />
     </main>
   );
 }

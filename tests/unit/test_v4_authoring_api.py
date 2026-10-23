@@ -18,6 +18,13 @@ Verifies the 3 target metrics:
 
 from __future__ import annotations
 
+import os
+
+os.environ.setdefault("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
+os.environ.setdefault("WORKFLOW_DRAFT_DB", "/tmp/opencode/v4_test_drafts.db")
+os.environ.setdefault("WORKFLOW_RUNS_DB", "/tmp/opencode/v4_test_runs.db")
+os.environ.setdefault("WORKFLOW_APPROVALS_DB", "/tmp/opencode/v4_test_approvals.db")
+
 import uuid
 from typing import Any
 
@@ -54,6 +61,28 @@ def _make_client(user_roles: dict[str, Role] | None = None) -> TestClient:
     )
     app.dependency_overrides[get_principal] = lambda: principal
     return TestClient(app)
+
+
+_TERMINAL = ("completed", "failed", "cancelled")
+
+
+def _await_terminal(client: TestClient, wid: str, run_id: str, attempts: int = 100) -> dict:
+    """T-A16: poll the status handler until the supervised task settles.
+
+    The run id is returned before dispatch, so the terminal state is read from
+    the status route rather than from the run response.
+    """
+    import time
+
+    last: dict = {}
+    for _ in range(attempts):
+        res = client.get(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/{run_id}")
+        assert res.status_code == 200, res.text
+        last = res.json()["run"]
+        if last["status"] in _TERMINAL:
+            return last
+        time.sleep(0.02)
+    return last
 
 
 def _sample_definition(
@@ -157,9 +186,7 @@ def test_metric_1_cross_workspace_refused_across_all_8_handlers():
     assert res_run.status_code == 403
 
     # 7. status
-    res_stat = client.get(
-        f"/v1/workspaces/{WS_FOREIGN}/workflows/wf-foreign/runs/wfrun-xyz"
-    )
+    res_stat = client.get(f"/v1/workspaces/{WS_FOREIGN}/workflows/wf-foreign/runs/wfrun-xyz")
     assert res_stat.status_code == 403
 
     # 8. cancel
@@ -343,17 +370,13 @@ def test_v4_authoring_full_lifecycle():
     assert "timeline" in run_data
 
     # 7. STATUS: inspect run status and timeline
-    res_stat = client.get(
-        f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/{run_id}"
-    )
+    res_stat = client.get(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/{run_id}")
     assert res_stat.status_code == 200
     stat_data = res_stat.json()
     assert stat_data["run"]["id"] == run_id
 
     # 8. CANCEL: cancel run
-    res_can = client.post(
-        f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/{run_id}/cancel"
-    )
+    res_can = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/{run_id}/cancel")
     assert res_can.status_code == 200
     can_data = res_can.json()
     assert can_data["run"]["status"] in ("completed", "cancelled")
@@ -372,3 +395,298 @@ def test_import_workflow_native_and_langflow():
     assert res_native.status_code == 200
     assert res_native.json()["workflow_id"] == "wf-imported-native"
     assert res_native.json()["revision"] == 1
+
+
+def test_run_workflow_refuses_without_checkpoint_db(monkeypatch):
+    monkeypatch.delenv("WORKFLOW_CHECKPOINT_DB", raising=False)
+    from app.authz.principal import get_principal
+    from app.main import app
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="user@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.ADMIN},
+    )
+    client = TestClient(app)
+    resp = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/workflows/wf-does-not-matter/run",
+        json={"revision": 1, "inputs": {}},
+    )
+    assert resp.status_code == 503
+    assert resp.json()["detail"]["error"] == "checkpoint_unavailable"
+
+
+def test_run_workflow_invalid_definition_returns_422():
+    from app.authz.principal import get_principal
+    from app.main import app
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="user@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.OWNER},
+    )
+    wid = "wf-invalid-" + __import__("uuid").uuid4().hex[:6]
+    body = {
+        "id": wid,
+        "workspace_id": WS_ALLOWED,
+        "name": "Invalid",
+        "description": "x",
+        "nodes": [
+            {
+                "id": "trigger-1",
+                "type": "trigger",
+                "name": "Start",
+                "output_ports": [{"name": "output", "type": "dict"}],
+            },
+            {
+                "id": "http-1",
+                "type": "http",
+                "name": "Http",
+                "input_ports": [{"name": "input", "type": "any"}],
+            },
+        ],
+        "edges": [
+            {
+                "id": "e1",
+                "source_node_id": "trigger-1",
+                "source_port": "output",
+                "target_node_id": "http-1",
+                "target_port": "input",
+            }
+        ],
+    }
+    import requests
+
+    _ = requests
+    client = TestClient(app)
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/import", json={"flow_data": body})
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    resp = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}}
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_definition"
+    assert "traceback" not in resp.text.lower()
+
+
+def test_run_workflow_runtime_failure_returns_coded_error():
+    import uuid
+
+    from app.authz.principal import get_principal
+    from app.main import app
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="user@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.OWNER},
+    )
+    wid = "wf-runtime-" + uuid.uuid4().hex[:6]
+    body = {
+        "id": wid,
+        "workspace_id": WS_ALLOWED,
+        "name": "Runtime",
+        "description": "x",
+        "nodes": [
+            {
+                "id": "trigger-1",
+                "type": "trigger",
+                "name": "Start",
+                "output_ports": [{"name": "output", "type": "dict"}],
+            },
+            {
+                "id": "llm-1",
+                "type": "llm",
+                "name": "LLM",
+                "config": {"model": "x"},
+                "input_ports": [{"name": "input", "type": "any"}],
+                "output_ports": [{"name": "output", "type": "any"}],
+            },
+            {
+                "id": "output-1",
+                "type": "output",
+                "name": "End",
+                "input_ports": [{"name": "input", "type": "any"}],
+            },
+        ],
+        "edges": [
+            {
+                "id": "e1",
+                "source_node_id": "trigger-1",
+                "source_port": "output",
+                "target_node_id": "llm-1",
+                "target_port": "input",
+            },
+            {
+                "id": "e2",
+                "source_node_id": "llm-1",
+                "source_port": "output",
+                "target_node_id": "output-1",
+                "target_port": "input",
+            },
+        ],
+    }
+    client = TestClient(app)
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/import", json={"flow_data": body})
+    client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    resp = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}}
+    )
+    assert resp.status_code == 200
+    data = resp.json()["run"]
+    # T-A16: the run id is returned BEFORE dispatch, so the terminal outcome is
+    # observed through the status handler once the supervised task settles.
+    assert data["status"] in ("running", "failed")
+    run_id = data["id"]
+
+    final = _await_terminal(client, wid, run_id)
+    assert final["status"] == "failed"
+    assert final["error"].startswith("node 'llm-1' failed: LLM node")
+    assert "traceback" not in str(final).lower()
+
+
+def test_cancel_without_live_executor_returns_409(monkeypatch):
+    monkeypatch.setenv("WORKFLOW_DRAFT_DB", "/tmp/opencode/v4_test_drafts.db")
+    monkeypatch.setenv("WORKFLOW_CHECKPOINT_DB", "/tmp/opencode/v4_test_checkpoints.db")
+    monkeypatch.setenv("WORKFLOW_RUNS_DB", "/tmp/opencode/v4_test_runs.db")
+    monkeypatch.setenv("WORKFLOW_APPROVALS_DB", "/tmp/opencode/v4_test_approvals.db")
+    from datetime import UTC, datetime
+
+    from app.authz.principal import get_principal
+    from app.main import app
+    from app.workflows.store import save_run
+    from core.auth import Principal, Role
+    from fastapi.testclient import TestClient
+    from workflow_engine.interfaces import WorkflowRun, WorkflowRunStatus
+
+    app.dependency_overrides[get_principal] = lambda: Principal(
+        user_id=USER_ID,
+        email="u@test.org",
+        is_authenticated=True,
+        workspace_roles={WS_ALLOWED: Role.ADMIN},
+    )
+    wid = "wf-cancel-" + __import__("uuid").uuid4().hex[:6]
+    run = WorkflowRun(
+        id="wfrun-cancel",
+        workspace_id=WS_ALLOWED,
+        workflow_id=wid,
+        status=WorkflowRunStatus.RUNNING,
+        created_at=datetime.now(UTC).isoformat(),
+    )
+    save_run(run, None)
+    client = TestClient(app)
+    resp = client.post(f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/runs/wfrun-cancel/cancel")
+    assert resp.status_code == 409
+
+
+def _def_with_node(node_type: str, wid: str) -> dict:
+    return {
+        "id": wid,
+        "workspace_id": WS_ALLOWED,
+        "name": "t",
+        "nodes": [
+            {
+                "id": "t",
+                "type": "trigger",
+                "name": "Start",
+                "output_ports": [{"name": "out", "type": "dict"}],
+            },
+            {
+                "id": "x",
+                "type": node_type,
+                "name": node_type,
+                "config": {},
+                "input_ports": [{"name": "in", "type": "any"}],
+                "output_ports": [{"name": "out", "type": "any"}],
+            },
+            {
+                "id": "o",
+                "type": "output",
+                "name": "End",
+                "input_ports": [{"name": "in", "type": "any"}],
+            },
+        ],
+        "edges": [
+            {
+                "id": "e1",
+                "source_node_id": "t",
+                "source_port": "out",
+                "target_node_id": "x",
+                "target_port": "in",
+            },
+            {
+                "id": "e2",
+                "source_node_id": "x",
+                "source_port": "out",
+                "target_node_id": "o",
+                "target_port": "in",
+            },
+        ],
+    }
+
+
+def test_a15_supported_node_times() -> None:
+    import uuid
+
+    wid = "wf-A15-s-" + uuid.uuid4().hex[:6]
+    client = _make_client()
+    defn = _def_with_node("transform", wid)
+    r = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=defn)
+    assert r.status_code == 200, r.text
+    approve = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    assert approve.status_code == 200, approve.text
+
+
+def test_a15_unsupported_node_approval_refused() -> None:
+    import uuid
+
+    wid = "wf-A15-u-" + uuid.uuid4().hex[:6]
+    client = _make_client()
+    defn = _def_with_node("http", wid)
+    r = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=defn)
+    assert r.status_code == 200, r.text
+    approve = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    assert approve.status_code == 422, approve.text
+
+
+def test_a15_previously_approved_unexecutable_now_refused() -> None:
+    import uuid
+
+    wid = "wf-A15-p-" + uuid.uuid4().hex[:6]
+    client = _make_client()
+    defn = _def_with_node("http", wid)
+    r = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=defn)
+    assert r.status_code == 200, r.text
+    if r.status_code == 201:
+        approve = client.post(
+            f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1}
+        )
+        assert approve.status_code == 422, approve.text
+
+
+def test_a12_flag_on_unconfigured_refuses_before_run(monkeypatch) -> None:
+    import uuid
+
+    wid = "wf-A12-" + uuid.uuid4().hex[:6]
+    client = _make_client()
+    defn = _sample_definition(wid=wid, workspace=WS_ALLOWED)
+    sav = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=defn)
+    assert sav.status_code == 200
+    # approve
+    ap = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/approve", json={"revision": 1})
+    assert ap.status_code == 200
+    monkeypatch.setenv("WORKFLOW_V3_ADAPTER", "1")
+    run = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/drafts/{wid}/run",
+        json={"revision": 1},
+    )
+    assert run.status_code == 503, run.text

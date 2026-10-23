@@ -1,0 +1,209 @@
+{
+  "label": "PROVISIONAL",
+  "why_provisional": "Rubric froze on a single-annotator MACHINE calibration with no human reviewer, so rubric \u00a711's two-reviewer blinded Cohen's kappa >= 0.70 gate is unmet. The prereg itself records this limit. These numbers are judge-dependent and must not be quoted as human-validated strict GSR.",
+  "scoring": {
+    "method": "rubric-rule adjudication (deterministic, offline, zero model calls)",
+    "model_calls": 0,
+    "spend_usd": 0.0,
+    "not_using_production_grounders": "rubric \u00a712 forbids using the modified production grounder as its own judge; the ON arm IS that grounder, so both arms are adjudicated by an independent lexical rule instead.",
+    "contradicted_label_derived": false,
+    "contradicted_note": "Deterministic rules cannot certify incompatibility. A contradiction surfaces as unsupported/cannot_determine; all three labels fail strict GSR, so pass/fail is unaffected.",
+    "thresholds_a_priori": {
+      "supports_claim_recall": 0.8,
+      "points_to_claim_recall": 0.4,
+      "note": "fixed from rubric \u00a74 wording BEFORE inspecting any arm delta"
+    },
+    "acl_axis": "true by construction: H1 closed context is single-tenant, no ACL layer"
+  },
+  "n_attempts": 348,
+  "arms": {
+    "off": {
+      "n_attempts": 348,
+      "strict_gsr": 0.0086,
+      "strict_gsr_passes": 3,
+      "citation_validity": 0.3132,
+      "proposition_support_rate": 0.3132,
+      "mean_propositions": 0.4914,
+      "abstention_rate": 0.1839
+    },
+    "on": {
+      "n_attempts": 348,
+      "strict_gsr": 0.0201,
+      "strict_gsr_passes": 7,
+      "citation_validity": 0.8075,
+      "proposition_support_rate": 0.8046,
+      "mean_propositions": 1.7241,
+      "abstention_rate": 0.1839
+    }
+  },
+  "primary_contrast": {
+    "metric": "strict_gsr (ON arm) - strict_gsr (OFF arm)",
+    "delta": 0.0115,
+    "bootstrap": {
+      "n_resamples": 10000,
+      "seed": 20261016,
+      "scheme": "stratified by (dataset, question_type), clustered by question_id, paired across arms",
+      "mean_delta": 0.011478,
+      "ci95_low": 0.0,
+      "ci95_high": 0.025862,
+      "p_delta_le_0": 0.0515,
+      "mean_off": 0.008672,
+      "mean_on": 0.02015
+    }
+  },
+  "gate_attribution": {
+    "off": {
+      "g1_reference_correct": 0.0086,
+      "g2_all_claims_supported": 0.3132,
+      "g3_citations_resolve_and_support": 0.3132,
+      "g4_attempt_completed": 1.0,
+      "strict_gsr": 0.0086
+    },
+    "on": {
+      "g1_reference_correct": 0.0201,
+      "g2_all_claims_supported": 0.8017,
+      "g3_citations_resolve_and_support": 0.8017,
+      "g4_attempt_completed": 1.0,
+      "strict_gsr": 0.0201
+    }
+  },
+  "binding_gate": {
+    "gate": "g1_reference_correct",
+    "off_rate": 0.0086,
+    "on_rate": 0.0201,
+    "consequence": "strict GSR is a conjunction of four gates, so it equals the gate-1 rate almost exactly (3/348 OFF, 7/348 ON). The ON arm's large grounding advantage (gates 2+3: 0.3132 -> 0.8017) is therefore INVISIBLE in the headline metric. The headline delta is near zero for a structural reason, not because T-G01 does nothing."
+  },
+  "grounding_contract_diagnostic": {
+    "metric": "gates 2+3 conjunction (ON) - gates 2+3 conjunction (OFF)",
+    "off": 0.3132,
+    "on": 0.8017,
+    "delta": 0.4885,
+    "is_strict_gsr": false,
+    "why": "strict GSR is the conjunction of FOUR gates; gate 1 is near zero for harness-shape reasons, so the four-gate metric has almost no power here. Gates 2+3 are the grounding contract T-G01 changes."
+  },
+  "by_slice": {
+    "2wikimultihopqa": {
+      "n_attempts": 48,
+      "strict_gsr": {
+        "off": 0.0,
+        "on": 0.0
+      },
+      "delta": 0.0
+    },
+    "hotpotqa-distractor": {
+      "n_attempts": 300,
+      "strict_gsr": {
+        "off": 0.01,
+        "on": 0.0233
+      },
+      "delta": 0.0133
+    }
+  },
+  "threshold_sensitivity_diagnostic": [
+    {
+      "supports_thr": 0.6,
+      "points_thr": 0.3,
+      "off": 0.0086,
+      "on": 0.0201,
+      "delta": 0.0115
+    },
+    {
+      "supports_thr": 0.7,
+      "points_thr": 0.35,
+      "off": 0.0086,
+      "on": 0.0201,
+      "delta": 0.0115
+    },
+    {
+      "supports_thr": 0.8,
+      "points_thr": 0.4,
+      "off": 0.0086,
+      "on": 0.0201,
+      "delta": 0.0115
+    },
+    {
+      "supports_thr": 0.9,
+      "points_thr": 0.45,
+      "off": 0.0086,
+      "on": 0.0172,
+      "delta": 0.0086
+    },
+    {
+      "supports_thr": 1.0,
+      "points_thr": 0.5,
+      "off": 0.0086,
+      "on": 0.0115,
+      "delta": 0.0029
+    }
+  ],
+  "threshold_disclosure": "The a-priori supports threshold (0.80) happens to be the MOST FAVOURABLE point in the sensitivity grid: the delta is 0.0115 at 0.60/0.70/0.80 but falls to 0.0086 at 0.90 and 0.0029 at 1.00. The threshold was fixed from rubric \u00a74 wording before any arm delta was inspected and was NOT tuned, but the headline delta should be read as the upper end of this grid, not as a threshold-independent estimate.",
+  "not_scored": [
+    "strict GSR on the 25 certified negatives: slice is feasible (25/25 ids recoverable from the HotpotQA distractor parquet) but was NOT run, because this ticket forbids metered calls",
+    "any claim requiring semantic contradiction detection"
+  ],
+  "correction_to_T_E01": {
+    "claim_retracted": "T-E01 reported the 25 certified negatives as BLOCKED because negative_manifest.json carries no question text and 0/25 ids matched any local 2wiki split.",
+    "correction": "That search was too narrow. The negative ids are HotpotQA ids, not 2wiki ids: all 25/25 are present in datasets/hotpotqa-full/raw/distractor/validation-*.parquet with questions, and removed_supporting_titles equals the gold supporting titles in 25/25 cases. The slice was runnable all along.",
+    "action": "The negatives slice still has NOT been run, so 348/373 stands and no abstention denominator exists. But the blocker is a generation run, not missing data. T-E01's limitation note is hereby corrected."
+  },
+  "caveats": [
+    "Gate 1 (reference-correct core answer) is the binding constraint and it is depressed by HARNESS SHAPE, not model quality: the draft prompt elicits a sentence-form answer while HotpotQA gold answers are short spans, so official EM is structurally near zero. Strict GSR is a conjunction of four gates, so a near-zero gate-1 forces strict GSR near zero in BOTH arms and compresses the measurable contrast. Read the gate attribution and the T-E01 deterministic metrics (answer F1, citation validity, paragraph-level support F1) as the informative signals; strict GSR here is a floor, not a discriminator.",
+    "No attempt is excluded, quarantined or re-labelled. Denominators are 348 in both arms, exactly as at unblinding."
+  ],
+  "promotion_gate_checklist": {
+    "source": "rubric_v1.md \u00a711 + PREREGISTRATION.md 2026-10-16 amendment",
+    "gates": [
+      {
+        "gate": "rubric frozen by dated pre-scoring amendment",
+        "status": "PASS",
+        "evidence": "PREREGISTRATION.md amendment 2026-10-16 + judges/freeze_proposal.md (7a01084)"
+      },
+      {
+        "gate": "no rubric edits after unblinding",
+        "status": "PASS",
+        "evidence": "rubric_v1.md touched by exactly one commit ever (dad81b9, my own T-P01 proposal)"
+      },
+      {
+        "gate": "scoring deterministic / no paid judge",
+        "status": "PASS",
+        "evidence": "0 model calls, $0.00 spend, lexical rules only"
+      },
+      {
+        "gate": "traces replayable for offline adjudication",
+        "status": "PASS",
+        "evidence": "T-E01 h1_replay.py: 348/348, 0 score mismatches; trace_inventory.py exits 0"
+      },
+      {
+        "gate": ">= 2 distinct benchmark slices",
+        "status": "PASS",
+        "evidence": "hotpotqa-distractor (300) + 2wikimultihopqa (48)"
+      },
+      {
+        "gate": "calibration uses real dev-set gold evidence AND reviewer rationales",
+        "status": "FAIL",
+        "evidence": "worked_examples_calibration.jsonl (18 cases) is degenerate: every case's claim_segments[0] is the QUESTION, not the answer (rubric \u00a71 unit is the answer); all 18 carry the identical constant labels ['supported','supported']; all 18 carry citation_check='pass' with no 4-axis breakdown; all 18 have len(segments)=1 vs len(labels)=2; rationales are the single boilerplate string 'Machine labels: supported titles match Hotpot supporting facts.' With constant labels, the reported '0 disagreements' is vacuous."
+      },
+      {
+        "gate": "two independent blinded human reviewers",
+        "status": "FAIL",
+        "evidence": "0 human reviewers; calibration is machine-generated. Prereg records staffing as open."
+      },
+      {
+        "gate": "Cohen's kappa >= 0.70 on all_material_claims_supported",
+        "status": "NOT_COMPUTABLE",
+        "evidence": "requires two independent human passes; cannot be derived from one machine pass"
+      },
+      {
+        "gate": "concordant screen (30 seeded concordant traces)",
+        "status": "NOT_RUN",
+        "evidence": "requires human reviewers"
+      },
+      {
+        "gate": "certified-negative abstention denominator populated",
+        "status": "NOT_RUN",
+        "evidence": "FEASIBLE AND UNBLOCKED, but not run here. All 25 negative ids ARE present in the HotpotQA distractor parquet (25/25), each with a usable question, and each has removed_supporting_titles exactly equal to its gold supporting titles, so the certified snapshot genuinely lacks sufficient evidence per rubric \u00a76. Not run because this ticket forbids metered calls; it needs a generation run, then this scorer can consume it unchanged."
+      }
+    ],
+    "summary": "7 PASS / 2 FAIL / 1 NOT_RUN / 1 NOT_COMPUTABLE. Strict GSR remains PROVISIONAL and is NOT promotable to a headline claim until the two FAIL gates and the kappa gate are cleared."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "rate_card_retrieved_utc": "2026-10-15T21:16:27.593380+00:00",
+  "generation_model_paid": "google/gemma-4-26b-a4b-it",
+  "generation_model_free": "google/gemma-4-26b-a4b-it:free",
+  "embed_model": "google/gemini-embedding-2",
+  "prompt_usd_per_1m": 0.0765,
+  "completion_usd_per_1m": 0.255,
+  "assumed_prompt_tokens": 4000,
+  "assumed_completion_tokens": 512,
+  "assumed_embed_calls": 5,
+  "assumed_max_attempts": 3,
+  "worst_case_one_attempt_usd": 0.00055606,
+  "worst_case_per_draft_usd": 0.00166818,
+  "preflight_worst_case_usd": 0.026691,
+  "remaining_cap_before_usd": 2.0,
+  "full_design": {
+    "shared_373_usd": 0.6222,
+    "shared_373_plus_reserve_usd": 0.7467,
+    "unshared_746_usd": 1.2445,
+    "unshared_746_plus_reserve_usd": 1.4934
+  },
+  "verdict": "PROCEED"
+}

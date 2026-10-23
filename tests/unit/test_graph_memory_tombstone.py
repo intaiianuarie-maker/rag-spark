@@ -55,9 +55,12 @@ async def test_memory_tombstone_entity_regenerates_partial_community_summary() -
     e2 = _ent("e2", ws, "Bob")
     r1 = _rel("r1", ws, "e1", "e2")
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice and Bob",
+        id="c1",
+        workspace_id=ws,
+        title="Alice and Bob",
         summary="Alice and Bob are connected.",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -97,9 +100,12 @@ async def test_memory_tombstone_relationship_invalidates_edge_only_community_sum
     e2 = _ent("e2", ws, "Bob")
     r1 = _rel("r1", ws, "e1", "e2")
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice and Bob",
+        id="c1",
+        workspace_id=ws,
+        title="Alice and Bob",
         summary="Alice and Bob are connected.",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -135,14 +141,21 @@ async def test_memory_tombstone_document_invalidates_all_community_provenance() 
     await store.ensure_graph(ws)
     e1 = _ent("e1", ws, "Alice", did="d-1")
     r1 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e1",
-        type=RelationshipType.RELATED_TO, workspace_id=ws,
-        chunk_ids=["c-1"], document_ids=["d-1"],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e1",
+        type=RelationshipType.RELATED_TO,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=["d-1"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice Team",
+        id="c1",
+        workspace_id=ws,
+        title="Alice Team",
         summary="Alice is the sole member.",
-        entity_ids=["e1"], relationship_ids=["r1"],
+        entity_ids=["e1"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1])
     await store.upsert_relationships(ws, [r1])
@@ -170,14 +183,21 @@ async def test_memory_tombstone_document_preserves_surviving_member() -> None:
     e1 = _ent("e1", ws, "Alice", did="d-1")
     e2 = _ent("e2", ws, "Bob", did="d-2")
     r1 = Relationship(
-        id="r1", source_entity_id="e1", target_entity_id="e2",
-        type=RelationshipType.RELATED_TO, workspace_id=ws,
-        chunk_ids=["c-1", "c-2"], document_ids=["d-1", "d-2"],
+        id="r1",
+        source_entity_id="e1",
+        target_entity_id="e2",
+        type=RelationshipType.RELATED_TO,
+        workspace_id=ws,
+        chunk_ids=["c-1", "c-2"],
+        document_ids=["d-1", "d-2"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Alice and Bob",
+        id="c1",
+        workspace_id=ws,
+        title="Alice and Bob",
         summary="Alice and Bob are on the team.",
-        entity_ids=["e1", "e2"], relationship_ids=["r1"],
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r1"],
     )
     await store.upsert_entities(ws, [e1, e2])
     await store.upsert_relationships(ws, [r1])
@@ -208,9 +228,12 @@ async def test_memory_tombstone_relationship_missing_id_returns_false() -> None:
     ws = "ws-mem-missing"
     await store.ensure_graph(ws)
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Team",
+        id="c1",
+        workspace_id=ws,
+        title="Team",
         summary="Alice and Bob.",
-        entity_ids=["e1", "e2"], relationship_ids=["r99"],
+        entity_ids=["e1", "e2"],
+        relationship_ids=["r99"],
     )
     await store.upsert_communities(ws, [c1])
 
@@ -250,14 +273,21 @@ async def test_memory_tombstone_document_unresolved_ids_invalidates_community() 
     ws = "ws-mem-fallback"
     await store.ensure_graph(ws)
     r1 = Relationship(
-        id="r1", source_entity_id="missing-src", target_entity_id="missing-tgt",
-        type=RelationshipType.RELATED_TO, workspace_id=ws,
-        chunk_ids=["c-1"], document_ids=["d-1"],
+        id="r1",
+        source_entity_id="missing-src",
+        target_entity_id="missing-tgt",
+        type=RelationshipType.RELATED_TO,
+        workspace_id=ws,
+        chunk_ids=["c-1"],
+        document_ids=["d-1"],
     )
     c1 = GraphCommunity(
-        id="c1", workspace_id=ws, title="Deleted acquisition",
+        id="c1",
+        workspace_id=ws,
+        title="Deleted acquisition",
         summary="Secret acquisition happened.",
-        entity_ids=["missing-src"], relationship_ids=["r1"],
+        entity_ids=["missing-src"],
+        relationship_ids=["r1"],
     )
     await store.upsert_relationships(ws, [r1])
     await store.upsert_communities(ws, [c1])
@@ -273,3 +303,65 @@ async def test_memory_tombstone_document_unresolved_ids_invalidates_community() 
     gres = await retriever.global_search(ws, "Secret")
     assert gres.evidence_chunk_ids == []
     assert not any("Secret" in c.summary for c in gres.communities)
+
+
+@pytest.mark.unit
+async def test_rv19_f2_uuid_memory_upsert_entities() -> None:
+    import uuid
+
+    store = MemoryGraphStore()
+    ws = "ws-mem-uuid"
+    await store.ensure_graph(ws)
+    da, db = str(uuid.uuid4()), str(uuid.uuid4())
+    ua, ub = str(uuid.uuid4()), str(uuid.uuid4())
+    await store.upsert_entities(
+        ws,
+        [
+            Entity(
+                id="e",
+                name="Alice",
+                type=EntityType.PERSON,
+                workspace_id=ws,
+                document_ids=[da],
+                chunk_ids=[ua],
+            )
+        ],
+    )
+    await store.upsert_entities(
+        ws,
+        [
+            Entity(
+                id="e",
+                name="Alice",
+                type=EntityType.PERSON,
+                workspace_id=ws,
+                document_ids=[db],
+                chunk_ids=[ub],
+            )
+        ],
+    )
+    await store.tombstone_document(ws, da)
+    ent = await store.get_entity(ws, "e") if hasattr(store, "get_entity") else None
+    # Memory store merges on upsert? It does now (merge). But upsert_entities direct merges.
+    # After tombstone da, entity should survive with db.
+    assert ent is not None
+    assert da not in ent.document_ids
+    assert ua not in ent.chunk_ids
+
+
+@pytest.mark.unit
+async def test_rv19_f10_memory_retired_fence() -> None:
+    store = MemoryGraphStore()
+    ws = "ws-mem-f10"
+    await store.ensure_graph(ws)
+    da = "doc"
+    from graph.interfaces import Entity, EntityType
+    e = Entity(id="e", name="Alice", type=EntityType.PERSON, workspace_id=ws,
+               document_ids=[da], chunk_ids=["uuid-a"])
+    await store.upsert_entities(ws, [e])
+    await store.tombstone_document(ws, da)
+    fresh = Entity(id="fresh", name="Fresh", type=EntityType.PERSON, workspace_id=ws,
+                   document_ids=["doc2"], chunk_ids=["uuid-a"])
+    written = await store.upsert_entities(ws, [fresh])
+    assert written == 0
+    assert await store.get_entity(ws, "fresh") is None

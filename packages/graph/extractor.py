@@ -71,6 +71,7 @@ class ExtractionResult:
     relationships: list[Relationship] = field(default_factory=list)
     communities: list[GraphCommunity] = field(default_factory=list)
     chunk_ids: list[str] = field(default_factory=list)
+    failed_chunk_ids: list[str] = field(default_factory=list)
     errors: list[ExtractionError] = field(default_factory=list)
 
 
@@ -390,7 +391,10 @@ class RuleBasedGraphExtractor(GraphExtractor):
             return ExtractionResult()
         violation = _reject_mixed_workspace(chunks)
         if violation is not None:
-            return ExtractionResult(errors=[violation])
+            return ExtractionResult(
+                errors=[violation],
+                failed_chunk_ids=[c.chunk_id for c in chunks],
+            )
         entities: list[Entity] = []
         triples: list[_RelTriple] = []
         ok_chunk_ids: set[str] = set()
@@ -415,6 +419,7 @@ class RuleBasedGraphExtractor(GraphExtractor):
             entities=entities,
             relationships=relationships,
             chunk_ids=sorted(ok_chunk_ids),
+            failed_chunk_ids=[],
         )
 
     def _scan_entities(self, chunk: GraphChunk) -> list[Entity]:

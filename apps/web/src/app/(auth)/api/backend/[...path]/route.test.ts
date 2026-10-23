@@ -21,7 +21,7 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({ get: cookieGetMock })),
 }));
 
-import { forward, DELETE, POST, MAX_UPLOAD_BYTES, UploadTooLargeError, boundedBodyStream } from "./route";
+import { forward, DELETE, POST, MAX_UPLOAD_BYTES, UploadTooLargeError, boundedBodyStream } from "./handlers";
 
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
 

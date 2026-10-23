@@ -1,0 +1,14 @@
+{
+  "run_tag": "h1_rp01",
+  "reader_prompt_variant": "revised",
+  "n_attempts": 150,
+  "metered_calls": 267,
+  "free_calls": 6,
+  "paid_calls": 261,
+  "fallbacks": 261,
+  "failed_calls": 0,
+  "prompt_tokens": 404946,
+  "completion_tokens": 23811,
+  "spent_usd": 0.02175966,
+  "remaining_cap_usd": 1.949186
+}

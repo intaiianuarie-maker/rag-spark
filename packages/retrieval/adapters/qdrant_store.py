@@ -128,6 +128,26 @@ class VectorStoreError(RuntimeError):
     """Typed error for Qdrant failures; wraps vendor exceptions with cause."""
 
 
+class VectorStoreDimensionMismatch(VectorStoreError):
+    """Typed error when collection dimension does not match write/ensure dimension."""
+
+    def __init__(self, message: str, *, expected: int, actual: int, collection: str = "") -> None:
+        super().__init__(message)
+        self.reason = REJECT_DIMENSION
+        self.expected = expected
+        self.actual = actual
+        self.collection = collection
+
+
+class VectorStoreMissingSparse(VectorStoreError):
+    """Typed error when collection lacks the declared sparse vector config."""
+
+    def __init__(self, message: str, *, collection: str = "") -> None:
+        super().__init__(message)
+        self.reason = "missing_sparse"
+        self.collection = collection
+
+
 #: Rejection reasons emitted by the storage boundary (T-V1-015). Stable strings:
 #: callers/tests key off them, not off message text.
 REJECT_DIMENSION = "dimension_mismatch"
@@ -586,10 +606,24 @@ class QdrantVectorStore(VectorStore):
                     else:
                         vec_size = vectors.size  # type: ignore[union-attr]
                     if vec_size != dimension:
-                        raise VectorStoreError(
-                            f"collection {coll} dimension mismatch: {vec_size} != {dimension}"
+                        raise VectorStoreDimensionMismatch(
+                            f"collection {coll} dimension mismatch: {vec_size} != {dimension}",
+                            expected=dimension, actual=int(vec_size), collection=coll,
                         )
                 except (AttributeError, KeyError, TypeError):
+                    pass
+                # sparse declaration check
+                try:
+                    vectors = info.config.params.vectors
+                    sparse = getattr(info.config.params, "sparse_vectors", {})
+                    if not (isinstance(sparse, dict) and SPARSE_NAME in sparse):
+                        raise VectorStoreMissingSparse(
+                            f"collection {coll} is missing sparse vector config for {SPARSE_NAME}",
+                            collection=coll,
+                        )
+                except VectorStoreMissingSparse:
+                    raise
+                except Exception:
                     pass
                 else:
                     self._dimensions[coll] = dimension
@@ -1031,15 +1065,22 @@ class QdrantVectorStore(VectorStore):
                 reason="unknown_collection",
                 collection=coll,
             )
-        if query_identity is not None:
-            try:
-                verify_query_identity(stored_identity, query_identity, collection=coll)
-            except EmbeddingIdentityError as exc:
-                raise VectorStoreIdentityError(
-                    str(exc),
-                    reason="incompatible_query",
-                    collection=coll,
-                ) from exc
+        # T-A05: query identity is required at this boundary. An implicit
+        # compatible guess (or omitted identity) is no longer accepted.
+        if query_identity is None:
+            raise VectorStoreIdentityError(
+                f"collection {coll!r}: query identity is required at the dense search boundary",
+                reason="missing_query_identity",
+                collection=coll,
+            )
+        try:
+            verify_query_identity(stored_identity, query_identity, collection=coll)
+        except EmbeddingIdentityError as exc:
+            raise VectorStoreIdentityError(
+                str(exc),
+                reason="incompatible_query",
+                collection=coll,
+            ) from exc
         try:
             qfilter = _filter_from_search_filter(query_filter)
             # T-V1-018: widen the candidate window (CANDIDATE_OVERFETCH) so the

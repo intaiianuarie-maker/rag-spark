@@ -156,7 +156,7 @@ async def test_results_are_workspace_scoped() -> None:
 class _PoisonedVectorStore(FakeVectorStore):
     """Returns an out-of-scope row with a perfect score, ignoring its filter."""
 
-    async def search(self, *, collection, vector, top_k, query_filter):
+    async def search(self, *, collection, vector, top_k, query_filter, query_identity=None):
         self.search_calls.append(query_filter)
         return [
             make_item(
@@ -446,7 +446,7 @@ async def test_rerank_out_of_scope_item_is_dropped() -> None:
 
 
 class _BrokenDense(FakeVectorStore):
-    async def search(self, *, collection, vector, top_k, query_filter):
+    async def search(self, *, collection, vector, top_k, query_filter, query_identity=None):
         raise RuntimeError("dense down")
 
 

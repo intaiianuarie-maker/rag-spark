@@ -371,3 +371,9 @@ async def queue_depth() -> int:
         return int(await get_client().llen(queue_key()))
     except RedisError as exc:
         raise GraphQueueUnavailable("graph queue unavailable") from exc
+
+
+class GraphJobDisposition(str):
+    SUCCESS = "success"
+    RETRY = "retry"
+    PARKED = "parked"
