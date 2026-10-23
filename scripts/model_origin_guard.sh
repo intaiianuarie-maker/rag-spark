@@ -21,12 +21,12 @@
 #     semantics). A right-hand side that is not a literal (e.g.
 #     `os.environ.get(...)`) is not a pin; the literal it falls back to is
 #     pinned on its own line.
-#   * dotenv sources (`.env`, `.env.*`) are parsed with `python-dotenv` when it
-#     is importable — the exact runtime semantics: an optional `export`
+#   * dotenv sources (`.env`, `.env.*`) require `python-dotenv` and are parsed
+#     with `dotenv.parser.parse_stream` — the exact runtime semantics: an optional `export`
 #     keyword, optional whitespace (incl. TAB) around `=`, an optional
 #     surrounding pair of quotes, and an inline `#` comment that starts after
-#     ANY whitespace (space or tab) but never inside a quoted value. When
-#     `python-dotenv` is absent, a manual parser reproduces those rules.
+#     ANY whitespace (space or tab) but never inside a quoted value.
+#     A missing parser fails the gate closed.
 #
 # The COMPLETE literal value is validated — never a prefix of it — and the
 # validation happens IN-PROCESS, before any value crosses the shell boundary
@@ -156,50 +156,6 @@ def python_pins(source: str):
                     continue
                 pins.append((target.id, literal))
     return pins
-
-
-def dotenv_value(raw: str) -> str:
-    value = raw.strip()
-    if not value:
-        return ""
-    # Quoted value: the content of the matching quotes; a '#' after the closing
-    # quote (preceded by whitespace) is a comment.
-    if value[0] in "\"'" and len(value) >= 2:
-        quote = value[0]
-        end = value.find(quote, 1)
-        if end != -1:
-            inner = value[1:end]
-            tail = value[end + 1:].lstrip()
-            if not tail or tail.startswith("#"):
-                return inner
-            return value
-    # Unquoted: a '#' preceded by ANY whitespace starts a comment.
-    match = re.search(r"\s#", value)
-    if match:
-        value = value[: match.start()].rstrip()
-    return value
-
-
-def dotenv_pins_manual(source: str):
-    # Split on the runtime's line terminators only (\r\n, \r, \n). Embedded
-    # VT / FF / U+2028 are NOT line breaks here, so they cannot truncate a
-    # value to an approved prefix or forge a second record.
-    pins = []
-    for raw in source.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
-        line = raw.strip()
-        if not line or line.startswith("#"):
-            continue
-        if line.startswith("export") and len(line) > 6 and line[6].isspace():
-            line = line[6:].strip()
-        if "=" not in line:
-            continue
-        name, _, value = line.partition("=")
-        name = name.strip().split(":", 1)[0].strip()
-        if not is_model_name(name):
-            continue
-        pins.append((name, dotenv_value(value)))
-    return pins
-
 
 def dotenv_pins(source: str):
     # Use dotenv.parser.parse_stream to validate EVERY model pin without
@@ -359,6 +315,16 @@ EMBEDDING_MODEL = unlisted/police-probe'
     'adjacent python literals approved (one value)|0|.py|DEFAULT_MODEL = "gpt-4o-" "mini"'
     'triple quoted python literal|1|.py|DEFAULT_MODEL = """unlisted/police-probe"""'
     'rejected vendor|1||DEFAULT_MODEL = "moonshot/police-probe"'
+    'export env approved|0||export EMBEDDING_MODEL=google/gemini-embedding-2'
+    'dynamic python RHS with approved fallback|0|.py|import os
+DEFAULT_MODEL = "gpt-4o-mini"
+EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", DEFAULT_MODEL)'
+    'duplicate first unlisted fails|1||EMBEDDING_MODEL = "unlisted/police-probe"
+EMBEDDING_MODEL = "gpt-4o-mini"'
+    'duplicate middle before approved fails|1||EMBEDDING_MODEL = "gpt-4o-mini"
+EMBEDDING_MODEL = "unlisted/police-probe"
+EMBEDDING_MODEL = "gpt-4o-mini"'
+    'malformed env|1||EMBEDDING_MODEL="unlisted/police-probe'
 )
 
 run_selftest() {
@@ -374,7 +340,7 @@ try:
     import dotenv
     print("python-dotenv " + version("python-dotenv"))
 except Exception:
-    print("python-dotenv not importable (manual dotenv parser, parity verified on controls)")
+    print("python-dotenv not importable (parse_stream mandatory for dotenv controls)")
 PY
 )
     echo "parity: $dv"
@@ -387,23 +353,38 @@ PY
         fi
         local base
         base="$(basename "$src")"
-        local probe_first="$tmp/${base}.unlisted-first"
-        local probe_second="$tmp/${base}.unlisted-second"
-        local probe_china="$tmp/${base}.china-origin"
+        # Keep .py as the outermost suffix so verify_pins dispatches to python_pins
+        # (path.endswith(".py")) for Python sources; dotenv sources keep the plain name.
+        if [[ "$src" == *.py ]]; then
+          local probe_first="$tmp/${base}.unlisted-first.py"
+          local probe_second="$tmp/${base}.unlisted-second.py"
+          local second_spaced="$tmp/${base}.second-spaced.py"
+          local probe_china="$tmp/${base}.china-origin.py"
+          local second_label="quoted Python syntax"
+        else
+          local probe_first="$tmp/${base}.unlisted-first"
+          local probe_second="$tmp/${base}.unlisted-second"
+          local second_spaced="$tmp/${base}.second-spaced"
+          local probe_china="$tmp/${base}.china-origin"
+          local second_label="bare dotenv syntax"
+        fi
 
         cp "$src" "$tmp/$(basename "$src")"
         # Replace the value of every literal model pin with an unlisted probe.
         sed -E "s/^([[:space:]]*[A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*[[:space:]]*=[[:space:]]*)([\"'][^\"']*[\"']|[A-Za-z0-9._:/-]+)/\1\"unlisted\/police-probe\"/" "$src" >"$probe_first"
         # A SECOND pin in the same file, in both syntaxes.
-        { cat "$src"; printf '\nEMBEDDING_MODEL = "unlisted/police-probe"\n'; } >"$tmp/${base}.second-spaced"
-        { cat "$src"; printf '\nEMBEDDING_MODEL=unlisted/police-probe\n'; } >"$probe_second"
+        { cat "$src"; printf '\nEMBEDDING_MODEL = "unlisted/police-probe"\n'; } >"$second_spaced"
+        if [[ "$src" == *.py ]]; then
+          { cat "$src"; printf '\nEMBEDDING_MODEL = "unlisted/police-probe"\n'; } >"$probe_second"
+        else
+          { cat "$src"; printf '\nEMBEDDING_MODEL=unlisted/police-probe\n'; } >"$probe_second"
+        fi
         { cat "$src"; printf '\nDEFAULT_MODEL = "moonshot/police-probe"\n'; } >"$probe_china"
 
         expect_exit 0 "approved pins pass ($src)" "$tmp/$(basename "$src")" || failed=1
         expect_exit 1 "unlisted FIRST pin fails ($src)" "$probe_first" || failed=1
-        expect_exit 1 "unlisted SECOND pin fails, spaced syntax ($src)" \
-            "$tmp/${base}.second-spaced" || failed=1
-        expect_exit 1 "unlisted SECOND pin fails, bare syntax ($src)" "$probe_second" || failed=1
+        expect_exit 1 "unlisted SECOND pin fails, spaced syntax ($src)" "$second_spaced" || failed=1
+        expect_exit 1 "unlisted SECOND pin fails, $second_label ($src)" "$probe_second" || failed=1
         expect_exit 1 "China-origin pin fails ($src)" "$probe_china" || failed=1
     done
 
