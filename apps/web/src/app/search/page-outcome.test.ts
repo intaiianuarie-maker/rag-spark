@@ -111,6 +111,15 @@ function Observer() {
         else pending.resolve({ results: [{ content: "A PRIVATE RESULT", workspace_id: "A" }] });
       }
     }
+    // Start a request for the NEW workspace during B's own layout commit:
+    // it belongs to the active workspace and must survive B's passive
+    // invalidation.
+    if (id === "B" && window.startBAtLayout) {
+      document
+        .querySelector("form")
+        .dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+      window.trace.push("submitted B in B layout");
+    }
   }, [id]);
   useEffect(() => {
     window.trace.push("passive:" + id);
@@ -194,7 +203,7 @@ async function submit() {
     await tick();
     await submit();
     const bRequest = window.pending.find((p) => p.workspace === "B");
-    if (!bRequest || bRequest.workspace !== "B") throw new Error("fresh-b: no B request");
+    if (!bRequest) throw new Error("fresh-b: no B request");
     bRequest.resolve({ results: [{ content: "B CURRENT RESULT", workspace_id: "B" }] });
     await tick();
     window.reports.push({
@@ -203,6 +212,44 @@ async function submit() {
       privateVisible: host.textContent.includes("A PRIVATE RESULT"),
       surface: host.textContent,
     });
+
+    // A request started for the NEW workspace during that workspace's own
+    // layout commit: it belongs to the active workspace and must survive
+    // the passive invalidation that follows the commit.
+    for (const mode of ["success", "error"]) {
+      window.trace = [];
+      window.pending = [];
+      window.workspaceList = undefined;
+      window.releaseAt = "none";
+      window.releaseMode = "success";
+      window.startBAtLayout = true;
+      root.render(<Harness key={"b-layout-" + mode} />);
+      await tick();
+      await tick();
+      await submit();
+      if (window.pending.length !== 1) throw new Error("b-layout: no pending request");
+      await window.switchTo();
+      await tick();
+      await tick();
+      const bInLayout = window.pending.find((p) => p.workspace === "B");
+      if (!bInLayout) throw new Error("b-layout: no B request started in the layout commit");
+      window.trace.push("settle B after passive");
+      if (mode === "error") bInLayout.reject(new Error("B CURRENT ERROR"));
+      else bInLayout.resolve({ results: [{ content: "B CURRENT RESULT", workspace_id: "B" }] });
+      await tick();
+      await tick();
+      window.reports.push({
+        case: mode === "error" ? "B starts in B layout, rejects after passive" : "B starts in B layout, resolves after passive",
+        newBVisible: host.textContent.includes("B CURRENT RESULT"),
+        bErrorVisible: host.textContent.includes("B CURRENT ERROR"),
+        loadingVisible: host.textContent.includes("Searching"),
+        privateVisible: host.textContent.includes("A PRIVATE RESULT"),
+        privateErrorVisible: host.textContent.includes("A PRIVATE ERROR"),
+        surface: host.textContent,
+        trace: [...window.trace],
+      });
+    }
+    window.startBAtLayout = false;
 
     report.textContent = JSON.stringify(window.reports);
   } catch (error) {
@@ -216,6 +263,8 @@ type Leg = {
   privateVisible?: boolean;
   privateErrorVisible?: boolean;
   newBVisible?: boolean;
+  bErrorVisible?: boolean;
+  loadingVisible?: boolean;
   surface?: string;
   trace?: string[];
   error?: string;
@@ -330,5 +379,17 @@ describe.skipIf(!chrome)("T-IMP-003: the workspace fence holds in a real commit 
   it("still lets a fresh request for the active workspace succeed", () => {
     const leg = legFor("fresh B request succeeds");
     expect(leg.newBVisible).toBe(true);
+  });
+
+  it("keeps a request that started for the active workspace in its own commit window", () => {
+    const leg = legFor("B starts in B layout, resolves after passive");
+    expect(leg.newBVisible).toBe(true);
+    expect(leg.loadingVisible).toBe(false);
+  });
+
+  it("keeps the error of a request that started for the active workspace in its own commit window", () => {
+    const leg = legFor("B starts in B layout, rejects after passive");
+    expect(leg.bErrorVisible).toBe(true);
+    expect(leg.loadingVisible).toBe(false);
   });
 });

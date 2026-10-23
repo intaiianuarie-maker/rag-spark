@@ -42,14 +42,25 @@ export default function SearchPage() {
   const [response, setResponse] = useState<Scoped<SearchResponse> | null>(null);
   const [selected, setSelected] = useState<Scoped<SearchResultItem> | null>(null);
   const runIdRef = useRef(0);
+  const lastRunRef = useRef<{ workspaceId: string; runId: number } | null>(null);
   const activeId = active?.id;
   const scopeId = activeId ?? "";
   const [lastActiveId, setLastActiveId] = useState(activeId);
 
   useEffect(() => {
-    // Invalidate any in-flight request from the previous workspace so a
+    // Invalidate work started for a workspace that is no longer active, so a
     // delayed result/error can never land under the new workspace.
-    runIdRef.current += 1;
+    //
+    // Only OLD-workspace work is invalidated: a run started for the
+    // workspace that is ALREADY active — e.g. a request submitted during
+    // this workspace's own commit window — belongs to the workspace the
+    // caller is looking at and must not be superseded here. (A request
+    // started for the old workspace is superseded anyway by the newer run
+    // id, so no data of the old workspace is published either way.)
+    const lastRun = lastRunRef.current;
+    if (lastRun && lastRun.workspaceId !== (activeId ?? "")) {
+      runIdRef.current += 1;
+    }
   }, [activeId]);
 
   // Reset the result surface when the active workspace changes. Adjusted
@@ -81,6 +92,10 @@ export default function SearchPage() {
       if (!active?.id) return;
       const workspaceId = active.id;
       const thisRun = ++runIdRef.current;
+      // Remember which workspace this run belongs to: the workspace-change
+      // invalidation must supersede old-workspace work only, never a run
+      // started for the workspace that is already active.
+      lastRunRef.current = { workspaceId, runId: thisRun };
       if (q.trim().length === 0) {
         if (runIdRef.current === thisRun) {
           setError({ workspaceId, value: "Enter a query to search." });

@@ -11,16 +11,27 @@
 #   * ANY model pin in those files points at a model not on the ALLOWED list.
 #
 # A "model pin" is an assignment to a MODEL-named constant. The pin syntax
-# varies by file, so ALL of these forms are recognised (optional whitespace
-# on both sides of "=", quoted or bare value):
+# varies by source, so the extraction is SOURCE-AWARE:
 #
-#   DEFAULT_MODEL = "BAAI/bge-m3"          # Python adapter (spaced, quoted)
-#   DEFAULT_MODEL="BAAI/bge-m3"            # Python adapter (unspaced)
-#   DEFAULT_MULTIMODAL_EMBEDDING_MODEL = "google/gemini-embedding-2"
-#   EMBEDDING_MODEL=google/gemini-embedding-2   # env file (bare value)
+#   * Python sources (`.py`) are parsed with the `ast` module and the value is
+#     read with `ast.literal_eval` — the same semantics the runtime uses. That
+#     covers annotations (`DEFAULT_MODEL: str = "..."`), raw strings
+#     (`r"..."`), triple-quoted strings, parenthesised values and ADJACENT
+#     string literals, which are CONCATENATED into one value (Python
+#     semantics). A right-hand side that is not a literal (e.g.
+#     `os.environ.get(...)`) is not a pin; the literal it falls back to is
+#     pinned on its own line.
+#   * dotenv sources (`.env`, `.env.*`) are read with dotenv semantics:
+#     an optional `export` keyword, optional whitespace around `=`, an
+#     optional surrounding pair of quotes, and an inline comment that only
+#     starts at a `#` preceded by whitespace.
+#   * a file of unknown type is read with BOTH interpretations and EVERY pin
+#     found by either one is validated.
 #
-# A right-hand side that is not a plain literal (e.g. os.environ.get(...))
-# is not a pin: the literal it falls back to is pinned on its own line.
+# The COMPLETE literal value is validated — never a prefix of it — and an
+# empty, whitespace-only or unapproved value FAILS the gate (it is not
+# skipped). So `NAME="allowed" "-suffix"`, `NAME = allowed+suffix` and
+# `NAME=""` are all rejected.
 #
 # Usage:
 #   scripts/model_origin_guard.sh              # scan the repository sources
@@ -70,20 +81,129 @@ ADAPTER_SOURCES=(
     ".env.example"
 )
 
-# A model pin: NAME = "value" (Python, quoted) or NAME=value (env, bare),
-# with optional whitespace around "=". NAME is any MODEL-named constant.
-PIN_RE="^[[:space:]]*[A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*[[:space:]]*=[[:space:]]*[\"'][^\"']*[\"']|^[A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*=[A-Za-z0-9._:/-]+"
+# The pin extractor is source-aware; it needs a Python parser. Without one the
+# gate cannot do its job, so it fails closed instead of passing silently.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "FAIL: model origin guard - python3 is required to read model pins"
+    exit 1
+fi
 
 # Print "NAME=VALUE" for every model pin in the given file.
 extract_pins() {
-    grep -oE "$PIN_RE" "$1" 2>/dev/null \
-        | sed -E "s/^[[:space:]]*([A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*)[[:space:]]*=[[:space:]]*[\"']?([^\"']*)[\"']?$/\1=\2/"
-}
+    python3 - "$1" <<'PY'
+import ast
+import os
+import sys
 
-# Replace the value of every literal model pin with an unlisted probe.
-# (Control fixture for the selftest; the production tree is never touched.)
-unlist_pins() {
-    sed -E "s/^([[:space:]]*[A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*[[:space:]]*=[[:space:]]*)([\"'][^\"']*[\"']|[A-Za-z0-9._:/-]+)/\1\"unlisted\/police-probe\"/" "$1"
+path = sys.argv[1]
+
+
+def is_model_name(name: str) -> bool:
+    """A MODEL-named constant (upper-case, contains MODEL)."""
+    return "MODEL" in name and name == name.upper()
+
+
+def python_pins(source: str):
+    """Complete literal values of MODEL-named assignments (Python semantics)."""
+    tree = ast.parse(source, filename=path)
+    pins = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign):
+            targets, value = node.targets, node.value
+        elif isinstance(node, ast.AnnAssign):
+            targets, value = [node.target], node.value
+        else:
+            continue
+        if value is None:
+            continue
+        for target in targets:
+            if not isinstance(target, ast.Name) or not is_model_name(target.id):
+                continue
+            try:
+                literal = ast.literal_eval(value)
+            except (ValueError, SyntaxError, TypeError):
+                # Not a literal (e.g. os.environ.get(...)): not a pinned value.
+                continue
+            if isinstance(literal, bytes):
+                literal = literal.decode("utf-8", "replace")
+            if not isinstance(literal, str):
+                literal = str(literal)
+            pins.append((target.id, literal))
+    return pins
+
+
+def dotenv_value(raw: str) -> str:
+    """The dotenv value of an assignment's right-hand side."""
+    value = raw.strip()
+    if not value:
+        return ""
+    if value[0] in "\"'":
+        quote = value[0]
+        end = value.find(quote, 1)
+        if end != -1:
+            inner = value[1:end]
+            rest = value[end + 1 :].strip()
+            if rest == "" or rest.startswith("#"):
+                return inner
+            # Trailing junk after the quoted value: keep the whole text, it is
+            # not a plain model id.
+            return value
+    # Unquoted: an inline comment only starts at a "#" preceded by space.
+    index = value.find(" #")
+    if index != -1:
+        value = value[:index].rstrip()
+    return value
+
+
+def dotenv_pins(source: str):
+    """dotenv values of MODEL-named assignments."""
+    pins = []
+    for raw in source.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].lstrip()
+        if "=" not in line:
+            continue
+        name, _, value = line.partition("=")
+        name = name.strip()
+        # A Python annotation is not part of a dotenv name.
+        name = name.split(":", 1)[0].strip()
+        if not is_model_name(name):
+            continue
+        pins.append((name, dotenv_value(value)))
+    return pins
+
+
+with open(path, encoding="utf-8") as handle:
+    source = handle.read()
+
+base = os.path.basename(path)
+if path.endswith(".py"):
+    modes = ["python"]
+elif base == ".env" or base.startswith(".env."):
+    modes = ["dotenv"]
+else:
+    # Unknown type: read it both ways and validate every pin either way finds.
+    modes = ["python", "dotenv"]
+
+pins = []
+for mode in modes:
+    try:
+        if mode == "python":
+            pins.extend(python_pins(source))
+        else:
+            pins.extend(dotenv_pins(source))
+    except SyntaxError as exc:
+        if mode == "python" and modes == ["python"]:
+            print(f"FAIL: model origin guard - cannot parse {path}: {exc}", file=sys.stderr)
+            sys.exit(2)
+        # A file that is not valid Python is read as dotenv only.
+
+for name, value in pins:
+    print(f"{name}={value}")
+PY
 }
 
 # Scan one file: China-origin patterns, then EVERY model pin.
@@ -99,12 +219,12 @@ scan_file() {
     done
 
     # b) EVERY model pin must be on the allowlist (each pin is checked, not
-    #    just the first one).
+    #    just the first one). An empty, whitespace-only or unapproved value
+    #    FAILS: it is never skipped and never truncated to a prefix.
     while IFS= read -r pin; do
         [ -n "$pin" ] || continue
         pin_name="${pin%%=*}"
         model="${pin#*=}"
-        [ -n "$model" ] || continue
         allowed=0
         for m in "${ALLOWED[@]}"; do
             if [ "$model" = "$m" ]; then
@@ -123,10 +243,16 @@ scan_file() {
 # Executable controls (offline, no network)
 # --------------------------------------------------------------------------- #
 #
-# For every scanned source: the unmodified file passes; an unlisted FIRST pin
-# fails; an unlisted SECOND pin in the same file fails; a China-origin pin
-# fails. The controls are the regression for the pin-extraction gap (a spaced
-# Python assignment used to escape the scan entirely).
+# 1. For every scanned source: the unmodified file passes; an unlisted FIRST
+#    pin fails; an unlisted SECOND pin fails; a China-origin pin fails.
+# 2. A syntax matrix: quoted/bare values, whitespace variants, the `export`
+#    keyword, annotated assignments, adjacent literals, allowed-prefix +
+#    unlisted suffix, and empty/whitespace-only values — approved controls
+#    pass, everything else fails.
+#
+# The controls are the regression for the pin-extraction gap: a spaced
+# Python assignment, an annotated assignment, an adjacent literal or an
+# empty value used to escape the scan entirely.
 
 expect_exit() {
     local expected="$1"
@@ -141,6 +267,38 @@ expect_exit() {
     echo "ok: guard selftest - $label (exit $rc)"
     return 0
 }
+
+# name|expected exit|source extension|file content
+SELFTEST_MATRIX=(
+    'approved quoted|0||DEFAULT_MODEL = "gpt-4o-mini"'
+    'unknown quoted|1||DEFAULT_MODEL = "unlisted/police-probe"'
+    'unknown second quoted pin|1||DEFAULT_MODEL = "gpt-4o-mini"
+EMBEDDING_MODEL = "unlisted/police-probe"'
+    'approved bare|0||EMBEDDING_MODEL=google/gemini-embedding-2'
+    'unknown bare|1||EMBEDDING_MODEL=unlisted/police-probe'
+    'unknown bare spaced|1||EMBEDDING_MODEL = unlisted/police-probe'
+    'unknown bare space after equals|1||EMBEDDING_MODEL= unlisted/police-probe'
+    'unknown bare space before equals|1||EMBEDDING_MODEL =unlisted/police-probe'
+    'unknown second bare spaced pin|1||DEFAULT_MODEL=gpt-4o-mini
+EMBEDDING_MODEL = unlisted/police-probe'
+    'approved bare spaced|0||EMBEDDING_MODEL = google/gemini-embedding-2'
+    'empty python literal|1|.py|DEFAULT_MODEL = ""'
+    'empty env literal|1||EMBEDDING_MODEL=""'
+    'empty bare env|1||EMBEDDING_MODEL='
+    'whitespace only value|1||EMBEDDING_MODEL="   "'
+    'annotated python unknown|1|.py|DEFAULT_MODEL: str = "unlisted/police-probe"'
+    'annotated python approved|0|.py|DEFAULT_MODEL: str = "gpt-4o-mini"'
+    'exported env unknown|1||export EMBEDDING_MODEL=unlisted/police-probe'
+    'env allowed prefix plus suffix|1||EMBEDDING_MODEL=google/gemini-embedding-2+unlisted'
+    'env hash suffix|1||EMBEDDING_MODEL=google/gemini-embedding-2#unlisted'
+    'raw python literal|1|.py|DEFAULT_MODEL = r"unlisted/police-probe"'
+    'parenthesised python literal|1|.py|DEFAULT_MODEL = ("unlisted/police-probe")'
+    'adjacent python literals|1|.py|DEFAULT_MODEL = "gpt-4o-mini" "-unlisted"'
+    'adjacent python literals approved (one value)|0|.py|DEFAULT_MODEL = "gpt-4o-" "mini"'
+    'adjacent literals in an unknown-type source are rejected|1||DEFAULT_MODEL = "gpt-4o-" "mini"'
+    'triple quoted python literal|1|.py|DEFAULT_MODEL = """unlisted/police-probe"""'
+    'rejected vendor|1||DEFAULT_MODEL = "moonshot/police-probe"'
+)
 
 run_selftest() {
     local failed=0
@@ -159,7 +317,8 @@ run_selftest() {
         probe_china="$tmp/${base}.china-origin"
 
         cp "$src" "$tmp/${base}.baseline"
-        unlist_pins "$src" >"$probe_first"
+        # Replace the value of every literal model pin with an unlisted probe.
+        sed -E "s/^([[:space:]]*[A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*[[:space:]]*=[[:space:]]*)([\"'][^\"']*[\"']|[A-Za-z0-9._:/-]+)/\1\"unlisted\/police-probe\"/" "$src" >"$probe_first"
         # A SECOND pin in the same file, in both syntaxes.
         { cat "$src"; printf '\nEMBEDDING_MODEL = "unlisted/police-probe"\n'; } >"$tmp/${base}.second-spaced"
         { cat "$src"; printf '\nEMBEDDING_MODEL=unlisted/police-probe\n'; } >"$probe_second"
@@ -171,6 +330,22 @@ run_selftest() {
             "$tmp/${base}.second-spaced" || failed=1
         expect_exit 1 "unlisted SECOND pin fails, bare syntax ($src)" "$probe_second" || failed=1
         expect_exit 1 "China-origin pin fails ($src)" "$probe_china" || failed=1
+    done
+
+    # The syntax matrix (each case is a standalone file; the extension
+    # decides whether it is read as a Python source or as a dotenv source).
+    local index=0
+    local entry label expected extension content
+    for entry in "${SELFTEST_MATRIX[@]}"; do
+        index=$((index + 1))
+        label="${entry%%|*}"
+        entry="${entry#*|}"
+        expected="${entry%%|*}"
+        entry="${entry#*|}"
+        extension="${entry%%|*}"
+        content="${entry#*|}"
+        printf '%s\n' "$content" >"$tmp/matrix-$index$extension"
+        expect_exit "$expected" "syntax matrix: $label" "$tmp/matrix-$index$extension" || failed=1
     done
 
     rm -rf "$tmp"
