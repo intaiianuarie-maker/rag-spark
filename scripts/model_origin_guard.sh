@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# model_origin_guard.sh (PD-005 v3) — model-level China-origin allowlist gate.
+# model_origin_guard.sh (PD-005 v4) — model-level China-origin allowlist gate.
 #
 # Replaces any paid/China-hosted rerank route with a self-hosted
 # cross-encoder/ms-marco-MiniLM-L6-v2 ("MS MiniLM + UKP/SentenceTransformers",
@@ -21,23 +21,29 @@
 #     semantics). A right-hand side that is not a literal (e.g.
 #     `os.environ.get(...)`) is not a pin; the literal it falls back to is
 #     pinned on its own line.
-#   * dotenv sources (`.env`, `.env.*`) are read with dotenv semantics:
-#     an optional `export` keyword, optional whitespace around `=`, an
-#     optional surrounding pair of quotes, and an inline comment that only
-#     starts at a `#` preceded by whitespace.
-#   * a file of unknown type is read with BOTH interpretations and EVERY pin
-#     found by either one is validated.
+#   * dotenv sources (`.env`, `.env.*`) are parsed with `python-dotenv` when it
+#     is importable — the exact runtime semantics: an optional `export`
+#     keyword, optional whitespace (incl. TAB) around `=`, an optional
+#     surrounding pair of quotes, and an inline `#` comment that starts after
+#     ANY whitespace (space or tab) but never inside a quoted value. When
+#     `python-dotenv` is absent, a manual parser reproduces those rules.
 #
-# The COMPLETE literal value is validated — never a prefix of it — and an
-# empty, whitespace-only or unapproved value FAILS the gate (it is not
-# skipped). So `NAME="allowed" "-suffix"`, `NAME = allowed+suffix` and
-# `NAME=""` are all rejected.
+# The COMPLETE literal value is validated — never a prefix of it — and the
+# validation happens IN-PROCESS, before any value crosses the shell boundary
+# (so a value containing a newline / NUL / tab can never be split into a
+# forged second record or truncated to an approved prefix). An empty,
+# whitespace-only or unapproved value FAILS the gate (it is not skipped). So
+# `NAME = "allowed" "-suffix"`, `NAME = allowed+suffix`, `NAME = ""` and
+# `EMBEDDING_MODEL=` are all rejected.
+#
+# Failures are NOT swallowed: a file that cannot be read, cannot be parsed, or
+# whose pin parser/interpreter fails makes the OUTER gate fail closed (exit 1).
 #
 # Usage:
 #   scripts/model_origin_guard.sh              # scan the repository sources
 #   scripts/model_origin_guard.sh --selftest   # run the executable controls
 #   scripts/model_origin_guard.sh <file>...    # scan the given files only
-# Always exit 0; report failures on stdout and exit 1.
+# Exits 0 on pass, 1 on failure.
 
 set +e
 
@@ -88,23 +94,49 @@ if ! command -v python3 >/dev/null 2>&1; then
     exit 1
 fi
 
-# Print "NAME=VALUE" for every model pin in the given file.
-extract_pins() {
-    python3 - "$1" <<'PY'
+# Newline-separated allowlist passed to the in-process pin validator (so it can
+# validate the COMPLETE value before anything reaches the shell).
+ALLOWED_STR="$(printf '%s\n' "${ALLOWED[@]}")"
+
+# --------------------------------------------------------------------------- #
+# In-process pin validator.
+#
+# Reads the value of every MODEL-named assignment and validates the COMPLETE
+# literal against the allowlist (no shell transfer of values). Prints "FAIL:"
+# lines on violations and exits:
+#   0 = all pins approved
+#   1 = a pin value (or empty/unapproved) is not on the allowlist
+#   2 = the source cannot be read or parsed (fail closed)
+# --------------------------------------------------------------------------- #
+verify_pins() {
+    GUARD_ALLOWED="$ALLOWED_STR" python3 - "$1" <<'PY'
 import ast
+import io
 import os
+import re
 import sys
 
 path = sys.argv[1]
+allowed = set(os.environ.get("GUARD_ALLOWED", "").splitlines())
 
 
 def is_model_name(name: str) -> bool:
-    """A MODEL-named constant (upper-case, contains MODEL)."""
-    return "MODEL" in name and name == name.upper()
+    return "MODEL" in name and name == name.upper() and bool(re.fullmatch(r"[A-Z][A-Z0-9_]*", name))
+
+
+def python_value(node):
+    try:
+        literal = ast.literal_eval(node)
+    except (ValueError, SyntaxError, TypeError):
+        return None
+    if isinstance(literal, bytes):
+        literal = literal.decode("utf-8", "replace")
+    if not isinstance(literal, str):
+        literal = str(literal)
+    return literal
 
 
 def python_pins(source: str):
-    """Complete literal values of MODEL-named assignments (Python semantics)."""
     tree = ast.parse(source, filename=path)
     pins = []
     for node in ast.walk(tree):
@@ -117,126 +149,134 @@ def python_pins(source: str):
         if value is None:
             continue
         for target in targets:
-            if not isinstance(target, ast.Name) or not is_model_name(target.id):
-                continue
-            try:
-                literal = ast.literal_eval(value)
-            except (ValueError, SyntaxError, TypeError):
-                # Not a literal (e.g. os.environ.get(...)): not a pinned value.
-                continue
-            if isinstance(literal, bytes):
-                literal = literal.decode("utf-8", "replace")
-            if not isinstance(literal, str):
-                literal = str(literal)
-            pins.append((target.id, literal))
+            if isinstance(target, ast.Name) and is_model_name(target.id):
+                literal = python_value(value)
+                if literal is None:
+                    continue
+                pins.append((target.id, literal))
     return pins
 
 
 def dotenv_value(raw: str) -> str:
-    """The dotenv value of an assignment's right-hand side."""
     value = raw.strip()
     if not value:
         return ""
-    if value[0] in "\"'":
+    # Quoted value: the content of the matching quotes; a '#' after the closing
+    # quote (preceded by whitespace) is a comment.
+    if value[0] in "\"'" and len(value) >= 2:
         quote = value[0]
         end = value.find(quote, 1)
         if end != -1:
             inner = value[1:end]
-            rest = value[end + 1 :].strip()
-            if rest == "" or rest.startswith("#"):
+            tail = value[end + 1:].lstrip()
+            if not tail or tail.startswith("#"):
                 return inner
-            # Trailing junk after the quoted value: keep the whole text, it is
-            # not a plain model id.
             return value
-    # Unquoted: an inline comment only starts at a "#" preceded by space.
-    index = value.find(" #")
-    if index != -1:
-        value = value[:index].rstrip()
+    # Unquoted: a '#' preceded by ANY whitespace starts a comment.
+    match = re.search(r"\s#", value)
+    if match:
+        value = value[: match.start()].rstrip()
     return value
 
 
-def dotenv_pins(source: str):
-    """dotenv values of MODEL-named assignments."""
+def dotenv_pins_manual(source: str):
+    # Split on the runtime's line terminators only (\r\n, \r, \n). Embedded
+    # VT / FF / U+2028 are NOT line breaks here, so they cannot truncate a
+    # value to an approved prefix or forge a second record.
     pins = []
-    for raw in source.splitlines():
+    for raw in source.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
-        if line.startswith("export "):
-            line = line[len("export ") :].lstrip()
+        if line.startswith("export") and len(line) > 6 and line[6].isspace():
+            line = line[6:].strip()
         if "=" not in line:
             continue
         name, _, value = line.partition("=")
-        name = name.strip()
-        # A Python annotation is not part of a dotenv name.
-        name = name.split(":", 1)[0].strip()
+        name = name.strip().split(":", 1)[0].strip()
         if not is_model_name(name):
             continue
         pins.append((name, dotenv_value(value)))
     return pins
 
 
-with open(path, encoding="utf-8") as handle:
-    source = handle.read()
-
-base = os.path.basename(path)
-if path.endswith(".py"):
-    modes = ["python"]
-elif base == ".env" or base.startswith(".env."):
-    modes = ["dotenv"]
-else:
-    # Unknown type: read it both ways and validate every pin either way finds.
-    modes = ["python", "dotenv"]
-
-pins = []
-for mode in modes:
+def dotenv_pins(source: str):
     try:
-        if mode == "python":
-            pins.extend(python_pins(source))
-        else:
-            pins.extend(dotenv_pins(source))
-    except SyntaxError as exc:
-        if mode == "python" and modes == ["python"]:
-            print(f"FAIL: model origin guard - cannot parse {path}: {exc}", file=sys.stderr)
-            sys.exit(2)
-        # A file that is not valid Python is read as dotenv only.
+        from dotenv import dotenv_values
+    except Exception:
+        return dotenv_pins_manual(source)
+    try:
+        vals = dotenv_values(stream=io.StringIO(source), interpolate=False)
+    except Exception:
+        return dotenv_pins_manual(source)
+    pins = []
+    for name, val in vals.items():
+        if val is None:
+            val = ""
+        if is_model_name(name):
+            pins.append((name, val))
+    return pins
 
+
+try:
+    with open(path, encoding="utf-8") as handle:
+        source = handle.read()
+except OSError as exc:
+    print(f"FAIL: model origin guard - cannot read {path}: {exc}")
+    sys.exit(2)
+
+try:
+    if path.endswith(".py"):
+        pins = python_pins(source)
+    else:
+        pins = dotenv_pins(source)
+except SyntaxError as exc:
+    print(f"FAIL: model origin guard - cannot parse {path}: {exc}")
+    sys.exit(2)
+except Exception as exc:
+    print(f"FAIL: model origin guard - cannot parse {path}: {exc}")
+    sys.exit(2)
+
+failed = False
 for name, value in pins:
-    print(f"{name}={value}")
+    if value not in allowed:
+        print(f"FAIL: model origin guard - model {value!r} (pin {name}) not in allowlist: {', '.join(sorted(allowed))}")
+        failed = True
+sys.exit(1 if failed else 0)
 PY
 }
 
-# Scan one file: China-origin patterns, then EVERY model pin.
+# Scan one file: China-origin patterns, then EVERY model pin (validated
+# in-process). Any read/parse/interpreter failure fails the gate closed.
 scan_file() {
     local src="$1"
 
-    # a) Reject any flagged China-origin pattern in the adapter sources.
+    # a) Reject any flagged China-origin pattern (byte-identical REJECTED).
     for pat in "${REJECTED[@]}"; do
-        if grep -Eq "$pat" "$src"; then
+        grep -Eq "$pat" "$src"
+        local grc=$?
+        if [ "$grc" -eq 0 ]; then
             echo "FAIL: model origin guard - rejected pattern '$pat' in $src"
+            MODEL_FAILED=1
+        elif [ "$grc" -ge 2 ]; then
+            echo "FAIL: model origin guard - cannot read $src (pattern scan: '$pat')"
             MODEL_FAILED=1
         fi
     done
 
-    # b) EVERY model pin must be on the allowlist (each pin is checked, not
-    #    just the first one). An empty, whitespace-only or unapproved value
-    #    FAILS: it is never skipped and never truncated to a prefix.
-    while IFS= read -r pin; do
-        [ -n "$pin" ] || continue
-        pin_name="${pin%%=*}"
-        model="${pin#*=}"
-        allowed=0
-        for m in "${ALLOWED[@]}"; do
-            if [ "$model" = "$m" ]; then
-                allowed=1
-                break
-            fi
-        done
-        if [ "$allowed" -ne 1 ]; then
-            echo "FAIL: model origin guard - model '$model' (pin $pin_name) not in allowlist: ${ALLOWED[*]}"
-            MODEL_FAILED=1
+    # b) Every model pin (complete literal value) is validated in-process by
+    #    the Python helper. The helper's exit code is propagated: a nonzero
+    #    exit (parse/read/interpreter error or a bad pin) fails the gate.
+    local verdict jrc
+    verdict=$(verify_pins "$src")
+    jrc=$?
+    [ -n "$verdict" ] && printf '%s\n' "$verdict"
+    if [ "$jrc" -ne 0 ]; then
+        if [ -z "$verdict" ]; then
+            echo "FAIL: model origin guard - pin check failed for $src (parser/interpreter error)"
         fi
-    done < <(extract_pins "$src")
+        MODEL_FAILED=1
+    fi
 }
 
 # --------------------------------------------------------------------------- #
@@ -244,15 +284,20 @@ scan_file() {
 # --------------------------------------------------------------------------- #
 #
 # 1. For every scanned source: the unmodified file passes; an unlisted FIRST
-#    pin fails; an unlisted SECOND pin fails; a China-origin pin fails.
+#    pin fails; an unlisted SECOND pin fails (spaced + bare syntax); a
+#    China-origin pin fails.
 # 2. A syntax matrix: quoted/bare values, whitespace variants, the `export`
-#    keyword, annotated assignments, adjacent literals, allowed-prefix +
-#    unlisted suffix, and empty/whitespace-only values — approved controls
-#    pass, everything else fails.
-#
-# The controls are the regression for the pin-extraction gap: a spaced
-# Python assignment, an annotated assignment, an adjacent literal or an
-# empty value used to escape the scan entirely.
+#    keyword, annotated assignments, raw/parenthesised/triple-quoted literals,
+#    adjacent literals, allowed-prefix + unlisted suffix, `#`-suffix, and
+#    empty/whitespace-only values — approved controls pass, everything else
+#    fails.
+# 3. Byte-level controls: a value carrying a real control char (newline / NUL /
+#    tab / embedded VT / FF / U+2028) is validated COMPLETELY in-process and
+#    never truncated to an approved prefix or split into a forged record.
+# 4. Failure-injection: a malformed source, a missing/unreadable source, and a
+#    failing interpreter each fail the OUTER gate (no swallowing).
+# 5. dotenv parity: the guard's whitespace/comment/tab rules match
+#    python-dotenv (see the version line printed by `--selftest`).
 
 expect_exit() {
     local expected="$1"
@@ -289,13 +334,13 @@ EMBEDDING_MODEL = unlisted/police-probe'
     'annotated python unknown|1|.py|DEFAULT_MODEL: str = "unlisted/police-probe"'
     'annotated python approved|0|.py|DEFAULT_MODEL: str = "gpt-4o-mini"'
     'exported env unknown|1||export EMBEDDING_MODEL=unlisted/police-probe'
+    'export keyword with tab|1||export	EMBEDDING_MODEL=unlisted/police-probe'
     'env allowed prefix plus suffix|1||EMBEDDING_MODEL=google/gemini-embedding-2+unlisted'
     'env hash suffix|1||EMBEDDING_MODEL=google/gemini-embedding-2#unlisted'
     'raw python literal|1|.py|DEFAULT_MODEL = r"unlisted/police-probe"'
     'parenthesised python literal|1|.py|DEFAULT_MODEL = ("unlisted/police-probe")'
     'adjacent python literals|1|.py|DEFAULT_MODEL = "gpt-4o-mini" "-unlisted"'
     'adjacent python literals approved (one value)|0|.py|DEFAULT_MODEL = "gpt-4o-" "mini"'
-    'adjacent literals in an unknown-type source are rejected|1||DEFAULT_MODEL = "gpt-4o-" "mini"'
     'triple quoted python literal|1|.py|DEFAULT_MODEL = """unlisted/police-probe"""'
     'rejected vendor|1||DEFAULT_MODEL = "moonshot/police-probe"'
 )
@@ -305,16 +350,30 @@ run_selftest() {
     local tmp
     tmp=$(mktemp -d) || return 1
 
+    # Note the python-dotenv version (parity target) when available.
+    local dv
+    dv=$(python3 - <<'PY' 2>/dev/null
+try:
+    from importlib.metadata import version
+    import dotenv
+    print("python-dotenv " + version("python-dotenv"))
+except Exception:
+    print("python-dotenv not importable (manual dotenv parser, parity verified on controls)")
+PY
+)
+    echo "parity: $dv"
+
     for src in "${ADAPTER_SOURCES[@]}"; do
         if [ ! -f "$src" ]; then
             echo "FAIL: guard selftest - scanned source missing: $src"
             failed=1
             continue
         fi
+        local base
         base="$(basename "$src")"
-        probe_first="$tmp/${base}.unlisted-first"
-        probe_second="$tmp/${base}.unlisted-second"
-        probe_china="$tmp/${base}.china-origin"
+        local probe_first="$tmp/${base}.unlisted-first"
+        local probe_second="$tmp/${base}.unlisted-second"
+        local probe_china="$tmp/${base}.china-origin"
 
         cp "$src" "$tmp/${base}.baseline"
         # Replace the value of every literal model pin with an unlisted probe.
@@ -332,8 +391,7 @@ run_selftest() {
         expect_exit 1 "China-origin pin fails ($src)" "$probe_china" || failed=1
     done
 
-    # The syntax matrix (each case is a standalone file; the extension
-    # decides whether it is read as a Python source or as a dotenv source).
+    # The syntax matrix (the extension decides python vs dotenv parsing).
     local index=0
     local entry label expected extension content
     for entry in "${SELFTEST_MATRIX[@]}"; do
@@ -348,12 +406,59 @@ run_selftest() {
         expect_exit "$expected" "syntax matrix: $label" "$tmp/matrix-$index$extension" || failed=1
     done
 
+    # Byte-level controls: the COMPLETE value (incl. control chars) is
+    # validated in-process; a newline / NUL cannot truncate to an approved
+    # prefix or forge a second allow-listed record.
+    printf 'DEFAULT_MODEL = "gpt-4o-mini\\n"\n' >"$tmp/byte-newline.py"
+    printf 'DEFAULT_MODEL = "gpt-4o-mini\\x00"\n' >"$tmp/byte-nul.py"
+    printf 'DEFAULT_MODEL = "gpt-4o-mini\\nEMBEDDING_MODEL=gpt-4o-mini"\n' >"$tmp/byte-forgery.py"
+    printf 'DEFAULT_MODEL = "gpt-4o-mini\\t"\n' >"$tmp/byte-tab.py"
+    expect_exit 1 "byte: trailing newline in value rejected" "$tmp/byte-newline.py" || failed=1
+    expect_exit 1 "byte: NUL in value rejected" "$tmp/byte-nul.py" || failed=1
+    expect_exit 1 "byte: record forgery by newline rejected" "$tmp/byte-forgery.py" || failed=1
+    expect_exit 1 "byte: trailing tab in value rejected" "$tmp/byte-tab.py" || failed=1
+
+    # dotenv parity controls (match python-dotenv's whitespace/comment rules).
+    printf 'export\tEMBEDDING_MODEL=unlisted/police-probe\n' >"$tmp/env-export-tab.env"
+    printf 'EMBEDDING_MODEL=google/gemini-embedding-2\t# legitimate comment\n' >"$tmp/env-tab-comment.env"
+    printf 'EMBEDDING_MODEL=google/gemini-embedding-2\013unlisted\n' >"$tmp/env-vt.env"
+    printf 'EMBEDDING_MODEL=google/gemini-embedding-2\014unlisted\n' >"$tmp/env-ff.env"
+    printf 'EMBEDDING_MODEL=google/gemini-embedding-2\u2028unlisted\n' >"$tmp/env-u2028.env"
+    expect_exit 1 "parity: export keyword with a TAB is not skipped" "$tmp/env-export-tab.env" || failed=1
+    expect_exit 0 "parity: TAB before # is a comment (approved value survives)" "$tmp/env-tab-comment.env" || failed=1
+    expect_exit 1 "parity: embedded VT does not forge an approved prefix" "$tmp/env-vt.env" || failed=1
+    expect_exit 1 "parity: embedded FF does not forge an approved prefix" "$tmp/env-ff.env" || failed=1
+    expect_exit 1 "parity: embedded U+2028 does not forge an approved prefix" "$tmp/env-u2028.env" || failed=1
+
+    # Failure-injection: parse/read/interpreter failures propagate to the OUTER
+    # gate (no swallowing via process substitution or command substitution).
+    printf 'DEFAULT_MODEL = "unlisted/police-probe"\n(\n' >"$tmp/malformed.py"
+    expect_exit 1 "injection: malformed python fails the outer gate" "$tmp/malformed.py" || failed=1
+    expect_exit 1 "injection: missing source fails the outer gate" "$tmp/does-not-exist" || failed=1
+
+    # Stub interpreter: python3 -> /bin/false must fail the gate closed.
+    # Only python3 is shadowed; the rest of PATH (bash, grep, ...) is kept real
+    # so the shebang and the pattern scan still resolve.
+    local stubbin
+    stubbin=$(mktemp -d)
+    ln -sf /usr/bin/false "$stubbin/python3"
+    printf 'DEFAULT_MODEL = "gpt-4o-mini"\n' >"$tmp/stub-approved.py"
+    ( PATH="$stubbin:$PATH" "$SCRIPT_PATH" "$tmp/stub-approved.py" ) >/dev/null 2>&1
+    local stubrc=$?
+    if [ "$stubrc" -ne 1 ]; then
+        echo "FAIL: guard selftest - injection: stub python3 did not fail the gate (expected 1, got $stubrc)"
+        failed=1
+    else
+        echo "ok: guard selftest - injection: stub python3 fails the gate (exit 1)"
+    fi
+    rm -rf "$stubbin"
+
     rm -rf "$tmp"
     if [ "$failed" -ne 0 ]; then
-        echo "FAIL: model origin guard selftest (PD-005 v3)"
+        echo "FAIL: model origin guard selftest (PD-005 v4)"
         return 1
     fi
-    echo "PASS: model origin guard selftest (PD-005 v3)"
+    echo "PASS: model origin guard selftest (PD-005 v4)"
     return 0
 }
 
@@ -367,18 +472,23 @@ if [ "${1:-}" = "--selftest" ]; then
 fi
 
 # Positional arguments override the scanned source list (used by the selftest).
+# A source that is given explicitly but missing/unreadable fails the gate.
 if [ "$#" -gt 0 ]; then
     ADAPTER_SOURCES=("$@")
 fi
 
 for src in "${ADAPTER_SOURCES[@]}"; do
-    [ -f "$src" ] || continue
+    if [ ! -f "$src" ]; then
+        echo "FAIL: model origin guard - source missing: $src"
+        MODEL_FAILED=1
+        continue
+    fi
     scan_file "$src"
 done
 
 if [ "$MODEL_FAILED" -ne 0 ]; then
-    echo "FAIL: model origin guard (PD-005 v3)"
+    echo "FAIL: model origin guard (PD-005 v4)"
     exit 1
 fi
 
-echo "PASS: model origin guard (PD-005 v3) - no China-origin models"
+echo "PASS: model origin guard (PD-005 v4) - no China-origin models"
