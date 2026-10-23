@@ -375,7 +375,7 @@ PY
         local probe_second="$tmp/${base}.unlisted-second"
         local probe_china="$tmp/${base}.china-origin"
 
-        cp "$src" "$tmp/${base}.baseline"
+        cp "$src" "$tmp/$(basename "$src")"
         # Replace the value of every literal model pin with an unlisted probe.
         sed -E "s/^([[:space:]]*[A-Z][A-Z0-9_]*MODEL[A-Z0-9_]*[[:space:]]*=[[:space:]]*)([\"'][^\"']*[\"']|[A-Za-z0-9._:/-]+)/\1\"unlisted\/police-probe\"/" "$src" >"$probe_first"
         # A SECOND pin in the same file, in both syntaxes.
@@ -383,7 +383,7 @@ PY
         { cat "$src"; printf '\nEMBEDDING_MODEL=unlisted/police-probe\n'; } >"$probe_second"
         { cat "$src"; printf '\nDEFAULT_MODEL = "moonshot/police-probe"\n'; } >"$probe_china"
 
-        expect_exit 0 "approved pins pass ($src)" "$tmp/${base}.baseline" || failed=1
+        expect_exit 0 "approved pins pass ($src)" "$tmp/$(basename "$src")" || failed=1
         expect_exit 1 "unlisted FIRST pin fails ($src)" "$probe_first" || failed=1
         expect_exit 1 "unlisted SECOND pin fails, spaced syntax ($src)" \
             "$tmp/${base}.second-spaced" || failed=1
