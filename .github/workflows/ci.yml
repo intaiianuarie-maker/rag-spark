@@ -104,10 +104,17 @@ jobs:
         if: steps.web.outputs.present == 'yes'
         working-directory: apps/web
         run: npm run lint
-      - name: Test (vitest)
+      - name: Require Chrome for browser regression tests
         if: steps.web.outputs.present == 'yes'
         working-directory: apps/web
-        run: npm run test
+        run: |
+          CHROME_BINARY="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          test -x "$CHROME_BINARY"
+          echo "CHROME_PATH=$CHROME_BINARY" >> "$GITHUB_ENV"
+      - name: Run browser and unit tests
+        if: steps.web.outputs.present == 'yes'
+        working-directory: apps/web
+        run: npm run test -- --maxWorkers=2 --minWorkers=1
       - name: Build
         if: steps.web.outputs.present == 'yes'
         working-directory: apps/web
