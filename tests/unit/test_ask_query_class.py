@@ -317,10 +317,15 @@ def test_ask_handler_path_has_no_hardcoded_model():
     source = Path(router_mod.__file__).read_text(encoding="utf-8")
     assert "gpt-4o-mini" not in source  # no model literal anywhere in the call site
     assert "DEFAULT_ANSWER_MODEL" not in source  # handler does not import a default
-    assert source.count("resolved_model, reason = resolve_model(") == 1  # single call-site
-    # The router's pick is threaded into the factory as its REQUIRED model; there
-    # is no second assignment that could overwrite it (T-V1-028 single source).
+    # Every model selection on the handler path goes through the ONE policy
+    # resolver. TASK-M4-001b added the streaming endpoint, so the call-site
+    # count is now exactly 2 (POST /ask + POST /stream) — a THIRD site would
+    # be a second, potentially diverging policy and must fail this pin.
+    assert source.count("resolved_model, reason = resolve_model(") == 2
+    # The router's pick is threaded into the factory as its REQUIRED model, and
+    # there is no second assignment that could overwrite it (T-V1-028 single
+    # source) — at BOTH call sites.
     assert (
-        source.count("build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)") == 1
+        source.count("build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)") == 2
     )
     assert "engine.model =" not in source
