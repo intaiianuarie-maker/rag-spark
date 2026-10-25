@@ -70,6 +70,76 @@ export function buildPassageUrl(
   return `/api/passage?${params.toString()}`;
 }
 
+/**
+ * A workspace-scoped reference to one open passage, serializable into the URL
+ * hash so a pasted deep-link re-opens the right source panel on load.
+ *
+ * Only the current workspace's content is ever serialized, and parsing requires
+ * the workspace id to match the active one — a hash captured in another
+ * workspace can never open this workspace's panel (no cross-workspace leakage).
+ */
+export type SourceRef = {
+  workspaceId: string;
+  /** Index of the transcript message that owns the citation. */
+  messageIndex: number;
+  chunkId: string;
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === "object" && v !== null && !Array.isArray(v);
+}
+
+function isSourceRef(v: unknown): v is SourceRef {
+  if (!isRecord(v)) return false;
+  const { workspaceId, messageIndex, chunkId } = v;
+  return (
+    typeof workspaceId === "string" &&
+    workspaceId.length > 0 &&
+    typeof messageIndex === "number" &&
+    Number.isInteger(messageIndex) &&
+    messageIndex >= 0 &&
+    typeof chunkId === "string" &&
+    chunkId.length > 0
+  );
+}
+
+/**
+ * Serialize a source ref into a complete URL fragment (with leading `#`).
+ * Stable round-trip: parse(serialize(x)) deep-equals x.
+ */
+export function serializeSourceRef(ref: SourceRef): string {
+  return `#source=${encodeURIComponent(JSON.stringify(ref))}`;
+}
+
+/**
+ * Parse a URL fragment back into a source ref, or null when the hash is
+ * missing, garbage, references another workspace, or fails validation.
+ * Never throws — callers treat null as "panel stays closed".
+ */
+export function parseSourceRef(hash: string, workspaceId: string | null): SourceRef | null {
+  if (!workspaceId) return null;
+  const raw = hash.startsWith("#") ? hash.slice(1) : hash;
+  const encoded = new URLSearchParams(raw).get("source");
+  if (encoded === null) return null;
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+  if (!isSourceRef(parsed)) return null;
+  // Only workspace-scoped content: a hash captured in another workspace is
+  // refused outright instead of opening this workspace's panel.
+  if (parsed.workspaceId !== workspaceId) return null;
+  return parsed;
+}
+
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 
 function errorMessage(error: unknown): string {

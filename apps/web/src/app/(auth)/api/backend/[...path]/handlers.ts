@@ -245,6 +245,17 @@ export async function forward(
     return upstreamFailureResponse(error, base, request, false);
   }
 
+  // M5-001a REV-2 Finding 1: stream SSE responses through instead of
+  // buffering `upstream.text()` first. For text/event-stream the client must
+  // receive each token as the backend emits it — awaiting the full body
+  // before returning meant nothing rendered until upstream EOF. The deadline
+  // signal stays attached to the body stream after `fetch` resolves, so a
+  // stalled upstream body is still bounded by APP_PROXY_TIMEOUT_MS (the same
+  // cap the text() path had).
+  if (isEventStream(upstream)) {
+    return streamUpstreamResponse(upstream);
+  }
+
   let text: string;
   try {
     // The deadline signal stays attached to the body stream, so headers AND
@@ -274,6 +285,43 @@ export async function forward(
   const contentType = upstream.headers.get("content-type");
   if (contentType && responseBody !== null) responseHeaders.set("content-type", contentType);
   return new Response(responseBody, { status: upstream.status, headers: responseHeaders });
+}
+
+/** True when the upstream response is an SSE stream the proxy must forward live. */
+function isEventStream(response: Response): boolean {
+  const contentType = response.headers.get("content-type") ?? "";
+  return contentType.toLowerCase().includes("text/event-stream");
+}
+
+/**
+ * Stream an upstream response body through to the client WITHOUT buffering it
+ * in memory first (M5-001a REV-2 Finding 1).
+ *
+ * `forward()` used to `await upstream.text()` before returning — for an SSE
+ * answer that means the client waits for upstream EOF before rendering a single
+ * token. Here the upstream body is piped straight through as a
+ * `ReadableStream`, so the first chunk reaches the client as soon as the
+ * backend emits it.
+ *
+ * Headers are forwarded verbatim (content-type, cache-control, and the
+ * `X-Accel-Buffering: no` hint the Ask SSE endpoint sets so a reverse proxy
+ * never re-buffers the stream). The deadline signal stays attached to the body
+ * stream after `fetch` resolves, so a stalled upstream body is still bounded by
+ * `APP_PROXY_TIMEOUT_MS` — the same cap as the text() path.
+ *
+ * A null body (204/205/304, or an upstream that sent headers only) is forwarded
+ * as a null body: constructing a Response with `body: ""` and status 204/205
+ * throws "Invalid response status code 204".
+ */
+export function streamUpstreamResponse(upstream: Response): Response {
+  const body = upstream.body;
+  const headers = new Headers();
+  headers.set("cache-control", "no-store");
+  for (const key of ["content-type", "x-accel-buffering"]) {
+    const value = upstream.headers.get(key);
+    if (value) headers.set(key, value);
+  }
+  return new Response(body, { status: upstream.status, headers });
 }
 
 export async function GET(

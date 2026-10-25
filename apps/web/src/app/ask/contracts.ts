@@ -92,6 +92,13 @@ export type AnswerStatus =
   | "degraded"
   | "needs_review";
 
+export type FeedbackPayload = {
+  turnId: string;
+  rating: "positive" | "negative" | "none";
+  comment?: string;
+  answeredAt: string;
+};
+
 /** Ingestion job `status` values — mirror of `packages/core.errors.JobStatus`
  * (re-exported by `packages/ingestion/persistence.py`). `ready` remains the
  * only fully-published state; `degraded`/`partial`/`needs_review` are honest

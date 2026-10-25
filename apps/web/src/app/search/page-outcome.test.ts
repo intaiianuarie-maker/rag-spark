@@ -153,6 +153,16 @@ async function submit() {
   await tick();
 }
 
+// Each leg is a FRESH mount, but the document's URL persists across legs —
+// and the page's URL-sync effect writes ?q=… on every submit. Without this
+// reset the next leg's mount would inherit the previous leg's query and the
+// initial URL search (the M5-001b feature) would fire an extra request,
+// racing the leg's own submit (pending.length !== 1). Harness hygiene only:
+// no assertion is relaxed by clearing it.
+function resetUrl() {
+  window.history.replaceState(null, "", window.location.pathname);
+}
+
 (async () => {
   try {
     const legs = [
@@ -166,6 +176,7 @@ async function submit() {
       window.workspaceList = undefined;
       window.releaseAt = leg.releaseAt;
       window.releaseMode = leg.releaseMode;
+      resetUrl();
       root.render(<Harness key={leg.name} />);
       await tick();
       await tick();
@@ -193,6 +204,7 @@ async function submit() {
     window.workspaceList = undefined;
     window.releaseAt = "none";
     window.releaseMode = "success";
+    resetUrl();
     root.render(<Harness key="fresh-b" />);
     await tick();
     await tick();
@@ -223,6 +235,7 @@ async function submit() {
       window.releaseAt = "none";
       window.releaseMode = "success";
       window.startBAtLayout = true;
+      resetUrl();
       root.render(<Harness key={"b-layout-" + mode} />);
       await tick();
       await tick();

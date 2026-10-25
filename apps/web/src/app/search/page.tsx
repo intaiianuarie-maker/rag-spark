@@ -19,6 +19,12 @@ import { ModeToggle } from "./components/mode-toggle";
 import { FilterBar } from "./components/filter-bar";
 import { ResultList } from "./components/result-list";
 import { ResultDetail } from "./components/result-detail";
+import { parseSearchState, searchStateToParams } from "./url-state";
+import {
+  createInitialUrlGate,
+  markInitialUrlSearchRan,
+  shouldRunInitialUrlSearch,
+} from "./initial-url-search";
 
 /**
  * A published value together with the workspace it belongs to.
@@ -34,9 +40,10 @@ type Scoped<T> = { workspaceId: string; value: T };
 
 export default function SearchPage() {
   const { active } = useWorkspaces();
-  const [query, setQuery] = useState("");
-  const [mode, setMode] = useState<SearchMode>(DEFAULT_SEARCH_MODE);
-  const [filters, setFilters] = useState<SearchFilters>(EMPTY_SEARCH_FILTERS);
+  const initial = typeof window !== "undefined" ? parseSearchState(window.location.search) : null;
+  const [query, setQuery] = useState(initial?.query ?? "");
+  const [mode, setMode] = useState<SearchMode>(initial?.mode ?? DEFAULT_SEARCH_MODE);
+  const [filters, setFilters] = useState<SearchFilters>(initial?.filters ?? EMPTY_SEARCH_FILTERS);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<Scoped<string> | null>(null);
   const [response, setResponse] = useState<Scoped<SearchResponse> | null>(null);
@@ -46,6 +53,15 @@ export default function SearchPage() {
   const activeId = active?.id;
   const scopeId = activeId ?? "";
   const [lastActiveId, setLastActiveId] = useState(activeId);
+  /**
+   * The initial URL-derived search fires exactly once, the moment the active
+   * workspace becomes available. Idempotent on active change (M5-001b REV-1):
+   * a workspace switch must NOT re-derive a search from the URL — the URL
+   * already holds the user's last query and re-running it on every switch
+   * would fire duplicate requests. The gate object is created fresh per mount
+   * (unmount/remount = a real reload).
+   */
+  const initialUrlGateRef = useRef(createInitialUrlGate());
 
   useEffect(() => {
     // Invalidate work started for a workspace that is no longer active, so a
@@ -127,6 +143,56 @@ export default function SearchPage() {
     },
     [active],
   );
+
+  // Sync filter/mode/query state to the URL. We use replaceState (not
+  // pushState) so filter tweaks do not spam browser history depth; back/
+  // forward navigation is still handled via the popstate listener below.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = searchStateToParams({ query, mode, filters });
+    const qs = params.toString();
+    const url = qs ? `${window.location.pathname}?${qs}` : window.location.pathname;
+    window.history.replaceState(null, "", url);
+  }, [query, mode, filters]);
+
+  // Restore state from the URL on back/forward navigation and re-run search.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onPopState = () => {
+      const next = parseSearchState(window.location.search);
+      setQuery(next.query);
+      setMode(next.mode);
+      setFilters(next.filters);
+      if (next.query.trim().length > 0) {
+        void runSearch(next.query, next.mode, next.filters);
+      }
+    };
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, [runSearch]);
+
+  /**
+   * M5-001b REV-1/REV-2 Finding: the mount-only effect used to call runSearch
+   * while WorkspaceProvider still had active=null, so runSearch returned
+   * immediately and the effect never re-ran when the workspace finally
+   * resolved — a reload or pasted URL with q+filters silently did nothing.
+   *
+   * Now depends on workspace readiness through the one-shot gate in
+   * `initial-url-search.ts`: the initial URL-derived search runs exactly once,
+   * the moment the active workspace becomes available. The gate is extracted
+   * (not just re-read from source) so the delayed-initialization interleaving
+   * is pinned by a real test — see `initial-url-search.test.ts`.
+   */
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    if (!shouldRunInitialUrlSearch(initialUrlGateRef.current, activeId)) return;
+    markInitialUrlSearchRan(initialUrlGateRef.current);
+    const initial = parseSearchState(window.location.search);
+    if (initial.query.trim().length > 0) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      void runSearch(initial.query, initial.mode, initial.filters);
+    }
+  }, [activeId, runSearch]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
