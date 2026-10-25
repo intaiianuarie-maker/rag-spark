@@ -38,6 +38,7 @@ from ingestion.adapters.llamaindex_chunker import (
 from ingestion.adapters.llamaindex_chunker import (
     chunk_document as llamaindex_chunk_document,
 )
+from ingestion.adapters.llamaindex_chunker import is_available as llamaindex_is_available
 from ingestion.adapters.pdf_scan import pdf_text_layer_report
 from ingestion.adapters.registry import (
     ParseAttempt,
@@ -459,9 +460,7 @@ def resolved_chunking_backend() -> str:
     """Backend identifier actually in use (recorded in stage logs + debugger)."""
     if CHUNKING_BACKEND == "builtin":
         return "builtin-whitespace"
-    try:
-        import llama_index.core  # noqa: F401  - availability probe only
-    except ImportError:
+    if not llamaindex_is_available():
         return "builtin-whitespace"
     return llamaindex_backend_name()
 
