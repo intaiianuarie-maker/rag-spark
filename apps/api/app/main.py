@@ -27,6 +27,7 @@ from app.documents.delete import router as documents_delete_router
 from app.documents.reads import router as knowledge_reads_router
 from app.documents.upload import jobs_router as jobs_router
 from app.documents.upload import router as documents_router
+from app.eval.router import legacy_router as legacy_eval_router
 from app.eval.router import router as eval_router
 from app.models_config.router import router as models_config_router
 from app.search.search import legacy_router as legacy_search_router
@@ -155,6 +156,7 @@ def create_app() -> FastAPI:
     app.include_router(search_router)
     app.include_router(legacy_search_router)
     app.include_router(eval_router)
+    app.include_router(legacy_eval_router)
     app.include_router(agent_router)
     app.include_router(research_router)
     app.include_router(workflow_router)

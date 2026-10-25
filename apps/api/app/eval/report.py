@@ -30,12 +30,18 @@ class MetricRow(BaseModel):
     ndcg: float = 0.0
     citation_accuracy: float = 0.0
     faithfulness: float = 0.0
+    cost: float = 0.0
+    latency_ms: float = 0.0
+    tokens: int = 0
 
 
 class RunSummary(BaseModel):
     run_id: str
     n_questions: int = 0
     means: dict[str, float] = Field(default_factory=dict)
+    cost: float = 0.0
+    latency_ms: float = 0.0
+    tokens: int = 0
 
 
 class ComparisonReport(BaseModel):
@@ -52,10 +58,16 @@ def summarize_run(run_id: str, rows: list[MetricRow]) -> RunSummary:
     """Aggregate one run's rows into per-metric means."""
     run_rows = [r for r in rows if r.run_id == run_id]
     means = {
-        metric: _mean([float(getattr(r, metric)) for r in run_rows])
-        for metric in REPORT_METRICS
+        metric: _mean([float(getattr(r, metric)) for r in run_rows]) for metric in REPORT_METRICS
     }
-    return RunSummary(run_id=run_id, n_questions=len(run_rows), means=means)
+    return RunSummary(
+        run_id=run_id,
+        n_questions=len(run_rows),
+        means=means,
+        cost=sum(r.cost for r in run_rows),
+        latency_ms=sum(r.latency_ms for r in run_rows),
+        tokens=sum(r.tokens for r in run_rows),
+    )
 
 
 def build_comparison_report(rows: list[MetricRow]) -> ComparisonReport:
