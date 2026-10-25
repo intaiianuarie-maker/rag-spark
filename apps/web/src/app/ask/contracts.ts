@@ -23,6 +23,44 @@ export type Confidence = {
   probability?: number | null;
 };
 
+export type DebugTraceItem = {
+  chunk_id?: string | null;
+  document_id?: string | null;
+  workspace_id?: string | null;
+  score?: number | null;
+  scores?: Record<string, number> | null;
+};
+
+export type DebugTrace = {
+  version?: number;
+  query?: { sha256?: string | null; characters?: number | null } | null;
+  rewrite?: { status?: string | null } | null;
+  filters?: { workspace_ids?: string[] | null; include_public?: boolean | null; mode?: string | null } | null;
+  retrieval?: {
+    status?: string | null;
+    latency_ms?: number | null;
+    candidate_scope?: string | null;
+    items?: DebugTraceItem[] | null;
+  } | null;
+  context?: { chunk_ids?: string[] | null; source_text_included?: boolean | null } | null;
+  generation?: {
+    status?: string | null;
+    model?: string | null;
+    prompt_template_sha256?: string | null;
+    latency_ms?: number | null;
+    prompt_tokens?: number | null;
+    completion_tokens?: number | null;
+    usage_status?: string | null;
+  } | null;
+  verification?: {
+    phase?: string | null;
+    status?: string | null;
+    latency_ms?: number | null;
+    usage_status?: string | null;
+  } | null;
+  total_latency_ms?: number | null;
+};
+
 export type AnswerPayload = {
   answer: string;
   status: "answered" | "partial" | "insufficient_evidence" | "clarification_needed" | "unavailable";
@@ -31,6 +69,7 @@ export type AnswerPayload = {
   confidence?: Confidence;
   limitations?: string[];
   trace_id?: string | null;
+  debug_trace?: DebugTrace | null;
   claims: Claim[];
   citations: Citation[];
   citation_integrity?: Record<string, unknown> | null;

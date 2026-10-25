@@ -3,6 +3,7 @@
 import { useState, type JSX, type ReactElement } from "react";
 import type { AnswerPayload, AnswerStatus, Claim, Citation, Confidence } from "../contracts";
 import { CitationChip } from "./citation-chip";
+import { AnswerDebugger } from "@/components/debugger/answer-debugger";
 
 /**
  * Citation exactly as it is stored WITH the message that produced it
@@ -44,6 +45,8 @@ export type ChatMessage = {
   error?: boolean;
   /** True when the stream was interrupted before the citations event arrived. */
   interrupted?: boolean;
+  /** Raw answer payload for the debugger (optional, privacy-gated). */
+  debug?: AnswerPayload;
 };
 
 /** A user turn. Deliberately owns an EMPTY citation list, never a borrowed one. */
@@ -71,6 +74,7 @@ export function answerMessage(payload: AnswerPayload): ChatMessage {
     confidence: payload.confidence,
     limitations: [...(payload.limitations ?? [])],
     error: false,
+    debug: payload,
   };
 }
 
@@ -302,6 +306,12 @@ export function ChatWindow({
                     </div>
                   )}
                   <MessageMeta message={msg} />
+                  {msg.role === "assistant" && msg.debug && (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-neutral-500">Debug</summary>
+                      <AnswerDebugger payload={msg.debug} showSourceText={false} />
+                    </details>
+                  )}
                   {/* Controls for completed assistant messages */}
                   {msg.role === "assistant" && !msg.error && !isStreamingTarget && (
                     <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-neutral-200 pt-2 dark:border-neutral-800">
