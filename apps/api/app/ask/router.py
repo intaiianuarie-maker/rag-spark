@@ -267,7 +267,10 @@ async def ask(
         except Exception as exc:
             logger.warning(
                 "semantic_verifier_initialization_failed",
-                extra={"event": "semantic_verifier_initialization_failed", "error": str(exc)},
+                extra={
+                    "event": "semantic_verifier_initialization_failed",
+                    "error_type": type(exc).__name__,
+                },
             )
 
     try:
@@ -330,8 +333,8 @@ class AskStreamRequest(BaseModel):
 async def ask_stream(
     workspace_id: uuid.UUID,
     body: AskStreamRequest,
+    request: Request,
     principal: Principal = Depends(get_principal),
-    request: Request = Depends(),
 ) -> StreamingResponse:
     """Stream a grounded answer as SSE events.
 
@@ -406,7 +409,10 @@ async def ask_stream(
         except Exception as exc:
             logger.warning(
                 "semantic_verifier_initialization_failed",
-                extra={"event": "semantic_verifier_initialization_failed", "error": str(exc)},
+                extra={
+                    "event": "semantic_verifier_initialization_failed",
+                    "error_type": type(exc).__name__,
+                },
             )
 
     engine_stream = engine.stream(

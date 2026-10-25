@@ -95,6 +95,8 @@ class Answer(BaseModel):
     #: Verifier model identifier that evaluated semantic claims
     #: (e.g. google/gemma-4-26b-a4b-it:free).
     verifier_model: str | None = None
+    #: Per-call, workspace-scoped diagnostics. No source text or prompt content.
+    debug_trace: dict[str, Any] | None = None
 
 
 class DocumentStatus(StrEnum):

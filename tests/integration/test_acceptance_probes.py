@@ -228,9 +228,13 @@ async def test_acceptance_5_multilingual_cross_language_retrieval() -> None:
     )
     orchestrator = MockAcceptanceOrchestrator([ro_item])
 
-    llm_output = (
-        '{"answer": "Platforma accepta autentificarea pe bază de roluri.", '
-        '"claims": [{"text": "Autentificarea pe bază de roluri", "chunk_ids": ["chunk-ro-1"]}]}'
+    # RO/PT extractive grounding deliberately requires a complete assertion.
+    # A noun phrase cannot prove that the platform actually supports a feature.
+    llm_output = json.dumps(
+        {
+            "answer": ro_item.content,
+            "claims": [{"text": ro_item.content, "chunk_ids": ["chunk-ro-1"]}],
+        }
     )
     llm = MockAcceptanceLLM(response_text=llm_output)
     engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="gpt-4o-mini")

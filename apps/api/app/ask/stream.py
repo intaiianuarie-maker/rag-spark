@@ -80,6 +80,7 @@ def _answer_to_payload(answer: Any) -> dict[str, Any]:
         "semantic_verification": answer.semantic_verification,
         "publication_gate": answer.publication_gate,
         "limitations": answer.limitations,
+        "debug_trace": getattr(answer, "debug_trace", None),
     }
 
 

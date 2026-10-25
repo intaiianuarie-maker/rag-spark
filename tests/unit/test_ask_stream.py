@@ -1005,8 +1005,8 @@ async def test_stream_citations_payload_serialization_parity(monkeypatch):
     response = await ask_stream(
         workspace_id,
         AskStreamRequest(query="Revenue?"),
-        principal,
-        _FakeRequest(),
+        principal=principal,
+        request=_FakeRequest(),
     )
     frames = await _sse_frames(response)
     citations_frames = [(e, d) for e, d in frames if e == "citations"]
@@ -1050,8 +1050,8 @@ async def test_stream_endpoint_honors_selected_model(monkeypatch, caplog):
     response = await ask_stream(
         workspace_id,
         AskStreamRequest(query="Revenue?", model="request-override-b"),
-        principal,
-        _FakeRequest(),
+        principal=principal,
+        request=_FakeRequest(),
     )
     async for _chunk in response.body_iterator:
         pass  # drain: the handler wires the stream before returning
@@ -1087,8 +1087,8 @@ async def test_stream_endpoint_without_model_uses_operator_default(monkeypatch, 
     response = await ask_stream(
         workspace_id,
         AskStreamRequest(query="Revenue?"),
-        principal,
-        _FakeRequest(),
+        principal=principal,
+        request=_FakeRequest(),
     )
     async for _chunk in response.body_iterator:
         pass

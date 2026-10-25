@@ -77,6 +77,7 @@ from .models import (
     DocumentStatus,
 )
 from .prompts import SYSTEM_PROMPT, build_prompt, parse_model_output
+from .tracing import trace_answer, trace_stream
 from .verification import ClaimGrounder, ExtractiveGrounder, verify_claims
 
 logger = logging.getLogger("knowledge_os.answer")
@@ -481,6 +482,7 @@ class AnswerEngine:
     #: Verifier model identifier for Stage 12 semantic checks.
     verifier_model: str = "google/gemma-4-26b-a4b-it:free"
 
+    @trace_answer
     async def answer(
         self, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
     ) -> Answer:
@@ -664,7 +666,7 @@ class AnswerEngine:
         except Exception as exc:
             logger.warning(
                 "stage11_integrity_check_failed",
-                extra={"event": "stage11_integrity_check_failed", "error": str(exc)},
+                extra={"event": "stage11_integrity_check_failed", "error_type": type(exc).__name__},
             )
 
         try:
@@ -1161,6 +1163,7 @@ class AnswerEngine:
     # Streaming variant (TASK-M4-001b)
     # ------------------------------------------------------------------
 
+    @trace_stream
     async def stream(
         self, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
     ) -> AsyncIterator[tuple[str, Any]]:
@@ -1271,8 +1274,9 @@ class AnswerEngine:
         # Streaming answer-text extractor — only yields the "answer" value,
         # never any chunk_ids or claims structure.
         extractor = _StreamingAnswerExtractor()
+        model_stream = self.llm.stream(request)
         try:
-            async for chunk in self.llm.stream(request):
+            async for chunk in model_stream:
                 accumulated.append(chunk)
                 # Emit partial answer text as token events as it arrives.
                 for fragment in extractor.feed(chunk):
@@ -1287,6 +1291,10 @@ class AnswerEngine:
                 },
             )
             raise
+        finally:
+            close = getattr(model_stream, "aclose", None)
+            if close is not None:
+                await close()
 
         raw_text = "".join(accumulated)
 
@@ -1388,7 +1396,7 @@ class AnswerEngine:
         except Exception as exc:
             logger.warning(
                 "stage11_integrity_check_failed",
-                extra={"event": "stage11_integrity_check_failed", "error": str(exc)},
+                extra={"event": "stage11_integrity_check_failed", "error_type": type(exc).__name__},
             )
 
         try:
