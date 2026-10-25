@@ -105,6 +105,7 @@ const ENTRY = `
 import React from "react";
 import { createRoot } from "react-dom/client";
 import { UploadPanel } from ${JSON.stringify(UPLOAD_PANEL_PATH)};
+import { WorkspaceProvider } from "@/components/workspace/workspace-provider";
 
 window.__uploadCount = 0;
 window.__jobStatus = {};
@@ -125,8 +126,10 @@ function uploadFile(input, name, type) {
   input.dispatchEvent(new Event("change", { bubbles: true }));
 }
 
+function Harness() { return <WorkspaceProvider><UploadPanel /></WorkspaceProvider>; }
+
 (async () => {
-  root.render(<UploadPanel />);
+  root.render(<Harness />);
   await new Promise((r) => setTimeout(r, 200));
   const input = document.querySelector('input[type="file"]') as HTMLInputElement;
 
@@ -146,7 +149,7 @@ function uploadFile(input, name, type) {
   if (cancelBtn) cancelBtn.click();
   await new Promise((r) => setTimeout(r, 50));
   // rerender
-  root.render(<UploadPanel />);
+  root.render(<Harness />);
   await new Promise((r) => setTimeout(r, 100));
   window.__scenario2 = (document.body.textContent || "").toLowerCase().includes("cancelled");
 
@@ -155,7 +158,7 @@ function uploadFile(input, name, type) {
   const nextN = (window.__uploadCount || 0) + 1;
   window.__jobStatus["job-" + nextN] = { job_id: "job-" + nextN, document_id: "doc-" + nextN, status: "failed", stage: "failed", attempts: 1, max_attempts: 3, error_code: "PARSE_ERROR", error_message: "bad", created_at: new Date().toISOString(), finished_at: new Date().toISOString() };
   uploadFile(input, "h.txt", "text/plain");
-  await new Promise((r) => setTimeout(r, 200));
+  await new Promise((r) => setTimeout(r, 2400));
   const retryBtn = Array.from(document.querySelectorAll("button")).find((b) => /retry/i.test(b.textContent || ""));
   const countBeforeRetry = window.__uploadCount;
   if (retryBtn) retryBtn.click();

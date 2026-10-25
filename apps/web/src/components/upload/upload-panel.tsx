@@ -11,8 +11,12 @@ export type UploadPanelProps = {
   onJobTerminal?: (jobId: string, documentId: string) => void;
 };
 
-export function UploadPanel({ onJobTerminal }: UploadPanelProps) {
+export function UploadPanel(props: UploadPanelProps) {
   const { activeId } = useWorkspaces();
+  return <ScopedUploadPanel key={activeId ?? "no-workspace"} activeId={activeId} {...props} />;
+}
+
+function ScopedUploadPanel({ activeId, onJobTerminal }: UploadPanelProps & { activeId: string | null }) {
   const activeIdRef = useRef(activeId);
   useEffect(() => { activeIdRef.current = activeId; }, [activeId]);
   const [file, setFile] = useState<File | null>(null);

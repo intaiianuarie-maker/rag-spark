@@ -37,7 +37,9 @@ describe("deep-link load wiring", () => {
   });
 
   it("retries until the transcript hydrates (does not drop the link)", () => {
-    expect(page).toContain("transcript not hydrated yet");
+    // Hydration changes messages; the real browser direct-load case proves
+    // that this dependency opens the passage after asynchronous hydration.
+    expect(page).toMatch(/\},\s*\[messages, workspaceId\]\)/);
   });
 
   it("re-runs on hash navigation (back/forward/paste)", () => {
