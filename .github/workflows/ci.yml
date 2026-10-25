@@ -20,6 +20,12 @@ jobs:
       - name: Install backend dependencies
         run: pip install -r requirements-dev.txt
 
+      - name: Install CPU reranker test dependencies
+        run: >-
+          pip install -r apps/rerank/requirements.txt
+          --index-url https://download.pytorch.org/whl/cpu
+          --extra-index-url https://pypi.org/simple
+
       - name: Ruff lint
         run: ruff check .
 

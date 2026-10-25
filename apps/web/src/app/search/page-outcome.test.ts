@@ -83,6 +83,7 @@ const STUBS: Record<string, string> = {
 const ENTRY = `
 import React, { useEffect, useLayoutEffect } from "react";
 import { createRoot } from "react-dom/client";
+import { flushSync } from "react-dom";
 import Page from ${JSON.stringify(PAGE_PATH)};
 import { WorkspaceProvider, useWorkspaces } from ${JSON.stringify(PROVIDER_PATH)};
 
@@ -90,6 +91,14 @@ window.trace = [];
 window.pending = [];
 window.reports = [];
 const tick = () => new Promise((r) => setTimeout(r, 20));
+
+async function waitFor(predicate, label) {
+  for (let attempt = 0; attempt < 150; attempt += 1) {
+    if (predicate()) return;
+    await tick();
+  }
+  throw new Error("browser prerequisite timed out: " + label + "; " + window.trace.join(","));
+}
 
 function Observer() {
   const { active, reload } = useWorkspaces();
@@ -99,6 +108,7 @@ function Observer() {
     await reload();
   };
   useLayoutEffect(() => {
+    window.activeWorkspace = id;
     window.trace.push("layout:" + id);
     // Release A's in-flight request DURING B's layout commit: the window
     // between the render that switches the workspace and the passive effect
@@ -144,12 +154,13 @@ document.body.appendChild(report);
 const root = createRoot(host);
 
 async function submit() {
+  const countBefore = window.pending.length;
   const input = document.querySelector("input");
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value").set;
   setter.call(input, "salary");
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-  await tick();
-  document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+  flushSync(() => input.dispatchEvent(new Event("input", { bubbles: true })));
+  flushSync(() => document.querySelector("form").dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })));
+  await waitFor(() => window.pending.length > countBefore, "submitted search reaches transport");
   await tick();
 }
 
@@ -177,9 +188,9 @@ function resetUrl() {
       window.releaseAt = leg.releaseAt;
       window.releaseMode = leg.releaseMode;
       resetUrl();
+      window.activeWorkspace = null;
       root.render(<Harness key={leg.name} />);
-      await tick();
-      await tick();
+      await waitFor(() => window.activeWorkspace === "A", "workspace A hydration");
       await submit();
       if (window.pending.length !== 1) throw new Error(leg.name + ": no pending request");
       await window.switchTo();
@@ -205,9 +216,9 @@ function resetUrl() {
     window.releaseAt = "none";
     window.releaseMode = "success";
     resetUrl();
+    window.activeWorkspace = null;
     root.render(<Harness key="fresh-b" />);
-    await tick();
-    await tick();
+    await waitFor(() => window.activeWorkspace === "A", "workspace A hydration");
     await submit();
     if (window.pending.length !== 1) throw new Error("fresh-b: no pending request");
     await window.switchTo();
@@ -236,9 +247,9 @@ function resetUrl() {
       window.releaseMode = "success";
       window.startBAtLayout = true;
       resetUrl();
+      window.activeWorkspace = null;
       root.render(<Harness key={"b-layout-" + mode} />);
-      await tick();
-      await tick();
+      await waitFor(() => window.activeWorkspace === "A", "workspace A hydration");
       await submit();
       if (window.pending.length !== 1) throw new Error("b-layout: no pending request");
       await window.switchTo();
