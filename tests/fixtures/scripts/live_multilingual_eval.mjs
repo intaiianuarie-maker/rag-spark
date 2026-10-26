@@ -35,6 +35,8 @@ let stage = "configuration", browser, context, temporary;
 class GateError extends Error { constructor(code) { super(code); this.code = code; } }
 const check = (condition, code) => { if (!condition) throw new GateError(code); };
 const finite = value => typeof value === "number" && Number.isFinite(value);
+const SCORING_STAGES = [["dense", "dense"], ["lexical", "lexical"], ["fusion", "rrf"], ["rerank", "rerank"]];
+const RETRIEVAL_STAGES = ["embedding", "dense", "lexical", "sparse", "graph", "fusion", "rerank", "context"];
 const endpoint = path => `${base}/api/backend/v1/workspaces/${workspaceId}${path}`;
 const jsonl = path => readFileSync(join(root, path), "utf8").split(/\r?\n/).filter(Boolean).map(JSON.parse);
 
@@ -76,8 +78,24 @@ function traceGaps(trace, question) {
   if (!trace?.filters?.workspace_ids?.includes(workspaceId) || trace.filters.include_public !== false) missing.push("filters");
   const items = trace?.retrieval?.items;
   if (!Array.isArray(items) || !items.length || !finite(trace?.retrieval?.latency_ms)) missing.push("retrieval");
-  for (const score of ["dense", "lexical", "rrf", "rerank"]) {
-    if (!items?.some(item => finite(item.scores?.[score]))) missing.push(`score_${score}`);
+  for (const [name, score] of SCORING_STAGES) {
+    const measurement = trace?.retrieval?.stages?.[name];
+    if (!measurement || measurement.status !== "completed") {
+      missing.push(`stage_${name}`);
+      continue;
+    }
+    const candidates = measurement.candidate_count;
+    const returned = measurement.returned_context_count;
+    if (!Number.isInteger(candidates) || candidates < 0) missing.push(`stage_${name}_candidate_count`);
+    if (!finite(measurement.latency_ms) || measurement.latency_ms < 0) missing.push(`stage_${name}_latency`);
+    if (!Number.isInteger(returned) || returned < 0 || !Number.isInteger(candidates) || returned > candidates)
+      missing.push(`stage_${name}_returned_context_count`);
+    const actualScores = Array.isArray(items) ? items.filter(item => finite(item.scores?.[score])).length : null;
+    // A completed empty leg has no score. Candidates that all dropped before
+    // context selection also need no fabricated score. Actual returned score
+    // contributions must agree with the independently reported stage count.
+    if (returned > 0 && !actualScores) missing.push(`score_${score}`);
+    if (Number.isInteger(returned) && returned !== actualScores) missing.push(`stage_${name}_score_count_mismatch`);
   }
   if (!trace?.context?.chunk_ids?.length || trace.context.source_text_included !== false) missing.push("context");
   if (!trace?.generation?.model || !trace.generation.prompt_template_sha256 || !finite(trace.generation.latency_ms)) missing.push("model_prompt_latency");
@@ -87,6 +105,12 @@ function traceGaps(trace, question) {
   if (!finite(trace?.total_latency_ms)) missing.push("total_latency");
   return missing;
 }
+function allScoringLegsHaveScores(trace) {
+  return SCORING_STAGES.every(([name, score]) =>
+    trace?.retrieval?.stages?.[name]?.status === "completed" &&
+    trace.retrieval.stages[name].returned_context_count > 0 &&
+    trace.retrieval.items?.some(item => finite(item.scores?.[score])));
+}
 function traceEvidence(trace) {
   if (!trace) return null;
   // Keep reviewable measurements, never arbitrary provider metadata or text.
@@ -94,6 +118,9 @@ function traceEvidence(trace) {
     query: trace.query, rewrite: trace.rewrite, filters: trace.filters,
     retrieval: { status: trace.retrieval?.status, latency_ms: trace.retrieval?.latency_ms,
       candidate_scope: trace.retrieval?.candidate_scope,
+      stages: Object.fromEntries(RETRIEVAL_STAGES.filter(name => trace.retrieval?.stages?.[name])
+        .map(name => [name, Object.fromEntries(["status", "candidate_count", "returned_context_count", "latency_ms"]
+          .map(key => [key, trace.retrieval.stages[name][key]]))])),
       items: trace.retrieval?.items?.map(item => ({ chunk_id: item.chunk_id,
         document_id: item.document_id, workspace_id: item.workspace_id, score: item.score,
         scores: Object.fromEntries(["dense", "sparse", "lexical", "rrf", "rerank"]
@@ -231,17 +258,27 @@ try {
         const displayed = await panel.textContent();
         for (const label of ["Query", "Rewrite", "Filters", "Retrieval", "Context", "Generation", "Verification", "Total"])
           check(displayed.includes(label), "debugger_stage_missing");
+        for (const [name] of SCORING_STAGES) {
+          const measurement = answer.debug_trace?.retrieval?.stages?.[name];
+          const expected = measurement
+            ? `${name}: status ${measurement.status ?? "not reported"} · candidates ${measurement.candidate_count ?? "not reported"} · in returned context ${measurement.returned_context_count ?? "not reported"} · latency ${measurement.latency_ms ?? "not reported"} ms`
+            : `${name} stage: not reported`;
+          check(displayed.includes(expected), "debugger_retrieval_measurement_mismatch");
+        }
         check(displayed.includes(answer.debug_trace?.query?.sha256 || "__missing__") &&
           displayed.includes(citation.chunk_id), "debugger_wire_mismatch");
         check(!displayed.includes(canonical.passage.content.trim()), "debugger_source_text_visible");
       } catch { gaps.push("debugger_ui"); }
       report.trace_checks.push({ case_id: item.id, missing: gaps, passed: gaps.length === 0,
+        all_scoring_legs_have_scores: allScoringLegsHaveScores(answer.debug_trace),
         observed_trace: traceEvidence(answer.debug_trace) });
     } catch (error) { failure(item.id, error); }
   }
   report.outcomes.m7_answer_cases = suites.multilingual.every(item => report.outcomes[item.id] === true);
   report.outcomes.golden_answer_cases = suites.golden.every(item => report.outcomes[item.id] === true);
-  report.outcomes.m8_trace = report.trace_checks.length === 5 && report.trace_checks.every(item => item.passed);
+  report.outcomes.m8_all_leg_scores = report.trace_checks.some(item => item.passed && item.all_scoring_legs_have_scores);
+  report.outcomes.m8_trace = report.trace_checks.length === 5 && report.trace_checks.every(item => item.passed) &&
+    report.outcomes.m8_all_leg_scores;
 
   for (const [gate, items] of Object.entries(suites)) {
     stage = `ui_eval_${gate}`;

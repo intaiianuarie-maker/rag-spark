@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import math
 from collections.abc import AsyncIterator, Awaitable, Callable
+from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from functools import wraps
 from time import perf_counter
@@ -32,6 +33,7 @@ class _Trace:
     started: float = field(default_factory=perf_counter)
     retrieval_ms: float | None = None
     retrieval_status: str = "not_run"
+    retrieval_stages: dict[str, dict[str, Any]] = field(default_factory=dict)
     items: list[dict[str, Any]] = field(default_factory=list)
     generation: dict[str, Any] = field(default_factory=lambda: {"status": "not_run"})
     generation_finished: float | None = None
@@ -55,6 +57,7 @@ class _Trace:
                 "status": self.retrieval_status,
                 "latency_ms": self.retrieval_ms,
                 "candidate_scope": "returned_context_only",
+                "stages": deepcopy(self.retrieval_stages),
                 "items": self.items,
             },
             "context": {
@@ -91,6 +94,11 @@ class _RetrievalObserver:
         return getattr(self.delegate, name)
 
     async def retrieve(self, **kwargs: Any) -> list[RetrievedItem]:
+        from retrieval.orchestrator import retrieval_outcome_ctx
+
+        # A delegate that does not publish diagnostics cannot inherit an older
+        # call's outcome on this task. The engine still owns consuming the new one.
+        retrieval_outcome_ctx.set(None)
         started = perf_counter()
         forwarded = kwargs.get("query")
         if isinstance(forwarded, str):
@@ -109,11 +117,10 @@ class _RetrievalObserver:
             self.trace.retrieval_ms = (perf_counter() - started) * 1000
         self.trace.retrieval_status = "completed"
         # Observe without consuming the outcome; the engine still owns pop().
-        from retrieval.orchestrator import retrieval_outcome_ctx
-
         outcome = retrieval_outcome_ctx.get()
         if outcome is not None:
             self.trace.retrieval_status = outcome.status.value
+            self.trace.retrieval_stages = deepcopy(outcome.stages)
         # Defense in depth: diagnostics never expose an unscoped item even if
         # a faulty test double/adapter returns it. The retrieval behavior itself
         # is forwarded unchanged; the engine's existing guards remain in force.
@@ -132,6 +139,19 @@ class _RetrievalObserver:
             for item in items
             if self.trace.scope.allows_workspace(item.workspace_id)
         ]
+        # A hydration wrapper may drop stale canonical rows after the base
+        # orchestrator measured its stages. Count only the final scoped items
+        # this observer actually forwards; operation status/count/timing stays
+        # the measured upstream evidence, never inferred from surviving scores.
+        for stage, key in (("dense", "dense"), ("sparse", "sparse"),
+                           ("lexical", "lexical"), ("graph", "graph"),
+                           ("fusion", "rrf"), ("rerank", "rerank")):
+            if stage in self.trace.retrieval_stages:
+                self.trace.retrieval_stages[stage]["returned_context_count"] = sum(
+                    1 for item in self.trace.items if key in item["scores"]
+                )
+        if "context" in self.trace.retrieval_stages:
+            self.trace.retrieval_stages["context"]["returned_context_count"] = len(self.trace.items)
         return items
 
 

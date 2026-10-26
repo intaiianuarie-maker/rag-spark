@@ -31,6 +31,16 @@ export type DebugTraceItem = {
   scores?: Record<string, number> | null;
 };
 
+export type DebugRetrievalStageName =
+  | "embedding" | "dense" | "lexical" | "sparse" | "graph" | "fusion" | "rerank" | "context";
+
+export type DebugRetrievalStage = {
+  status: "completed" | "failed" | "not_configured" | "not_run";
+  candidate_count: number | null;
+  returned_context_count?: number | null;
+  latency_ms: number | null;
+};
+
 export type DebugTrace = {
   version?: number;
   query?: { sha256?: string | null; characters?: number | null } | null;
@@ -40,6 +50,7 @@ export type DebugTrace = {
     status?: string | null;
     latency_ms?: number | null;
     candidate_scope?: string | null;
+    stages?: Partial<Record<DebugRetrievalStageName, DebugRetrievalStage>> | null;
     items?: DebugTraceItem[] | null;
   } | null;
   context?: { chunk_ids?: string[] | null; source_text_included?: boolean | null } | null;

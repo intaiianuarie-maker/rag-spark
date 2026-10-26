@@ -44,11 +44,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import Any, ClassVar, Final, Protocol, runtime_checkable
+from time import perf_counter
+from typing import Any, ClassVar, Final, Protocol, TypeVar, runtime_checkable
 
 from core.auth import ACLScope
 from core.errors import ReasonCode, spec_for
@@ -156,6 +157,9 @@ class RetrievalResult:
     #: T-A11: explicit graph leg omission disclosure (never a silent empty).
     graph_disclosure: str = ""
     graph_omitted: bool = False
+    #: Actual per-call operations; counts are ACL-eligible outputs before later
+    #: truncation, not invented per-item scores or a candidate inventory.
+    stages: dict[str, dict[str, Any]] = field(default_factory=dict)
 
     @property
     def reason(self) -> str:
@@ -196,13 +200,53 @@ REQUIRED_LEGS: dict[str, tuple[str, ...]] = {
 }
 
 
+_T = TypeVar("_T")
+_STAGES = ("embedding", "dense", "sparse", "lexical", "graph", "fusion", "rerank", "context")
+
+
 @dataclass
 class _LegReport:
     """Per-call accumulator of leg failures (one per ``retrieve()`` call)."""
 
     failures: list[LegFailure] = field(default_factory=list)
+    allowed: set[str] = field(default_factory=set)
+    include_public: bool = False
+    stages: dict[str, dict[str, Any]] = field(default_factory=lambda: {
+        name: {"status": "not_run", "candidate_count": None, "latency_ms": None,
+               "returned_context_count": 0}
+        for name in _STAGES
+    })
+
+    def not_configured(self, leg: str) -> None:
+        self.stages[leg]["status"] = "not_configured"
+
+    async def measure(self, leg: str, operation: Awaitable[_T]) -> _T:
+        started = perf_counter()
+        try:
+            result = await operation
+        except BaseException:
+            self.stages[leg]["status"] = "failed"
+            raise
+        else:
+            self.stages[leg]["status"] = "completed"
+            return result
+        finally:
+            self.stages[leg]["latency_ms"] = (perf_counter() - started) * 1000
+
+    def candidates(self, leg: str, items: Sequence[RetrievedItem]) -> None:
+        self.stages[leg]["candidate_count"] = sum(
+            1 for item in items if item.workspace_id is not None
+            and (self.include_public or item.workspace_id in self.allowed)
+        )
+
+    def completed(self, stage: str, started: float, count: int) -> None:
+        self.stages[stage] = {"status": "completed", "candidate_count": count,
+                              "latency_ms": (perf_counter() - started) * 1000,
+                              "returned_context_count": 0}
 
     def record(self, leg: str, exc: BaseException, reason_code: ReasonCode) -> None:
+        self.stages[leg]["status"] = "failed"
+        self.stages[leg]["candidate_count"] = None
         self.failures.append(
             LegFailure(leg=leg, error_type=type(exc).__name__, reason_code=reason_code)
         )
@@ -366,7 +410,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         With no ``report`` the leg raises (legacy caller contract).
         """
         try:
-            vector = await self.embedding.embed_query(query)
+            operation = self.embedding.embed_query(query)
+            vector = (await report.measure("embedding", operation) if report is not None
+                      else await operation)
         except Exception as exc:
             if report is None:
                 raise
@@ -377,13 +423,17 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         # boundary. observed dimension means we catch provider/dimension lies.
         query_identity = provider_identity(self.embedding, len(vector))
         try:
-            return await self.dense.search(
+            search = self.dense.search(
                 collection=self.collection,
                 vector=vector,
                 top_k=top_k,
                 query_filter=query_filter,
                 query_identity=query_identity,
             )
+            items = await report.measure("dense", search) if report is not None else await search
+            if report is not None:
+                report.candidates("dense", items)
+            return items
         except Exception as exc:
             if report is None:
                 raise
@@ -399,15 +449,19 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         report: _LegReport | None = None,
     ) -> list[RetrievedItem]:
         if self.sparse is None:
+            if report is not None:
+                report.not_configured("sparse")
             return []
         if report is None:
             return await self.sparse.search(
                 query=query, top_k=top_k, query_filter=query_filter
             )
         try:
-            return await self.sparse.search(
+            items = await report.measure("sparse", self.sparse.search(
                 query=query, top_k=top_k, query_filter=query_filter
-            )
+            ))
+            report.candidates("sparse", items)
+            return items
         except Exception as exc:
             report.record("sparse", exc, LEG_REASON_CODES["sparse"])
             return []
@@ -416,9 +470,11 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         self, query: str, top_k: int, query_filter: SearchFilter, *, report: _LegReport
     ) -> list[RetrievedItem]:
         try:
-            return await self.lexical.search(
+            items = await report.measure("lexical", self.lexical.search(
                 query=query, top_k=top_k, query_filter=query_filter
-            )
+            ))
+            report.candidates("lexical", items)
+            return items
         except Exception as exc:
             report.record("lexical", exc, LEG_REASON_CODES["lexical"])
             return []
@@ -449,7 +505,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         self, query: str, workspace_ids: Sequence[str], *, report: _LegReport
     ) -> list[RetrievedItem]:
         if self.graph is None:
+            report.not_configured("graph")
             return []
+        started = perf_counter()
         items: list[RetrievedItem] = []
         for ws_id in workspace_ids:
             try:
@@ -468,6 +526,13 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                     items.append(item)
             except Exception as exc:
                 report.record("graph", exc, LEG_REASON_CODES["graph"])
+        if report.failed("graph"):
+            report.stages["graph"] = {"status": "failed", "candidate_count": None,
+                                       "latency_ms": (perf_counter() - started) * 1000,
+                                       "returned_context_count": 0}
+        else:
+            report.completed("graph", started, 0)
+            report.candidates("graph", items)
         return items
 
     # --- ACL --------------------------------------------------------------
@@ -501,16 +566,17 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         call when "no results" must be distinguishable from "search is down".
         """
         trace_id = request_id_ctx.get() or new_request_id()
-        report = _LegReport()
+        report = _LegReport(allowed=set(acl_scope.workspace_ids),
+                            include_public=acl_scope.include_public)
 
         # G0: empty/unscoped scope fails closed, before any retriever call.
         # Not a failure: nothing was attempted.
         if acl_scope.is_empty:
-            return RetrievalResult(items=[], trace_id=trace_id)
+            return RetrievalResult(items=[], trace_id=trace_id, stages=report.stages)
         # Micro #12: a blank/whitespace query can match nothing; return early
         # (no retriever/embedding calls). Matches the PG FTS store guard.
         if not query.strip():
-            return RetrievalResult(items=[], trace_id=trace_id)
+            return RetrievalResult(items=[], trace_id=trace_id, stages=report.stages)
 
         # T-A01: sensitive/local-only workspaces must not egress query
         # embeddings. Refuse semantic/hybrid retrieval BEFORE any embedding
@@ -542,6 +608,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 reason_code=ReasonCode.EMBED_UNAVAILABLE,
                 trace_id=trace_id,
                 legs_failed=(failure,),
+                stages=report.stages,
             )
         allowed = set(acl_scope.workspace_ids)
         query_filter = SearchFilter(workspace_ids=list(acl_scope.workspace_ids))
@@ -556,6 +623,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         # T-A11: an explicit graph/graph-only request must not become a silent
         # empty success when the graph retriever is unavailable. Refuse loudly.
         if mode is RetrievalMode.GRAPH and self.graph is None:
+            report.not_configured("graph")
             failure = LegFailure(
                 leg="graph",
                 error_type="GraphUnavailable",
@@ -569,6 +637,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 legs_failed=(failure,),
                 graph_disclosure="graph retrieval unavailable: graph retriever is disabled",
                 graph_omitted=True,
+                stages=report.stages,
             )
         if mode is RetrievalMode.HYBRID_GRAPH and self.graph is None:
             graph_disclosure = (
@@ -619,8 +688,10 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 reason_code=primary.reason_code,
                 trace_id=trace_id,
                 legs_failed=tuple(report.failures),
+                stages=report.stages,
             )
 
+        fusion_started = perf_counter()
         # Defense in depth: never rank/fuse an out-of-scope row even if a store
         # ignored its filter (R-004). Provenance-poor rows are dropped too.
         public = acl_scope.include_public
@@ -703,6 +774,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             scores["rrf"] = fused[key]
             item.scores = scores
             fused_items.append(item)
+        report.completed("fusion", fusion_started, len(fused_items))
 
         # Rerank (optional). A reranker outage degrades to RRF order, loudly.
         # T-ARCH-03: When reranker is deleted/disabled/bypassed, run dense-only with disclosure.
@@ -711,9 +783,10 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         rerank_disclosure = ""
         if self.rerank_enabled and self.reranker is not None and fused_items:
             try:
-                reranked = await self.reranker.rerank(
+                reranked = await report.measure("rerank", self.reranker.rerank(
                     query=query, documents=fused_items, top_k=rerank_top_k
-                )
+                ))
+                report.candidates("rerank", reranked)
             except Exception as exc:  # degrade, never 500 silently
                 report.record("rerank", exc, LEG_REASON_CODES["rerank"])
                 logger.warning(
@@ -754,6 +827,8 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 else:
                     rerank_disclosure = DENSE_ONLY_DISCLOSURE
         else:
+            if not self.rerank_enabled or self.reranker is None:
+                report.not_configured("rerank")
             rerank_disclosure = DENSE_ONLY_DISCLOSURE
             logger.info(
                 "retrieval_dense_only",
@@ -764,6 +839,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 },
             )
 
+        context_started = perf_counter()
         selected = final_items[:context_top_k]
         for item in selected:
             # Guarantee the trace keys that must always be present.
@@ -774,6 +850,16 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             item.scores = scores
             if rerank_disclosure:
                 item.metadata["rerank_disclosure"] = rerank_disclosure
+        report.completed("context", context_started, len(selected))
+        report.stages["context"]["returned_context_count"] = len(selected)
+        for stage, key in (("dense", "dense"), ("sparse", "sparse"),
+                           ("lexical", "lexical"), ("graph", "graph"),
+                           ("fusion", "rrf"), ("rerank", "rerank")):
+            report.stages[stage]["returned_context_count"] = sum(
+                1 for item in selected
+                if isinstance((value := item.scores.get(key)), (int, float))
+                and not isinstance(value, bool) and math.isfinite(value)
+            )
 
         if mode is RetrievalMode.HYBRID_GRAPH and any(f.leg == "graph" for f in report.failures):
             graph_disclosure = "graph leg unavailable; baseline hybrid returned"
@@ -801,6 +887,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             rerank_disclosure=rerank_disclosure,
             graph_disclosure=graph_disclosure,
             graph_omitted=bool(graph_disclosure),
+            stages=report.stages,
         )
 
     async def retrieve(

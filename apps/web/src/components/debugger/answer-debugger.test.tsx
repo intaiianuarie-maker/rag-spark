@@ -65,4 +65,66 @@ describe("AnswerDebugger", () => {
     const html = renderToStaticMarkup(<AnswerDebugger payload={null} />);
     expect(html).toBe("");
   });
+
+  it("shows a measured empty lexical stage without inventing an item score", () => {
+    const payload: AnswerPayload = { ...base, debug_trace: { retrieval: {
+      stages: { lexical: { status: "completed", candidate_count: 0,
+        returned_context_count: 0, latency_ms: 1.25 } },
+      items: [{ chunk_id: "chunk-1", scores: { dense: 0.8, rrf: 0.03 } }],
+    } } };
+    const html = renderToStaticMarkup(<AnswerDebugger payload={payload} />);
+    expect(html).toContain("lexical: status completed · candidates 0 · in returned context 0 · latency 1.25 ms");
+    expect(html).not.toContain("lexical=");
+    expect(html).toContain("dense=0.8");
+  });
+
+  it("keeps missing diagnostics distinct from a completed empty stage", () => {
+    const html = renderToStaticMarkup(<AnswerDebugger payload={{ ...base, debug_trace: {
+      retrieval: { items: [{ chunk_id: "chunk-1", scores: { dense: 0.8 } }] },
+    } }} />);
+    expect(html).toContain("lexical stage: not reported");
+    expect(html).not.toContain("lexical: status completed");
+    expect(html).not.toContain("candidates 0");
+  });
+
+  it("distinguishes candidates dropped before context selection from an empty retrieval leg", () => {
+    const html = renderToStaticMarkup(<AnswerDebugger payload={{ ...base, debug_trace: {
+      retrieval: {
+        stages: { lexical: { status: "completed", candidate_count: 7,
+          returned_context_count: 0, latency_ms: 3 } },
+        items: [{ chunk_id: "chunk-1", scores: { dense: 0.8 } }],
+      },
+    } }} />);
+    expect(html).toContain("lexical: status completed · candidates 7 · in returned context 0 · latency 3 ms");
+    expect(html).not.toContain("lexical=");
+    expect(html).not.toContain("candidates 0");
+  });
+
+  it("reports failed and unconfigured stages without zero counts or timings", () => {
+    const html = renderToStaticMarkup(<AnswerDebugger payload={{ ...base, debug_trace: {
+      retrieval: { stages: {
+        lexical: { status: "failed", candidate_count: null, latency_ms: 2.5 },
+        rerank: { status: "not_configured", candidate_count: null, latency_ms: null },
+        graph: { status: "not_run", candidate_count: null, latency_ms: null },
+      } },
+    } }} />);
+    expect(html).toContain("lexical: status failed · candidates not reported · in returned context not reported · latency 2.5 ms");
+    expect(html).toContain("rerank: status not_configured · candidates not reported · in returned context not reported · latency not reported ms");
+    expect(html).toContain("graph: status not_run");
+    expect(html).not.toContain("candidates 0");
+  });
+
+  it("preserves an actual zero score and zero measured latency for a returned candidate", () => {
+    const html = renderToStaticMarkup(<AnswerDebugger payload={{ ...base, debug_trace: {
+      retrieval: {
+        stages: { lexical: { status: "completed", candidate_count: 1,
+          returned_context_count: 1, latency_ms: 0 } },
+        items: [{ chunk_id: "chunk-1", score: 0, scores: { lexical: 0 } }],
+      },
+    } }} />);
+    expect(html).toContain("lexical: status completed · candidates 1 · in returned context 1 · latency 0 ms");
+    expect(html).toContain("score=0");
+    expect(html).toContain("lexical=0");
+    expect(html).not.toContain("lexical stage: not reported");
+  });
 });

@@ -1,6 +1,10 @@
 "use client";
 
-import type { AnswerPayload, DebugTrace } from "@/app/ask/contracts";
+import type { AnswerPayload, DebugRetrievalStageName, DebugTrace } from "@/app/ask/contracts";
+
+const RETRIEVAL_STAGES: DebugRetrievalStageName[] = [
+  "embedding", "dense", "lexical", "sparse", "graph", "fusion", "rerank", "context",
+];
 
 export type AnswerDebuggerProps = {
   payload: AnswerPayload | null;
@@ -69,6 +73,18 @@ export function AnswerDebugger({ payload, showSourceText = false }: AnswerDebugg
               status: {t.retrieval.status ?? "—"} · latency: {t.retrieval.latency_ms ?? "—"} ms ·
               scope: {t.retrieval.candidate_scope ?? "—"}
             </p>
+            <ul aria-label="Retrieval stages" className="space-y-1 text-xs">
+              {RETRIEVAL_STAGES.map((name) => {
+                const stage = t.retrieval?.stages?.[name];
+                return (
+                  <li key={name} data-retrieval-stage={name}>
+                    {stage ? (
+                      <span>{`${name}: status ${stage.status ?? "not reported"} · candidates ${stage.candidate_count ?? "not reported"} · in returned context ${stage.returned_context_count ?? "not reported"} · latency ${stage.latency_ms ?? "not reported"} ms`}</span>
+                    ) : <Absent label={`${name} stage`} />}
+                  </li>
+                );
+              })}
+            </ul>
             <ul className="list-disc pl-4 text-xs">
               {(t.retrieval.items ?? []).map((it, i) => (
                 <li key={i}>
