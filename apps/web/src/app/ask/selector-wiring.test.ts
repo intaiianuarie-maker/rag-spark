@@ -1,5 +1,5 @@
 /**
- * TASK-M5-001c — Model selector + release journey wiring (behavioral pin).
+ * TASK-M5-001c — Structural selector wiring; browser outcomes live separately.
  *
  * The selector must list configured models, flow the override into the
  * request, and expose accessible controls. vitest runs in node, so the wiring
@@ -13,9 +13,10 @@ const page = readFileSync(fileURLToPath(new URL("./page.tsx", import.meta.url)),
 const selector = readFileSync(fileURLToPath(new URL("./components/model-selector.tsx", import.meta.url)), "utf8");
 
 describe("model selector wiring", () => {
-  it("renders ModelSelector with configured MODEL_OPTIONS", () => {
+  it("renders ModelSelector with fetched workspace model options", () => {
     expect(page).toContain("ModelSelector");
-    expect(page).toContain("MODEL_OPTIONS");
+    expect(page).toContain("options={modelOptions}");
+    expect(page).toContain("/v1/workspaces/${ws}/model-configs");
   });
 
   it("tracks selectedModel state and passes it to streamQuestion", () => {

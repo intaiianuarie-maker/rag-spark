@@ -2,6 +2,8 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useWorkspaces } from "@/components/workspace/workspace-provider";
+import { auth } from "@/lib/auth-client";
+import { listCollections } from "@/app/knowledge/contracts";
 import { type AnswerPayload } from "./contracts";
 import {
   ChatWindow,
@@ -29,10 +31,7 @@ import {
   type StreamingScopeState,
 } from "./streaming-scope";
 
-const MODEL_OPTIONS = [
-  { id: "gpt-4o-mini", label: "gpt-4o-mini" },
-  { id: "gpt-4o", label: "gpt-4o" },
-];
+const WORKSPACE_DEFAULT_OPTION = { id: "", label: "Workspace default" };
 
 /**
  * Ask screen (T-V1-032 — per-message citations; T-V1-033 — persisted,
@@ -51,7 +50,14 @@ export default function AskPage() {
     messages: [],
   });
   const [selectedSource, setSelectedSource] = useState<MessageCitation | null>(null);
-  const [selectedModel, setSelectedModel] = useState("gpt-4o-mini");
+  const [selectorConfig, setSelectorConfig] = useState<{
+    scope: string;
+    selected: string;
+    models: { id: string; label: string }[];
+    collection: { id: string; name: string } | null;
+    error: string | null;
+  } | null>(null);
+  const [selectorScope, setSelectorScope] = useState("");
   /**
    * Streaming state scoped to the TURN that produced it (M5-001a REV-2
    * Finding 2). A global `streamingContent` string let a workspace switch
@@ -84,6 +90,26 @@ export default function AskPage() {
   /** `account::workspace`, or "" while the scope is unknown (no persistence). */
   const scopeKey =
     accountScope !== null && workspaceId !== null ? `${accountScope}::${workspaceId}` : "";
+
+  // Discard selection during the scope-change render, before the next commit.
+  // Clearing on each transition also prevents A -> B -> A from reviving A's
+  // previous override while its new metadata request is pending.
+  if (selectorScope !== scopeKey) {
+    setSelectorScope(scopeKey);
+    setSelectorConfig(null);
+  }
+
+  // Fence the render and outgoing override before effects run on scope changes.
+  const visibleSelectors = selectorScope === scopeKey && selectorConfig?.scope === scopeKey
+    ? selectorConfig : null;
+  const selectedModel = visibleSelectors?.selected ?? "";
+  const modelOptions = visibleSelectors?.models ?? [WORKSPACE_DEFAULT_OPTION];
+  const collection = visibleSelectors?.collection ?? null;
+  const setSelectedModel = useCallback((selected: string) => {
+    setSelectorConfig((previous) => previous?.scope === scopeKey &&
+      previous.models.some((option) => option.id === selected)
+      ? { ...previous, selected } : previous);
+  }, [scopeKey]);
 
   const storage = useCallback((): HistoryStorage | null => {
     if (storageRef.current === undefined) storageRef.current = browserStorage();
@@ -379,6 +405,46 @@ export default function AskPage() {
 
   const messages = transcript.key === scopeKey ? transcript.messages : [];
 
+  // Metadata shares the transcript's account/workspace authorization scope.
+  const configEpochRef = useRef(0);
+  useEffect(() => {
+    const epoch = ++configEpochRef.current;
+    const ws = workspaceId;
+    if (!ws || !scopeKey) return;
+    type Config = {
+      preferred_model?: string | null;
+      override_model?: string | null;
+      extra_models?: Array<{ id?: unknown; model_id?: unknown }> | null;
+    };
+    void Promise.allSettled([
+      auth.authFetch<Config[]>(`/v1/workspaces/${ws}/model-configs`, {}),
+      listCollections(ws),
+    ]).then(([configs, collections]) => {
+      if (epoch !== configEpochRef.current) return;
+      const ids = new Set<string>();
+      if (configs.status === "fulfilled") {
+        for (const config of configs.value) {
+          for (const id of [config.preferred_model, config.override_model,
+            ...(config.extra_models ?? []).map((extra) => extra.id ?? extra.model_id)]) {
+            if (typeof id === "string" && id.trim()) ids.add(id);
+          }
+        }
+      }
+      const implicit = collections.status === "fulfilled" && Array.isArray(collections.value)
+        ? collections.value.find((item) => item.id === ws) ?? null : null;
+      setSelectorConfig({
+        scope: scopeKey,
+        selected: "",
+        models: [WORKSPACE_DEFAULT_OPTION, ...Array.from(ids, (id) => ({ id, label: id }))],
+        collection: implicit,
+        error: configs.status === "rejected"
+          ? "Configured models unavailable. Workspace default remains available."
+          : implicit === null ? "Collection unavailable." : null,
+      });
+    });
+    return () => { configEpochRef.current += 1; };
+  }, [workspaceId, scopeKey]);
+
   // The streaming surface is scope-gated in the RENDER too (REV-3). The
   // mutation fence drops a superseded turn's tokens once the new scope owns
   // the surface, but between the workspace switch render and the abort
@@ -437,10 +503,21 @@ export default function AskPage() {
         <div className="flex items-center justify-between px-6 py-3 border-b border-neutral-200 dark:border-neutral-800 md:px-8 md:py-4">
           <h1 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">Ask</h1>
           <ModelSelector
+            key={scopeKey}
             value={selectedModel}
             onChange={setSelectedModel}
-            options={MODEL_OPTIONS}
+            options={modelOptions}
           />
+          <label className="text-xs text-neutral-500">
+            Collection
+            <select aria-label="Collection" className="ml-2 rounded border px-2 py-1"
+              value={collection?.id ?? ""} disabled={!collection} onChange={() => {}}>
+              <option value={collection?.id ?? ""}>
+                {collection?.name ?? "Workspace collection"}
+              </option>
+            </select>
+          </label>
+          {visibleSelectors?.error && <p role="status" className="text-xs text-amber-700">{visibleSelectors.error}</p>}
         </div>
         <ChatWindow
           pending={pending}

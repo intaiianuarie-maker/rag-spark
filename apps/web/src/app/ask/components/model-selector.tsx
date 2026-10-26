@@ -18,6 +18,7 @@ export function ModelSelector({
   const [highlight, setHighlight] = useState(0);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const optionRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const selected = options.find((o) => o.id === value);
 
   function openMenu() {
@@ -28,6 +29,11 @@ export function ModelSelector({
 
   useEffect(() => {
     if (!open) return;
+    optionRefs.current[highlight]?.focus();
+  }, [open, highlight]);
+
+  useEffect(() => {
+    if (!open) { optionRefs.current = []; return; }
     function onDocClick(event: MouseEvent) {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setOpen(false);
@@ -112,6 +118,7 @@ export function ModelSelector({
                 role="option"
                 aria-selected={o.id === value}
                 tabIndex={index === highlight ? 0 : -1}
+                ref={(el) => { optionRefs.current[index] = el; }}
                 onClick={() => {
                   onChange(o.id);
                   setOpen(false);
