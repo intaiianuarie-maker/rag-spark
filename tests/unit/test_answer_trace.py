@@ -94,7 +94,7 @@ async def test_parallel_answers_trace_their_own_scope_scores_and_usage():
         assert trace["generation"]["latency_ms"] >= 0
         assert trace["verification"]["latency_ms"] >= 0
         assert trace["total_latency_ms"] >= trace["retrieval"]["latency_ms"]
-        assert trace["rewrite"]["status"] == "not_reported"
+        assert trace["rewrite"]["status"] == "unchanged"
         assert (
             trace["query"]["sha256"] == hashlib.sha256(f"Question for {ws}?".encode()).hexdigest()
         )

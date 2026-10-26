@@ -17,6 +17,7 @@ from typing import Any
 
 from core.auth import ACLScope
 from models.interfaces import GenerationRequest, GenerationResult, LLMProvider
+from models.usage import StreamUsage, capture_stream_usage
 from retrieval.interfaces import RetrievalMode, RetrievedItem
 
 from .models import Answer
@@ -34,6 +35,7 @@ class _Trace:
     items: list[dict[str, Any]] = field(default_factory=list)
     generation: dict[str, Any] = field(default_factory=lambda: {"status": "not_run"})
     generation_finished: float | None = None
+    rewrite: dict[str, Any] = field(default_factory=lambda: {"status": "not_reported"})
 
     def payload(self, answer: Answer) -> dict[str, Any]:
         finished = perf_counter()
@@ -43,7 +45,7 @@ class _Trace:
                 "sha256": hashlib.sha256(self.query.encode()).hexdigest(),
                 "characters": len(self.query),
             },
-            "rewrite": {"status": "not_reported"},
+            "rewrite": dict(self.rewrite),
             "filters": {
                 "workspace_ids": list(self.scope.workspace_ids),
                 "include_public": self.scope.include_public,
@@ -90,6 +92,14 @@ class _RetrievalObserver:
 
     async def retrieve(self, **kwargs: Any) -> list[RetrievedItem]:
         started = perf_counter()
+        forwarded = kwargs.get("query")
+        if isinstance(forwarded, str):
+            self.trace.rewrite = {
+                "status": "unchanged" if forwarded == self.trace.query else "rewritten",
+                "forwarded_query_sha256": hashlib.sha256(forwarded.encode()).hexdigest(),
+                "forwarded_query_characters": len(forwarded),
+                "observed_at": "retrieval_input",
+            }
         try:
             items = await self.delegate.retrieve(**kwargs)
         except BaseException:
@@ -135,6 +145,7 @@ class _ProviderObserver(LLMProvider):
         self.trace.generation = {
             "status": "running",
             "model": request.model,
+            "requested_model": request.model,
             "prompt_template_sha256": hashlib.sha256(SYSTEM_PROMPT.encode()).hexdigest(),
             "prompt_tokens": None,
             "completion_tokens": None,
@@ -172,19 +183,39 @@ class _ProviderObserver(LLMProvider):
 
     async def stream(self, request: GenerationRequest) -> AsyncIterator[str]:
         started = self._start(request)
-        tokens = self.delegate.stream(request)
+        usage = StreamUsage()
+        tokens = None
         try:
-            async for token in tokens:
+            with capture_stream_usage(usage):
+                tokens = self.delegate.stream(request)
+            while True:
+                with capture_stream_usage(usage):
+                    try:
+                        token = await anext(tokens)
+                    except StopAsyncIteration:
+                        break
                 yield token
             self.trace.generation["status"] = "completed"
         except BaseException:
             self.trace.generation["status"] = "failed"
             raise
         finally:
-            close = getattr(tokens, "aclose", None)
-            if close is not None:
-                await close()
-            self._finish(started)
+            try:
+                close = getattr(tokens, "aclose", None)
+                if close is not None:
+                    with capture_stream_usage(usage):
+                        await close()
+            finally:
+                self.trace.generation.update({
+                    "model": usage.model or request.model,
+                    "model_status": usage.model_status,
+                    "prompt_tokens": usage.prompt_tokens,
+                    "completion_tokens": usage.completion_tokens,
+                    "total_tokens": usage.total_tokens,
+                    "cost_usd": usage.cost_usd,
+                    "usage_status": usage.usage_status,
+                })
+                self._finish(started)
 
 
 def _observed(engine: Any, trace: _Trace) -> Any:
