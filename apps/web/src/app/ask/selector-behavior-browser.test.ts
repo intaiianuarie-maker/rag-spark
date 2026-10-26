@@ -136,6 +136,7 @@ async function send() {
   await sleep(100); await openModels();
   outcomes.stale = !options().some(node=>node.textContent==="stale-marker");
   document.activeElement.dispatchEvent(new KeyboardEvent("keydown",{key:"Escape",bubbles:true}));
+  await waitFor(()=>!document.querySelector('[role="listbox"]'),"Escape menu close");
   window.resolveMetadata(0);
   await openModels();
   await waitFor(()=>options().some(node=>node.textContent==="model-a"),"fresh A options");
