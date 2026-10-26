@@ -19,7 +19,8 @@ const run = randomUUID().slice(0, 12);
 const uploaded = [];
 const summary = { formats_ready: 0, search_modes: [], citation_passage: false, keyboard: false };
 let stage = "configuration", browser, context, failure;
-const check = (condition, code) => { if (!condition) throw new Error(code); };
+class GateError extends Error { constructor(code) { super(code); this.code = code; } }
+const check = (condition, code) => { if (!condition) throw new GateError(code); };
 const backend = path => `${base}/api/backend/v1/workspaces/${workspaceId}${path}`;
 
 function observeResponse(page, predicate) {
@@ -40,7 +41,7 @@ function finalAnswer(wire) {
     const lines = frame.split(/\r?\n/);
     const event = lines.find(line => line.startsWith("event:"))?.slice(6).trim();
     const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trimStart()).join("\n");
-    if (event === "error") throw new Error("answer_stream_error");
+    if (event === "error") throw new GateError("answer_stream_error");
     if (event === "citations") answer = JSON.parse(data);
   }
   check(answer, "terminal_citations_missing");
@@ -131,6 +132,9 @@ try {
   const stream = await answerResponse();
   check(stream.status() === 200, "answer_http_failure");
   const answer = finalAnswer(await stream.text());
+  summary.answer_status = /^[a-z_]{1,64}$/.test(answer.status) ? answer.status : "unknown";
+  summary.publication_status = /^[a-z_]{1,64}$/.test(answer.publication_status) ? answer.publication_status : "unknown";
+  summary.answer_reason_code = /^[A-Z_0-9]{1,64}$/.test(answer.reason_code) ? answer.reason_code : null;
   check(answer.status === "answered" && answer.publication_status === "verified", "answer_not_verified");
   const textCitation = answer.citations?.find(citation => citation.document_id === textDocument.document_id);
   check(textCitation?.chunk_id, "answer_did_not_cite_uploaded_text_document");
@@ -195,7 +199,8 @@ try {
 } catch (error) {
   // Playwright exception messages can contain fill() passwords or HTTP bodies.
   // Emit only our stage and exception type, never its message/call log.
-  failure = { stage, error_type: error?.name || "Error" };
+  failure = { stage, error_type: error?.name || "Error",
+    ...(error instanceof GateError ? { code: error.code } : {}) };
 } finally {
   if (context) {
     for (const document of uploaded) {

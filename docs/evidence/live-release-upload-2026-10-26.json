@@ -1,0 +1,20 @@
+{
+  "workflow_run": 40301858461,
+  "source_revision": "a76604356d0463d88cd989ea978c237851af8735",
+  "scope": "Actual browser UI upload and specific job polling through real ephemeral API/worker/PostgreSQL/SeaweedFS/Qdrant/OpenRouter embeddings",
+  "formats_ready": 6,
+  "formats": [
+    "pdf",
+    "docx",
+    "html",
+    "csv",
+    "markdown",
+    "txt"
+  ],
+  "later_journey_failure": {
+    "stage": "answer_and_citation",
+    "error_type": "Error"
+  },
+  "release_journey_passed": false,
+  "acceptance": "M2-002b upload only; M5/M7/M8 remain open"
+}

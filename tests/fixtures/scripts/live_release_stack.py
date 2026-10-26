@@ -140,6 +140,10 @@ class Stack:
             "AGENT_STORE_SHARED_ROOT": str(self.private),
         })
         require(Path(self.env["PLAYWRIGHT_MODULE"]).is_file(), "playwright_required")
+        provider_file = self.private / "cli-provider.json"
+        private_json(provider_file, {"OPENROUTER_API_KEY": self.env["OPENROUTER_API_KEY"]})
+        self.env["LIVE_EVAL_PROVIDER_KEY_FILE"] = str(provider_file)
+        self.env["MULTILINGUAL_REPORT_FILE"] = str(self.private / "multilingual-raw.json")
         require((REPO / "apps/web/.next/standalone/server.js").is_file(),
                 "standalone_release_required")
 
@@ -277,9 +281,18 @@ class Stack:
                 r"[A-Za-z0-9_.-]{1,100}", failure[key],
             ) for key in ("stage", "error_type")), "invalid_browser_report")
             failure = {key: failure[key] for key in ("stage", "error_type")}
+            code = raw["failure"].get("code")
+            if isinstance(code, str) and re.fullmatch(r"[a-z_]{1,100}", code):
+                failure["code"] = code
+        answer_fields = {}
+        for key in ("answer_status", "publication_status", "answer_reason_code"):
+            value = raw.get(key)
+            if isinstance(value, str) and re.fullmatch(r"[A-Za-z_0-9]{1,64}", value):
+                answer_fields[key] = value
         private_json(self.reports / "journey.json", {
             "formats_ready": count, "citation_passage": raw.get("citation_passage") is True,
             "keyboard": raw.get("keyboard") is True, "search_modes": modes, "failure": failure,
+            **answer_fields,
         })
 
     def evidence(self) -> None:
@@ -343,6 +356,22 @@ class Stack:
         finally:
             self.browser_report()
         self.evidence()
+        self.stage = "multilingual_debugger_parity"
+        try:
+            self.command("multilingual", ["node", str(
+                REPO / "tests/fixtures/scripts/live_multilingual_eval.mjs"
+            )], timeout=1200)
+        finally:
+            multilingual_path = self.private / "multilingual-raw.json"
+            if multilingual_path.is_file():
+                result = json.loads(multilingual_path.read_text())
+                # The gate publishes only IDs, scores, measurements and fixed
+                # statuses. Public fixture answers remain in its private manifest.
+                fields = ("run_id", "corpus", "datasets", "scoring", "outcomes",
+                          "failures", "trace_checks", "cli", "passed")
+                private_json(self.reports / "multilingual.json", {
+                    field: result[field] for field in fields if field in result
+                })
         self.summary["passed"] = True
 
     def cleanup(self) -> None:

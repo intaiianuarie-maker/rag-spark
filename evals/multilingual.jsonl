@@ -1,0 +1,3 @@
+{"id":"ro-001","language":"ro","question":"Care este perioada de reziliere?","fixture":"sample-contract-ro.txt","expected_source":"sample-contract-ro.txt","expected_answer_contains":["30 de zile"],"tags":["romanian","citation"]}
+{"id":"pt-001","language":"pt","question":"Qual é o prazo de rescisão?","fixture":"sample-contract-pt.txt","expected_source":"sample-contract-pt.txt","expected_answer_contains":["30 dias"],"tags":["portuguese","citation"]}
+{"id":"cross-001","language":"ro","question":"Cine este furnizorul?","fixture":"sample-contract-en.txt","expected_source":"sample-contract-en.txt","expected_answer_contains":["ACME Supplies"],"tags":["cross-language","romanian"]}

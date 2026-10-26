@@ -8,6 +8,10 @@ on:
       - .github/workflows/live-release.yml
       - tests/fixtures/scripts/live_release_stack.py
       - tests/fixtures/scripts/release_journey*
+      - tests/fixtures/scripts/live_multilingual_eval*
+      - evals/golden.jsonl
+      - evals/multilingual.jsonl
+      - tests/fixtures/sample-contract-*.txt
 
 permissions:
   contents: read
