@@ -32,6 +32,7 @@ from app.eval.router import router as eval_router
 from app.models_config.router import router as models_config_router
 from app.search.search import legacy_router as legacy_search_router
 from app.search.search import router as search_router
+from app.sources.router import router as sources_router
 from app.workflows.router import router as workflow_router
 
 logger = logging.getLogger("knowledge_os.api")
@@ -149,6 +150,7 @@ def create_app() -> FastAPI:
     app.include_router(keys_router)
     app.include_router(documents_router)
     app.include_router(models_config_router)
+    app.include_router(sources_router)
     app.include_router(documents_delete_router)
     app.include_router(jobs_router)
     app.include_router(knowledge_reads_router)

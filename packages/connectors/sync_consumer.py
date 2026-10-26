@@ -86,6 +86,7 @@ class ItemStatus(StrEnum):
     UPDATED = "updated"
     UNCHANGED = "unchanged"
     FAILED = "failed"
+    DELETED = "deleted"
 
 
 # ---- persisted shapes --------------------------------------------------------
@@ -161,6 +162,9 @@ class SyncProgress:
     items_updated: int = 0
     items_unchanged: int = 0
     items_failed: int = 0
+    items_deleted: int = 0
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
     updated_at: datetime | None = None
 
 
@@ -180,6 +184,7 @@ class SyncReport:
     updated: int
     unchanged: int
     failed: int
+    deleted: int = 0
     snapshot: str | None = None
     snapshot_drift: bool = False
     #: ``None`` when the run completed; otherwise the keyset cursor it stopped at.
