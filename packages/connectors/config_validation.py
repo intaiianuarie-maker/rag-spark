@@ -7,6 +7,7 @@ beneath operator-approved roots. Errors never contain input payloads.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 from typing import Any
@@ -109,12 +110,39 @@ SETTING_MODELS: dict[str, type[BaseModel]] = {
 }
 
 
-def validate_settings(kind: str, settings: Any) -> dict[str, Any]:
+def _approved_s3_source(workspace_id: str | None, settings: dict[str, Any]) -> None:
+    from storage.originals import originals_bucket
+
+    # The shared credentials used to store originals must never let a source
+    # read another workspace's originals or recursively ingest its own writes.
+    if settings["bucket"] == originals_bucket():
+        raise ValueError("the document-originals bucket cannot be a source")
+    try:
+        policy = json.loads(os.environ.get("CONNECTOR_S3_SOURCES", "{}"))
+    except (TypeError, ValueError):
+        raise ValueError("invalid approved S3 source configuration") from None
+    if not isinstance(policy, dict):
+        raise ValueError("invalid approved S3 source configuration")
+    scopes = policy.get(workspace_id, []) if workspace_id else []
+    shared = policy.get("*", [])
+    if not isinstance(scopes, list) or not isinstance(shared, list):
+        raise ValueError("invalid approved S3 source configuration")
+    for scope in scopes + shared:
+        if (isinstance(scope, dict) and scope.get("bucket") == settings["bucket"]
+                and isinstance(scope.get("prefix"), str)
+                and settings.get("prefix", "").startswith(scope["prefix"])):
+            return
+    raise ValueError("S3 source is outside the operator-approved workspace scope")
+
+
+def validate_settings(
+    kind: str, settings: Any, *, workspace_id: str | None = None
+) -> dict[str, Any]:
     model = SETTING_MODELS.get(kind)
     if model is None:
         raise ValueError("unsupported connector kind")
     try:
-        return model.model_validate(settings).model_dump(mode="json", exclude_none=True)
+        validated = model.model_validate(settings).model_dump(mode="json", exclude_none=True)
     except ValidationError as exc:
         errors = exc.errors(include_input=False, include_context=False, include_url=False)
         # Our field validators use safe constants; omit rejected input/contexts.
@@ -128,3 +156,6 @@ def validate_settings(kind: str, settings: Any) -> dict[str, Any]:
         # A worker logs this error, so suppress that cause as well as omitting
         # input from the public message.
         raise ValueError("; ".join(parts) or "invalid settings") from None
+    if kind == "s3":
+        _approved_s3_source(workspace_id, validated)
+    return validated

@@ -68,3 +68,31 @@ def test_git_ssh_username_is_a_transport_user_not_a_password():
 def test_non_object_persisted_settings_fail_closed(settings):
     with pytest.raises(ValueError):
         validate_settings("s3", settings)
+
+
+def test_s3_scope_is_owned_by_operator_and_workspace(monkeypatch):
+    import json
+
+    monkeypatch.setenv("S3_BUCKET", "internal-originals")
+    monkeypatch.setenv("CONNECTOR_S3_SOURCES", json.dumps({
+        "workspace-a": [{"bucket": "external", "prefix": "docs/"}],
+    }))
+    valid = validate_settings("s3", {"bucket": "external", "prefix": "docs/team/"},
+                              workspace_id="workspace-a")
+    assert valid["prefix"] == "docs/team/"
+    for workspace, settings in (
+        ("workspace-b", {"bucket": "external", "prefix": "docs/team/"}),
+        ("workspace-a", {"bucket": "external", "prefix": "private/"}),
+        ("workspace-a", {"bucket": "other", "prefix": "docs/"}),
+    ):
+        with pytest.raises(ValueError, match="approved"):
+            validate_settings("s3", settings, workspace_id=workspace)
+    # Even an explicit approval cannot turn internal originals into a source.
+    monkeypatch.setenv("CONNECTOR_S3_SOURCES", json.dumps({
+        "*": [{"bucket": "internal-originals", "prefix": ""}],
+    }))
+    with pytest.raises(ValueError, match="originals bucket"):
+        validate_settings("s3", {"bucket": "internal-originals"}, workspace_id="workspace-a")
+    monkeypatch.delenv("CONNECTOR_S3_SOURCES")
+    with pytest.raises(ValueError, match="approved"):
+        validate_settings("s3", {"bucket": "external"}, workspace_id="workspace-a")

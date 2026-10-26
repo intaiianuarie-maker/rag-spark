@@ -6,6 +6,9 @@ loads persisted settings through `connectors.adapters.config_loader`; it does
 not require the API application in its image or fall back to environment
 configurations when that import fails. Git acquisition requires the Git binary,
 which is installed in the worker image.
+Persisted S3 sources require the API and worker to share the operator's
+`CONNECTOR_S3_SOURCES` workspace/bucket/prefix approvals; see
+[workspace sources](SOURCES.md). Internal originals cannot be a source bucket.
 
 Each source item maps `(workspace, connector, full external ID)` to a document.
 The mapping stores the full ID and uses its SHA256 as the bounded index key;

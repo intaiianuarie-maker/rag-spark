@@ -39,7 +39,7 @@ def load_persisted_sources(
         for row in rows:
             if row["credential_ref"] is not None:
                 raise ValueError("credential_ref is not supported by this adapter")
-            settings = validate_settings(row["kind"], row["settings"])
+            settings = validate_settings(row["kind"], row["settings"], workspace_id=str(workspace))
             configs.append(ConnectorConfig(
                 connector_id=row["connector_id"],
                 workspace_id=str(workspace),

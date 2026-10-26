@@ -30,7 +30,14 @@ pytestmark = pytest.mark.integration
 
 
 @pytest.fixture(autouse=True)
-def restore_local_root_policy():
+def restore_local_root_policy(client, monkeypatch):
+    import json
+
+    scopes = [{"bucket": bucket, "prefix": ""}
+              for bucket in ("b", "b2", "fixture", "public-fixture")]
+    monkeypatch.setenv("CONNECTOR_S3_SOURCES", json.dumps({
+        str(client.ws): scopes, str(client.other): scopes,
+    }))
     previous = os.environ.get("CONNECTOR_LOCAL_ROOTS")
     try:
         yield
@@ -525,3 +532,34 @@ def test_status_exposes_durable_source_failure_and_new_attempt_state(client):
         assert succeeded["last_error"] is None
     finally:
         assert client.delete(f"{prefix}/{connector}").status_code == 204
+
+
+def test_source_s3_cannot_read_another_workspace_or_internal_originals(client, monkeypatch):
+    import json
+
+    monkeypatch.setenv("S3_BUCKET", "internal-originals-fixture")
+    monkeypatch.setenv("CONNECTOR_S3_SOURCES", json.dumps({
+        str(client.ws): [{"bucket": "external-source", "prefix": "docs/"},
+                         {"bucket": "internal-originals-fixture", "prefix": ""}],
+    }))
+    first = f"/v1/workspaces/{client.ws}/sources"
+    other = f"/v1/workspaces/{client.other}/sources"
+    body = {"connector_id": "approved-s3", "kind": "s3",
+            "settings": {"bucket": "external-source", "prefix": "docs/team/"}}
+    assert client.post(first, json=body).status_code == 201
+    try:
+        # This principal owns BOTH workspaces. Source approval is a separate
+        # operator-controlled boundary, not implied by workspace ownership.
+        assert client.post(other, json=body).status_code == 422
+        forbidden = {**body, "connector_id": "internal",
+                     "settings": {"bucket": "internal-originals-fixture"}}
+        assert client.post(first, json=forbidden).status_code == 422
+        wider = {**body, "connector_id": "wider", "settings": {"bucket": "external-source"}}
+        assert client.post(first, json=wider).status_code == 422
+        assert next(item for item in client.load_sources(client.ws)
+                    if item.connector_id == "approved-s3").settings["prefix"] == "docs/team/"
+        monkeypatch.setenv("CONNECTOR_S3_SOURCES", "{}")
+        with pytest.raises(ValueError, match="approved"):
+            client.load_sources(client.ws)  # revocation is rechecked by the worker
+    finally:
+        assert client.delete(first + "/approved-s3").status_code == 204

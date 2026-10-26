@@ -24,7 +24,7 @@ class SourceConfigService:
         return row is not None
 
     async def create(self, workspace_id: uuid.UUID, body: ConnectorCreate) -> ConnectorConfigRecord:
-        settings = _validate_settings(body.kind, body.settings)
+        settings = _validate_settings(body.kind, body.settings, workspace_id=str(workspace_id))
         if body.credential_ref is not None:
             raise ValueError("credential_ref is not supported by this adapter")
         record = ConnectorConfigRecord(
@@ -61,7 +61,9 @@ class SourceConfigService:
         if record is None:
             return None
         if body.settings is not None:
-            record.settings = _validate_settings(record.kind, body.settings)
+            record.settings = _validate_settings(
+                record.kind, body.settings, workspace_id=str(workspace_id)
+            )
         if "credential_ref" in body.model_fields_set:
             if body.credential_ref is not None:
                 raise ValueError("credential_ref is not supported by this adapter")
@@ -83,5 +85,7 @@ class SourceConfigService:
             connector_id=record.connector_id,
             workspace_id=str(record.workspace_id),
             kind=ConnectorKind(record.kind),
-            settings=dict(record.settings or {}),
+            settings=_validate_settings(
+                record.kind, record.settings, workspace_id=str(record.workspace_id)
+            ),
         )

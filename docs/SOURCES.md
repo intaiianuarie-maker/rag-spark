@@ -24,6 +24,21 @@ Per-source `credential_ref` and S3 `endpoint_ref` values are currently rejected
 because no resolver is installed. Operators configure S3 credentials/endpoints
 through the existing environment and Git authentication through its environment
 or credential helper. Raw credentials do not belong in saved source settings.
+Saved S3 sources also require operator approval in `CONNECTOR_S3_SOURCES`, a JSON
+object keyed by workspace UUID. For example:
+
+```json
+{"<workspace-uuid>":[{"bucket":"external-documents","prefix":"team-a/"}]}
+```
+
+Configure the same policy on the API and worker. Each entry permits its exact
+bucket and literal key prefix, including narrower prefixes. Use a trailing `/`
+when approving a folder. A `"*"` workspace entry explicitly shares a scope with
+all workspaces. Missing approval fails closed; the worker rechecks approval on
+every load, so revocation prevents subsequent syncs. The document-originals
+bucket is always rejected, even if approved, to protect workspace isolation and
+prevent ingestion of the connector's own output. Use a separate source bucket.
+
 Optional settings with null values are omitted, so a milliseconds-only web
 politeness delay is not shadowed by a null seconds value.
 
