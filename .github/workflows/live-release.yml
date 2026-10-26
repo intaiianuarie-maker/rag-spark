@@ -13,6 +13,11 @@ on:
       - evals/golden.jsonl
       - evals/multilingual.jsonl
       - tests/fixtures/sample-contract-*.txt
+      - apps/api/app/**
+      - apps/api/alembic/**
+      - apps/worker/**
+      - apps/web/**
+      - packages/**
 
 permissions:
   contents: read

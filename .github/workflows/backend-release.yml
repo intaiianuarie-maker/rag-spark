@@ -10,6 +10,11 @@ on:
       - apps/api/requirements.txt
       - apps/worker/Dockerfile
       - apps/worker/requirements.txt
+      - apps/api/app/**
+      - apps/api/alembic/**
+      - apps/worker/jobs/**
+      - apps/worker/worker/**
+      - packages/**
 
 permissions:
   contents: read
