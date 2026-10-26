@@ -118,6 +118,7 @@ jobs:
       - name: Source admission and runtime regression gates
         run: >-
           pytest -q tests/unit/test_connector_config_validation.py
+          tests/unit/test_connector_source_contracts.py
           tests/unit/test_local_connector_containment.py
           tests/unit/test_sync_consumer.py tests/unit/test_sync_convergence.py
           tests/unit/test_sync_deletion.py tests/integration/test_sources.py

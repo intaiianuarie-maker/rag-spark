@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 import pytest
+from connectors.adapters.progress_store import SyncOutcomeRow, SyncProgressRow
 from core.config import get_settings
 from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.exc import OperationalError
@@ -60,6 +61,13 @@ def test_connector_migration_upgrade_downgrade_upgrade():
                 "0017_sync_failure_markers"
             )
             database = inspect(conn)
+            for model in (SyncProgressRow, SyncOutcomeRow):
+                actual = {
+                    column["name"]: column for column in database.get_columns(model.__tablename__)
+                }
+                assert set(actual) == set(model.__table__.columns.keys())
+                for column in model.__table__.columns:
+                    assert actual[column.name]["nullable"] == column.nullable
             mapping = {column["name"] for column in database.get_columns("sync_source_documents")}
             assert {"external_id", "external_id_key", "document_id", "workspace_id"} <= mapping
             primary_key = database.get_pk_constraint("sync_source_documents")["constrained_columns"]

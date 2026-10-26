@@ -500,8 +500,8 @@ def test_sync_queue_reuses_the_claim_ack_scripts_and_stays_disjoint() -> None:
 # ---- migration ↔ model parity -------------------------------------------------
 
 
-def _load_migration():
-    path = REPO_ROOT / "apps" / "api" / "alembic" / "versions" / "0008_connector_sync_progress.py"
+def _load_migration(filename="0008_connector_sync_progress.py"):
+    path = REPO_ROOT / "apps" / "api" / "alembic" / "versions" / filename
     spec = importlib.util.spec_from_file_location("m0008_connector_sync_progress", path)
     assert spec and spec.loader
     module = importlib.util.module_from_spec(spec)
@@ -509,12 +509,28 @@ def _load_migration():
     return module
 
 
-def test_migration_matches_the_orm_models() -> None:
+def test_migration_matches_the_orm_models(monkeypatch) -> None:
     from connectors.adapters.progress_store import SyncOutcomeRow, SyncProgressRow
 
     migration = _load_migration()
     # read the real upgrade() SQL, not the module docstring
     source = inspect.getsource(migration.upgrade)
+    # Later revisions extend 0008 rather than rewriting deployed history.
+    # Capture their actual Alembic operations, including the target table.
+    additions = {}
+
+    class Operations:
+        def add_column(self, table, column):
+            key = (table, column.name)
+            assert key not in additions
+            additions[key] = column
+
+    for filename in (
+        "0013_connector_sync_progress_deleted.py", "0017_sync_failure_markers.py",
+    ):
+        extension = _load_migration(filename)
+        monkeypatch.setattr(extension, "op", Operations())
+        extension.upgrade()
 
     for table, model in (
         ("connector_sync_progress", SyncProgressRow),
@@ -522,8 +538,13 @@ def test_migration_matches_the_orm_models() -> None:
     ):
         assert f"CREATE TABLE IF NOT EXISTS {table}" in source
         for column in model.__table__.columns:
+            added = additions.get((table, column.name))
+            if added is not None:
+                assert str(added.type) == str(column.type)
+                assert added.nullable == column.nullable
+                continue
             assert re.search(rf"\b{column.name}\b", source), (
-                f"column {table}.{column.name} missing from migration 0008"
+                f"column {table}.{column.name} missing from connector migration chain"
             )
         for constraint in model.__table__.constraints:
             if constraint.name:
