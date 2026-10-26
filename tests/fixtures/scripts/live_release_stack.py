@@ -289,6 +289,19 @@ class Stack:
             value = raw.get(key)
             if isinstance(value, str) and re.fullmatch(r"[A-Za-z_0-9]{1,64}", value):
                 answer_fields[key] = value
+        status = raw.get("answer_http_status")
+        if type(status) is int and 100 <= status <= 599:
+            answer_fields["answer_http_status"] = status
+        observation = raw.get("answer_observation")
+        if isinstance(observation, dict):
+            require(observation.get("transport") == "actual_browser_fetch_clone"
+                    and observation.get("request_count") == 1
+                    and type(observation.get("bytes")) is int
+                    and 0 <= observation["bytes"] <= 2 * 1024 * 1024,
+                    "invalid_browser_observation")
+            answer_fields["answer_observation"] = {
+                key: observation[key] for key in ("transport", "request_count", "bytes")
+            }
         private_json(self.reports / "journey.json", {
             "formats_ready": count, "citation_passage": raw.get("citation_passage") is True,
             "keyboard": raw.get("keyboard") is True, "search_modes": modes, "failure": failure,
@@ -368,7 +381,7 @@ class Stack:
                 # The gate publishes only IDs, scores, measurements and fixed
                 # statuses. Public fixture answers remain in its private manifest.
                 fields = ("run_id", "corpus", "datasets", "scoring", "outcomes",
-                          "failures", "trace_checks", "cli", "passed")
+                          "failures", "trace_checks", "answer_observations", "cli", "passed")
                 private_json(self.reports / "multilingual.json", {
                     field: result[field] for field in fields if field in result
                 })

@@ -8,6 +8,7 @@ on:
       - .github/workflows/live-release.yml
       - tests/fixtures/scripts/live_release_stack.py
       - tests/fixtures/scripts/release_journey*
+      - tests/fixtures/scripts/browser_sse_observer.mjs
       - tests/fixtures/scripts/live_multilingual_eval*
       - evals/golden.jsonl
       - evals/multilingual.jsonl

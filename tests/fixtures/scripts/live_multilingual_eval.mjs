@@ -17,6 +17,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { armAskStreamObserver, installAskStreamObserver, readObservedAskStream } from "./browser_sse_observer.mjs";
 
 const execute = promisify(execFile);
 const base = (process.env.BASE_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
@@ -29,7 +30,7 @@ const uploads = [], answers = [], evaluations = [];
 const report = { run_id: runId, corpus: "restored original sample-contract-en/ro/pt, one mixed workspace",
   datasets: "complete original golden.jsonl (2) and multilingual.jsonl (3)",
   scoring: "production retrieval metrics; lexical_overlap_v1 faithfulness proxy, no RAGAS claim",
-  outcomes: {}, failures: [], trace_checks: [], cli: null };
+  outcomes: {}, failures: [], trace_checks: [], answer_observations: [], cli: null };
 let stage = "configuration", browser, context, temporary;
 class GateError extends Error { constructor(code) { super(code); this.code = code; } }
 const check = (condition, code) => { if (!condition) throw new GateError(code); };
@@ -118,6 +119,8 @@ try {
   context = await browser.newContext();
   context.setDefaultTimeout(timeout);
   const page = await context.newPage();
+  stage = "observer_install";
+  await installAskStreamObserver(page, workspaceId, timeout);
   stage = "login";
   await page.goto(`${base}/login`);
   await page.locator('input[type="email"]').fill(credentials.email);
@@ -163,17 +166,37 @@ try {
   report.outcomes.uploads = true;
 
   for (const item of [...suites.golden, ...suites.multilingual]) {
-    stage = `answer_${item.id}`;
+    stage = `answer_${item.id}_navigation`;
     try {
       await page.goto(`${base}/ask`);
+      stage = `answer_${item.id}_observer_arm`;
+      check(await armAskStreamObserver(page, item.question), "answer_observer_not_installed");
       const answered = observe(page, response => response.request().method() === "POST" &&
         new URL(response.url()).pathname === `/api/backend/v1/workspaces/${workspaceId}/ask/stream` &&
         response.request().postDataJSON().query === item.question);
+      stage = `answer_${item.id}_fill`;
       await page.getByPlaceholder("Ask anything…").fill(item.question);
+      stage = `answer_${item.id}_send`;
       await page.getByRole("button", { name: "Send", exact: true }).click();
+      stage = `answer_${item.id}_network_response`;
       const response = await answered();
+      const observation = { case_id: item.id, http_status: response.status() };
+      report.answer_observations.push(observation);
       check(response.status() === 200, "answer_http_failure");
-      const answer = terminalAnswer(await response.text());
+      stage = `answer_${item.id}_observer_read`;
+      const observed = await readObservedAskStream(page, item.question, timeout);
+      check(observed.ok, observed.code);
+      check(observed.http_status === 200 && observed.request_count === 1, "answer_observer_http_mismatch");
+      Object.assign(observation, { transport: "actual_browser_fetch_clone", bytes: observed.bytes,
+        request_count: observed.request_count });
+      stage = `answer_${item.id}_wire_parse`;
+      const answer = terminalAnswer(observed.wire);
+      Object.assign(observation, {
+        answer_status: /^[a-z_]{1,64}$/.test(answer.status) ? answer.status : "unknown",
+        publication_status: /^[a-z_]{1,64}$/.test(answer.publication_status) ? answer.publication_status : "unknown",
+        reason_code: /^[A-Z_0-9]{1,64}$/.test(answer.reason_code) ? answer.reason_code : null,
+      });
+      stage = `answer_${item.id}_assertions`;
       check(answer.status === "answered" && answer.publication_status === "verified", "answer_not_verified");
       check(typeof answer.answer === "string" && answer.answer.trim(), "answer_text_missing");
       // Retain only public synthetic fixture answers in a private temporary
@@ -185,10 +208,13 @@ try {
       const document = uploads.find(upload => upload.filename === item.expected_source);
       const citation = answer.citations?.find(entry => entry.document_id === document.document_id);
       check(citation?.chunk_id && citation.workspace_id === workspaceId, "expected_source_not_cited");
+      stage = `answer_${item.id}_canonical_request`;
       const canonicalResponse = await context.request.get(`${base}/api/passage?${new URLSearchParams({
         workspace_id: workspaceId, chunk_id: citation.chunk_id, document_id: document.document_id })}`);
       check(canonicalResponse.status() === 200, "canonical_citation_unavailable");
+      stage = `answer_${item.id}_canonical_body`;
       const canonical = await canonicalResponse.json();
+      stage = `answer_${item.id}_canonical_assertions`;
       check(canonical.ok && canonical.passage?.chunk_id === citation.chunk_id &&
         canonical.passage.document_id === document.document_id && canonical.passage.content?.trim(), "canonical_identity_mismatch");
       report.outcomes[item.id] = true;
@@ -196,8 +222,10 @@ try {
       // The strict trace gate is independent of the multilingual answer gate.
       // Honest not_reported values remain a failed acceptance requirement.
       try {
+        stage = `answer_${item.id}_debugger_open`;
         const debug = page.locator("details").filter({ has: page.locator("summary", { hasText: "Debug" }) }).last();
         await debug.locator("summary").click();
+        stage = `answer_${item.id}_debugger_visible`;
         const panel = debug.getByRole("complementary", { name: "Answer debugger" });
         await panel.waitFor({ state: "visible", timeout });
         const displayed = await panel.textContent();

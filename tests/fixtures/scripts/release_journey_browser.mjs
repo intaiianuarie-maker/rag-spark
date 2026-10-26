@@ -3,6 +3,7 @@
 // QA dependency: Playwright, resolved through PLAYWRIGHT_MODULE or the package.
 import { readFileSync, statSync, writeFileSync } from "node:fs";
 import { randomUUID } from "node:crypto";
+import { armAskStreamObserver, installAskStreamObserver, readObservedAskStream } from "./browser_sse_observer.mjs";
 
 const base = (process.env.BASE_URL || "http://127.0.0.1:3001").replace(/\/$/, "");
 const workspaceId = process.env.WORKSPACE_ID;
@@ -60,6 +61,8 @@ try {
   context = await browser.newContext();
   context.setDefaultTimeout(timeout);
   const page = await context.newPage();
+  stage = "observer_install";
+  await installAskStreamObserver(page, workspaceId, timeout);
 
   stage = "login";
   await page.goto(`${base}/login`);
@@ -121,17 +124,32 @@ try {
     summary.formats_ready++;
   }
 
-  stage = "answer_and_citation";
+  stage = "ask_navigation";
   const textDocument = uploaded.find(item => item.name.endsWith("txt_en.txt"));
   await page.goto(`${base}/ask`);
+  const question = "In Knowledge OS Text Fixture, quote exactly the sentence beginning 'This plain text document exercises'.";
+  stage = "ask_observer_arm";
+  check(await armAskStreamObserver(page, question), "answer_observer_not_installed");
   const answerResponse = observeResponse(page, response => response.request().method() === "POST" &&
-    new URL(response.url()).pathname === `/api/backend/v1/workspaces/${workspaceId}/ask/stream`);
-  await page.getByPlaceholder("Ask anything…").fill(
-    "In Knowledge OS Text Fixture, quote exactly the sentence beginning 'This plain text document exercises'.");
+    new URL(response.url()).pathname === `/api/backend/v1/workspaces/${workspaceId}/ask/stream` &&
+    response.request().postDataJSON().query === question);
+  stage = "ask_fill";
+  await page.getByPlaceholder("Ask anything…").fill(question);
+  stage = "ask_send";
   await page.getByRole("button", { name: "Send", exact: true }).click();
+  stage = "ask_network_response";
   const stream = await answerResponse();
+  summary.answer_http_status = stream.status();
   check(stream.status() === 200, "answer_http_failure");
-  const answer = finalAnswer(await stream.text());
+  stage = "ask_observer_read";
+  const observed = await readObservedAskStream(page, question, timeout);
+  check(observed.ok, observed.code);
+  check(observed.http_status === 200 && observed.request_count === 1, "answer_observer_http_mismatch");
+  summary.answer_observation = { transport: "actual_browser_fetch_clone", bytes: observed.bytes,
+    request_count: observed.request_count };
+  stage = "ask_wire_parse";
+  const answer = finalAnswer(observed.wire);
+  stage = "ask_answer_assertions";
   summary.answer_status = /^[a-z_]{1,64}$/.test(answer.status) ? answer.status : "unknown";
   summary.publication_status = /^[a-z_]{1,64}$/.test(answer.publication_status) ? answer.publication_status : "unknown";
   summary.answer_reason_code = /^[A-Z_0-9]{1,64}$/.test(answer.reason_code) ? answer.reason_code : null;
@@ -144,16 +162,23 @@ try {
       url.searchParams.get("workspace_id") === workspaceId &&
       url.searchParams.get("chunk_id") === textCitation.chunk_id;
   });
+  stage = "citation_open";
   await page.locator('button[title*="' + textDocument.name + '"]').first().click();
+  stage = "citation_network_response";
   const passage = await passageResponse();
   check(passage.status() === 200, "canonical_passage_http_failure");
+  stage = "citation_body_read";
   const canonical = await passage.json();
+  stage = "citation_identity";
   check(canonical.ok === true && canonical.passage?.chunk_id === textCitation.chunk_id &&
     canonical.passage?.document_id === textDocument.document_id &&
     canonical.passage?.content?.includes("TXT parser and language tagging"), "canonical_passage_mismatch");
   const panel = page.locator('aside:has(button[aria-label="Close source panel"])');
+  stage = "citation_panel_visible";
   await panel.waitFor({ state: "visible", timeout });
+  stage = "citation_canonical_live_badge";
   await panel.getByText("Canonical (live)", { exact: true }).waitFor({ state: "visible", timeout });
+  stage = "citation_passage_visible";
   await page.waitForFunction(name => {
     const panel = document.querySelector('aside:has(button[aria-label="Close source panel"])');
     const text = panel?.textContent.replace(/\s+/g, " ") || "";
