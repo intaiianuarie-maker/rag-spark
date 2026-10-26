@@ -2,6 +2,18 @@ name: Connector release validation
 
 on:
   workflow_dispatch:
+  push:
+    branches: [review/super-rag-2026-10-17]
+    paths:
+      - .github/workflows/sync-release.yml
+      - packages/connectors/**
+      - apps/worker/jobs/sync_worker.py
+      - apps/api/app/sources/**
+      - apps/api/alembic/versions/0015*
+      - apps/api/alembic/versions/0016*
+      - apps/api/alembic/versions/0017*
+      - tests/integration/test_sync*
+      - tests/integration/test_connector_migrations.py
 
 permissions:
   contents: read
