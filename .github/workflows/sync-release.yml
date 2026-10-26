@@ -67,6 +67,7 @@ jobs:
           --mount type=volume,destination=/data
           -v "$GITHUB_WORKSPACE/infrastructure/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro"
           chrislusf/seaweedfs:3.82 server -dir=/data -filer -s3
+          -s3.config=/etc/seaweedfs/s3.json
       - name: Require all fixture services
         run: |
           python - <<'PY'

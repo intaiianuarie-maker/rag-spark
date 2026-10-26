@@ -11,9 +11,12 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import logging
+import socket
 import subprocess
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -25,7 +28,9 @@ from connectors.adapters.progress_store import SqlAlchemySyncProgressStore
 from connectors.adapters.s3_connector import S3Connector
 from connectors.adapters.source_document_map import get_mapped_document
 from connectors.interfaces import ConnectorConfig, ConnectorKind
+from connectors.sync_consumer import SourceIdentity
 from core.config import get_settings
+from core.errors import ReasonCode, normalize_code
 from ingestion import persistence
 from ingestion.adapters import redis_queue
 from ingestion.persistence import ChunkRow, Document, DocumentVersion, IngestionJob
@@ -344,6 +349,115 @@ async def test_live_redis_sync_lease_expiry_recovers_and_fences_ack(broker, monk
     assert await broker.zcard(sync_queue.claims_key()) == 0
     assert await broker.hlen(sync_queue.claim_tokens_key()) == 0
     assert await queue.claim(timeout_seconds=0) is None
+
+
+async def _assert_discovery_failure(source, database, broker, caplog, error_type, sentinel):
+    """Check real discovery errors at the durable consumer/claim boundary."""
+    from connectors.adapters.progress_store import SyncOutcomeRow, SyncProgressRow
+    from connectors.adapters.source_document_map import SyncSourceDocument
+
+    started = datetime.now(UTC)
+    payload = await sync_queue.enqueue_sync_job(
+        source.config.workspace_id, source.config.connector_id,
+    )
+    log_start = len(caplog.records)
+    with caplog.at_level(logging.INFO, logger="knowledge_os.connectors.sync"):
+        with pytest.raises(error_type) as failure:
+            await _consumer(source, database).run_once(timeout_seconds=1)
+
+    # The job must remain under its original lease, with no ready-queue
+    # duplicate or ingestion dispatch. The common lease recovery test above
+    # proves that such an unacked claim can be retried after expiry.
+    assert await broker.zrange(sync_queue.claims_key(), 0, -1) == [payload]
+    assert await broker.hget(sync_queue.claim_tokens_key(), payload)
+    assert await broker.llen(sync_queue.queue_key()) == 0
+    assert await broker.llen(redis_queue.queue_key()) == 0
+    assert await _counts(database) == (0, 0, 0)
+
+    # Reopen the SQL store instead of inspecting the consumer's in-memory
+    # progress: the failure has to survive a worker restart and be UI-visible.
+    identity = SourceIdentity.from_config(source.config)
+    store = SqlAlchemySyncProgressStore(session_factory=database)
+    progress = await store.load(identity)
+    assert progress is not None
+    assert progress.last_attempt_at is not None and progress.last_attempt_at >= started
+    assert progress.last_finished_at is not None
+    assert progress.last_finished_at >= progress.last_attempt_at
+    assert progress.last_success_at is None
+    assert progress.last_error_code == normalize_code(ReasonCode.INGESTION_ERROR)
+    assert progress.last_run_id
+    assert progress.cursor is None
+    assert progress.items_seen == progress.items_created == progress.items_updated == 0
+    assert await store.outcomes(identity, progress.generation) == {}
+    async with database() as session:
+        assert await session.scalar(select(func.count()).select_from(SyncSourceDocument)) == 0
+        persisted = []
+        for model in [SyncProgressRow, SyncOutcomeRow]:
+            persisted.extend((await session.execute(select(model.__table__))).mappings().all())
+    assert len(persisted) == 1  # one source failure; no invented item outcome
+    assert sentinel not in repr(persisted)
+    assert sentinel not in repr([record.__dict__ for record in caplog.records[log_start:]])
+    assert any(record.message == "sync_job_failed" for record in caplog.records[log_start:])
+    return failure.value
+
+
+async def test_live_s3_bad_credentials_persist_failure_without_ack(
+    s3_source, database, broker, caplog,
+):
+    import boto3
+    from botocore.config import Config
+    from botocore.exceptions import ClientError
+
+    # The admin-created bucket contains actual objects. An unauthenticated S3
+    # fixture would list them successfully and FAIL this test, never skip it.
+    sentinel = "m6-secret-sentinel-" + uuid.uuid4().hex
+    client = boto3.client(
+        "s3", endpoint_url=s3_source.adapter.endpoint_url,
+        aws_access_key_id=s3_source.adapter.access_key,
+        aws_secret_access_key=sentinel, region_name="us-east-1",
+        config=Config(signature_version="s3v4", connect_timeout=1, read_timeout=2,
+                      retries={"total_max_attempts": 1}),
+    )
+    rejected = LiveSource(
+        s3_source.config, S3Connector(injectable_client=client), s3_source.a, s3_source.b,
+    )
+    try:
+        error = await _assert_discovery_failure(
+            rejected, database, broker, caplog, ClientError, sentinel,
+        )
+        assert error.operation_name == "ListObjectsV2"
+        assert error.response["ResponseMetadata"]["HTTPStatusCode"] == 403
+        assert error.response["Error"]["Code"] in {"SignatureDoesNotMatch", "AccessDenied"}
+    finally:
+        client.close()
+
+
+async def test_live_git_unreachable_http_host_persists_failure_without_ack(
+    database, broker, caplog, tmp_path,
+):
+    from connectors.adapters.git_connector import GitSourceRefused
+
+    sentinel = "m6-secret-sentinel-" + uuid.uuid4().hex
+    # A bound, non-listening loopback socket reserves a private port while
+    # making connects fail immediately. There is no HTTP mock or Git runner.
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+        reserved.bind(("127.0.0.1", 0))
+        port = reserved.getsockname()[1]
+        config = ConnectorConfig(
+            connector_id="unreachable-git", workspace_id=str(uuid.uuid4()),
+            kind=ConnectorKind.GIT,
+            settings={"repo": f"http://127.0.0.1:{port}/{sentinel}.git"},
+        )
+        source = LiveSource(config, GitConnector(scratch_root=str(tmp_path)), "", "")
+        error = await _assert_discovery_failure(
+            source, database, broker, caplog, GitSourceRefused, sentinel,
+        )
+    # Prove that real Git acquisition ran and failed, rather than a URL
+    # validation refusal satisfying the negative case accidentally.
+    assert isinstance(error.__cause__, subprocess.CalledProcessError)
+    assert error.__cause__.returncode != 0
+    assert "clone" in error.__cause__.cmd
+    assert list(tmp_path.iterdir()) == []  # failed acquisition cleaned scratch
 
 
 class FixtureEmbedder:

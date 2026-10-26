@@ -653,3 +653,27 @@ async def test_partial_purge_preserves_mapping_and_retry_finishes(pg):
     await deleter(ident, "nested/report.txt", None)
     assert calls == [mapped, mapped]
     assert await _mapped(pg, ws, "c1", "nested/report.txt") is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("filename,declared,expected", [
+    ("note.txt", None, "text/plain"),
+    ("from-server.dat", "text/html; charset=utf-8", "text/html"),
+    ("unknown.no-such-extension", None, "application/octet-stream"),
+])
+async def test_source_mime_metadata_survives_the_publication_boundary(
+    pg, filename, declared, expected
+):
+    ws = uuid.uuid4()
+    publisher = await _publisher(pg)
+    identity = SourceIdentity.from_config(_config("mime", ws))
+    item = SourceItem(external_id=filename, name=filename, mime_type=declared)
+    await publisher(identity, item, b"source", "checksum")
+    document_id = await _mapped(pg, ws, "mime", filename)
+    async with pg.session_factory() as session:
+        document = await session.get(Document, document_id)
+        version = (await session.scalars(select(DocumentVersion).where(
+            DocumentVersion.document_id == document_id,
+        ))).one()
+        assert document.mime_type == expected
+        assert version.mime_type == expected
