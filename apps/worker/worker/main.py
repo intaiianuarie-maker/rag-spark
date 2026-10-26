@@ -25,6 +25,7 @@ from graph.consumer import (
 )
 from jobs.agent_worker import run_supervised_agent_consumer
 from jobs.ingest_worker import run_worker
+from jobs.sync_worker import run_supervised_sync_consumer, sync_worker_enabled
 
 from worker.adapters.redis_broker import RedisBroker
 
@@ -493,6 +494,27 @@ async def run() -> None:
             extra={"event": "graph_consumer_disabled", "graph_mode": graph_mode()},
         )
 
+    # M6-001b: the connector sync loop, supervised. SYNC_WORKER_ENABLED=off
+    # (the default) starts nothing and touches no sync code, so the flag-off
+    # path stays byte-identical to before. When on, the loop consumes sync
+    # jobs against the durable progress store with real document
+    # ingest/tombstone wiring, and a crash restarts it with backoff instead
+    # of taking the worker down.
+    sync_task: asyncio.Task | None = None
+    if sync_worker_enabled():
+        sync_task = asyncio.create_task(
+            run_supervised_sync_consumer(stop), name="sync-consumer"
+        )
+        logger.info(
+            "sync_consumer_enabled",
+            extra={"event": "sync_consumer_enabled"},
+        )
+    else:
+        logger.info(
+            "sync_consumer_disabled",
+            extra={"event": "sync_consumer_disabled"},
+        )
+
     try:
         await stop.wait()
     finally:
@@ -501,6 +523,8 @@ async def run() -> None:
         if graph_task is not None:
             # The supervisor also honours stop_event, so this returns promptly.
             await graph_task
+        if sync_task is not None:
+            await sync_task
         if agent_task is not None:
             await agent_task
         await broker.close()

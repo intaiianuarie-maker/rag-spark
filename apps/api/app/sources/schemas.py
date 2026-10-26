@@ -62,6 +62,9 @@ class SyncStatusResponse(BaseModel):
     last_attempt_at: datetime | None = None
     last_success_at: datetime | None = None
     last_error: str | None = None
+    last_run_id: str | None = None
+    last_finished_at: datetime | None = None
+    state: Literal["idle", "running", "succeeded", "failed"] = "idle"
     items_seen: int = 0
     items_created: int = 0
     items_updated: int = 0

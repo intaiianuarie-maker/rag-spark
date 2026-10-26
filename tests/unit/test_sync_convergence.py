@@ -266,6 +266,7 @@ def _consumer(
     *,
     connector: Any,
     publisher: Callable[..., Any] | None = None,
+    deleter: Callable[..., Any] | None = None,
     page_size: int = 2,
     max_pages: int | None = None,
     load_sources: Callable[..., Any] | None = None,
@@ -277,11 +278,23 @@ def _consumer(
         "publisher": publisher,
         "connector_factory": lambda _cfg: connector,
     }
+    if deleter is not None:
+        kwargs["deleter"] = deleter
     if load_sources is not None:
         kwargs["load_sources"] = load_sources
     if max_pages is not None:
         kwargs["max_pages"] = max_pages
     return QueuedSyncConsumer(**kwargs)
+
+
+class RecordingDeleter:
+    """Deleter seam stand-in: records every tombstone call."""
+
+    def __init__(self) -> None:
+        self.calls: list[str] = []
+
+    async def __call__(self, identity: SourceIdentity, external_id: str, prior: Any) -> None:
+        self.calls.append(external_id)
 
 
 async def _drive(
@@ -303,8 +316,42 @@ async def _drive(
             queue.nack()  # un-acked → lease redelivers
             reports.append(None)
             continue
-        assert summary is not None and summary.acked
+        if summary is None:
+            continue
+        # Root review #4: a run with failures must NOT ack (the lease expires
+        # and the job is redelivered); a clean run acks. This harness models
+        # the redelivery explicitly in the dedicated recovery test below.
+        clean = all(report.failed == 0 for report in summary.reports)
+        assert summary.acked is clean
         reports.extend(summary.reports)
+    return reports
+
+
+async def _drive_until_converged(
+    consumer_factory: Callable[[], QueuedSyncConsumer],
+    queue: LeaseQueue,
+    *,
+    max_loops: int = 12,
+) -> list[SyncReport]:
+    """Drive with REAL lease semantics: an un-acked claim is redelivered.
+
+    This is the recovery path POLICE's finding #4 restored: a failed item
+    (or a failed deletion) leaves the job un-acked, the lease expires, the
+    job comes back, and the retry converges — instead of the failed work
+    being silently acked away.
+    """
+    reports: list[SyncReport] = []
+    loops = 0
+    while not queue.drained:
+        loops += 1
+        if loops > max_loops:
+            raise AssertionError("sync did not converge within the loop bound")
+        summary = await consumer_factory().run_once()
+        if summary is None:
+            continue
+        reports.extend(summary.reports)
+        if not summary.acked:
+            queue.nack()  # lease expiry -> redelivery
     return reports
 
 
@@ -674,3 +721,155 @@ async def test_byte_limit_is_not_enforced_in_the_sync_path_disclosed() -> None:
     assert report is not None
     assert report.created == 2  # the big item is published, not rejected
     assert store.head["big.md"] == hashlib.sha256(big.encode("utf-8")).hexdigest()
+
+
+async def test_unacked_failed_run_redelivers_and_converges() -> None:
+    """Root review #4: the failed run is NOT acked; the redelivery converges."""
+    source = Source({"a.md": "A", "b.md": "B"})
+    config = _config()
+    progress = InMemorySyncProgressStore()
+    store = PublishedStore()
+
+    flaky = FlakyConnector(source, page_size=2, fail_on="a.md", fail_times=1)
+    queue = LeaseQueue([encode_sync_job("ws-a")])
+    reports = await _drive_until_converged(
+        lambda: _consumer(progress, queue, connector=flaky, publisher=store,
+                          load_sources=lambda _w: [config]),
+        queue,
+    )
+    assert queue.redeliveries >= 1  # the un-acked job came back
+    # The failure was visible on its own run, then recovered on the redelivery.
+    assert any("a.md" in e for r in reports for e in r.errors)
+    assert store.live_set(source) == {"a.md", "b.md"}
+    assert store.duplicate_versions() == {}
+
+
+async def test_empty_source_deletes_everything_on_a_fresh_run(tmp_path: Path) -> None:
+    """Root review #2: a source that emptied out must delete its documents."""
+    config = _config()
+    progress = InMemorySyncProgressStore()
+    store = PublishedStore()
+    deleter = RecordingDeleter()
+
+    full = SourceConnector(Source({"a.md": "A", "b.md": "B"}), page_size=2)
+    q1 = LeaseQueue([encode_sync_job("ws-a")])
+    await _drive(
+        lambda: _consumer(progress, q1, connector=full, publisher=store,
+                          deleter=deleter, load_sources=lambda _w: [config]),
+        q1,
+    )
+    assert store.live_set(Source({"a.md": "A", "b.md": "B"})) == {"a.md", "b.md"}
+
+    # The source empties completely.
+    empty = SourceConnector(Source({}), page_size=2)
+    q2 = LeaseQueue([encode_sync_job("ws-a")])
+    reports = await _drive(
+        lambda: _consumer(progress, q2, connector=empty, publisher=store,
+                          deleter=deleter, load_sources=lambda _w: [config]),
+        q2,
+    )
+    deleted = sum(r.deleted for r in reports)
+    assert deleted == 2  # both documents tombstoned via the deleter
+    assert store.live_set(Source({})) == set()
+
+
+async def test_resumed_run_does_not_delete_earlier_pages() -> None:
+    """Root review #1: a resumed (mid-cursor) run must not false-delete."""
+    config = _config()
+    progress = InMemorySyncProgressStore()
+    store = PublishedStore()
+    deleter = RecordingDeleter()
+
+    # A fresh run publishes page 1, then is interrupted mid-listing (the fake
+    # queue drains after one page via max_pages).
+    source = Source({f"f{i}.md": str(i) for i in range(4)})
+    q1 = LeaseQueue([encode_sync_job("ws-a")])
+    interrupted = _consumer(progress, q1, connector=SourceConnector(source, page_size=2),
+                            publisher=store, deleter=deleter,
+                            load_sources=lambda _w: [config], max_pages=1)
+    with pytest.raises(RuntimeError, match="max_pages"):
+        await interrupted.run_once()
+    assert q1.acked == []
+    assert deleter.calls == []  # the interrupted fresh run deleted nothing
+
+    # The RESUME run: it starts mid-cursor — earlier pages are not re-seen and
+    # must NOT be deleted as absent (root review #1).
+    q2 = LeaseQueue([encode_sync_job("ws-a")])
+    await _drive(
+        lambda: _consumer(progress, q2, connector=SourceConnector(source, page_size=2),
+                          publisher=store, deleter=deleter,
+                          load_sources=lambda _w: [config]),
+        q2,
+    )
+    assert deleter.calls == []  # full reconciliation proves all four still exist
+    assert q2.acked == [encode_sync_job("ws-a")]
+
+
+async def test_failed_prefix_is_retried_before_recovered_claim_is_acked() -> None:
+    source = Source({"a.md": "A", "b.md": "B", "c.md": "C"})
+    connector = FlakyConnector(source, page_size=1, fail_on="a.md", fail_times=1)
+    published, progress = PublishedStore(), InMemorySyncProgressStore()
+    queue, config = LeaseQueue([encode_sync_job("ws-a")]), _config()
+    interrupted = _consumer(progress, queue, connector=connector, publisher=published,
+                            load_sources=lambda _w: [config], max_pages=1)
+    with pytest.raises(RuntimeError, match="max_pages"):
+        await interrupted.run_once()
+    assert queue.acked == [] and "a.md" not in published.head
+    queue.nack()
+    recovered = _consumer(progress, queue, connector=connector, publisher=published,
+                          load_sources=lambda _w: [config])
+    result = await recovered.run_once()
+    assert result is not None and result.acked
+    assert set(published.head) == set(source.ids())
+    assert not published.duplicate_versions()
+    outcomes = await progress.outcomes(SourceIdentity.from_config(config), 1)
+    assert all(item.status is not ItemStatus.FAILED for item in outcomes.values())
+    state = await progress.load(SourceIdentity.from_config(config))
+    assert state.last_error_code is None
+    assert state.last_success_at == state.last_finished_at >= state.last_attempt_at
+
+
+async def test_recovered_claim_reconciles_real_deletion_before_ack() -> None:
+    source = Source({"a.md": "A", "b.md": "B", "c.md": "C"})
+    connector = SourceConnector(source, page_size=1)
+    published, progress, deleter = PublishedStore(), InMemorySyncProgressStore(), RecordingDeleter()
+    config = _config()
+    baseline = _consumer(progress, LeaseQueue([]), connector=connector,
+                         publisher=published, deleter=deleter)
+    await baseline.run_sync(config)
+    source.delete("b.md")
+    queue = LeaseQueue([encode_sync_job("ws-a")])
+    interrupted = _consumer(progress, queue, connector=connector, publisher=published,
+                            deleter=deleter, load_sources=lambda _w: [config], max_pages=1)
+    with pytest.raises(RuntimeError, match="max_pages"):
+        await interrupted.run_once()
+    assert queue.acked == []
+    queue.nack()
+    recovered = _consumer(progress, queue, connector=connector, publisher=published,
+                          deleter=deleter, load_sources=lambda _w: [config])
+    result = await recovered.run_once()
+    assert result is not None and result.acked
+    assert deleter.calls == ["b.md"]
+    outcomes = await progress.outcomes(SourceIdentity.from_config(config), 1)
+    assert outcomes["b.md"].status is ItemStatus.DELETED
+    assert outcomes["a.md"].status is not ItemStatus.DELETED
+    assert outcomes["c.md"].status is not ItemStatus.DELETED
+
+
+async def test_source_failure_is_durable_and_logs_do_not_echo_credentials(caplog) -> None:
+    class BrokenDiscovery(SourceConnector):
+        async def discover(self, *args, **kwargs):
+            raise OSError("private-credential-sentinel")
+
+    config, progress = _config(), InMemorySyncProgressStore()
+    queue = LeaseQueue([encode_sync_job("ws-a")])
+    consumer = _consumer(progress, queue, connector=BrokenDiscovery(Source({})),
+                         load_sources=lambda _w: [config])
+    with pytest.raises(OSError):
+        await consumer.run_once()
+    state = await progress.load(SourceIdentity.from_config(config))
+    assert state.last_attempt_at is not None
+    assert state.last_finished_at >= state.last_attempt_at
+    assert state.last_error_code == normalize_code(ReasonCode.INGESTION_ERROR)
+    assert queue.acked == []
+    assert "private-credential-sentinel" not in caplog.text

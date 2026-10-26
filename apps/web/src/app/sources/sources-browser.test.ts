@@ -40,6 +40,10 @@ const state=window.fixture;
 const json=(payload,status=200)=>new Response(JSON.stringify(payload),{status,headers:{"content-type":"application/json"}});
 const initial = "2026-01-01T00:00:00.000Z";
 const statusPayload=(id,job,stage)=>({connector_id:id,kind:"s3",
+  last_run_id:stage==="history" ? job.previousRun : job.run,
+  last_finished_at:stage==="success" || stage==="failure" ? job.success : null,
+  state:stage==="history" ? job.previousError ? "failed" : "succeeded" :
+    stage==="success" ? "succeeded" : stage==="failure" ? "failed" : "running",
   last_attempt_at:stage==="history" ? job.previousAttempt : job.attempt,
   last_success_at:stage==="success" ? job.success : job.previousSuccess,
   last_error:stage==="failure" ? "INGESTION_ERROR" : stage==="history" ? job.previousError : null,
@@ -90,7 +94,8 @@ window.fetch=async(url,init={})=>{
       state.jobs[id]={attempt:new Date(Date.parse(initial)+attempt*10000).toISOString(),
         success:new Date(Date.parse(initial)+attempt*10000+1000).toISOString(),
         previousAttempt:source.last_attempt_at,previousSuccess:source.last_success_at,
-        previousError:source.last_error,stage:"pending",polls:0,
+        previousError:source.last_error,previousRun:previous?.run??null,run:"run-"+attempt,
+        stage:"pending",polls:0,
         fail:id==="failsrc" && !previous};
       return json({job_id:"sync:"+ws+"/"+id,workspace_id:ws,connector_id:id,acked:true});
     };

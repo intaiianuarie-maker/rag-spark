@@ -24,6 +24,9 @@ export type SourceStatus = {
   last_attempt_at: string | null;
   last_success_at: string | null;
   last_error: string | null;
+  last_run_id?: string | null;
+  last_finished_at?: string | null;
+  state?: "idle" | "running" | "succeeded" | "failed";
   items_seen: number;
   items_created: number;
   items_updated: number;

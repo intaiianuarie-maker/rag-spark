@@ -69,6 +69,13 @@ class SyncProgressRow(Base):
     items_deleted: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     last_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    #: Durable source-level failure markers (root review): a discovery
+    #: failure happens BEFORE any ItemOutcome, so without these the
+    #: status endpoint cannot see an unreachable host / bad credentials.
+    last_error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_finished_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now()
     )
@@ -156,6 +163,8 @@ class SqlAlchemySyncProgressStore:
             items_deleted=row.items_deleted,
             last_attempt_at=row.last_attempt_at,
             last_success_at=row.last_success_at,
+            last_error_code=row.last_error_code,
+            last_finished_at=row.last_finished_at,
             updated_at=row.updated_at,
         )
 
@@ -190,6 +199,8 @@ class SqlAlchemySyncProgressStore:
             row.items_deleted = progress.items_deleted
             row.last_attempt_at = progress.last_attempt_at
             row.last_success_at = progress.last_success_at
+            row.last_error_code = progress.last_error_code
+            row.last_finished_at = progress.last_finished_at
             await session.commit()
 
     async def record_outcome(self, identity: SourceIdentity, outcome: ItemOutcome) -> None:

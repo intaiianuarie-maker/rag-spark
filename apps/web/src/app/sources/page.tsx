@@ -111,7 +111,7 @@ function ScopedSourcesPage({ activeId }: { activeId: string | null }) {
   }, [activeId, refresh, clearAllPolls]);
 
 
-  const startPolling = useCallback((ws: string, id: string, gen: number, previousAttempt: string | null) => {
+  const startPolling = useCallback((ws: string, id: string, gen: number, baseline: SourceStatus) => {
     if (!aliveRef.current) return;
     clearPoll(id);
     pollGenerationRef.current[id] = gen;
@@ -128,10 +128,13 @@ function ScopedSourcesPage({ activeId }: { activeId: string | null }) {
         setPolling((prev) => ({ ...prev, [id]: st }));
         // Terminal only when the server reports a NEW attempt (last_attempt_at
         // differs from the pre-trigger value) and a terminal outcome.
-        const newAttempt = !!st.last_attempt_at && st.last_attempt_at !== previousAttempt;
+        const newAttempt = (!!st.last_run_id && st.last_run_id !== baseline.last_run_id) ||
+          (!!st.last_attempt_at && st.last_attempt_at !== baseline.last_attempt_at);
         const succeeded = !!st.last_success_at && !!st.last_attempt_at &&
           Date.parse(st.last_success_at) >= Date.parse(st.last_attempt_at);
-        const terminal = newAttempt && (!!st.last_error || succeeded);
+        const terminal = newAttempt && (st.state
+          ? st.state === "succeeded" || st.state === "failed"
+          : !!st.last_error || succeeded);
         if (terminal) {
           clearPoll(id);
           const epoch = requestEpochRef.current;
@@ -228,7 +231,7 @@ function ScopedSourcesPage({ activeId }: { activeId: string | null }) {
       await triggerSourceSync(ws, id);
       if (!aliveRef.current || epoch !== requestEpochRef.current || activeIdRef.current !== ws) return;
       if (pollGenerationRef.current[id] !== gen) return;
-      startPolling(ws, id, gen, baseline.last_attempt_at);
+      startPolling(ws, id, gen, baseline);
     } catch (e) {
       if (!aliveRef.current || activeIdRef.current !== ws) return;
       setStatus(e instanceof Error ? e.message : "sync failed");

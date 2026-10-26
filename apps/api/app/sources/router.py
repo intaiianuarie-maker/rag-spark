@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Literal
 
 from connectors import ConnectorKind
 from connectors.adapters.progress_store import SqlAlchemySyncProgressStore
@@ -75,6 +76,29 @@ def _public(
     )
 
 
+def _progress_error(progress, outcomes) -> str | None:
+    source_error = getattr(progress, "last_error_code", None)
+    if source_error:
+        return source_error
+    current_run = progress.last_run_id
+    codes = [o.error_code for o in outcomes.values()
+             if o.run_id == current_run and o.error_code]
+    if codes:
+        return codes[-1]
+    return "INGESTION_ERROR" if progress.items_failed else None
+
+
+def _progress_state(
+    progress, error: str | None
+) -> Literal["idle", "running", "succeeded", "failed"]:
+    if progress is None or progress.last_attempt_at is None:
+        return "idle"
+    finished = getattr(progress, "last_finished_at", None)
+    if finished is None or finished < progress.last_attempt_at:
+        return "running"
+    return "failed" if error else "succeeded"
+
+
 @router.get("", response_model=list[ConnectorPublic])
 async def list_sources(
     workspace_id: uuid.UUID,
@@ -97,8 +121,7 @@ async def list_sources(
         last_error = None
         if progress is not None:
             outcomes = await store.outcomes(ident, progress.generation)
-            codes = [o.error_code for o in outcomes.values() if o.error_code]
-            last_error = codes[-1] if codes else None
+            last_error = _progress_error(progress, outcomes)
         out.append(_public(r, progress, last_error))
     return out
 
@@ -145,8 +168,7 @@ async def get_source(
     last_error = None
     if progress is not None:
         outcomes = await store.outcomes(ident, progress.generation)
-        codes = [o.error_code for o in outcomes.values() if o.error_code]
-        last_error = codes[-1] if codes else None
+        last_error = _progress_error(progress, outcomes)
     return _public(record, progress, last_error)
 
 
@@ -232,14 +254,16 @@ async def get_status(
     last_error = None
     if progress is not None:
         outcomes = await store.outcomes(ident, progress.generation)
-        codes = [o.error_code for o in outcomes.values() if o.error_code]
-        last_error = codes[-1] if codes else None
+        last_error = _progress_error(progress, outcomes)
     return SyncStatusResponse(
         connector_id=connector_id,
         kind=record.kind,
         last_attempt_at=progress.last_attempt_at if progress else None,
         last_success_at=progress.last_success_at if progress else None,
         last_error=last_error,
+        last_run_id=progress.last_run_id if progress else None,
+        last_finished_at=getattr(progress, "last_finished_at", None),
+        state=_progress_state(progress, last_error),
         items_seen=progress.items_seen if progress else 0,
         items_created=progress.items_created if progress else 0,
         items_updated=progress.items_updated if progress else 0,

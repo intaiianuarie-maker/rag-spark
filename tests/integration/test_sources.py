@@ -473,3 +473,55 @@ def test_worker_loader_refuses_legacy_credential_payload_without_traceback_leak(
         assert "private-sentinel" not in "".join(traceback.format_exception(caught.value))
     finally:
         assert client.delete(prefix + "/legacy-config").status_code == 204
+
+
+def test_status_exposes_durable_source_failure_and_new_attempt_state(client):
+    from datetime import UTC, datetime, timedelta
+
+    from connectors.sync_consumer import settings_fingerprint
+
+    prefix = f"/v1/workspaces/{client.ws}/sources"
+    connector = "durable-state"
+    created = client.post(prefix, json={"connector_id": connector, "kind": "s3",
+                                        "settings": {"bucket": "fixture"}})
+    assert created.status_code == 201
+    status_url = f"{prefix}/{connector}/status"
+    assert client.get(status_url).json()["state"] == "idle"
+    attempt = datetime.now(UTC)
+    try:
+        with client.sync_sessions() as session:
+            row = SyncProgressRow(
+                workspace_id=str(client.ws), connector_id=connector, kind="s3",
+                settings_fingerprint=settings_fingerprint(created.json()["settings"]),
+                last_run_id="failed-discovery", last_attempt_at=attempt,
+                last_finished_at=attempt + timedelta(seconds=1), last_error_code="INGESTION_ERROR",
+            )
+            session.add(row)
+            session.commit()
+            identifier = row.id
+        failed = client.get(status_url).json()
+        assert failed["state"] == "failed"
+        assert failed["last_error"] == "INGESTION_ERROR"
+        assert failed["last_run_id"] == "failed-discovery"
+        assert failed["items_failed"] == 0  # discovery failed before an item existed
+        with client.sync_sessions() as session:
+            row = session.get(SyncProgressRow, identifier)
+            row.last_run_id = "new-attempt"
+            row.last_error_code = None
+            row.last_success_at = attempt - timedelta(seconds=5)
+            row.last_attempt_at = attempt + timedelta(seconds=2)
+            session.commit()
+        running = client.get(status_url).json()
+        assert running["state"] == "running"  # prior success/finish cannot finish the new run
+        assert running["last_error"] is None
+        with client.sync_sessions() as session:
+            row = session.get(SyncProgressRow, identifier)
+            row.last_finished_at = attempt + timedelta(seconds=3)
+            row.last_success_at = row.last_finished_at
+            session.commit()
+        succeeded = client.get(status_url).json()
+        assert succeeded["state"] == "succeeded"
+        assert succeeded["last_run_id"] == "new-attempt"
+        assert succeeded["last_error"] is None
+    finally:
+        assert client.delete(f"{prefix}/{connector}").status_code == 204
