@@ -1,0 +1,124 @@
+name: Backend runtime image artifact
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [review/super-rag-2026-10-17]
+    paths:
+      - .github/workflows/backend-release.yml
+      - apps/api/Dockerfile
+      - apps/api/requirements.txt
+      - apps/worker/Dockerfile
+      - apps/worker/requirements.txt
+
+permissions:
+  contents: read
+
+concurrency:
+  group: backend-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  runtime-images:
+    if: github.ref == 'refs/heads/review/super-rag-2026-10-17'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # Artifact preparation only: separate release gates authorize deployment.
+      # Docker reads this immutable checkout, never the operator's live worktree.
+      - name: Build API runtime image
+        id: api
+        run: |
+          started=$(date +%s)
+          docker build --pull --progress=plain \
+            --file apps/api/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "knowledge-os-api:release-$GITHUB_SHA" .
+          printf 'duration_seconds=%s\n' "$(( $(date +%s) - started ))" >> "$GITHUB_OUTPUT"
+      - name: Build worker runtime image
+        id: worker
+        run: |
+          started=$(date +%s)
+          docker build --pull --progress=plain \
+            --file apps/worker/Dockerfile \
+            --label "org.opencontainers.image.revision=$GITHUB_SHA" \
+            --tag "knowledge-os-worker:release-$GITHUB_SHA" .
+          printf 'duration_seconds=%s\n' "$(( $(date +%s) - started ))" >> "$GITHUB_OUTPUT"
+      - name: Smoke import API without services or network
+        run: |
+          docker run --rm --network none \
+            --env APP_ENV=test \
+            --env AUTH_JWT_SECRET=runtime-artifact-smoke-synthetic-only-0123456789 \
+            --env MIGRATIONS_ON_BOOT=false \
+            --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
+            --env PYTHONPATH=/app/packages:/app/apps/api \
+            --entrypoint python "knowledge-os-api:release-$GITHUB_SHA" \
+            -c 'import app.main; import app.sources.service; import models.usage'
+      - name: Smoke import worker without services or network
+        run: |
+          docker run --rm --network none \
+            --env APP_ENV=test \
+            --env AUTH_JWT_SECRET=runtime-artifact-smoke-synthetic-only-0123456789 \
+            --env MIGRATIONS_ON_BOOT=false \
+            --env HF_HUB_OFFLINE=1 --env TRANSFORMERS_OFFLINE=1 \
+            --env PYTHONPATH=/app/packages:/app/apps/worker \
+            --entrypoint python "knowledge-os-worker:release-$GITHUB_SHA" \
+            -c 'import worker.main; import jobs.sync_worker; import models.usage'
+      - name: Require Git in worker image
+        run: |
+          docker run --rm --network none --entrypoint git \
+            "knowledge-os-worker:release-$GITHUB_SHA" --version
+      - name: Record immutable runtime identities
+        env:
+          API_BUILD_SECONDS: ${{ steps.api.outputs.duration_seconds }}
+          WORKER_BUILD_SECONDS: ${{ steps.worker.outputs.duration_seconds }}
+        run: |
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+          from pathlib import Path
+
+          sha = os.environ["GITHUB_SHA"]
+          assert re.fullmatch(r"[0-9a-f]{40}", sha), "invalid source revision"
+          images = {}
+          for role in ("api", "worker"):
+              tag = f"knowledge-os-{role}:release-{sha}"
+              image = json.loads(subprocess.check_output(
+                  ["docker", "image", "inspect", tag], text=True
+              ))[0]
+              assert image["Config"]["Labels"]["org.opencontainers.image.revision"] == sha
+              assert re.fullmatch(r"sha256:[0-9a-f]{64}", image["Id"])
+              images[role] = {
+                  "tag": tag,
+                  "image_id": image["Id"],
+                  "build_duration_seconds": int(os.environ[f"{role.upper()}_BUILD_SECONDS"]),
+              }
+          Path("runtime-images.json").write_text(
+              json.dumps({"source_sha": sha, "images": images}, indent=2) + "\n"
+          )
+          PY
+      - name: Package both images in one archive
+        run: |
+          # One docker save deduplicates shared layers across both images.
+          docker image save "knowledge-os-api:release-$GITHUB_SHA" \
+            "knowledge-os-worker:release-$GITHUB_SHA" | gzip -1 > runtime-images.tar.gz
+          sha256sum runtime-images.tar.gz runtime-images.json > runtime-images.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: runtime-images-${{ github.sha }}
+          path: |
+            runtime-images.tar.gz
+            runtime-images.sha256
+            runtime-images.json
+          compression-level: 0
+          retention-days: 7
+          if-no-files-found: error
