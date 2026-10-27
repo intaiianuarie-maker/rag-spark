@@ -99,7 +99,9 @@ def provider_identity(provider: Any, observed_dim: int) -> EmbeddingIdentity:
     ``observed_dim`` is measured from the vectors, not trusted from the
     provider's declared attribute: a provider that claims 1024 and returns 768
     is exactly the failure this module exists to catch, so the observed value
-    is what gets recorded.
+    is what gets recorded. A trusted adapter may explicitly pin its encoder's
+    provider label across a Python transport-class refactor. This is not a
+    comparison alias: all four resulting identity fields still match exactly.
     """
     model = str(getattr(provider, "model_name", "") or "")
     revision = str(getattr(provider, "revision", "") or "")
@@ -111,8 +113,14 @@ def provider_identity(provider: Any, observed_dim: int) -> EmbeddingIdentity:
         raise EmbeddingIdentityError(
             f"refusing to record identity with dimension {observed_dim!r}"
         )
+    missing = object()
+    label = getattr(provider, "embedding_identity_provider", missing)
+    if label is missing:
+        label = type(provider).__name__
+    elif not isinstance(label, str) or not label.strip() or label != label.strip():
+        raise EmbeddingIdentityError("provider exposes an invalid embedding_identity_provider")
     return EmbeddingIdentity(
-        provider=type(provider).__name__,
+        provider=label,
         model=model,
         revision=revision,
         dimension=int(observed_dim),

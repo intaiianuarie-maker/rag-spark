@@ -197,13 +197,10 @@ async def embed_batch_with_retry(
 
 
 def provider_identity(provider: EmbeddingProvider, observed_dim: int) -> dict[str, Any]:
-    """Provider identity stamped into every record's metadata (T-V1-014 metric)."""
-    return {
-        "embedding_provider": type(provider).__name__,
-        "embedding_model": provider.model_name,
-        "embedding_revision": provider.revision,
-        "embedding_dimension": int(observed_dim),
-    }
+    """Use the shared stable encoder identity, retaining the public dict shape."""
+    from retrieval.embedding_identity import provider_identity as shared_provider_identity
+
+    return shared_provider_identity(provider, observed_dim).as_metadata()
 
 
 def build_record(row: Any, vector: list[float], identity: dict[str, Any]) -> VectorRecord:

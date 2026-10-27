@@ -393,6 +393,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
     model_name: ClassVar[str] = DEFAULT_EMBEDDING_MODEL
     dimension: ClassVar[int] = DEFAULT_EMBEDDING_DIMENSION
     revision: ClassVar[str] = DEFAULT_EMBEDDING_MODEL
+    # Stable encoder identity, independent of the chat/HTTP adapter's Python
+    # class name. scripts/rebuild_with_manifest.GeminiEmbedding2 used the same
+    # OpenRouter /embeddings model + input payload and 3072-d output, with no
+    # task/pooling/vector transform. Keep its persisted label, not an alias in
+    # the strict identity comparison (model/revision/dimension stay mandatory).
+    embedding_identity_provider: ClassVar[str] = "GeminiEmbedding2"
 
     def __init__(
         self,
