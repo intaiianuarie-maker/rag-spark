@@ -148,6 +148,10 @@ async def check_vector_store_contract(
         vector=list(base),
         top_k=10,
         query_filter=_scope("ws-a"),
+        # T-A05: the dense boundary requires an explicit query identity; the
+        # contract's fixture records carry CONTRACT_IDENTITY, so a matching
+        # query verifies compatibility instead of assuming it.
+        query_identity=CONTRACT_IDENTITY,
     )
     if not hits:
         _fail("search returned no hits for its own workspace")
@@ -168,13 +172,15 @@ async def check_vector_store_contract(
         _fail(f"top_k=10 ignored: {len(hits)} items returned")
 
     one = await store.search(
-        collection=collection, vector=list(base), top_k=1, query_filter=_scope("ws-a")
+        collection=collection, vector=list(base), top_k=1,
+        query_filter=_scope("ws-a"), query_identity=CONTRACT_IDENTITY,
     )
     if len(one) != 1:
         _fail(f"top_k=1 must return exactly one item, got {len(one)}")
 
     if await store.search(
-        collection=collection, vector=list(base), top_k=5, query_filter=_scope()
+        collection=collection, vector=list(base), top_k=5,
+        query_filter=_scope(), query_identity=CONTRACT_IDENTITY,
     ):
         # Fail closed (R-004). v1 assumption: `SearchFilter` has no
         # `include_public` field yet, so this is also the behaviour a
@@ -182,7 +188,8 @@ async def check_vector_store_contract(
         _fail("empty workspace scope must return nothing (fail closed, R-004)")
 
     if await store.search(
-        collection=collection, vector=list(base), top_k=0, query_filter=_scope("ws-a")
+        collection=collection, vector=list(base), top_k=0,
+        query_filter=_scope("ws-a"), query_identity=CONTRACT_IDENTITY,
     ):
         _fail("top_k=0 must return nothing")
 
@@ -190,7 +197,8 @@ async def check_vector_store_contract(
     if removed != 1:
         _fail(f"delete by id must return the number removed, got {removed}")
     after_delete = await store.search(
-        collection=collection, vector=list(base), top_k=10, query_filter=_scope("ws-a")
+        collection=collection, vector=list(base), top_k=10,
+        query_filter=_scope("ws-a"), query_identity=CONTRACT_IDENTITY,
     )
     if any(hit.chunk_id == "chunk-a-1" for hit in after_delete):
         _fail("deleted id still returned by search")
@@ -204,7 +212,8 @@ async def check_vector_store_contract(
             f"(expected 1, got {removed_by_filter})"
         )
     survivors = await store.search(
-        collection=collection, vector=list(base), top_k=10, query_filter=_scope("ws-b")
+        collection=collection, vector=list(base), top_k=10,
+        query_filter=_scope("ws-b"), query_identity=CONTRACT_IDENTITY,
     )
     if not survivors:
         _fail("delete by filter removed another workspace's rows")
