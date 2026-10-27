@@ -293,6 +293,10 @@ async def test_a_first_purge_reaches_all_three_stores_and_scopes_by_document(
     FakeVectorStore.closed = 0
     monkeypatch.setattr("retrieval.adapters.pg_fts.PostgresLexicalStore", FakeLexicalStore)
     monkeypatch.setattr("retrieval.adapters.qdrant_store.QdrantVectorStore", FakeVectorStore)
+    # Hermetic collection name: integration modules export VECTOR_COLLECTION at
+    # import time (scratch names), and a full ``-m unit`` collection imports
+    # them all. Production never exports it and keeps the default.
+    monkeypatch.setattr("ingestion.dedup.vector_collection", lambda: "knowledge")
 
     workspace_id, document_id = uuid.uuid4(), uuid.uuid4()
     version_id = uuid.uuid4()

@@ -116,7 +116,11 @@ async def test_worker_loop_exits_when_stopped() -> None:
     await run_worker(stop)  # returns immediately; no Redis needed
 
 
-def test_queue_keys_are_namespaced_per_env() -> None:
+def test_queue_keys_are_namespaced_per_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hermetic namespace. Integration modules export INGEST_QUEUE_PREFIX at
+    # import time (e.g. "t071-dedup-:"), and a full ``-m unit`` collection
+    # imports them all — the ambient value must not leak into this assertion.
+    monkeypatch.setenv("INGEST_QUEUE_PREFIX", "unit-test:")
     from ingestion.queue import delayed_key, queue_key
 
     assert queue_key() != "ingest:queue"
