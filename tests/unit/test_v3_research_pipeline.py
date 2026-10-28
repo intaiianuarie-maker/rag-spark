@@ -525,6 +525,7 @@ def test_api_widening_returns_400(monkeypatch) -> None:
 
 def test_api_unconfigured_pipeline_returns_typed_unavailable(monkeypatch) -> None:
     """When unconfigured (no gateway or key), returns typed Unavailable."""
+    reset_workspace_policies()  # the widening test above leaves a tighter policy behind
     # Force unconfigured
     for k in ("OPENROUTER_API_KEY", "LITELLM_URL", "LITELLM_API_KEY", "DEEPSEEK_API_KEY"):
         monkeypatch.delenv(k, raising=False)

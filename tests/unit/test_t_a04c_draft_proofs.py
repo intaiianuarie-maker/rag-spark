@@ -26,14 +26,14 @@ def _definition(wid, ws):
     )
 
 
-def test_draft_bad_path_refuses():
+def test_draft_bad_path_refuses(tmp_path):
     import apps.api.app.workflows.store as storemod
 
     os.environ.pop("WORKFLOW_DRAFT_DB", None)
     with pytest.raises(ValueError):
         storemod.draft_db_path()
 
-    blocker = Path("/tmp/opencode/t_a04c_blocker")
+    blocker = tmp_path / "t_a04c_blocker"
     blocker.write_text("x")
     import sqlite3
 

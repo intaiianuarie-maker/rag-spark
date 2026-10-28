@@ -21,12 +21,12 @@ def test_checkpoint_path_fail_closed(monkeypatch) -> None:
         checkpoint_db_path()
 
 
-def test_checkpoint_path_bad_unwritable_raises(monkeypatch) -> None:
+def test_checkpoint_path_bad_unwritable_raises(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("WORKFLOW_CHECKPOINT_DB", "/no/such/parent/dir/checkpoints.db")
     # resolve must succeed (path only); store startup fails when creating parent dir fails
     from workflow_engine.checkpoint import SqliteCheckpointStore
 
-    blocker = Path("/tmp/opencode/t_a04b_blocker")
+    blocker = tmp_path / "t_a04b_blocker"
     blocker.write_text("x")
     with pytest.raises(OSError):
         SqliteCheckpointStore(blocker / "checkpoints.db")

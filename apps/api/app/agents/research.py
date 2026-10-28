@@ -133,6 +133,23 @@ async def submit_research(
 ) -> SubmitResearchResponse:
     _require_workspace(principal, workspace_id)
 
+    # Widening is refused before any branch: with no pipeline wired, nothing else checks it.
+    from agents.policy import get_workspace_policy
+
+    policy = get_workspace_policy(str(workspace_id))
+    if body.max_questions is not None and body.max_questions > policy.max_steps:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "policy_violation",
+                "message": f"max_questions={body.max_questions} exceeds workspace limit "
+                f"{policy.max_steps}",
+                "field": "max_questions",
+                "requested": body.max_questions,
+                "limit": policy.max_steps,
+            },
+        )
+
     # Free-model-only gate (standing rule) — body does not carry model, but
     # the pipeline resolves the Gemma route via policy.resolve_gemma_route
     # (free-first, paid-fallback after workspace budget check, fail-closed).

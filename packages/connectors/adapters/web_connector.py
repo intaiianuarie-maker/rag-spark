@@ -51,8 +51,10 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import ipaddress
 import logging
 import math
+import socket
 from collections.abc import Awaitable, Callable
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -163,6 +165,24 @@ def resolve_redirect(
             f"redirect from {current_url} left the allowed origins (origin={origin!r})"
         )
     return next_url
+
+
+def _assert_public_host(url: str) -> None:
+    """Refuse a fetch whose host resolves to a non-public address (SSRF guard).
+
+    ponytail: resolve-then-fetch. httpx resolves again on connect, so a record that
+    rebinds between this check and the connect still gets through. Upgrade: connect
+    to the vetted address directly.
+    """
+    host = urlparse(url).hostname or ""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise OutOfScopeRedirect(f"cannot resolve {host!r}: {exc}") from exc
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not addr.is_global:
+            raise OutOfScopeRedirect(f"{host!r} resolves to non-public address {addr}")
 
 
 def _default_headers(resp: Any) -> dict[str, str]:
@@ -334,6 +354,8 @@ class WebConnector(Connector):
             for hop in range(max_redirects + 1):
                 if hop > 0 and politeness_delay > 0:
                     await self._sleep(politeness_delay)
+                if self._client_factory is None:
+                    _assert_public_host(current)
                 resp = await client.get(current)
                 location = resp.headers.get("location")
                 if resp.status_code in _REDIRECT_STATUSES and location:

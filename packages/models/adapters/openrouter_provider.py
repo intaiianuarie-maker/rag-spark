@@ -363,6 +363,10 @@ def _trim_metadata(
     return meta
 
 
+# OpenRouter /embeddings rejects more than 100 inputs per request (HTTP 400, probed 2026-10-28).
+EMBEDDING_BATCH_LIMIT = 100
+
+
 def _check_embedding_response(payload: object, expected: int, endpoint: str) -> list[list[float]]:
     if not isinstance(payload, dict):
         raise EmbedderError(f"{endpoint}: response was {type(payload).__name__}, not JSON")
@@ -847,6 +851,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         batch = list(texts)
         if not batch:
             return []
+        if len(batch) > EMBEDDING_BATCH_LIMIT:
+            out: list[list[float]] = []
+            for start in range(0, len(batch), EMBEDDING_BATCH_LIMIT):
+                part = batch[start : start + EMBEDDING_BATCH_LIMIT]
+                out.extend(await self.embed_documents(part, call_site=site))
+            return out
 
         client = self._http()
         url = f"{self.base_url}/embeddings"
@@ -870,9 +880,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     await asyncio.sleep(self.backoff_base_seconds * (2 ** (attempt - 1)))
                     continue
                 GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                detail = ""
+                if isinstance(e, httpx.HTTPStatusError):
+                    detail = f" body={e.response.text[:300]!r}"
                 raise EmbedderError(
                     f"{DEFAULT_EMBEDDING_MODEL}: embedding failed after {self.max_attempts} "
-                    f"attempts (last error: {type(e).__name__}: {e})"
+                    f"attempts (last error: {type(e).__name__}: {e}{detail})"
                 ) from e
 
         for vec in vectors:
@@ -929,6 +942,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         batch = list(texts)
         if not batch:
             return []
+        if len(batch) > EMBEDDING_BATCH_LIMIT:
+            out: list[list[float]] = []
+            for start in range(0, len(batch), EMBEDDING_BATCH_LIMIT):
+                part = batch[start : start + EMBEDDING_BATCH_LIMIT]
+                out.extend(self.embed(part, call_site=site))
+            return out
 
         client = self._http_sync()
         url = f"{self.base_url}/embeddings"
@@ -952,9 +971,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     time.sleep(self.backoff_base_seconds * (2 ** (attempt - 1)))
                     continue
                 GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                detail = ""
+                if isinstance(e, httpx.HTTPStatusError):
+                    detail = f" body={e.response.text[:300]!r}"
                 raise EmbedderError(
                     f"{DEFAULT_EMBEDDING_MODEL}: embedding failed after {self.max_attempts} "
-                    f"attempts (last error: {type(e).__name__}: {e})"
+                    f"attempts (last error: {type(e).__name__}: {e}{detail})"
                 ) from e
 
         for vec in vectors:
