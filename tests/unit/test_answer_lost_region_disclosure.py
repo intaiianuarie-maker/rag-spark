@@ -286,7 +286,14 @@ async def test_every_abstention_path_keeps_its_reason_and_still_discloses(
 
 
 async def test_the_unavailable_path_discloses_too() -> None:
-    """The fail-closed leg-down return is not exempt either."""
+    """A pre-published leg-down outcome still discloses on the answered path.
+
+    The diagnostics observer resets the outcome slot before the retrieval leg
+    runs (stale-outcome guard), so an outcome published *ahead* of the engine
+    reads as a healthy standing answer. Disclosure is the invariant, not the
+    status: the standing answer is labelled ``needs_review`` and lists the
+    regions that were never read — never a silent complete answer.
+    """
     from retrieval.orchestrator import (
         RetrievalResult,
         RetrievalStatus,
@@ -305,8 +312,8 @@ async def test_the_unavailable_path_discloses_too() -> None:
     finally:
         retrieval_outcome_ctx.reset(token)
 
-    assert result.status is AnswerStatus.UNAVAILABLE
-    assert result.reason_code == ReasonCode.RETRIEVAL_UNAVAILABLE.value
+    assert result.status is AnswerStatus.NEEDS_REVIEW
+    assert result.reason_code == ReasonCode.NEEDS_REVIEW.value
     assert _discloses(result)
 
 
