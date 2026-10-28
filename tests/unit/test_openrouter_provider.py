@@ -414,11 +414,28 @@ async def test_embed_wrong_dimension_rejected() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _live_credential_key() -> str | None:
+    """House credential isolation (live_release_stack.py / CREDENTIAL_FILE).
+
+    The environment carries a *path* to a private (0600) JSON file holding the
+    key — never the secret itself — so the hygiene gate keeps its teeth.
+    """
+    key_path = os.environ.get("OPENROUTER_API_KEY_FILE")
+    if not key_path or not os.path.isfile(key_path):
+        return None
+    if os.stat(key_path).st_mode & 0o077:
+        return None
+    with open(key_path, encoding="utf-8") as handle:
+        payload = json.loads(handle.read())
+    api_key = payload.get("api_key") if isinstance(payload, dict) else None
+    return api_key if isinstance(api_key, str) and api_key else None
+
+
 @pytest.mark.asyncio
 async def test_live_openrouter_wire_verify() -> None:
-    api_key = os.environ.get("OPENROUTER_API_KEY")
+    api_key = _live_credential_key()
     if not api_key:
-        pytest.skip("OPENROUTER_API_KEY not configured for live smoke test")
+        pytest.skip('OPENROUTER_API_KEY_FILE (private JSON {"api_key": ...}) not configured')
 
     provider = OpenRouterProvider(
         default_call_site="live_smoke",
