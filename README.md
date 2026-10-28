@@ -1,76 +1,109 @@
 # Knowledge OS
 
-Self-hosted, local-first AI knowledge platform.
+Self-hosted knowledge platform. Upload documents, search them (dense and keyword hybrid), and ask questions that get answers with citations. It runs as a Docker Compose stack on your own machine.
 
-> **OPERATIVE PLAN & CONTROLLING SPECIFICATION:**
-> [`OPERATIVE_PLAN.md`](./OPERATIVE_PLAN.md) and the shared `../rag-fork-solution/` plan docs.
+## Before you start
 
-## Quickstart (local stack)
+- **Docker.** Docker Desktop on Windows or macOS, or Docker Engine with the Compose plugin on Linux. Start it and wait until it reports that it is running.
+- **Git.**
+- **An OpenRouter API key** from https://openrouter.ai/keys. Search and answers need it.
 
-```bash
-make up       # build + start full stack
-make ps       # service status
-make logs     # follow logs
-make down     # stop (keeps volumes)
-```
-
-Migrations (host, postgres running):
+## Install and start
 
 ```bash
-make migrate
+git clone https://github.com/intaiianuarie-maker/rag-spark.git
+cd rag-spark
+git checkout cleanup/portable-install
+cp .env.example .env
 ```
 
-Backend dev loop:
+On Windows PowerShell, use `Copy-Item .env.example .env` instead of `cp`.
+
+Open `.env` and set two values:
+
+- `OPENROUTER_API_KEY`: your OpenRouter key.
+- `AUTH_JWT_SECRET`: a random string of at least 32 characters. Generate one with Docker, so you don't need Python on the host:
 
 ```bash
-make api-dev
-make worker-dev
+docker run --rm python:3.12-slim python -c "import secrets; print(secrets.token_urlsafe(48))"
 ```
 
-Tests:
+Start the stack:
 
 ```bash
-make test        # full suite
-make test-unit   # unit only
-make test-integration
+docker compose up -d --build
+docker compose ps
 ```
 
-Lint / typecheck:
+The first build downloads images and installs dependencies, so it takes a while. Then open:
+
+- **App:** http://localhost:3001. Create an account on the sign-up page.
+- **API health:** http://localhost:8000/health, and readiness at http://localhost:8000/ready.
+
+Stop the stack with `docker compose down`. Your data stays in Docker volumes. `docker compose down -v` deletes all data.
+
+Ports are bound to `127.0.0.1`, so only this machine can reach them. To reach the stack from another device, change the `127.0.0.1:` prefix in `docker-compose.yml` and read the security notes below first.
+
+### Optional: rerank sidecar
+
+The `rerank` service is off by default, and nothing in the API or the worker calls it. To start it anyway: `docker compose --profile rerank up -d`.
+
+## Configuration
+
+`.env.example` lists the settings you may need. Only `AUTH_JWT_SECRET` and `OPENROUTER_API_KEY` are required. Ports (`WEB_PORT`, `API_PORT`) and `CORS_ORIGINS` have defaults. The knowledge graph is off by default (`GRAPH_MODE=off`).
+
+Fixed in code, not in `.env`: embeddings use `google/gemini-embedding-2` through OpenRouter, with 3072 dimensions.
+
+## Tests
+
+Use Python 3.12, the version the Docker images use:
 
 ```bash
-make lint
-make typecheck
+python -m venv .venv
+. .venv/bin/activate          # Windows: .venv\Scripts\activate
+pip install -r requirements-dev.txt
+pytest -m unit
 ```
+
+Last run on Windows 11, Python 3.12.13, without Docker or any service running: 2220 passed, 26 skipped, 18 failed, 3 errors. The skips need a dataset that is not in the repo (MuSiQue, 2WikiMultiHopQA, HotpotQA) or a POSIX system. Most of the failures need a live service, which these tests should not depend on:
+
+- Postgres: `test_pg_fts_lifecycle_gate.py`, `test_lexical_regression.py`, and the purge test in `test_graph_lifecycle.py`.
+- Redis: the nine tests in `test_queue_semantics.py`. They hang in the worker's heartbeat call.
+
+Three more fail for reasons not yet analysed: `test_ingest_pipeline.py::test_worker_survives_process_one_failure`, `test_supersession_vector_cleanup.py`, and `test_v4_authoring_api.py::test_run_workflow_runtime_failure_returns_coded_error`.
+
+Integration tests need the running stack: `pytest -m integration`.
+
+Lint and types: `ruff check .` and `mypy`.
+
+If you have `make`, the same tasks are available as `make up`, `make down`, `make test-unit`, and so on. Run `make help` for the list.
 
 ## Repository layout
 
-- `apps/api` FastAPI service (workflows, search, health)
-- `apps/worker` agent runtime worker
-- `apps/web` Next.js UI
-- `packages/` core, ingestion, retrieval, models, workflow_engine, agents
-- `infrastructure/docker` image pins and ops notes
-- `tests/` unit + boot integration
+- `apps/api`: FastAPI service. Auth, workspaces, documents, search, ask, workflows. Runs database migrations on start.
+- `apps/worker`: ingestion worker. Parses, chunks, embeds and indexes documents.
+- `apps/web`: Next.js UI.
+- `apps/rerank`: optional rerank sidecar, not used by default.
+- `packages/`: shared code. Config, storage, retrieval, answer engine, models, workflow engine.
+- `tests/`: unit, contract and integration tests.
+- `evals/`: benchmark harness and its results (`evals/benchmark_v1/results`).
+- `docs/`: design, ingestion and evaluation notes.
+- `scripts/`: operational and guard scripts.
 
-## Feature maturity
+## Known limits
 
-| Area | Status | Subsystem |
-|------|--------|-----------|
-| Dense + lexical hybrid retrieval (RRF) | Implemented | `packages/retrieval/` |
-| Workflows (draft/validate/approve/run, checkpointing) | Implemented | `apps/api/app/workflows/`, `packages/workflow_engine/` |
-| V3 agent adapter | Implemented (flag-gated, off by default) | `packages/workflow_engine/adapters/v3_adapter.py` |
-| Rerank leg | Implemented behind `RERANK_ENABLED` (default off) | `packages/rerank/`, factory seam |
-| Graph retrieval leg | Construction-gated; degrades to off | `graph/`, factory |
-| Oral/connector surfaces | Planned / experimental | connectors interfaces |
-| V4 UI authoring | Implemented surface + validators | `apps/web` |
+- **Sign-up is open.** Anyone who can reach the web port can create an account. Keep the stack on localhost, or gate sign-up before you expose it.
+- **No TLS.** The compose file serves plain HTTP. Put a TLS reverse proxy in front of it for any shared use.
+- **Slow answers.** On the review server, median ask latency was 28 to 42 s and p95 was 61 to 127 s. That is not measured on your machine.
+- **Chunk IDs can appear in answers.** Not fixed.
+- **`include_public` in the ACL code is not what its name suggests.** Not fixed. Review it before you rely on it for access control.
+- **Web connector SSRF guard is unit-tested only.** The sync worker is disabled in the compose stack, so the guard has not run live.
 
-## Architecture (one-pager)
+## Security notes
 
-ACL scope is enforced before fan-out; dense/lexical (and optional graph) results
-fuse via deterministic RRF; rerank (optional, cloud, gated) then context
-selection; provenance/trace recorded per item. Workflow runs checkpoint at
-boundaries and resume via idempotency ledger. See `handoffs/CODE2-HANDOFF.md`
-and `reviews/` for decision record.
+- Backing services (Postgres, Redis, Qdrant, SeaweedFS) are reachable only from this machine. Their default credentials (`knowledge`, `admin`) are for local use. Change them before any shared use.
+- `.env` holds your secrets. It is gitignored. Never commit it.
 
-## Status notes
+## Repo notes
 
-flags and degrade explicitly rather than fake success.
+Agent handoff and review notes were removed from the working tree. They remain in git history, up to commit `c5380f2`.

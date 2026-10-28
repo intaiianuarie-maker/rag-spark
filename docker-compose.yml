@@ -124,7 +124,7 @@ x-backend-env: &backend-env
   # it is refused in every environment now. Compose fails closed with the `:?`
   # form: export a fresh AUTH_JWT_SECRET (>=32 chars) or compose refuses to start
   # rather than booting with a known secret.
-  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set explicitly (>=32 chars, no shipped default) - see handoffs/CODE1-HANDOFF.md T-R01}
+  AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set explicitly (>=32 chars, no shipped default)}
   # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
   CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
   WORKFLOW_DRAFT_DB: ${WORKFLOW_DRAFT_DB:?WORKFLOW_DRAFT_DB must be set to the durable workflow draft sqlite path}
@@ -223,11 +223,10 @@ services:
       MIGRATIONS_ON_BOOT: ${MIGRATIONS_ON_BOOT:-true}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3001}
     ports:
-      # T-V1-037 PUBLIC (justified): host-local tooling only (curl /health +
-      # /ready, test suites, IDE). In-stack callers use http://api:8000 over the
-      # compose network. It is the authenticated product API (JWT + CORS_ORIGINS),
-      # not a backing store — no backing port is reachable off-box.
-      - "${API_PORT:-8000}:8000"
+      # Loopback only by default: host-local tooling (curl /health and /ready,
+      # tests, IDE). Browsers use the same-origin /api proxy on the web port. To
+      # expose it on the LAN, change this line; JWT and CORS_ORIGINS still gate it.
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
@@ -284,11 +283,10 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       NEXT_TELEMETRY_DISABLED: "1"
     ports:
-      # T-V1-037 PUBLIC (justified): browser entry point — the single port a
-      # human/browser agent opens. Host default 3001: :3000 is a common dev port
-      # and is frequently occupied in this workspace; WEB_PORT stays overridable
-      # per host. The browser only ever talks same-origin here (see /api proxy).
-      - "${WEB_PORT:-3001}:3000"
+      # Loopback only by default. This is the browser entry point: open
+      # http://localhost:3001. Host default 3001 because :3000 is a common dev port.
+      # To expose it on the LAN, change this line.
+      - "127.0.0.1:${WEB_PORT:-3001}:3000"
     depends_on:
       - api
 
@@ -301,6 +299,9 @@ services:
     build:
       context: .
       dockerfile: apps/rerank/Dockerfile
+    # Off by default: nothing in api or worker calls this sidecar (the rerank leg
+    # goes through OpenRouter). Start it with: docker compose --profile rerank up -d
+    profiles: ["rerank"]
     restart: unless-stopped
     environment:
       TORCH_NUM_THREADS: "1"

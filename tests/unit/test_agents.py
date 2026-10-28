@@ -648,7 +648,8 @@ def test_calculator_node_cap_is_enforced_on_a_shallow_wide_tree() -> None:
     [
         ("1" * 1000, "a long literal"),
         ("1+" * 5000, "a long chain, far over the cap"),
-        ("x" * 50_000, "50KB of garbage"),
+        # Short id: pytest puts the node id in an env var; Windows caps those at 32767 chars.
+        pytest.param("x" * 50_000, "50KB of garbage", id="50kb-garbage"),
         ("9**9" + " " * 10_000, "a small expression padded with whitespace"),
     ],
 )
@@ -2527,7 +2528,7 @@ def test_step_store_monotonic_enforces_order_inmemory() -> None:
 
 @pytest.mark.unit
 def test_step_store_monotonic_enforces_order_sqlite() -> None:
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store = SqliteStepStore(Path(td) / "test.db")
         _run_step_store_suite(store)
 
@@ -2630,7 +2631,7 @@ def test_step_store_append_only_no_mutation_api() -> None:
         assert "update" not in dir(cls) or "update" not in cls.__dict__
         assert "delete" not in dir(cls) or "delete" not in cls.__dict__
     # SQLite backend also has no update/delete
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         sql_store = SqliteStepStore(Path(td) / "test.db")
         assert not hasattr(sql_store, "update")
         assert not hasattr(sql_store, "delete")
@@ -2648,7 +2649,7 @@ def test_step_store_adapter_injectable_both_backends_same_interface() -> None:
     mem_list = mem.list(run_id)
     assert [e.sequence for e in mem_list] == [1, 2, 3]
     # SQLite
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         sql = SqliteStepStore(Path(td) / "test.db")
         for ev in events:
             # Need fresh events with same sequence but different run_id to avoid cross-contamination
@@ -2897,7 +2898,7 @@ from agents.step_store import InMemoryStepStore, SqliteStepStore  # noqa
 def test_checkpoint_written_on_every_approval_and_terminal() -> None:
     """Metrics: checkpoints on every approval/terminal — all."""
     # Use an isolated Sqlite file so the test is durable (file survives kill simulation)
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store = SqliteStepStore(Path(td) / "ckpt.db")
         adapter = StepStoreCheckpointAdapter(store)
         from agents.runtime import (
@@ -2979,7 +2980,7 @@ def test_checkpoint_written_on_every_approval_and_terminal() -> None:
 @pytest.mark.unit
 def test_resume_from_checkpoint_trace_equality_kill_and_resume() -> None:
     """RESUME: run → checkpoint → kill → resume → identical continuation, trace equality."""
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store = SqliteStepStore(Path(td) / "ckpt2.db")
         adapter = StepStoreCheckpointAdapter(store)
         from agents.runtime import (
@@ -3091,7 +3092,7 @@ def test_resume_from_checkpoint_trace_equality_kill_and_resume() -> None:
 @pytest.mark.unit
 def test_checkpoint_persists_runstate_usage_budget_approvals() -> None:
     """Checkpoint reconstructs RunState + Usage + budget + approvals."""
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         store = SqliteStepStore(Path(td) / "ckpt3.db")
         adapter = StepStoreCheckpointAdapter(store)
         from agents.runtime import (
@@ -3230,7 +3231,7 @@ def test_worker_queue_claim_ack_with_lease_token_fence() -> None:
 def test_worker_killed_mid_run_resumes_identically_via_checkpoint_lease() -> None:
     """Killed-mid-run resumes identically — trace equality via checkpoint + lease expiry."""
     async def _run() -> None:
-        with tempfile.TemporaryDirectory() as td:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             store = SqliteStepStore(Path(td) / "worker-ckpt.db")
             adapter = StepStoreCheckpointAdapter(store)
             from agents.runtime import (
@@ -3514,7 +3515,7 @@ def test_evidence_round_trip_byte_identical_inmemory() -> None:
 @pytest.mark.unit
 def test_evidence_round_trip_byte_identical_sqlite() -> None:
     async def _run() -> None:
-        with _tempfile2.TemporaryDirectory() as td:
+        with _tempfile2.TemporaryDirectory(ignore_cleanup_errors=True) as td:
             store = SqliteEvidenceStore(Path(td) / "ev.db")
             await _evidence_round_trip_suite(store, "run-1", "trace-1")
             # Re-open from same file — durable
@@ -3581,7 +3582,7 @@ def test_evidence_append_only_no_mutation_api() -> None:
         assert "update" not in cls.__dict__
         assert "delete" not in cls.__dict__
     # Sqlite also
-    with _tempfile2.TemporaryDirectory() as td:
+    with _tempfile2.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         sql = SqliteEvidenceStore(Path(td) / "ev.db")
         assert not hasattr(sql, "update")
         assert not hasattr(sql, "delete")

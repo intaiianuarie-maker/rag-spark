@@ -1,4 +1,0 @@
-=== STEP 3 | 2026-10-13T11:55:40Z | RUN_WEB_E2E=1 pytest tests/integration/test_web_e2e.py -q -rs ===
-..                                                                       [100%]
-2 passed in 42.27s
-ELAPSED 43.05 s

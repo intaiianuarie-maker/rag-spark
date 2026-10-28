@@ -16,6 +16,10 @@ DATASET_PARQUET = pathlib.Path(
 )
 
 
+@pytest.mark.skipif(
+    not DATASET_PARQUET.exists(),
+    reason="needs the HotpotQA parquet (not in the repo)",
+)
 def test_pin_hash_enforced():
     import hashlib
 
@@ -25,6 +29,10 @@ def test_pin_hash_enforced():
     h = hashlib.sha256(open(path, 'rb').read()).hexdigest()
     assert h == pin["parquet_sha256"]
 
+@pytest.mark.skipif(
+    not DATASET_PARQUET.exists(),
+    reason="needs the HotpotQA parquet (not in the repo)",
+)
 def test_gold_not_from_sentence_support_information():
     # Ensure we use all_relevant_sentence_keys, not empty supporting_sentence_keys
     import pyarrow.parquet as pq

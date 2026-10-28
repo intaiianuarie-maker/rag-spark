@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 import pathlib
 
+import pytest
+
 
 def test_runner_uses_free_model_only():
     text = pathlib.Path("evals/g5_real_paired_eval.py").read_text()
@@ -32,6 +34,10 @@ def test_runner_selection_rule_first_20():
     assert len(pin["selected_indices"]) >= 20
 
 
+@pytest.mark.skipif(
+    not pathlib.Path("/root/code/Super Rag/datasets/rag-eval/ragbench-tests-v1/hotpotqa/test-00000-of-00001.parquet").exists(),
+    reason="needs the HotpotQA parquet (not in the repo)",
+)
 def test_runner_does_not_edit_corpus():
     pin_before = json.loads(pathlib.Path("evals/g5_hotpot_pin.json").read_text())
     # Runner should not modify pin

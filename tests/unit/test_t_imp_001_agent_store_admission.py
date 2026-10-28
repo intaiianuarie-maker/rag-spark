@@ -277,6 +277,7 @@ def test_queued_run_refused_when_root_is_not_the_mounted_volume(
     assert resp.json()["detail"]["error"] == "agent_store_root_not_mounted"
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX absolute paths and mount tables")
 def test_queued_run_refused_when_root_shadows_a_bind_mount(
     monkeypatch, production_env, tmp_path
 ) -> None:
@@ -531,6 +532,7 @@ def test_host_mode_without_declared_shared_mount_still_admits(
     assert (worker.admit, worker.shared) == (True, True), (api, worker)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="uses POSIX absolute paths and mount tables")
 def test_nested_mount_under_escaped_root_is_detected(
     monkeypatch, production_env, tmp_path
 ) -> None:

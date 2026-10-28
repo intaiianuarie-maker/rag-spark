@@ -376,7 +376,7 @@ def test_checkpoint_step_store_round_trip_recovers_exact_state() -> None:
 
 def test_sqlite_step_store_and_run_store_persistence() -> None:
     """Metric 2: Persistent SQLite backends survive restart and maintain step history."""
-    with tempfile.TemporaryDirectory() as td:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
         db_path = Path(td) / "lifecycle.db"
         run_store = SqliteRunStore(db_path)
         step_store = SqliteStepStore(db_path)

@@ -12,6 +12,8 @@ from graph.extractor import GraphChunk, RuleBasedGraphExtractor
 from graph.interfaces import Entity, EntityType
 from graph.sqlite_store import SQLiteGraphStore
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
 
 @pytest.mark.unit
 def test_store_uses_wal_and_busy_timeout(tmp_path: Path) -> None:
@@ -414,7 +416,7 @@ def test_rv19_f1_cross_process_deletion(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-c", setup],
         check=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
 
     # independent process deletes
@@ -432,7 +434,7 @@ def test_rv19_f1_cross_process_deletion(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-c", deleter],
         check=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
 
     # parent attempts upsert -> refused
@@ -455,7 +457,7 @@ def test_rv19_f1_cross_process_deletion(tmp_path: Path) -> None:
         [sys.executable, "-c", checker],
         capture_output=True,
         text=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
     assert "NONE" in out.stdout
 
@@ -464,7 +466,6 @@ def test_rv19_f1_cross_process_deletion(tmp_path: Path) -> None:
 def test_rv19_f4_cross_process_tombstone_chunks(tmp_path: Path) -> None:
     import subprocess
     import sys
-    from pathlib import Path
 
     db = tmp_path / "f4.sqlite"
     setup = (
@@ -482,7 +483,7 @@ def test_rv19_f4_cross_process_tombstone_chunks(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-c", setup],
         check=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
 
     # retire chunks
@@ -500,7 +501,7 @@ def test_rv19_f4_cross_process_tombstone_chunks(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-c", retire],
         check=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
 
     # late publish with retiring chunk -> refused
@@ -524,7 +525,7 @@ def test_rv19_f4_cross_process_tombstone_chunks(tmp_path: Path) -> None:
         [sys.executable, "-c", late],
         capture_output=True,
         text=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
     assert "NOOLD" in out.stdout
 
@@ -533,7 +534,6 @@ def test_rv19_f4_cross_process_tombstone_chunks(tmp_path: Path) -> None:
 def test_rv19_f5_cross_process_union(tmp_path: Path) -> None:
     import subprocess
     import sys
-    from pathlib import Path
 
     db = tmp_path / "f5.sqlite"
     setup = (
@@ -549,7 +549,7 @@ def test_rv19_f5_cross_process_union(tmp_path: Path) -> None:
     subprocess.run(
         [sys.executable, "-c", setup],
         check=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
 
     for i in range(5):
@@ -568,7 +568,7 @@ def test_rv19_f5_cross_process_union(tmp_path: Path) -> None:
         subprocess.run(
             [sys.executable, "-c", code],
             check=True,
-            cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+            cwd=str(REPO_ROOT),
         )
 
     check = (
@@ -587,6 +587,6 @@ def test_rv19_f5_cross_process_union(tmp_path: Path) -> None:
         [sys.executable, "-c", check],
         capture_output=True,
         text=True,
-        cwd=str(Path("/root/code/Super Rag/knowledge-os")),
+        cwd=str(REPO_ROOT),
     )
     assert out.stdout.strip() == "5"

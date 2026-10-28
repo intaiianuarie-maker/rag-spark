@@ -407,7 +407,7 @@ def test_hostile_definitions_are_refused_by_the_validator_and_the_compiler(
 
 
 @pytest.mark.unit
-def test_the_hostile_layer_record_written_for_the_handoff() -> None:
+def test_the_hostile_layer_record_written_for_the_handoff(tmp_path: Path) -> None:
     """The gate's evidence: every hostile shape, its layer, and its codes."""
     records = {}
     for label, definition in _hostile_definitions().items():
@@ -417,7 +417,7 @@ def test_the_hostile_layer_record_written_for_the_handoff() -> None:
             "codes": sorted({e.code for e in result.errors}),
             "compiler_refuses": True,
         }
-    target = Path("/tmp/opencode/b1_hostile_layers.json")
+    target = tmp_path / "b1_hostile_layers.json"
     target.write_text(json.dumps(records, indent=2), encoding="utf-8")
     assert all(r["refused_at"] == "validator" for r in records.values())
     assert target.exists()
@@ -760,7 +760,7 @@ def test_evidence_for_an_unknown_node_is_not_invented() -> None:
 
 
 @pytest.mark.unit
-def test_gate_summary_records_every_layer_refusal() -> None:
+def test_gate_summary_records_every_layer_refusal(tmp_path: Path) -> None:
     """The gate's deliverable is the record itself, so assert it exists."""
     records = {}
     for label, definition in _hostile_definitions().items():
@@ -769,7 +769,7 @@ def test_gate_summary_records_every_layer_refusal() -> None:
             "refused_at": "validator" if not result.valid else "REACHED COMPILATION",
             "codes": sorted({e.code for e in result.errors}),
         }
-    target = Path("/tmp/opencode/b1_gate_summary.json")
+    target = tmp_path / "b1_gate_summary.json"
     target.write_text(json.dumps(records, indent=2), encoding="utf-8")
     assert records
     assert all(r["refused_at"] == "validator" for r in records.values())

@@ -1,0 +1,3 @@
+# Store text as LF in the repo and check out LF on every OS. Without this,
+# core.autocrlf=true (the Windows default) writes CRLF into shell scripts and Dockerfiles.
+* text=auto eol=lf

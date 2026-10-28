@@ -18,6 +18,7 @@ Pinned properties (card):
 
 from __future__ import annotations
 
+import os
 import shutil
 import sqlite3
 import subprocess
@@ -492,7 +493,12 @@ def test_canonical_spec_round_trip_is_stable_across_hash_seeds(tmp_path: Path) -
         out = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True, text=True, check=True,
-            env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+            # SYSTEMROOT: Windows Winsock (imported by asyncio) fails to load without it.
+            env={
+                "PYTHONHASHSEED": seed,
+                "PATH": "/usr/bin:/bin",
+                "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+            },
         )
         import json as _json
 

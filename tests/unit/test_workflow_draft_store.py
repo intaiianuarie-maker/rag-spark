@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import sys
 from itertools import pairwise
@@ -272,7 +273,12 @@ def test_hash_is_process_independent() -> None:
         out = subprocess.run(
             [sys.executable, "-c", code],
             capture_output=True, text=True, check=True,
-            env={"PYTHONHASHSEED": seed, "PATH": "/usr/bin:/bin"},
+            # SYSTEMROOT: Windows Winsock (imported by asyncio) fails to load without it.
+            env={
+                "PYTHONHASHSEED": seed,
+                "PATH": "/usr/bin:/bin",
+                "SYSTEMROOT": os.environ.get("SYSTEMROOT", ""),
+            },
         )
         assert out.stdout.strip(), f"seed {seed} produced no hash: {out.stderr}"
         hashes.add(out.stdout.strip())

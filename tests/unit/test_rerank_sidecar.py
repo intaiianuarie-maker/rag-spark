@@ -29,6 +29,9 @@ for _p in ("packages", "apps/api", "scripts", "."):
 from retrieval.contract_tests import check_reranker_contract  # noqa: E402
 from retrieval.interfaces import RetrievedItem  # noqa: E402
 
+# apps/rerank/app/main.py imports the POSIX-only `resource` module; it runs in the Linux image.
+pytest.importorskip("resource", reason="rerank sidecar is POSIX-only (uses the resource module)")
+
 from apps.rerank.adapter import MiniLMReranker  # noqa: E402
 from apps.rerank.app.main import app, manager  # noqa: E402
 from apps.rerank.proof_gate import (  # noqa: E402

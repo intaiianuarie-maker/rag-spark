@@ -30,8 +30,7 @@ def _load(name: str, relpath: str):
 manifest = _load("reindex_manifest", "scripts/reindex_manifest.py")
 reconcile = _load("reconcile_points_chunks", "scripts/reconcile_points_chunks.py")
 
-_REVIEW_DIR = _REPO / "reviews" / "2026-10-14-super-rag-v1-v4-review"
-EVIDENCE = _REVIEW_DIR / "super-rag-review-evidence-2026-10-14.json"
+EVIDENCE = _REPO / "tests" / "fixtures" / "super-rag-review-evidence-2026-10-14.json"
 
 pytestmark = [pytest.mark.unit]
 

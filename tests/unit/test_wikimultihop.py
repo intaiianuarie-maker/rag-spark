@@ -25,11 +25,17 @@ import pytest
 
 from evals import wikimultihop as w2w
 
+requires_dataset = pytest.mark.skipif(
+    not w2w.WIKIMULTIHOP_ROOT.exists(),
+    reason="needs the 2WikiMultiHopQA corpus (not in the repo)",
+)
+
 # --------------------------------------------------------------------------- #
 # Corpus pins
 # --------------------------------------------------------------------------- #
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_pinned_files_present_and_sha256_match() -> None:
     verified = w2w.verify_pins()
@@ -58,6 +64,7 @@ def test_missing_or_drifted_file_fails_loudly(tmp_path: pathlib.Path) -> None:
         w2w.RAW_ROOT = original
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_split_row_counts_pinned() -> None:
     assert w2w.SPLIT_ROWS == {"train": 167_454, "validation": 12_576, "test": 12_576}
@@ -95,6 +102,7 @@ TRAIN_AUDIT = {
 }
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_validation_audit_counts_pinned() -> None:
     audit = w2w.audit_evidence_paths("validation")
@@ -106,6 +114,7 @@ def test_validation_audit_counts_pinned() -> None:
     assert audit.unresolvable == audit.n_title_not_in_context + audit.n_sent_id_out_of_range
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_test_split_is_unlabeled_upstream() -> None:
     audit = w2w.audit_evidence_paths("test")
@@ -157,6 +166,7 @@ def test_unresolvable_counter_is_live_not_hardcoded_zero() -> None:
     assert record.supporting_text() == ("only sentence",)
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_duplicate_context_titles_are_benign() -> None:
     """Repeats exist but never disagree, so sent_id is never ambiguous."""
@@ -170,6 +180,7 @@ def test_duplicate_context_titles_are_benign() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_records_carry_every_required_field() -> None:
     records = w2w.load_records("validation", limit=200)
@@ -181,6 +192,7 @@ def test_records_carry_every_required_field() -> None:
         assert record.resolved_paths() == record.supporting_facts
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_streaming_respects_limit_and_never_materializes_train() -> None:
     """train is 167k records; the streaming path must stop at the limit."""
@@ -225,6 +237,7 @@ def test_loader_writes_no_scoring_code() -> None:
     }
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_official_2wiki_metrics_remain_pending_in_the_harness() -> None:
     """The loader feeds the T-EVAL-007 interfaces; it does not satisfy them."""
@@ -244,6 +257,7 @@ def test_official_2wiki_metrics_remain_pending_in_the_harness() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_provenance_doc_has_no_missing_fields() -> None:
     """provenance fields missing: 0 — every required provenance fact recorded."""
@@ -276,6 +290,7 @@ def test_provenance_doc_has_no_missing_fields() -> None:
     assert "Unresolvable evidence paths: 0" in doc
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_license_and_card_files_sit_next_to_the_data() -> None:
     assert w2w.LICENSE_PATH.exists()

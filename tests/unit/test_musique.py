@@ -23,11 +23,17 @@ import pytest
 
 from evals import musique as muz
 
+requires_dataset = pytest.mark.skipif(
+    not muz.MUSIQUE_ROOT.exists(),
+    reason="needs the MuSiQue corpus under evals.musique.MUSIQUE_ROOT (not in the repo)",
+)
+
 # --------------------------------------------------------------------------- #
 # Corpus pins
 # --------------------------------------------------------------------------- #
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_pinned_files_present_and_sha256_match() -> None:
     for config in muz.FILE_SHA256:
@@ -96,6 +102,7 @@ FULL_AUDIT = {
 }
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_row_counts_and_audit_counts() -> None:
     # ans: 2 417 records, all answerable.
@@ -125,6 +132,7 @@ def test_row_counts_and_audit_counts() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_record_fields_typed() -> None:
     record = next(muz.iter_records("ans", verify=False))
@@ -247,6 +255,7 @@ def test_unresolvable_counter_is_live_not_hardcoded_zero() -> None:
 # --------------------------------------------------------------------------- #
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_provenance_doc_records_license_hashes_and_audits() -> None:
     doc = muz.PROVENANCE_PATH.read_text(encoding="utf-8")
@@ -272,6 +281,7 @@ def test_provenance_doc_records_license_hashes_and_audits() -> None:
         assert number in doc, number
 
 
+@requires_dataset
 @pytest.mark.unit
 def test_every_declared_file_present_and_no_strays() -> None:
     """A stray JSONL in the dataset dir would mean unacquired, unverified data."""
