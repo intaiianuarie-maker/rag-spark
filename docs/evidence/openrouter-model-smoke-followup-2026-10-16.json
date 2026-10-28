@@ -1,0 +1,263 @@
+{
+  "tested_at_utc": "2026-10-16T12:26:54.867569+00:00",
+  "test_type": "bounded synthetic smoke; no automatic model/provider fallback; one request per test",
+  "results": [
+    {
+      "test": "generation_free_ro_en",
+      "requested_model": "google/gemma-4-26b-a4b-it:free",
+      "provider_policy": {
+        "only": [
+          "google-ai-studio"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 429,
+      "error": {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+          "raw": "google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations",
+          "provider_name": "Google AI Studio",
+          "is_byok": false,
+          "provider_error_code": "429",
+          "limit_source": "upstream_provider_shared_pool",
+          "remedy_hint": "Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"
+        }
+      },
+      "latency_seconds": 0.459
+    },
+    {
+      "test": "generation_paid_ro_en",
+      "requested_model": "google/gemma-4-26b-a4b-it",
+      "provider_policy": {
+        "only": [
+          "coreweave"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "http_status": 200,
+      "response_id": "gen-1792153613-4Z6DOB9lkyUbCQu9YKKh",
+      "returned_model": "google/gemma-4-26b-a4b-it",
+      "provider": "CoreWeave",
+      "usage": {
+        "prompt_tokens": 55,
+        "completion_tokens": 44,
+        "total_tokens": 99,
+        "cost": 1.87e-05,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 1.87e-05,
+          "upstream_inference_prompt_cost": 5.5e-06,
+          "upstream_inference_completions_cost": 1.32e-05
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "finish_reason": "stop",
+      "output": "{\n  \"count\": 17,\n  \"english\": \"Station Orion has 17 sensors.\",\n  \"romanian\": \"Stația Orion are 17 senzori.\"\n}",
+      "parsed": {
+        "count": 17,
+        "english": "Station Orion has 17 sensors.",
+        "romanian": "Stația Orion are 17 senzori."
+      },
+      "passed": true,
+      "latency_seconds": 0.708
+    },
+    {
+      "test": "semantic_verification_free",
+      "requested_model": "google/gemma-4-26b-a4b-it:free",
+      "provider_policy": {
+        "only": [
+          "google-ai-studio"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "passed": false,
+      "http_status": 429,
+      "error": {
+        "message": "Provider returned error",
+        "code": 429,
+        "metadata": {
+          "raw": "google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations",
+          "provider_name": "Google AI Studio",
+          "is_byok": false,
+          "provider_error_code": "429",
+          "limit_source": "upstream_provider_shared_pool",
+          "remedy_hint": "Retry shortly, add your own provider key (https://openrouter.ai/settings/integrations), or route to another provider with provider routing: https://openrouter.ai/docs/features/provider-routing"
+        }
+      },
+      "latency_seconds": 0.471
+    },
+    {
+      "test": "semantic_verification_paid",
+      "requested_model": "google/gemma-4-26b-a4b-it",
+      "provider_policy": {
+        "only": [
+          "coreweave"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "http_status": 200,
+      "response_id": "gen-1792153614-1ZoqlgX4jvfmT9CfCqgZ",
+      "returned_model": "google/gemma-4-26b-a4b-it",
+      "provider": "CoreWeave",
+      "usage": {
+        "prompt_tokens": 91,
+        "completion_tokens": 13,
+        "total_tokens": 104,
+        "cost": 1.3e-05,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 1.3e-05,
+          "upstream_inference_prompt_cost": 9.1e-06,
+          "upstream_inference_completions_cost": 3.9e-06
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "finish_reason": "stop",
+      "output": "{\"C1\":\"supported\",\"C2\":\"unsupported\"}",
+      "parsed": {
+        "C1": "supported",
+        "C2": "unsupported"
+      },
+      "passed": true,
+      "latency_seconds": 0.333
+    },
+    {
+      "test": "vision_paid",
+      "requested_model": "google/gemma-4-26b-a4b-it",
+      "provider_policy": {
+        "only": [
+          "coreweave"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "http_status": 200,
+      "response_id": "gen-1792153614-FoMJikhwjYEyZNKO9OEr",
+      "returned_model": "google/gemma-4-26b-a4b-it",
+      "provider": "CoreWeave",
+      "usage": {
+        "prompt_tokens": 285,
+        "completion_tokens": 2,
+        "total_tokens": 287,
+        "cost": 2.91e-05,
+        "is_byok": false,
+        "prompt_tokens_details": {
+          "cached_tokens": 0,
+          "cache_write_tokens": 0,
+          "audio_tokens": 0,
+          "video_tokens": 0
+        },
+        "cost_details": {
+          "upstream_inference_cost": 2.91e-05,
+          "upstream_inference_prompt_cost": 2.85e-05,
+          "upstream_inference_completions_cost": 6e-07
+        },
+        "completion_tokens_details": {
+          "reasoning_tokens": 0,
+          "image_tokens": 0,
+          "audio_tokens": 0
+        }
+      },
+      "finish_reason": "stop",
+      "output": "Red",
+      "passed": true,
+      "latency_seconds": 0.32
+    },
+    {
+      "test": "embedding_paid",
+      "requested_model": "google/gemini-embedding-2",
+      "provider_policy": {
+        "only": [
+          "google-ai-studio"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "http_status": 200,
+      "response_id": "gen-emb-1792153614-FPOGmp0ke9y8xufqDogV",
+      "returned_model": "gemini-embedding-2",
+      "provider": "Google AI Studio",
+      "usage": {
+        "prompt_tokens": 18,
+        "total_tokens": 18,
+        "cost": 3.6e-06,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 3.6e-06,
+          "upstream_inference_prompt_cost": 3.6e-06,
+          "upstream_inference_completions_cost": 0
+        }
+      },
+      "dimensions": [
+        3072,
+        3072
+      ],
+      "indices": [
+        0,
+        1
+      ],
+      "passed": true,
+      "latency_seconds": 0.446
+    },
+    {
+      "test": "embedding_paid_vertex_single",
+      "requested_model": "google/gemini-embedding-2",
+      "provider_policy": {
+        "only": [
+          "google-vertex/eu"
+        ],
+        "allow_fallbacks": false
+      },
+      "synthetic_data_only": true,
+      "http_status": 200,
+      "response_id": "gen-emb-1792153614-0ZqTVSUOTpaFRQekcH8c",
+      "returned_model": "gemini-embedding-2",
+      "provider": "Google",
+      "usage": {
+        "prompt_tokens": 8,
+        "total_tokens": 8,
+        "cost": 1.76e-06,
+        "is_byok": false,
+        "cost_details": {
+          "upstream_inference_cost": 1.76e-06,
+          "upstream_inference_prompt_cost": 1.76e-06,
+          "upstream_inference_completions_cost": 0
+        }
+      },
+      "dimensions": [
+        3072
+      ],
+      "indices": [
+        0
+      ],
+      "passed": true,
+      "latency_seconds": 0.277
+    }
+  ]
+}

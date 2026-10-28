@@ -989,6 +989,7 @@ class GateSummaryReport:
     acceptance_flows: list[FlowResult]
     call_stats: CallStats
     all_targets_met: bool
+    per_item: list[ItemEvaluationResult] = dataclasses.field(default_factory=list)
 
 
 def compile_summary(
@@ -1119,6 +1120,7 @@ def compile_summary(
         acceptance_flows=acceptance_flows,
         call_stats=stats,
         all_targets_met=all_targets_met,
+        per_item=list(results),
     )
 
 
@@ -1253,8 +1255,15 @@ async def run_live_gate(
     split: str = "holdout",
     dry_run: bool = False,
     run_acceptance: bool = True,
+    collection: str = SERVING_COLLECTION,
 ) -> GateSummaryReport:
-    """Run full live evaluation gate on the switched corpus."""
+    """Run full live evaluation gate on the switched corpus.
+
+    ``collection`` defaults to the live serving collection only to preserve
+    backward compatibility for existing callers. T-EVAL-004 routes evaluations to
+    a scratch ``eval_scratch_*`` collection per the T-071 scratch-isolation rule:
+    no eval data is ever written to ``knowledge__serving``.
+    """
     dev_items, holdout_items = load_frozen_slices()
     if split == "holdout":
         items_to_eval = holdout_items
@@ -1265,9 +1274,13 @@ async def run_live_gate(
 
     embedder = GeminiEmbedding2()
     llm = OpenRouterProvider(default_call_site="live_v1_gate") if not dry_run else MockGateLLM()
-    evaluator = LiveGateEvaluator(embedder=embedder, llm=llm, dry_run=dry_run)
+    evaluator = LiveGateEvaluator(
+        embedder=embedder, llm=llm, dry_run=dry_run, collection=collection
+    )
 
-    async with LiveTestScope(f"v1-gate-{split}", embedder=embedder, dry_run=dry_run) as scope:
+    async with LiveTestScope(
+        f"v1-gate-{split}", embedder=embedder, collection=collection, dry_run=dry_run
+    ) as scope:
         logger.info("Ingesting %d %s items into live test scope...", len(items_to_eval), split)
         ingested_refs: list[IngestedItemRef] = []
         for it in items_to_eval:
@@ -1302,6 +1315,13 @@ def main() -> None:
     parser.add_argument("--split", choices=("holdout", "dev", "all"), default="holdout")
     parser.add_argument("--dry-run", action="store_true", help="Run without network calls")
     parser.add_argument("--no-acceptance", action="store_true", help="Skip the 5 acceptance flows")
+    parser.add_argument(
+        "--collection",
+        default=SERVING_COLLECTION,
+        help="Qdrant collection to ingest+retrieve from. T-EVAL-004 MUST be an "
+        "eval_scratch_* collection per the T-071 scratch-isolation rule; never "
+        "use knowledge__serving for eval writes.",
+    )
     args = parser.parse_args()
 
     report = asyncio.run(
@@ -1309,10 +1329,15 @@ def main() -> None:
             split=args.split,
             dry_run=args.dry_run,
             run_acceptance=not args.no_acceptance,
+            collection=args.collection,
         )
     )
     rendered = render_markdown_tables(report)
     print("\n" + rendered + "\n")
+
+    if not args.dry_run:
+        from t004_results_writer import emit_t004_results
+        emit_t004_results(report, args.collection)
 
     if not report.all_targets_met:
         logger.warning("One or more release gate targets were NOT met.")

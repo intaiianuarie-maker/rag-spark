@@ -59,7 +59,10 @@ async def test_lease_seconds_env_override(monkeypatch: pytest.MonkeyPatch) -> No
     assert lease_seconds() > 1
 
 
-async def test_claim_keys_are_namespaced_like_the_rest() -> None:
+async def test_claim_keys_are_namespaced_like_the_rest(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hermetic namespace — see test_ingest_pipeline: integration modules export
+    # INGEST_QUEUE_PREFIX at import time and a full collection imports them all.
+    monkeypatch.setenv("INGEST_QUEUE_PREFIX", "unit-test:")
     from ingestion.adapters.redis_queue import claim_tokens_key, claims_key
 
     assert claims_key().startswith("ingest:")

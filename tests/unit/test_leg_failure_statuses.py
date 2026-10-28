@@ -92,7 +92,7 @@ class _DownVectorStore(VectorStore):
     async def upsert(self, *, collection, records):
         raise AssertionError("this store is read-only in the fixture")
 
-    async def search(self, *, collection, vector, top_k, query_filter):
+    async def search(self, *, collection, vector, top_k, query_filter, query_identity=None):
         raise TimeoutError("qdrant search timed out")
 
     async def delete(self, *, collection, ids=None, query_filter=None):
@@ -496,7 +496,7 @@ def _client(monkeypatch, orchestrator):
     from app.main import create_app
     from fastapi.testclient import TestClient
 
-    monkeypatch.setattr(search_module, "create_orchestrator", lambda: orchestrator)
+    monkeypatch.setattr(search_module, "create_orchestrator", lambda sensitive=False: orchestrator)
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
     return TestClient(app)

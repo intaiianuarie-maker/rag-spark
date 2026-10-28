@@ -21,25 +21,44 @@ Deterministic and hermetic (fake embeddings/rerank; no services, weights, keys).
 
 from __future__ import annotations
 
+import importlib.util
 import json
+import sys
+from pathlib import Path
 
 import pytest
 from answer.verification import ExtractiveGrounder
-from graph_paired_eval import (
-    DATASET_ORIGIN_LABELLED,
-    DATASET_ORIGIN_SYNTHETIC,
-    DEFAULT_K,
-    RUNTIME_MODE_FAKE,
-    DatasetValidationError,
-    build_graph_retriever,
-    evidence_recall_at_k,
-    graph_retriever_evidence_recall,
-    keyword_baseline_evidence_recall,
-    load_labelled_dataset,
-    oracle_gold_answer_availability,
-    run_paired_eval,
-    synthetic_multihop_dataset,
+
+# T-I05: two modules are named ``graph_paired_eval`` — this test's fixture helper
+# (``tests/fixtures/graph_paired_eval.py``) and the CLI driver of the same name
+# (``evals/graph_paired_eval.py``). A bare top-level import resolves to whichever
+# copy comes first on sys.path, and under the full-suite run that was the driver,
+# which does not export these symbols — breaking collection for the whole suite.
+#
+# The helper is therefore loaded from its real path under a private alias, so the
+# test is immune to sys.path ordering and to any other module mutating it.
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[1] / "fixtures" / "graph_paired_eval.py"
 )
+_spec = importlib.util.spec_from_file_location("_g5_fixture_graph_paired_eval", _FIXTURE_PATH)
+assert _spec and _spec.loader, f"fixture helper not found at {_FIXTURE_PATH}"
+_fixture = importlib.util.module_from_spec(_spec)
+sys.modules["_g5_fixture_graph_paired_eval"] = _fixture
+_spec.loader.exec_module(_fixture)
+
+DATASET_ORIGIN_LABELLED = _fixture.DATASET_ORIGIN_LABELLED
+DATASET_ORIGIN_SYNTHETIC = _fixture.DATASET_ORIGIN_SYNTHETIC
+DEFAULT_K = _fixture.DEFAULT_K
+RUNTIME_MODE_FAKE = _fixture.RUNTIME_MODE_FAKE
+DatasetValidationError = _fixture.DatasetValidationError
+build_graph_retriever = _fixture.build_graph_retriever
+evidence_recall_at_k = _fixture.evidence_recall_at_k
+graph_retriever_evidence_recall = _fixture.graph_retriever_evidence_recall
+keyword_baseline_evidence_recall = _fixture.keyword_baseline_evidence_recall
+load_labelled_dataset = _fixture.load_labelled_dataset
+oracle_gold_answer_availability = _fixture.oracle_gold_answer_availability
+run_paired_eval = _fixture.run_paired_eval
+synthetic_multihop_dataset = _fixture.synthetic_multihop_dataset
 
 pytestmark = pytest.mark.unit
 

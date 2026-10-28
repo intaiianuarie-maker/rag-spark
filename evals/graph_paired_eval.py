@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.util
 import sys
 from pathlib import Path
 
@@ -48,13 +49,27 @@ for _p in (_REPO / "packages", _REPO / "apps" / "api", _REPO, _REPO / "tests" / 
     if str(_p) not in sys.path:
         sys.path.insert(0, str(_p))
 
-from graph_paired_eval import (  # noqa: E402 - must follow sys.path insert above
-    DEFAULT_K,
-    DatasetValidationError,
-    load_labelled_dataset,
-    run_paired_eval,
-    synthetic_multihop_dataset,
-)
+# T-I05: this driver and the fixture helper it consumes share the module name
+# ``graph_paired_eval``. A bare ``from graph_paired_eval import ...`` therefore
+# resolves to WHICHEVER copy sits first on sys.path — under pytest that was this
+# very file, so the import became self-referential ("partially initialized
+# module ... DEFAULT_K") and broke collection of the whole unit suite.
+#
+# The helper is loaded from its real path under a private alias instead, so this
+# driver's behaviour no longer depends on sys.path ordering. sys.path is still
+# prepared above for the helper's own dependencies.
+_FIXTURE_PATH = _REPO / "tests" / "fixtures" / "graph_paired_eval.py"
+_spec = importlib.util.spec_from_file_location("_g5_fixture_graph_paired_eval", _FIXTURE_PATH)
+assert _spec and _spec.loader, f"fixture helper not found at {_FIXTURE_PATH}"
+_fixture = importlib.util.module_from_spec(_spec)
+sys.modules["_g5_fixture_graph_paired_eval"] = _fixture
+_spec.loader.exec_module(_fixture)
+
+DEFAULT_K = _fixture.DEFAULT_K
+DatasetValidationError = _fixture.DatasetValidationError
+load_labelled_dataset = _fixture.load_labelled_dataset
+run_paired_eval = _fixture.run_paired_eval
+synthetic_multihop_dataset = _fixture.synthetic_multihop_dataset
 
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:

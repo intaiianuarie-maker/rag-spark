@@ -55,8 +55,9 @@ OBJECT_STORE_ENDPOINT = apply_if_reachable()
 #   restarts the dev container and briefly 502s the web proxy, so the harness
 #   disables bytecode writes for the whole test run.
 sys.dont_write_bytecode = True
-if "TMPDIR" not in os.environ and Path("/root/.tmp").is_dir():
-    os.environ["TMPDIR"] = "/root/.tmp"
+_LOCAL_TMP = Path.home() / ".tmp"
+if "TMPDIR" not in os.environ and _LOCAL_TMP.is_dir():
+    os.environ["TMPDIR"] = str(_LOCAL_TMP)
     tempfile.tempdir = None
 
 # Same defaults as tests/unit/test_health.py so the app never touches real

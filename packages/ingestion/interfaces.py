@@ -105,3 +105,99 @@ class DocumentParser(ABC):
         them, and tag ``ParsedDocument.language`` for RO/PT/EN retrieval.
         """
         raise NotImplementedError
+
+
+class PageClassification(StrEnum):
+    """Classification of a document page for routing (native vs OCR)."""
+
+    NATIVE_TEXT = "native_text"
+    OCR_REQUIRED = "ocr_required"
+    BLANK = "blank"
+    UNCERTAIN = "uncertain"
+
+
+class OcrWord(BaseModel):
+    """A single recognized word with bounding box and confidence score."""
+
+    text: str
+    confidence: float
+    bbox: BBox
+    line_num: int
+    block_num: int
+    par_num: int = 0
+    word_num: int = 0
+
+
+class OcrPageRequest(BaseModel):
+    """Request for performing OCR on a single rendered page."""
+
+    page_number: int
+    dpi: int = 300
+    languages: str = "ron+eng+por"
+    psm: int = 3
+    timeout_seconds: float = 60.0
+
+
+class OcrPageResult(BaseModel):
+    """OCR output for a single page, containing extracted words and elements."""
+
+    page_number: int
+    text: str
+    words: list[OcrWord] = Field(default_factory=list)
+    mean_confidence: float = 0.0
+    width_pts: float
+    height_pts: float
+    language: str | None = None
+    elements: list[DocumentElement] = Field(default_factory=list)
+    extraction_method: str = "tesseract"
+    engine_version: str | None = None
+
+
+class ExtractionReport(BaseModel):
+    """Structured extraction report recording native and OCR coverage."""
+
+    native_pages: list[int] = Field(default_factory=list)
+    ocr_pages: list[int] = Field(default_factory=list)
+    blank_pages: list[int] = Field(default_factory=list)
+    uncertain_pages: list[int] = Field(default_factory=list)
+    failed_pages: list[int] = Field(default_factory=list)
+    languages: list[str] = Field(default_factory=list)
+    engine: str = "tesseract"
+    engine_version: str | None = None
+    profile_hash: str | None = None
+    total_pages: int = 0
+    elapsed_seconds: float = 0.0
+
+    @property
+    def has_ocr(self) -> bool:
+        return bool(self.ocr_pages)
+
+    @property
+    def fully_lost(self) -> bool:
+        return (
+            bool(self.total_pages)
+            and not self.native_pages
+            and not self.ocr_pages
+            and bool(self.failed_pages)
+        )
+
+    @property
+    def partially_lost(self) -> bool:
+        return bool(self.failed_pages or self.uncertain_pages) and bool(
+            self.native_pages or self.ocr_pages
+        )
+
+    def as_metadata(self) -> dict[str, Any]:
+        return {
+            "native_pages": self.native_pages,
+            "ocr_pages": self.ocr_pages,
+            "blank_pages": self.blank_pages,
+            "uncertain_pages": self.uncertain_pages,
+            "failed_pages": self.failed_pages,
+            "languages": self.languages,
+            "engine": self.engine,
+            "engine_version": self.engine_version,
+            "profile_hash": self.profile_hash,
+            "total_pages": self.total_pages,
+            "elapsed_seconds": round(self.elapsed_seconds, 3),
+        }

@@ -9,11 +9,12 @@ section, span).
 from __future__ import annotations
 
 from enum import StrEnum
+from typing import Any
 
 from core.errors import (
     AnswerStatus as AnswerStatus,  # re-export: single shared definition (T-V1-025)
 )
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ConfidenceLevel(StrEnum):
@@ -83,3 +84,75 @@ class Answer(BaseModel):
     trace_id: str | None = None
     claims: list[Claim] = Field(default_factory=list)
     citations: list[Citation] = Field(default_factory=list)
+    #: Stage 11 deterministic citation integrity outcomes (T-OR-12).
+    citation_integrity: Any | None = None
+    #: Stage 12 Gemma semantic verification report (T-OR-12).
+    semantic_verification: Any | None = None
+    #: Final publication gate evaluation combining Stage 11 and Stage 12 (T-OR-12).
+    publication_gate: Any | None = None
+    #: Publication gate status: "verified", "needs_review", "abstain", "rejected", or None.
+    publication_status: str | None = None
+    #: Verifier model identifier that evaluated semantic claims
+    #: (e.g. google/gemma-4-26b-a4b-it:free).
+    verifier_model: str | None = None
+    #: Per-call, workspace-scoped diagnostics. No source text or prompt content.
+    debug_trace: dict[str, Any] | None = None
+
+
+class DocumentStatus(StrEnum):
+    """Lifecycle state of the document version a canonical chunk belongs to.
+
+    * ``ACTIVE`` — the current, live version; the chunk is citable.
+    * ``DELETED`` — the document was tombstoned (``documents.deleted_at`` set);
+      the chunk must never be cited even if a row still exists.
+    * ``SUPERSEDED`` — the document version was retired
+      (``document_versions.superseded_at`` set); a newer version is live and this
+      generation must never be cited.
+
+    Carried on :class:`CanonicalChunk` so Stage 11 can emit a *typed* rejection
+    reason (``DELETED_DOCUMENT`` / ``SUPERSEDED_VERSION``) instead of collapsing
+    both into a generic miss the way the existing ``ChunkLookup`` (which filters
+    deleted/superseded to ``None``) does.
+    """
+
+    ACTIVE = "active"
+    DELETED = "deleted"
+    SUPERSEDED = "superseded"
+
+
+class CanonicalChunk(BaseModel):
+    """Authoritative, store-resolved chunk record (the evidence citations are checked against).
+
+    Stage 11's deterministic integrity validator compares each candidate citation
+    against this canonical record rather than against whatever text a retriever
+    happened to carry (summaries, payload echoes, synthesized graph descriptions).
+    Unlike :class:`Citation`, it carries the document ``status`` (so a deleted or
+    superseded source gets a typed rejection reason) and the chunk ``metadata``
+    disclosure (``chunk_disclosure`` / ``parse_lost_regions`` / ``extraction_report``)
+    so OCR and parsing limitations are propagated to affected citations.
+
+    Additive, backward-compatible: existing call sites and the ``ChunkLookup``
+    protocol are unchanged; :class:`~answer.citation_integrity` simply builds
+    these records from a ``CanonicalChunk`` mapping or from ``ChunkLookup`` results.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    chunk_id: str
+    workspace_id: str | None = None
+    document_id: str | None = None
+    document_version_id: str | None = None
+    filename: str | None = None
+    #: Canonical provenance the citation asserts; ``None`` means "not asserted by
+    #: the chunk's metadata", which is *not* itself a fabrication.
+    page: int | None = None
+    section: str | None = None
+    #: Original, authoritative passage text (never a summary/payload echo).
+    content: str | None = None
+    status: DocumentStatus = DocumentStatus.ACTIVE
+    #: Disclosure carried by ingestion (see
+    #: :func:`apps.worker.jobs.ingest_pipeline.parse_disclosure`): the nested
+    #: ``chunk_disclosure`` dict and/or the top-level ``parse_lost_regions`` /
+    #: ``extraction_report`` / ``parse_partial`` keys. Read by Stage 11 to flag
+    #: unreadable source regions.
+    metadata: dict[str, Any] = Field(default_factory=dict)

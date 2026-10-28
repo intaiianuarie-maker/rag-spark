@@ -26,6 +26,7 @@ import os
 import sys
 import uuid
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -365,7 +366,7 @@ class _FactoryRecorder:
         self.models: list[str] = []
         self.engine = _FakeEngine()
 
-    def __call__(self, *, model: str) -> _FakeEngine:
+    def __call__(self, *, model: str, **kwargs: Any) -> _FakeEngine:
         self.models.append(model)
         self.engine.model = model
         return self.engine

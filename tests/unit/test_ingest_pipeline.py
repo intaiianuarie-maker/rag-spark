@@ -116,7 +116,11 @@ async def test_worker_loop_exits_when_stopped() -> None:
     await run_worker(stop)  # returns immediately; no Redis needed
 
 
-def test_queue_keys_are_namespaced_per_env() -> None:
+def test_queue_keys_are_namespaced_per_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Hermetic namespace. Integration modules export INGEST_QUEUE_PREFIX at
+    # import time (e.g. "t071-dedup-:"), and a full ``-m unit`` collection
+    # imports them all — the ambient value must not leak into this assertion.
+    monkeypatch.setenv("INGEST_QUEUE_PREFIX", "unit-test:")
     from ingestion.queue import delayed_key, queue_key
 
     assert queue_key() != "ingest:queue"
@@ -156,7 +160,9 @@ async def test_worker_survives_process_one_failure(monkeypatch: pytest.MonkeyPat
     assert calls["n"] >= 2  # loop consumed the next iteration after the failure
 
 
-async def test_graph_indexing_hook_executed_when_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_graph_indexing_hook_executed_when_enabled(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """RP-04 / QF-04: When GRAPH_MODE=rule, graph extraction and persistence hooks run."""
     db_file = tmp_path / "test_graph.db"
     monkeypatch.setenv("GRAPH_MODE", "rule")

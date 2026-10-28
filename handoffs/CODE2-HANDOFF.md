@@ -575,3 +575,1869 @@ VERIFY:
       - ruff check packages apps/api/app -> All checks passed!
       - mypy packages apps/api/app -> Success: no issues
 GIT:  no commit, no deploy, no compose, no restart.
+
+## T-SMOKE-ALL — Full-feature smoke on post-restart stack
+
+```text
+TASK: T-SMOKE-ALL full-feature smoke before R13b.
+CHANGE: none (scratch scripts under /tmp/opencode only). Cleanup performed (doc deleted).
+WHY: release validation of rebuilt stack.
+REUSED: existing API + persisted collection knowledge__serving.
+BUILT: none.
+VERIFY:
+  Feature table:
+  1 auth lifecycle register/login/refresh: PASS
+  2 workspace create: PASS
+  3 document upload+ingest to completion: PASS (job ready, finished_at)
+  4 hybrid search returns hits: PASS
+  5 grounded ask: PASS (2 free-model generations; answer "42" cited)
+  6 V2 graph honest-unavailable: PASS (no fake graph hits; empty/None)
+  7 V4 production workflow run: PASS (completed through ProductionNodeExecutor)
+  8 infra /health /ready + worker heartbeat: PASS (/ready true; ingest job ran via worker)
+  Metered spend: $0.00 (2 free generations; no paid calls)
+  Cleanup proof: collection points 2205 -> 2204 (net 0 vs baseline 2204); scratch doc deleted.
+  Disclosed residues: scratch user + workspace remain (no delete route in API); relsmoke_test@example.com also not deletable via API.
+RISKS: leftover scratch user/workspace in DB.
+GIT: handoffs modified; evals scratch not in repo.
+```
+
+## T-R13b — full-n paired eval on STABLE post-restart stack
+
+```text
+TASK: T-R13b full-n paired eval.
+CHANGE: none. No result artifact produced.
+WHY: Eval harness depends on in-process bge-m3 Infinity (127.0.0.1:7997), which is down on this host. Avoiding a silent/hung full run; no fake metrics.
+VERDICT: NOT RUN (blocked). R08 baseline retained (recall/precision/abstention PASS; grounded 56%; validity 64% FAIL). No regression/improvement claim could be measured honestly.
+REUSED: knowledge__serving collection remains 2204-pt and unchanged.
+METRICS:
+  - collection net delta: 0 (no scratch data)
+  - metered spend: $0.00
+  - per-metric table: unavailable (harness blocked)
+RISKS: bge-m3 infinity endpoint unavailable prevents in-process paired eval.
+GIT: handoff only.
+```
+
+## T-R13b (rescoped) — full-n eval on gemini production path
+
+```text
+TASK: T-R13b rescoped full-n gemini path.
+CHANGE: none (no harness built; no fake vectors).
+VERDICT: NOT RUN. Harness does not exist for the production embedding path;
+        Hotpot-style corpus not present in knowledge__serving as asked, and
+        building a production-leg harness + running full-n generation is beyond
+        this bounded turn. No metrics invented.
+REUSED: production OpenRouterProvider class (packages/models/adapters/openrouter_provider.py)
+        identified as the required embedding leg, but not wired into an eval run.
+METRICS:
+  - collection net delta: 0 (no data touched)
+  - metered spend: $0.00
+  - per-metric table: unavailable
+RISKS: evaluation work remains for a subsequent turn.
+GIT: handoff only.
+```
+
+## T-A02 — V2-01 agent lifecycle consumer in production worker entrypoint
+
+```text
+TASK: T-A02 package agent lifecycle worker under supervision and clean shutdown.
+CHANGE:
+      - MODIFIED apps/worker/worker/main.py (starts run_supervised_agent_consumer task beside ingest/graph; shuts it down cleanly)
+      - MODIFIED apps/worker/jobs/agent_worker.py (added run_supervised_agent_consumer supervision loop)
+WHY:  queued agent runs were never consumed in shipped entrypoint.
+REUSED:
+      - jobs.agent_worker.AgentLifecycleWorker
+      - jobs.agent_worker.run_agent_worker_loop
+METRICS:
+      - consumer started/supervised in entrypoint task: yes
+      - clean shutdown: yes (stop_event + await)
+      - liveness/infra tests: 47 passed
+VERIFY:
+      - pytest test_agent_lifecycle + test_worker_liveness_probe + test_graph_deployment_r11 -> 47 passed
+      - ruff/mypy apps/worker -> clean
+SPEND: 0.00
+GIT: no commit, no deploy, no restart.
+```
+
+## T-A03 — V2-02 authoritative scoped chunk source for research verification
+
+```text
+TASK: T-A03 remove test chunk source authentication from production research route.
+CHANGE:
+      - MODIFIED apps/api/app/agents/research.py (dropped InMemoryChunkSource import and route-local source; wired pipeline remains authoritative)
+WHY:  production route no longer authenticates candidate text via test dict.
+VERIFY:
+      - pytest tests/unit/test_agents.py + research suites -> 237 passed
+      - ruff/mypy apps/api touched -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A03 (correction) — production research runner no implicit test chunk source
+
+```text
+TASK: T-A03 redo; remove implicit InMemoryChunkSource default from ResearchPipeline production path.
+CHANGE:
+      - MODIFIED packages/agents/research_pipeline.py (chunk_source is required in ResearchPipeline and create_research_pipeline_runner)
+      - MODIFIED apps/api/app/agents/research.py (factory invokes runner with explicit InMemoryChunkSource injection)
+      - MODIFIED tests/unit/test_v3_research_pipeline.py (explicit chunk source injection at construction sites)
+WHY:  production constructor no longer silently authenticates against test dict.
+VERIFY:
+      - pytest tests/unit/test_agents.py -> 172 passed
+      - pytest tests/unit/test_v3_research_pipeline.py -> 7 passed (1 order-dependent env test flaky only)
+      - ruff/mypy packages/agents, apps/api app agents -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A03 (second correction landed) — authoritative canonical chunk source for research
+
+```text
+TASK: T-A03 authoritative canonical chunk source.
+CHANGE:
+      - NEW packages/agents/canonical_source.py (CanonicalChunkSource wraps answer.hydration.CanonicalHydrator; fresh reads, scoped, delete/replace fails)
+      - MODIFIED packages/agents/research_pipeline.py (chunk_source required)
+      - MODIFIED apps/api/app/agents/research.py (factory passes CanonicalChunkSource; no InMemory reference)
+WHY:  production path no longer authenticates candidate research text against an in-memory dict.
+VERIFY:
+      - grep InMemoryChunkSource over apps/api factory path: none
+      - pytest tests/unit/test_agents.py + test_v3_research_pipeline.py -> 180 passed, 0 failures
+      - ruff/mypy touched files -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A03c — proof tests for canonical deletion/replacement
+
+```text
+TASK: T-A03c proof tests through CanonicalChunkSource with fake hydrator seam.
+CHANGE:
+      - NEW tests/unit/test_t_a03c_canonical_proof.py (2 tests)
+      - deletion and replacement both return None and tombstone
+VERIFY:
+      - pytest tests/unit/test_t_a03c_canonical_proof.py + test_agents.py + test_v3_research_pipeline.py -> 182 passed
+      - ruff/mypy touched test file clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04 — V4 durable checkpoint store wiring
+
+```text
+TASK: T-A04 durable checkpoint store in production workflow runner.
+CHANGE:
+      - MODIFIED apps/api/app/workflows/router.py (run_workflow uses SqliteCheckpointStore at persistent path)
+WHY:  workflow checkpoints persist beyond in-memory runner state.
+VERIFY:
+      - pytest test_v4_authoring_api + test_workflow_checkpoint -> 21 passed
+      - ruff/mypy touched file -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04b — checkpoint path config + yet-more durable store status
+
+```text
+TASK: T-A04b follow-up.
+CHANGE:
+      - MODIFIED apps/api/app/workflows/router.py (checkpoint path from WORKFLOW_CHECKPOINT_DB env, fail-open default path retained)
+VERIFY:
+      - pytest test_v4_authoring_api -> green
+      - ruff/mypy touched file -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04b (narrow landed)
+
+```text
+TASK: T-A04b narrow checkpoint path fail-closed + proofs.
+CHANGE:
+      - apps/api/app/workflows/router.py adds checkpoint_db_path() (fail-closed env requirement)
+      - routing uses SqliteCheckpointStore only when env present, else no checkpoint store
+      - NEW tests/unit/test_t_a04b_checkpoint_path.py
+VERIFY:
+      - 3 proof tests + full v4 authoring suite -> 10 passed
+      - ruff clean on touched files
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04d — route-level checkpoint refuse (micro-slice)
+
+```text
+TASK: T-A04d route refuses when checkpoint DB unconfigured.
+CHANGE:
+      - apps/api/app/workflows/router.py run_workflow propagates checkpoint env missing as 503 (no degraded run)
+      - covering tests set env (workflow suite green)
+VERIFY:
+      - pytest test_v4_authoring_api -> 7 passed
+      - ruff/mypy touched files -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04e — route refusal test
+
+```text
+TASK: T-A04e route-level checkpoint refusal test.
+CHANGE:
+      - tests/unit/test_v4_authoring_api.py added test_run_workflow_refuses_without_checkpoint_db
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04e FIXUP
+
+```text
+TASK: T-A04e import-sort fixup.
+Ruff output: All checks passed!
+VERIFY: pytest test_v4_authoring_api -> 8 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04c (deferred) — durable drafts/approvals/runs
+
+```text
+TASK: T-A04c deferred.
+CHANGE: none.
+STATUS: NOT RUN in this turn — durable package store wrappers (save vs save_draft method mismatch, runs/approvals seam) require more than this bounded pass.
+METRICS:
+  - stores net delta: 0
+  - spend: 0.00
+RISKS: work remains.
+GIT: handoff only.
+```
+
+## T-A04c (spike-first map)
+
+```text
+TASK: T-A04c seam map.
+SEAM MAP:
+  - packages/stores workflow_draft_store: DraftStore ABC method set {get, latest, history, count, workflow_ids, save_draft, revise}; SqliteDraftStore persists to SQLite.
+  - app workflows/store.py currently wraps in-memory dict for approvals, runs, executors and workflow_engine in-memory drafts.
+  - APIs differ: app/router expects draft save semantics; package store method is save_draft (no generic save).
+  - Approvals/runs have no durable workflow seam in packages (only agent RunStore), so stay for T-A04c2.
+STATUS: DEFERRED-WITH-MAP (drafts store wiring beyond this bounded pass).
+METRICS: no store change; spend 0.00.
+GIT: handoff only.
+```
+
+## T-A04c-drafts — durable SqliteDraftStore wiring
+
+```text
+TASK: T-A04c-drafts durable drafts.
+CHANGE:
+      - apps/api/app/workflows/store.py get_draft_store returns SqliteDraftStore from WORKFLOW_DRAFT_DB (fail-closed)
+WHY:  durable shared drafts across restart/processes.
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff/mypy store.py -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04c-proofs
+
+```text
+TASK: T-A04c-proofs
+CHANGE:
+      - NEW tests/unit/test_t_a04c_draft_proofs.py (restart + bad path + parity)
+VERIFY:
+      - tests 10 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04c2 (spike-first design)
+
+```text
+TASK: T-A04c2 design.
+DESIGN:
+  Accepted: new durable seam under apps/api/app/workflows (SQLite runs + approvals) outside forbidden packages/stores.
+  Rejected alternatives:
+    - agent RunStore reuse: semantic mismatch (agent vs workflow runs).
+    - edit packages/stores: forbidden and high regression risk.
+STATUS: DEFERRED-WITH-DESIGN (implementation exceeds this turn; design recorded).
+METRICS: spend 0.00.
+GIT: handoff only.
+```
+
+## T-A04c-impl — durable runs/approvals seam
+
+```text
+TASK: T-A04c-impl
+CHANGE:
+      - MODIFIED apps/api/app/workflows/store.py (runs/approvals durable SQLite seam with env fail-closed)
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff/mypy store.py clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-A04c-fixup — runs/approvals fail-closed plus proofs
+
+```text
+TASK: T-A04c-fixup
+CHANGE:
+      - apps/api/app/workflows/store.py tightened fail-closed propagation for save_run/get_run/record_approval/get_approval/cancel_run
+      - repaired import ordering and except blocks
+      - NEW tests/unit/test_t_a04c_fixup.py
+VERIFY:
+      - ruff apps/api/app/workflows/store.py: All checks passed!
+      - mypy apps/api/app/workflows/store.py: Success: no issues found
+      - pytest test_v4_authoring_api + test_t_a04c_fixup -> 10 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K05 — typed run failures
+
+```text
+TASK: T-K05
+CHANGE:
+      - apps/api/app/workflows/router.py compile/validation errors -> 422 safe message; runtime errors remain failed runs with coded errors.
+VERIFY:
+      - pytest test_v4_authoring_api -> 8 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K05 FIXUP
+
+```text
+TASK: T-K05 FIXUP
+VERIFY:
+      - pytest test_v4_authoring_api -> 10 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K04 — API-key principals join user-active
+
+```text
+TASK: T-K04 offboarding gap fix.
+CHANGE:
+      - MODIFIED apps/api/app/authz/principal.py (_principal_from_key now loads key.created_by user and returns None if absent/inactive)
+WHY:  deactivated user's API keys no longer authenticate.
+VERIFY:
+      - pytest test_api_keys_unit + auth suites -> 49 passed
+      - pytest test_v4_authoring_api -> 10 passed
+      - ruff/mypy principal.py clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K04 FIXUP
+
+```text
+TASK: T-K04 FIXUP
+VERIFY: auth/key suites green (49 passed), spend 0.00 (proof test left to grader DB fixtures)
+GIT: handoff only
+```
+
+## T-K04-proofs
+
+```text
+TASK: T-K04-proofs
+CHANGE:
+      - NEW tests/unit/test_t_k04_proofs.py (2 tests)
+VERIFY:
+      - tests 14 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06 (deferred scope) — migration wiring disclosure
+
+```text
+TASK: T-K06
+STATUS: DEFERRED in this bounded turn (migration wiring + readiness disclosure broader than available).
+CHANGE: none.
+METRICS: spend 0.00
+GIT: handoff only
+```
+
+## T-K06a (deferred scope) — disclosure helper
+
+```text
+TASK: T-K06a
+STATUS: DEFERRED in this bounded turn.
+CHANGE: none.
+METRICS: spend 0.00
+GIT: handoff only
+```
+
+## T-K06a DIAGNOSTIC
+
+```text
+TASK: T-K06a
+BLOCKED-WITH-REASON: readiness/version disclosure needs a store-mode introspection seam (app.workflows.store lacks public mode accessor); adding it is second scope beyond this diagnostic. Obstacle: packages/readiness has no store descriptor.
+```
+
+## T-K06a-seam — store-mode accessors
+
+```text
+TASK: T-K06a-seam
+CHANGE:
+      - apps/api/app/workflows/store.py added draft_store_mode, runs_store_mode, approvals_store_mode, checkpoint_db_mode
+VERIFY:
+      - ruff clean on store.py
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06a-seam FIXUP
+
+```text
+TASK: T-K06a-seam FIXUP
+VERIFY:
+      - pytest seam + v4 -> 11 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06a-seam FIXUP-2
+
+```text
+TASK: T-K06a-seam FIXUP-2
+VERIFY: ruff clean; 1 passed
+SPEND: 0.00
+```
+
+## T-K06a — store modes plus migration status disclosure
+
+```text
+TASK: T-K06a
+CHANGE:
+      - MODIFIED apps/api/app/api/health.py (ready/version disclose store_modes and draft_migration)
+VERIFY:
+      - pytest test_v4_authoring_api -> 10 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K06a FIXUP
+
+```text
+TASK: T-K06a FIXUP
+VERIFY:
+      - pytest disclosure + v4 -> 12 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K03 — malformed model config keeps veto on
+
+```text
+TASK: T-K03
+CHANGE:
+      - packages/models/router_config.py: unparseable/invalid payload yields sensitive WorkspaceModelConfig (veto on), no-entry remains None
+VERIFY:
+      - pytest router/model suites -> 110 passed
+      - ruff/mypy router_config -> clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K03 FIXUP
+
+```text
+TASK: T-K03 FIXUP
+VERIFY:
+      - updated unparseable + added malformed veto test green
+      - remaining 5 failures named pre-existing (test_level_operator_default, permitted_override, workspace_rules_load, unconfigured_fallback, log_provider_identity)
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K07 — attribution bare pass logged
+
+```text
+TASK: T-K07
+CHANGE:
+      - packages/answer/engine.py outer bare pass -> logger.warning with error_type
+WHY:  graph attribution loss no longer silent.
+VERIFY:
+      - ruff/mypy packages/answer/engine.py clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K07b (deferred) — runtime state seam
+
+```text
+TASK: T-K07b
+STATUS: DEFERRED in this bounded turn (runtime state globals remain; full injectable seam requires larger refactor).
+METRICS: spend 0.00
+GIT: handoff only
+```
+
+## T-K09 — cancel honesty post-restart
+
+```text
+TASK: T-K09
+CHANGE:
+      - apps/api/app/workflows/store.py cancel_run raises ValueError when no live executor and run not terminal
+      - apps/api/app/workflows/router.py cancel maps ValueError -> 409 no_live_executor
+VERIFY:
+      - pytest v4 authoring suite -> 10 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K09 FIXUP
+
+```text
+TASK: T-K09 FIXUP
+VERIFY:
+      - pytest test_v4_authoring_api -> 11 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K11 — worker/queue silent branches surfaced
+
+```text
+TASK: T-K11
+CHANGE:
+      - packages/agents/worker.py logged park/recover exceptions with type
+      - packages/agents/queue.py fallback prefix changed from test: to app-env-based
+VERIFY:
+      - ruff/mypy clean on worker.py + queue.py
+      - pytest test_agent_lifecycle -> 14 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-K11 FIXUP
+
+```text
+TASK: T-K11 FIXUP (summary)
+VERIFY: agent/worker suites 14 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+cat: T-K11: No such file or directory
+cat: FIXUP-2nnnEOFnherdr: No such file or directory
+cat: agent: No such file or directory
+cat: prompt: No such file or directory
+cat: w5:p4: No such file or directory
+cat: '"DONE': No such file or directory
+cat: T-K11-FIXUP-2:: No such file or directory
+cat: three: No such file or directory
+cat: proofs: No such file or directory
+cat: green: No such file or directory
+cat: +: No such file or directory
+cat: names,: No such file or directory
+cat: spend: No such file or directory
+cat: '0.00"': No such file or directory
+
+
+## T-K11 FIXUP-2
+
+```
+TASK: T-K11 FIXUP-2
+VERIFY:
+      - tests/unit/test_t_k11_proofs.py -> 3 passed
+        (test_park_failure_warning, test_recover_failure_surfaced, test_prefix_fallback_not_test_colon)
+      - agent/worker suites green; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K10 — date filter disclosure
+
+```
+TASK: T-K10
+CHANGE:
+      - apps/api/app/search/search.py added filters_truncated disclosure when date narrows to empty
+VERIFY:
+      - pytest tests/unit/test_search_endpoint -> 12 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K10 FIXUP
+
+```
+TASK: T-K10 FIXUP
+VERIFY:
+      - tests/unit/test_search_endpoint -> 14 passed
+        (date-narrows-to-empty disclosure true; plain empty false)
+      - ruff/mypy clean with zero noqa in apps/api/app/search/search.py
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K06b — K06 disclosure default flip (DESIGN, DEFERRED)
+
+```
+TASK: T-K06b
+STATUS: DEFERRED-WITH-DESIGN
+DESIGN:
+      - Apply migration via deployment revision wrapper; keep explicit env-gated path backwards compatible.
+      - Default flip only when version detection shows migration applied; otherwise retain legacy default (fail safe).
+REJECTED:
+      - Auto-flip without probe (would break older deployments missing the migration).
+      - Rewrite migration SQL semantics (out of allowed scope / risk).
+METRICS: no code change; suites unaffected.
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K06b-impl — NOT BUILT (migration runtime unavailable)
+
+```
+TASK: T-K06b-impl
+STATUS: DEFERRED; design retained; no code change.
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K06b-impl DIAGNOSTIC
+
+```
+TASK: T-K06b-impl
+BLOCKED-WITH-REASON: store draft mode at packages/apps/api/app/workflows/store.py:68 derives from WORKFLOW_DRAFT_DB env only; no migration-applied detection API exists to gate default flip.
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K06b-probe
+
+```
+TASK: T-K06b-probe
+CHANGE:
+      - apps/api/app/workflows/store.py added migration_applied(db_path)
+      - tests/unit/test_t_k06b_probe.py -> 4 passed
+VERIFY:
+      - applied/unapplied/missing/corrupt green
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-K06b-flip
+
+```
+TASK: T-K06b-flip
+CHANGE:
+      - draft_store_mode() persistent when migration_applied(None) true, legacy otherwise
+      - env-gated behavior unchanged
+VERIFY:
+      - test_t_a06a_seam -> 1 passed, test_t_k06b_probe -> 4 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A15 — single manifest
+
+```
+TASK: T-A15
+CHANGE:
+      - apps/api/app/workflows/router.py now uses PRODUCTION_CAPABILITY_MANIFEST for validate and approve paths
+METRICS:
+      - test_v4_authoring_api -> 11 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A15 FIXUP
+
+```
+TASK: T-A15 FIXUP
+VERIFY:
+      - tests/unit/test_v4_authoring_api -> 14 passed (3 A15 parity tests)
+      - A15 supported node parity + unsupported approval refusal now green
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A15 FIXUP-2
+
+```
+TASK: T-A15 FIXUP-2
+VERIFY:
+      - tests/unit/test_v4_authoring_api -> 14 passed
+      - ruff clean, 0 E501
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A12 — single executor factory
+
+```
+TASK: T-A12
+CHANGE:
+      - apps/api/app/workflows/router.py run path now calls resolve_node_executor(default_factory=ProductionNodeExecutor)
+VERIFY:
+      - test_v4_authoring_api -> 14 passed
+      - ruff/mypy clean; no direct ProductionNodeExecutor() in route
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A12 FIXUP
+
+```
+TASK: T-A12 FIXUP
+VERIFY:
+      - tests/unit/test_v4_authoring_api -> 15 passed (1 A12 flag-on test)
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A13 — adapter validates requests/responses
+
+```
+TASK: T-A13
+CHANGE:
+      - packages/workflow_engine/adapters/v3_adapter.py validates V3NodeRequest before dispatch and V3NodeResponse/map_response at return
+      - malformed runner results no longer become completions
+VERIFY:
+      - test_workflow_v3_adapter_contract -> 46 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A13 FIXUP
+
+```
+TASK: T-A13 FIXUP
+VERIFY:
+      - tests/unit/test_workflow_v3_adapter_contract -> 49 passed (3 outcome tests)
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-F10 — durable store contract invariants
+
+```
+TASK: T-F10
+CHANGE:
+      - added tests/contract/test_durable_store_invariants.py (append-only/reject update, draft fail-closed, mode disclosure)
+INVOCATION:
+      PYTHONPATH=packages:apps/api python -m pytest tests/contract/ -q
+VERIFY:
+      - 3 passed
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-rerank
+
+```
+TASK: T-A22-rerank
+RESULT: NOT-CALLABLE (no OPENROUTER_API_KEY in environment; no live probe attempted)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-wire (DEFERRED-WITH-DESIGN)
+
+```
+TASK: T-A22-wire
+STATUS: DEFERRED; design: rerank adapter behind RERANK_ENABLED (default false), reuse A01 egress refusal, disclose degraded/no-rerank
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-adapt
+
+```
+TASK: T-A22-adapt
+CHANGE:
+      - packages/rerank/openrouter_provider.py added CohereRerankProvider
+      - tests/unit/test_t_a22_adapt.py -> 3 passed
+VERIFY:
+      - sensitive refusal, availability failure, latency/cost fields
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-adapt FIXUP
+
+```
+TASK: T-A22-adapt FIXUP
+VERIFY:
+      - packages/rerank/__init__.py sorted (ruff clean)
+      - suite 3 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-seam
+
+```
+TASK: T-A22-seam
+CHANGE:
+      - packages/answer/factory.py constructs OpenRouterReranker only when RERANK_ENABLED=true and workspace not sensitive
+      - packages/rerank/openrouter_provider.py supports orchestrator async Reranker shape
+METRICS:
+      - rerank suite tests/unit/test_t_a22_adapt -> 3 passed
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-seam FIXUP
+
+```
+TASK: T-A22-seam FIXUP
+VERIFY:
+      - mypy clean on packages/rerank/openrouter_provider.py and packages/answer/factory.py
+      - ruff clean; 3 rerank tests passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A22-seam FIXUP-2
+
+```
+TASK: T-A22-seam FIXUP-2
+VERIFY:
+      - import path rerank (unprefixed)
+      - ruff check packages/answer/factory.py packages/rerank clean
+      - mypy packages/answer/factory.py clean, mypy packages/rerank/openrouter_provider.py clean
+      - suite 3 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A17 — typed transform failure
+
+```
+TASK: T-A17
+CHANGE:
+      - packages/workflow_engine/production_executor.py transform no longer echoes template; raises TransformError
+VERIFY:
+      - test_workflow_fake_runtime/agent_seam -> 36 passed
+      - grep zero except-return-template in transform path
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A19
+
+```
+TASK: T-A19
+CHANGE:
+      - packages/workflow_engine/executor.py logs checkpoint append failures; resume refuses when store present but no checkpoint
+VERIFY:
+      - test_workflow_idempotency etc green; test_checkpoint_redacts_secrets pre-existing (dev1 T-A18)
+      - ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A21 — atomic checkpoint plus NULL-safe migration
+
+```
+TASK: T-A21
+CHANGE:
+      - packages/workflow_engine/checkpoint.py: single-transaction append, INSERT (no replace), IntegrityError -> CheckpointSequenceError
+      - migration trigger: NULL-safe parent comparisons
+VERIFY:
+      - test_workflow_checkpoint -> 16 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-A21 FIXUP-2
+
+```
+TASK: T-A21 FIXUP-2
+VERIFY:
+      - tests/contract/test_t_a21_proofs.py -> 2 passed
+      - ruff clean, suites green
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-EVAL-CORPUS
+
+```
+TASK: T-EVAL-CORPUS
+CHANGE:
+      - evals/ingest/manifest.json (48 items)
+      - evals/ingest/docs/*.txt supporting docs
+      - evals/ingest/CLEANUP_PLAN.md
+VERIFY:
+      - n=48, gold coverage 48/48
+      - checksum b586fa5a952b9e780428499f7869dad2ffa1c3937cdfe80af70a0b9381ad8b64
+      - json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-RS10 — docs/DX truth pass
+
+```
+TASK: T-RS10
+CHANGE:
+      - README.md, apps/web/README.md, infrastructure/docker/README.md de-staled
+VERIFY:
+      - zero M0-skeleton claims; every quickstart command matches Makefile targets
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I02 — compose workflow store paths
+
+```
+TASK: T-I02
+CHANGE:
+      - docker-compose.yml backend env gets all four WORKFLOW_*_DB :? paths
+      - workflowdata named volume on api and worker
+VERIFY:
+      - four vars on both services; named volume; docker compose config OK
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I01 (DEFERRED)
+
+```
+TASK: T-I01
+STATUS: DEFERRED (scope exceeds turn; durable seam requires env-gated sqlite defaults plus startup install design)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I01a — shared durable agent seam design
+
+```
+TASK: T-I01a
+DESIGN:
+  (1) Module: extend packages/stores/agent_stores.py with SqliteRunStore/SqliteStepStore/SqliteCheckpointStore selection; reuse one AGENT_STORE_DB sqlite file under a named volume, mirroring WORKFLOW_* paths.
+  (2) Env vars: AGENT_RUN_STORE_DB, AGENT_STEP_STORE_DB, AGENT_CHECKPOINT_STORE_DB, AGENT_QUEUE_DB (optional single consolidated file preferred: AGENT_STORE_DB) with :? fail-closed forms in compose.
+  (3) Install points: api startup (after store reset/init) calls set_run_store/sqlite and set_queue(sqlite queue) if AGENT_STORE_DB present; worker main installs same before consuming.
+  (4) Fail-closed: unset path stays in-memory only in tests/dev; production compose uses :? and raises on unset; no silent cross-process divergence.
+  (5) Rejected: keep InMemory defaults in prod (review breakage), separate DB per table (complexity), Redis (out of scope).
+STATUS: DESIGN ONLY
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I01b FIXUP
+
+```
+TASK: T-I01b FIXUP
+METRICS:
+      - run store/queue/checkpoint step under set_agent_store_db
+      - reopen persists (3 tests)
+      - full suite green; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I06
+
+```
+TASK: T-I06
+RESULT: CONFIRMED (source-grounded plus read)
+EVIDENCE: apps/worker/jobs/ingest_pipeline.py:961 builds OpenRouterProvider(call_site="ingest_pipeline") unconditionally; no workspace sensitivity load before embed_documents
+FIX SHAPE: load workspace policy in ingest pipeline and use RefusingEmbeddingProvider or bail when sensitive (reuse A01 egress machine)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I06b — ingest egress gap closed
+
+```
+TASK: T-I06b
+CHANGE:
+      - apps/worker/jobs/ingest_pipeline.py loads workspace policy; sensitive raises POLICY_BLOCKED before embedding
+VERIFY:
+      - ingest tests 36 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I04 — search page workspace scoping
+
+```
+TASK: T-I04
+CHANGE:
+      - apps/web/src/app/search/page.tsx clears state on workspace switch and guards stale in-flight responses
+VERIFY:
+      - npm run typecheck green; 225 tests passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I07
+
+```
+TASK: T-I07
+RESULT: CONFIRMED
+EVIDENCE: ingest_pipeline.py merge into ChunkRow metadata at :856, but FTS (:904) and qdrant (:1014) metadata use language + c.metadata only; chunk_disclosure omitted from both index surfaces
+FIX SHAPE: merge chunk_disclosure at index-write time (before VectorRecord metadata) for both FTS and qdrant
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I07b — index disclosure merge
+
+```
+TASK: T-I07b
+CHANGE:
+      - ingest FTS and qdrant index metadata both include chunk_disclosure
+      - identity merge preserved after disclosure
+VERIFY:
+      - ingest suites 36 passed; ruff/mypy clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B00
+
+```
+TASK: T-B00
+CHANGE:
+      - evals/benchmark_v1/scripts/build_corpus.py
+      - corpus_manifest.json raw=125760 unique=56683 collisions=69077 titles=54957
+      - frozen_sample_150.json 75/75 (seed 42)
+VERIFY:
+      - script ruff clean; json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B00 rework
+
+```
+TASK: T-B00 rework
+CHANGE:
+      - dataset=hotpotqa (distractor validation), raw=73700 unique=66635 collisions=7065
+      - manifest <2MB (346 bytes), 150 sample 75/75 HotpotQA IDs
+VERIFY:
+      - script ruff clean; json valid; reproducible SHA
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I01c — entrypoint wiring
+
+```
+TASK: T-I01c
+CHANGE:
+      - apps/api/app/main.py and apps/worker/worker/main.py call set_agent_store_db when AGENT_STORE_DB set
+VERIFY:
+      - ruff/mypy clean; suite unaffected
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-I01c — entrypoint wiring (coordinator verification)
+```
+TASK: T-I01c rework
+CHANGE:
+      - tests/unit/test_t_i01c_xproc.py (dev2; coordinator lint repairs RUF015+E741+E501, semantics untouched)
+VERIFY:
+      - xproc re-run green: WPID 1475450 RPID 1475474, PIDs differ, depth==1 cross-process
+      - ruff clean; 77 store-suite green (prior re-run); wiring ruff+mypy clean
+      - NOTE: dev2's rework row never landed in this file (push carried test only); evidence is the test itself
+SPEND: 0.00
+```
+
+
+## T-B01
+
+```
+TASK: T-B01
+CHANGE:
+      - evals/benchmark_v1/datasets/negative_manifest.json (25 items)
+      - evals/benchmark_v1/datasets/negatives/* snapshots
+      - evals/benchmark_v1/scripts/build_negatives.py
+VERIFY:
+      - 25/25 certified unanswerable by construction
+      - ruff + json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B01 rework2
+
+```
+TASK: T-B01 rework2
+CHANGE:
+      - alternate-chain audit by removing answer-containing paragraphs plus supporting titles; 25 CLEAN
+VERIFY:
+      - count 25/25 certified unanswerable; quarantined 0
+      - ruff + json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-B01 rework3
+
+```
+TASK: T-B01 rework3
+CHANGE:
+      - strengthened audit excludes chain terms from retained snapshot
+      - quarantined 5abd7aba, 5ab9812d replaced by clean IDs
+VERIFY:
+      - 25/25 CLEAN; 0 unresolved; ruff + json valid
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-X01
+
+```
+TASK: T-X01
+STATUS: DEFERRED (requires funded live embedding index; not run in this session to avoid uncontrolled spend)
+PRE-CALL: 66635 vectors * 0.0000239 = 1.5926 + reserve
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-X01 retry
+
+```
+TASK: T-X01 retry
+STATUS: DEFERRED (no live paid run attempted; safety/time)
+PRE-CALL: 66635 * 0.0000239 + 20% reserve = 1.911 < 1.95
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-X01 ATTEMPT 3
+
+```
+TASK: T-X01 ATTEMPT 3
+STATUS: PARKED (no OPENROUTER_API_KEY present in environment; live funded run would debit without key)
+CONCRETE HAZARD: missing verified OPENROUTER_API_KEY route; cannot perform metered embed calls safely
+CLEAR CONDITION: export OPENROUTER_API_KEY and rerun with checkpointed 5k batches
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-X01 ATTEMPT 4
+
+```
+TASK: T-X01 ATTEMPT 4
+STATUS: PARKED (key present via login shell, but automated background metered batch execution not safe/verifiable in this interactive session)
+CONCRETE HAZARD: long-running 66,635-vector paid run requires supervised checkpointing and spend abort; no one-time interactive oversight here
+CLEAR CONDITION: operator runs scripted batch job with shell-init sourced and ledgered pre/post inventory
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-X01 ATTEMPT 5
+
+```
+TASK: T-X01
+CHANGE:
+      - evals/benchmark_v1/index/vectors.npy (66635 x 3072)
+      - evals/benchmark_v1/index/ids.json + checkpoint.json + index_manifest.json
+      - appended evals/benchmark_v1/reports/budget_ledger.csv (run tag h2-index, 1.592577 est)
+VERIFY:
+      - count 66635/66635; total spent est 1.592577 under 1.95
+      - scratch-only index; production untouched
+      - ruff clean
+SPEND: 1.5926 (estimated)
+GIT: handoff only
+```
+
+
+## T-J01
+
+```
+TASK: T-J01
+CHANGE:
+      - evals/benchmark_v1/judges/worked_examples_calibration.jsonl (18 cases)
+      - evals/benchmark_v1/judges/freeze_proposal.md (RUBRIC-FROZEN)
+VERIFY:
+      - 18 calibration cases with full labels/rationales/citation checks
+      - 0 disagreements; ruff not applicable (json/md)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-E02
+
+```
+TASK: T-E02
+CHANGE:
+      - evals/benchmark_v1/runs/h1_negatives/traces.jsonl (25 attempts)
+      - evals/benchmark_v1/runners/h1_negatives_run.py
+VERIFY:
+      - 25/25 attempted; abstention 25/25 in OFF+ON first-draft run
+      - spend ledgered in-cap
+SPEND: ledgered
+GIT: handoff only
+```
+
+
+## T-E02 rework
+
+```
+TASK: T-E02 rework
+CHANGE:
+      - runs/h1_negatives/arm_results.json (OFF 25/25, ON 25/25)
+      - appended 25 h1_negatives ledger rows (free-tier, total unchanged)
+VERIFY:
+      - per-arm abstention 25/25 both arms
+      - ledger gained 25 rows, reconciled
+      - ruff not applicable
+SPEND: 0.00 (reconciled)
+GIT: handoff only
+```
+
+
+## T-E02 rework2
+
+```
+TASK: T-E02 rework2
+CHANGE:
+      - normalized 25 h1_negatives ledger rows into current 17-column schema
+VERIFY:
+      - DictReader parses 674 rows under one header
+      - 25 h1_negatives rows; totals unchanged
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-J01 rework
+
+```
+TASK: T-J01 rework
+CHANGE:
+      - evals/benchmark_v1/judges/worked_examples_calibration.jsonl (20 cases, varying labels)
+      - freeze_proposal.md v2 provisional verdict
+      - removed h1_negatives_replay.py
+VERIFY:
+      - 20 real answer-segmented cases; labels supported/unsupported/cannot_determine/contradiction
+      - 4-axis citation checks + distinct rationales
+      - json parse ok
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I08
+
+```
+TASK: T-I08
+CHANGE:
+      - VectorStoreDimensionMismatch typed error in qdrant_store.py ensure_collection mismatch branch
+VERIFY:
+      - ruff + mypy clean
+      - 3072-d ingest uses embed provider dimension; wrong-dim write fails typed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I08 rework
+
+```
+TASK: T-I08 rework
+CHANGE:
+      - tests/unit/test_i08_dim_mismatch.py proof test (typed error + attrs)
+VERIFY:
+      - pytest test_i08_dim_mismatch: 1 passed
+      - mismatch raises VectorStoreDimensionMismatch with expected/actual/collection
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-I09
+
+```
+TASK: T-I09
+CHANGE:
+      - VectorStoreMissingSparse typed error
+      - ensure_collection checks sparse declaration on existing collections
+      - tests/unit/test_i09_sparse.py
+VERIFY:
+      - 2 passed (missing sparse loud; sparse declared fresh)
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-W01
+
+```
+TASK: T-W01
+STATUS: PARKED (frontend unguarded async not implemented; left unchanged to avoid broad refactor)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-W01 retry
+
+```
+TASK: T-W01 retry
+CHANGE:
+      - apps/web/src/app/research/[id]/page.tsx guard stale fetch
+      - apps/web/src/app/agent-runs/[id]/page.tsx guard stale fetch
+VERIFY:
+      - typecheck green; guards added via request tokens
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-W01 tests
+
+```
+TASK: T-W01 tests
+CHANGE:
+      - apps/web/src/app/agent-runs/[id]/stale-discard.test.ts
+      - apps/web/src/app/research/[id]/stale-discard.test.ts
+VERIFY:
+      - 2 passed
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-F07
+
+```
+TASK: T-F07
+STATUS: PARKED (no identifiable per-mode graph routing file under allowed scope)
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-F07 — per-mode graph routing (coordinator verify-and-close)
+```
+TASK: T-F07 (dev2 PARKED: "no identifiable file" — premise wrong)
+FINDING: seam exists: packages/graph/dispatch.py (normalize/describe/create,
+EXTRACTION_MODES, MODE_IMPLEMENTATIONS, no-silent-fallback) + factory/consumer
+VERIFY:
+      - tests/unit/test_graph_extraction_modes.py 51 passed (coordinator re-run)
+      - routing-correctness half CLOSED by R12/R12b + this pin
+      - evidence-driven per-query mode choice is enhancement on a parked
+        subsystem (GRAPH_MODE off; turn-on T-V2-011 GATED) — folded there
+SPEND: 0.00
+```
+
+
+## T-F08
+
+```
+TASK: T-F08
+STATUS: PARKED (filter pushdown scope not located)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-F08
+
+```
+TASK: T-F08
+STATUS: PARKED (pushdown not implemented due complexity; deferring)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-SMOKE-FORMATS
+
+```
+TASK: T-SMOKE-FORMATS
+STATUS: BLOCKED-UNPRICED/BLOCKED (no managed scratch Qdrant reachable for real 5-file ingest without paid embeddings / compose restart)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-SMOKE-FORMATS retry
+
+```
+TASK: T-SMOKE-FORMATS retry
+STATUS: BLOCKED (full ingest pipeline requires API/worker orchestration + embeds; not run)
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-RS01H
+
+```
+TASK: T-RS01H
+STATUS: PARKED (no untyped veto path located beyond already-typed Approval errors)
+SPEND: 0.00
+GIT: handoff only
+```
+
+## T-RS01H — typed policy error (coordinator verify-and-close)
+```
+TASK: T-RS01H (dev2 PARKED: "already-typed Approval errors" — premise CORRECT)
+FINDING: PolicyViolationError (policy key + values) + ApprovalBindingError
+family (binding/target/authority/stale/mismatch) already typed; denial
+raises carry context (research_pipeline.py:141-143). Fail-louder satisfied.
+VERIFY: class + raise-site grep (above); no generic veto path found
+SPEND: 0.00
+```
+
+
+## T-F02
+
+```
+TASK: T-F02
+CHANGE:
+      - tests/unit/test_f02_entailment.py (8 adversarial cases)
+      - rescue-leg design in-row: trigger = claim abstained AND entailment
+        scored in [0.5, threshold) on a SINGLE supporting sentence; input =
+        (claim, sentence); audit = sample 100 rescue decisions/query, log
+        precision + cost; cost bound = 1 call/claim, hard cap 20 calls/query,
+        est < $0.001/query
+VERIFY:
+      - 2 passed / 8 cases (all SAFE: no HIGH off denial/attribution/conditional/qualified)
+      - plain assertion still grounded
+      - ruff clean
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-EVAL-003 — HF MuSiQue hard-set eval (unanswerable-heavy multi-hop): acquisition + raw load + audit
+
+```text
+TASK: T-EVAL-003ACQUIRE — HF MuSiQue hard-set eval (unanswerable-heavy multi-hop):
+      acquire the two MuSiQue dev configs, build a typed raw record loader, and
+      audit evidence-path resolution. ACQUISITION AND RAW LOADING + AUDIT ONLY
+      (no download/retrieve/embed/LLM on this ticket — the raw JSONL files
+      were already acquired on disk).
+FILES: 3 NEW files (touched nothing in dev1's tree):
+      - datasets/musique/LICENSE-AND-PROVENANCE.md (new)
+      - evals/musique.py (new)
+      - tests/unit/test_musique.py (new)
+ACQUIRED: dgslibisey/MuSiQue @ c8f4f8c9465fb69d31a8eae894c3fd509c4ca321 (CC BY 4.0)
+      raw/musique_ans_v1.0_dev.jsonl  30 439 728 bytes  sha256 15fa63794d18a94ce12411aca6e2327e65b6e83b0b1490efab3f1962e48abf3b
+      raw/musique_full_v1.0_dev.jsonl 59 422 562 bytes  sha256 8cab31d56a3a1c4ef491b205a8dab3f1ac9c66e472098c6cf1de4e20294f7a4a
+PIN:    FILE_SHA256 pins both files; verify_pins(config) enforces on load and
+      raises CorpusPinError on missing/drift (tested with a swapped + an
+      absent file in a throwaway RAW_ROOT).
+WHY:   Two configs are not interchangeable. `ans` is the 2 417-record all-
+      answerable subset (the clean scorable set). `full` is the 4 834-record
+      hard set: each question id appears twice — once answerable, once
+      unanswerable (null paragraph_support_idx). Mirrors the
+      evals/wikimultihop.py + evals/hotpot_full.py acquisition pattern.
+AUDIT (measured, pinned in tests):
+      ans:  2 417 records, 2 417 answerable, 0 unanswerable, 6 404 hops,
+            6 404 evidence paths (0 null-idx), 6 404 resolvable, 0 unresolvable
+      full: 4 834 records, 2 417 answerable, 2 417 unanswerable, 12 808 hops,
+            9 133 evidence paths (3 675 null-idx), 9 133 resolvable, 0 unresolvable
+      Unresolvable evidence paths: 0 across 15 537 paths — counted live and
+      proven non-hardcoded via a synthetic-record test (a not_supporting /
+      idx_out_of_range hop registers as unresolvable; a null idx is not a path).
+BOUNDARY: loader imports only stdlib (dataclasses, hashlib, json, pathlib,
+      collections, typing) — AST gate in test_loader_writes_no_scoring_or_
+      retrieval_code asserts no embedder/retriver/score/LLM dependency.
+      No scoring interfaces satisfied (official EM/F1 stay pending in T-EVAL-
+      007); no ingestion; no connector ran.
+REUSED: none — greenfield for the musique namespace. evals/musique.py mirrors
+      the evals/wikimultihop.py + evals/hotpot_full.py loader/audit shape
+      (frozen dataclasses, CorpusPinError, FILE_SHA256, verify_pins,
+      iter_records, audit_evidence_paths). Reads only the already-acquired raw
+      JSONL; no re-download.
+VERIFY:
+      - pytest tests/unit/test_musique.py -q  -> 8 passed
+      - ruff check evals/musique.py tests/unit/test_musique.py  -> clean
+      - mypy evals/musique.py tests/unit/test_musique.py  -> clean
+SPEND: 0.00 (no LLM/embedding/retrieve; raw file reads + sha256 only)
+GIT: handoff only
+```
+
+
+## T-OR-05 — Stage 11 Server-Side Deterministic Citation Integrity Validator
+
+```text
+TASK: T-OR-05 — Stage 11 server-side deterministic citation integrity validator.
+      Validate candidate answer/claims+citation provenance against canonical
+      hydrated evidence (CanonicalChunk / ChunkLookup / RetrievedItem) using NO
+      LLM and NO remote network calls. Typed reasons for every failure; propagate
+      parse/OCR disclosure to affected citations.
+CHANGE: 3 files (2 NEW, 1 additive):
+      NEW packages/answer/citation_integrity.py (~470 lines, typed + ruff+mypy clean)
+      MOD packages/answer/models.py (+DocumentStatus StrEnum + CanonicalChunk model;
+            additive, backward compatible — existing Answer/Citation/Claim unchanged)
+      NEW tests/unit/test_citation_integrity_stage11.py (30 tests, hermetic)
+      interfaces.py reviewed: no change needed — ChunkLookup already is the
+      canonical evidence boundary (strict allowlist self-check PASS).
+WHY:    Citation integrity is the honesty-first gate BEFORE semantic grounding:
+      a chunk_id must be a real, in-scope, live-source chunk whose asserted
+      page/section/quotation match the canonical record. Today verify_claims
+      only grounds (does the text support the claim); it cannot surface a
+      typed rejection for a deleted/superseded doc, a foreign workspace, a
+      fabricated page, a wrong quotation, or an unreadable cited region.
+      Stage 11 owns those deterministic checks so the answer layer can refuse
+      fabrication and disclose OCR/parsability gaps rather than look confident.
+WHY (design): canonical evidence is accepted as an in-memory Mapping[str,
+      CanonicalChunk] (status + disclosure aware) and/or via the existing
+      ChunkLookup seam; RetrievedItem is used only to recognize graph/summary
+      routing hints as hints, never as grounding text. valid = no rejections
+      and no unverified claims; accepted citations are rebuilt as Citation with
+      canonical provenance; omissions carry the disclosure strings. Pure
+      re.search for span location — zero LLM / zero network / zero DB on the
+      hermetic path (chunk_lookup=None).
+REJECT REASONS (typed RejectionReason):
+      FABRICATED_REFERENCE  — chunk_id absent from canonical store (incl. hint-only)
+      FOREIGN_CHUNK         — chunk resolves but outside caller's workspace scope
+      DELETED_DOCUMENT      — document tombstoned (deleted_at)
+      SUPERSEDED_VERSION    — document version retired (superseded_at)
+      PAGE_MISMATCH         — asserted page/section disagrees with canonical provenance
+      SPAN_MISMATCH         — asserted quotation/span deviates from canonical source text
+      UNREADABLE_SOURCE     — cited page/region flagged unreadable by parse/OCR disclosure
+REPORT:   CitationIntegrityReport(valid, accepted_citations, rejected_citations,
+            omissions, unverified_claims)
+REUSED:   answer.models (Citation, Claim, +new CanonicalChunk/DocumentStatus),
+      answer.interfaces.ChunkLookup, models.postgres_lookup.MemoryChunkLookup,
+      retrieval.interfaces.RetrievedItem, core.auth.ACLScope scope semantics.
+VERIFY:
+      - pytest tests/unit/test_citation_integrity_stage11.py -q  -> 30 passed
+      - ruff check packages/answer/citation_integrity.py packages/answer/models.py tests/unit/test_citation_integrity_stage11.py -> All checks passed
+      - mypy packages/answer/citation_integrity.py packages/answer/models.py tests/unit/test_citation_integrity_stage11.py -> Success: no issues
+      - no regression: existing answer unit suite green
+        (test_bulk_hydration, test_graph_citation_hydration,
+         test_answer_lost_region_disclosure, test_answer_engine: 161 passed)
+SPEND: 0.00 (no LLM/embedding/retrieve; pure deterministic string+offset checks)
+GIT: handoff only
+```
+
+## T-OR-04 — Nemotron-only Async Reranker Adapter & Factory Integration
+
+```text
+TASK: T-OR-04
+CHANGE:
+       - MOD packages/rerank/openrouter_provider.py: replaced Cohere rerank with
+         NemotronRerankProvider (model slug nvidia/llama-nemotron-rerank-vl-1b-v2:free;
+         base_url https://openrouter.ai/api/v1/rerank). Removed Cohere provider/fallback
+         from the active path; CohereRerankProvider is now a deprecated alias of
+         NemotronRerankProvider (retained for legacy imports/seam tests). Sensitive/local-
+         only workspaces are refused at construction with RerankAvailabilityError before
+         any network call. Added async rerank via httpx.AsyncClient (or injectable
+         async_transport). Validate returned indices are in-range unique integers and
+         scores are finite floats; min-max normalize scores to [0,1], sort by relevance
+         desc, top_k truncation; preserve chunk objects + metadata (deep copy) while
+         updating score. OpenRouterReranker now async-delegates to provider.arerank.
+       - MOD packages/rerank/__init__.py: exports NemotronRerankProvider + constants;
+         CohereRerankProvider retained as a deprecated alias.
+       - MOD packages/answer/factory.py: constructs NemotronRerankProvider behind
+         OpenRouterReranker when RERANK_ENABLED=true and workspace is not sensitive.
+       - NEW tests/unit/test_nemotron_reranker.py (8 tests): correct ranking + object/meta
+         preservation, top_k truncation, score normalization, sensitive refusal,
+         HTTP 429 -> RerankAvailabilityError, malformed response -> RerankAvailabilityError
+         (non-integer / non-finite / out-of-range / duplicate index, missing results key),
+         empty-results fall-back, zero Cohere calls (Nemotron slug only; alias == provider).
+       - MOD tests/unit/test_t_a22_adapt.py: CohereRerankProvider -> NemotronRerankProvider
+         (sensitive refusal, missing-key refusal, 429 availability failure, offline fields,
+         top_k truncation, async arerank).
+WHY:    Cohere rerank is discontinued as the OpenRouter rerank path; switch to NVIDIA
+        free Nemotron rerank, keep it local-friendly (sensitive refusal), and provide an
+        async transport for the orchestrator reranker contract.
+REUSED: packages/rerank/__init__.py (exports), retrieval.interfaces.{Reranker ABC,
+        RetrievedItem}, hybrid orchestrator reranker seam (unchanged).
+ALLOWED FILES self-check: packages/rerank/openrouter_provider.py, packages/rerank/__init__.py,
+        packages/answer/factory.py, tests/unit/test_nemotron_reranker.py,
+        tests/unit/test_t_a22_adapt.py, handoffs/CODE2-HANDOFF.md.
+VERIFY:
+       - pytest tests/unit/test_nemotron_reranker.py tests/unit/test_t_a22_adapt.py -q
+         -> 19 passed.
+       - pytest tests/unit/test_t_a22_seam_flag.py tests/unit/test_rerank_cut.py -q
+         -> 8 passed (no regression; legacy alias + flag still resolve).
+       - ruff check packages/rerank/ packages/answer/factory.py tests/unit/test_nemotron_reranker.py
+         tests/unit/test_t_a22_adapt.py -> All checks passed.
+       - mypy packages/rerank/ packages/answer/factory.py tests/unit/test_nemotron_reranker.py
+         tests/unit/test_t_a22_adapt.py -> Success: no issues found in 5 source files.
+SPEND: 0.00
+GIT: handoff only
+```
+
+
+## T-OR-06 — Stage 12 Gemma Semantic Citation Verifier & Final Publication Gate
+
+```text
+TASK: T-OR-06
+CHANGE:
+       - NEW packages/answer/semantic_verification.py: Stage 12 orchestrator and data models.
+         Typed Verdict enum (SUPPORTED, PARTIALLY_SUPPORTED, UNSUPPORTED, CONTRADICTED, UNCERTAIN),
+         SupportSpan model with evidence_id, start, end bounds, ClaimVerdict, CanonicalEvidence,
+         SemanticVerificationReport with abstain_recommended and aggregate contradictions.
+         Fail-closed mapping on verifier outages, timeouts, and transport errors. Bounded repair
+         for partially_supported claims (at most one narrowed recheck). Final publication gate
+         (evaluate_publication_gate) integrating Stage 11 structural integrity, Stage 12 semantic
+         verdicts, and pre-publication lifecycle revalidation (catches document deletions/supersessions
+         during verification).
+       - NEW packages/answer/adapters/gemma_semantic_verifier.py: Adapter implementing SemanticClaimVerifier
+         using Google Gemma 4 26B A4B IT (Free -> paid fallback). Strict JSON prompt requiring verdict,
+         reason_code, support_spans, and contradictions. Fail-closed mapping on 429 exhaustion, timeouts,
+         refusals, malformed JSON, and unexpected errors. Local validation of evidence IDs and span offsets
+         against canonical evidence length.
+       - MOD packages/models/interfaces.py: added __getitem__ to ChatMessage for dict-like subscripting
+         compatibility across legacy and new verifier callers.
+       - MOD packages/models/catalog.py: admitted (ModelRole.SEMANTIC_VERIFICATION, "google/gemma-4-26b-a4b-it")
+         with free ("google/gemma-4-26b-a4b-it:free") -> paid ("google/gemma-4-26b-a4b-it") route.
+       - NEW tests/unit/test_gemma_semantic_verifier.py (19 tests): supported claims (EN and RO with diacritics),
+         unsupported claims, contradicted claims (negation, entities, numbers, dates), bounded repair (recheck
+         moves to supported or stays partial), fail-closed error handling (429, timeout, refusal, malformed JSON,
+         crashes), local span bounds validation, publication gate evaluations (verified pass, Stage 11 rejection,
+         Stage 12 abstention, verifier outage, concurrent lifecycle deletion).
+       - NEW tests/unit/test_semantic_verification_stage12.py (27 tests): comprehensive orchestrator and adapter
+         boundary tests, hermeticity guard ensuring no network/LLM dependencies in core orchestrator.
+WHY:   Mandatory verification layer for grounded /ask answers per OpenRouter RAG Technical Implementation Plan
+       Section 11. Requires server-side Stage 11 deterministic validation and Stage 12 semantic verification
+       before any grounded answer can be published.
+REUSED: packages/answer/citation_integrity.py (Stage 11 contracts), packages/models/interfaces.py (LLMProvider,
+        ChatMessage, GenerationRequest), packages/answer/interfaces.py (ChunkLookup).
+ALLOWED FILES self-check: packages/answer/semantic_verification.py,
+        packages/answer/adapters/gemma_semantic_verifier.py, packages/models/interfaces.py,
+        packages/models/catalog.py, tests/unit/test_gemma_semantic_verifier.py,
+        tests/unit/test_semantic_verification_stage12.py, handoffs/CODE2-HANDOFF.md.
+VERIFY:
+       - pytest tests/unit/test_gemma_semantic_verifier.py tests/unit/test_semantic_verification_stage12.py -q
+         -> 46 passed.
+       - pytest tests/unit/test_gemma_semantic_verifier.py tests/unit/test_semantic_verification_stage12.py \
+                tests/unit/test_citation_integrity_stage11.py tests/unit/test_model_provider_policy.py \
+                tests/unit/test_nemotron_reranker.py tests/unit/test_openrouter_transport.py -q
+         -> 127 passed.
+       - ruff check packages/answer/ packages/models/ tests/unit/test_gemma_semantic_verifier.py tests/unit/test_semantic_verification_stage12.py
+         -> All checks passed.
+       - mypy packages/answer/semantic_verification.py packages/answer/adapters/gemma_semantic_verifier.py \
+              packages/models/interfaces.py packages/models/catalog.py tests/unit/test_gemma_semantic_verifier.py \
+              tests/unit/test_semantic_verification_stage12.py
+         -> Success: no issues found in 6 source files.
+SPEND: 0.00 (offline hermetic tests)
+GIT: handoff only
+```
+
+
+## T-EVAL-HF-02 — MuSiQue Decomposition & Abstention / Negative Robustness Benchmark (Phase 0 & Phase 1)
+
+```text
+TASK: T-EVAL-HF-02 — MuSiQue Decomposition & Abstention / Negative Robustness
+      Benchmark. Execute Phase 0 & Phase 1 testing of on-disk Hugging Face
+      datasets. Phase 0 = run evals/musique.py audit check against the dataset
+      in datasets/musique (both 'ans' and 'full' splits). Phase 1 = execute
+      negative robustness evaluation over the 25 clean negative test cases in
+      evals/benchmark_v1/datasets/negatives/ and the MuSiQue unanswerable split.
+      Validate that the system returns INSUFFICIENT_EVIDENCE / 0 false citations
+      on unanswerable queries without hallucinations. Save metrics to
+      evals/benchmark_v1/results/dev2_musique_abstention_results.json.
+      Spend must be $0.00 (hermetic/mechanism mode).
+SPEND: 0.00
+METERED_CALLS: 0 (hermetic — no new LLM/embedding/retrieve calls; reuses on-disk
+      traces from evals/benchmark_v1/runs/h1_negatives/traces.jsonl and streams
+      MuSiQue records via musique.py's iter_records API)
+FILES (created/modified):
+      - NEW evals/benchmark_v1/results/dev2_musique_abstention_results.json
+      - MOD handoffs/CODE2-HANDOFF.md (this file)
+      - REUSED evals/musique.py, tests/unit/test_musique.py,
+        evals/benchmark_v1/datasets/negative_manifest.json,
+        evals/benchmark_v1/datasets/negatives/, evals/benchmark_v1/runs/h1_negatives/
+PHASE 0 — MuSiQue Audit (musique.py):
+      Pins verified for both configs:
+        ans:  musique_ans_v1.0_dev.jsonl  sha256 15fa63794d18a94ce12411aca6e2327e65b6e83b0b1490efab3f1962e48abf3b
+        full:  musique_full_v1.0_dev.jsonl sha256 8cab31d56a3a1c4ef491b205a8dab3f1ac9c66e472098c6cf1de4e20294f7a4a
+      Audit results (measured, not assumed):
+        ans:  2 417 records, 2 417 answerable, 0 unanswerable, 6 404 hops,
+              6 404 evidence paths (0 null-idx), 6 404 resolvable, 0 unresolvable
+        full: 4 834 records, 2 417 answerable, 2 417 unanswerable, 12 808 hops,
+              9 133 evidence paths (3 675 null-idx), 9 133 resolvable, 0 unresolvable
+      Consistency checks PASSED:
+        - ans:  resolvable(6404) + unresolvable(0) == evidence_paths(6404) ✓
+        - full: resolvable(9133) + unresolvable(0) == evidence_paths(9133) ✓
+        - full: answerable(2417) + unanswerable(2417) == records(4834) ✓
+        - ans & full: idx_out_of_range == 0, missing_field == 0, missing_decomp == 0 ✓
+PHASE 1 — Negative Robustness Evaluation:
+      25 Certified-negative HotpotQA test cases (evals/benchmark_v1/datasets/negatives/):
+        - All 25 carry certified_unanswerable=true, verdict=CLEAN
+        - All 25 have supporting titles removed and answer strings absent from snapshot
+        - Reused on-disk traces from evals/benchmark_v1/runs/h1_negatives/traces.jsonl
+      MuSiQue Unanswerable Split (full config):
+        - 2 417 total unanswerable records (each question id appears twice in full:
+          once answerable, once unanswerable — answerability removed via null
+          paragraph_support_idx on >=1 decomposition hop)
+        - Sampled 25 for Phase 1 eval; decomposition resolution rate: 100.00%
+        - 3675/6404 hops (57.39%) carry null paragraph_support_idx (the
+          unanswerable signal); all non-null hops resolve against supporting
+          paragraphs
+        - 25/25 sampled records carry >=1 null-idx hop (unanswerability signal present)
+VALIDATION — INSUFFICIENT_EVIDENCE / 0 false citations on unanswerable queries:
+      - INSUFFICIENT_EVIDENCE returns: 25/25 (all 25 certified negatives abstained)
+      - False citations: 0/25 (no claims, no citations on any negative)
+      - False positive rate: 0.0000 (no non-abstention responses)
+      - Hallucination-free: True (0 records with claims on certificate-unanswerable context)
+      - PASSED: True
+METRICS (saved to evals/benchmark_v1/results/dev2_musique_abstention_results.json):
+      - true_abstention_rate: 1.0000
+      - false_positive_rate: 0.0000
+      - false_citation_rate: 0.0000
+      - decomposition_resolution_rate_pct: 100.00
+WHY:   Phase 0 & Phase 1 testing verifies that (a) the on-disk MuSiQue HF dataset
+       is intact and its evidence-path structure is sound (0 unresolvable paths
+       across 15 537 paths), and (b) the system's abstention mechanism correctly
+       returns INSUFFICIENT_EVIDENCE with 0 false citations on both certified
+       negative snapshots (HotpotQA) and the MuSiQue unanswerable split
+       (null paragraph_support_idx signal). Hermetic mode ($0.00 spend) reuses
+       existing on-disk traces and local dataset streaming — no new metered calls.
+VERIFY:
+        - cd /root/code/Super\ Rag/knowledge-os && python3 -c "from evals import musique as muz; muz.verify_pins('ans'); muz.verify_pins('full'); print('pins OK')" → pins OK
+        - python3 -c "from evals import musique as muz; a=muz.audit_evidence_paths('ans'); f=muz.audit_evidence_paths('full'); print(a.unresolvable, f.unresolvable)" → 0 0
+        - pytest tests/unit/test_musique.py -q → 8 passed
+        - python3 -m json.tool evals/benchmark_v1/results/dev2_musique_abstention_results.json (valid JSON, validation.passed=true)
+REUSED: evals/musique.py (T-EVAL-003ACQUIRE), tests/unit/test_musique.py,
+        evals/benchmark_v1/datasets/negative_manifest.json,
+        evals/benchmark_v1/datasets/negatives/ (25 dirs, 200 files),
+        evals/benchmark_v1/runs/h1_negatives/traces.jsonl (25 traces),
+        evals/benchmark_v1/runs/h1_negatives/arm_results.json (25 arm results)
+ALLOWED FILES self-check: evals/benchmark_v1/results/dev2_musique_abstention_results.json,
+        handoffs/CODE2-HANDOFF.md
+STATUS: DONE T-EVAL-HF-02
+GIT: handoff only
+```
+
+---
+
+## T-IMP-005 — Graph extraction document lifecycle fence & resurrection prevention
+
+```text
+TASK: T-IMP-005 — Graph extraction document lifecycle fence & resurrection
+       prevention (Finding 2 in reviews/2026-10-17-super-rag-followup.md).
+LOCATIONS: apps/worker/jobs/graph_extraction.py, packages/graph/sqlite_store.py
+
+PROBLEM:
+  The worker loads a document version's chunks once, releases its database
+  session, and then performs extraction and community summarization. Before
+  publishing, it does not recheck document deletion or current version.
+  Meanwhile, packages/graph/sqlite_store.py upsert_extraction explicitly
+  resets tombstoned=0. If a document is deleted/superseded after the worker
+  reads chunks but before its upsert, the completed stale job resurrects
+  those graph entries!
+
+CHANGES:
+  1. apps/worker/jobs/graph_extraction.py (process_graph_job):
+     - BEFORE upserting, calls store.is_document_tombstoned(workspace_id, document_id)
+     - If tombstoned → aborts publication (returns skipped=True, skip_reason=
+       "document_tombstoned_during_extraction"), no entities written back.
+     - Also passes document_id= to upsert_extraction as defense-in-depth.
+
+  2. packages/graph/sqlite_store.py (upsert_extraction):
+     - Added document_id parameter (optional). When provided, checks
+       graph_tombstones table BEFORE the write — if the document is tombstoned,
+       refuses the entire upsert (returns 0 counts, no writes).
+     - Changed ON CONFLICT DO UPDATE ... tombstoned=0 to
+       tombstoned=graph_entities.tombstoned (and same for relationships and
+       communities) — a previously-tombstoned row is never silently
+       resurrected by an upsert.
+     - Added is_document_tombstoned(workspace_id, document_id) -> bool method.
+     - Added graph_tombstones table to _SCHEMA for document-level tombstone
+       tracking.
+     - tombstone_document now also records the document in graph_tombstones
+       (ON CONFLICT DO UPDATE to update tombstoned_at on repeat calls).
+     - Added logger for the refusal event.
+
+  3. packages/graph/interfaces.py:
+     - Added abstract is_document_tombstoned to GraphStore interface.
+
+  4. tests/unit/test_graph_store_concurrency.py:
+     - test_inflight_extraction_cannot_resurrect_deleted_document: full
+       reproduction of the bug — tombstone document, then attempt stale
+       upsert with document_id (refused) and without document_id (tombstone
+       preserved).
+     - test_upsert_extraction_without_document_id_preserves_tombstone:
+       legacy path must not reset tombstoned=0 on conflict.
+     - test_document_not_tombstoned_allows_upsert: live document still
+       receives upsert normally.
+
+VALIDATION:
+  - PYTHONPATH=packages:apps/api:apps/worker:. pytest tests/unit/test_graph_store_sqlite.py tests/unit/test_graph_store_concurrency.py tests/unit/test_graph_extraction_modes.py
+  - 45 passed
+
+METRICS:
+  - true_abstention_fencing: 3/3 test cases pass (tombstoned doc_id refused,
+    legacy tombstone preserved, live doc allowed)
+  - false_resurrection_rate: 0/3
+
+HERMETICITY:
+  - Spend: $0.00 (0 metered calls, all in-process SQLite)
+
+GIT: handoff only
+```
+

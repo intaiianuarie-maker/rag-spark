@@ -47,7 +47,15 @@ from workflow_engine.adapters.v3_adapter import (
 
 
 class _DelegationSpy:
-    """Injected AgentRunner: records every delegation request verbatim."""
+    """Injected AgentRunner: records every delegation request verbatim.
+
+    T-seam-tests: the returned shape follows the A13 boundary contract
+    (``v3_contract.V3NodeResponse``) — a terminal ``status`` plus an
+    ``output_data`` port mapping. Before A13 the seam was a permissive
+    passthrough, so a spy could answer with a bare output mapping; the
+    adapter now validates the response at the boundary and refuses anything
+    else. ``outputs`` is the node's output-port mapping (``output_data``).
+    """
 
     def __init__(self, outputs: dict[str, Any] | None = None) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -57,7 +65,8 @@ class _DelegationSpy:
 
     async def __call__(self, request: Mapping[str, Any]) -> dict[str, Any]:
         self.calls.append(dict(request))
-        return dict(self._outputs)
+        # Contract-shaped success response (A13): terminal status + port mapping.
+        return {"status": "completed", "output_data": dict(self._outputs)}
 
 
 class _FakePrimary:

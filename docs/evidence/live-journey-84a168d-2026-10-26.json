@@ -1,0 +1,19 @@
+{
+  "formats_ready": 6,
+  "citation_passage": true,
+  "keyboard": true,
+  "search_modes": [
+    "hybrid",
+    "semantic",
+    "keyword"
+  ],
+  "failure": null,
+  "answer_status": "answered",
+  "publication_status": "verified",
+  "answer_http_status": 200,
+  "answer_observation": {
+    "transport": "actual_browser_fetch_clone",
+    "request_count": 1,
+    "bytes": 6402
+  }
+}

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AlertCircle, ChevronDown, ChevronRight } from "lucide-react";
 
 import { auth } from "@/lib/auth-client";
@@ -80,6 +80,7 @@ export type ResearchStatus = "loading" | "ready" | "unavailable" | "error";
 
 export default function ResearchReportPage({ params }: { params: Promise<{ id: string }> }) {
   const { activeId } = useWorkspaces();
+  const reqRef = useRef(0);
   const [researchId, setResearchId] = useState<string | null>(null);
   const [report, setReport] = useState<ResearchReport | null>(null);
   const [state, setState] = useState<ResearchStatus>("loading");
@@ -91,15 +92,18 @@ export default function ResearchReportPage({ params }: { params: Promise<{ id: s
 
   const load = useCallback(async () => {
     if (activeId === null || researchId === null) return;
+    const tok = ++reqRef.current;
     setState("loading");
     try {
       const result = await auth.authFetch<ResearchReport>(
         `/v1/workspaces/${activeId}/agent/research/${researchId}/report`,
         {},
       );
+      if (reqRef.current !== tok) return;
       setReport(result);
       setState("ready");
     } catch (err) {
+      if (reqRef.current !== tok) return;
       const status = (err as { status?: number })?.status;
       if (status === 404) {
         setState("unavailable");

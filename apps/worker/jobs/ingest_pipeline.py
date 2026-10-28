@@ -38,8 +38,10 @@ from ingestion.adapters.llamaindex_chunker import (
 from ingestion.adapters.llamaindex_chunker import (
     chunk_document as llamaindex_chunk_document,
 )
+from ingestion.adapters.llamaindex_chunker import is_available as llamaindex_is_available
 from ingestion.adapters.pdf_scan import pdf_text_layer_report
 from ingestion.adapters.registry import (
+    ParseAttempt,
     ParseReport,
     parse_with_precedence,
     parser_for_mime,
@@ -49,6 +51,7 @@ from ingestion.chunk import ChunkResult, chunk_document
 from ingestion.dedup import supersede_other_versions, vector_collection
 from ingestion.interfaces import DocumentElement, ParsedDocument
 from ingestion.normalize import MAX_DOCUMENT_BYTES, IngestionError
+from ingestion.ocr import process_pdf_with_ocr
 from ingestion.persistence import (
     ChunkRow,
     Document,
@@ -457,9 +460,7 @@ def resolved_chunking_backend() -> str:
     """Backend identifier actually in use (recorded in stage logs + debugger)."""
     if CHUNKING_BACKEND == "builtin":
         return "builtin-whitespace"
-    try:
-        import llama_index.core  # noqa: F401  - availability probe only
-    except ImportError:
+    if not llamaindex_is_available():
         return "builtin-whitespace"
     return llamaindex_backend_name()
 
@@ -522,12 +523,18 @@ PARSE_LOST_REGIONS_KEY = "parse_lost_regions"
 PARSE_REPORT_KEY = "parse"
 
 
-def parse_disclosure(report: ParseReport, lost_regions: list[dict]) -> dict:
+def parse_disclosure(
+    report: ParseReport,
+    lost_regions: list[dict],
+    extraction_report: dict | None = None,
+) -> dict:
     """The disclosure stored on every chunk of one document version."""
     disclosure: dict = {PARSE_REPORT_KEY: report.as_metadata()}
     if lost_regions:
         disclosure[PARSE_PARTIAL_KEY] = True
         disclosure[PARSE_LOST_REGIONS_KEY] = list(lost_regions)
+    if extraction_report:
+        disclosure["extraction_report"] = extraction_report
     return disclosure
 
 
@@ -747,57 +754,126 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     #: T-V1-031 lost regions: pages that carry an image and no text layer.
     #: Empty for a fully readable document.
     lost_regions: list[dict] = []
-    if mime_type == "application/pdf":
-        text_layer = pdf_text_layer_report(content)
-        if text_layer is not None and text_layer.fully_lost:
-            # Nothing here is readable and nothing may be invented for it.
-            return await _park_needs_review(
-                session,
-                job=job,
-                reasons=[
-                    "NEEDS_REVIEW: no text layer on any page "
-                    f"({len(text_layer.lost_pages)} of {text_layer.page_count} page(s) "
-                    "are image-only); OCR is not enabled in this deployment, so the "
-                    "content was NOT read"
-                ],
-                disclosure=text_layer.disclosure(),
-                stages=stages,
-            )
-        if text_layer is not None and text_layer.lost_pages:
-            lost_regions.append(text_layer.disclosure())
+    parsed: ParsedDocument | None = None
+    parse_report: ParseReport | None = None
+    ocr_report_meta: dict | None = None
 
-    try:
-        parsed: ParsedDocument
-        #: Pre-expansion budgets (T-V1-031): enforced while the parser expands
-        #: the document, so a pathological input is refused between elements
-        #: instead of after it has already cost the time and the memory.
-        parsed, parse_report = await parse_with_precedence(
-            content,
-            mime_type=mime_type,
-            filename=document.source_filename if document else None,
-            metadata=parse_metadata,
-            budgets=budgets_from_env(max_output_elements=max_elements()),
+    if mime_type == "application/pdf":
+        ocr_enabled = (
+            os.environ.get("OCR_ENABLED", "true").strip().lower() in ("true", "1", "yes")
         )
-        ensure_element_limit(parsed.elements)  # BEFORE chunk/DB writes
-    except IngestPipelineError:
-        raise
-    except ParseBudgetExceeded as exc:
-        logger.warning(
-            "ingest_parse_budget_exceeded",
-            extra={
-                "event": "ingest_parse_budget_exceeded",
-                "job_id": str(job.id),
-                "budget": exc.code,
-                "error": exc.message,
-            },
-        )
-        raise IngestPipelineError(exc.code, exc.message, retryable=False) from exc
-    except IngestionError as exc:
-        raise IngestPipelineError(exc.code, exc.message, retryable=False) from exc
-    except Exception as exc:  # unexpected/transient -> retryable
-        raise IngestPipelineError(
-            "PARSE_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
-        ) from exc
+        text_layer = pdf_text_layer_report(content)
+
+        if ocr_enabled and text_layer is not None and text_layer.lost_pages:
+            try:
+                ocr_elements, extraction_report = await process_pdf_with_ocr(
+                    content,
+                    languages=os.environ.get("OCR_LANGUAGES", "ron+eng+por"),
+                    dpi=int(os.environ.get("OCR_RENDER_DPI", "300")),
+                    filename=document.source_filename if document else None,
+                )
+                ocr_report_meta = extraction_report.as_metadata()
+                if extraction_report.fully_lost or not ocr_elements:
+                    return await _park_needs_review(
+                        session,
+                        job=job,
+                        reasons=[
+                            "NEEDS_REVIEW: no extractable text found across "
+                            f"{extraction_report.total_pages} page(s) after OCR"
+                        ],
+                        disclosure={
+                            "reason": "ocr_no_text",
+                            "lost_pages": list(extraction_report.failed_pages),
+                            "page_count": extraction_report.total_pages,
+                            "readable_pages": len(extraction_report.ocr_pages)
+                            + len(extraction_report.native_pages),
+                            "extraction_report": ocr_report_meta,
+                        },
+                        stages=stages,
+                    )
+
+                parsed = ParsedDocument(
+                    elements=ocr_elements,
+                    mime_type=mime_type,
+                    page_count=extraction_report.total_pages,
+                    language=extraction_report.languages[0]
+                    if extraction_report.languages
+                    else None,
+                    metadata={"extraction_report": ocr_report_meta},
+                )
+                parse_report = ParseReport(
+                    primary="tesseract",
+                    used="tesseract" if extraction_report.has_ocr else "docling",
+                    attempts=(
+                        ParseAttempt(
+                            parser="tesseract",
+                            outcome="ok",
+                        ),
+                    ),
+                )
+                if extraction_report.failed_pages:
+                    lost_regions.append(
+                        {
+                            "reason": "ocr_failed_pages",
+                            "lost_pages": list(extraction_report.failed_pages),
+                            "page_count": extraction_report.total_pages,
+                            "readable_pages": len(extraction_report.ocr_pages)
+                            + len(extraction_report.native_pages),
+                            "extraction_report": ocr_report_meta,
+                        }
+                    )
+            except Exception as ocr_exc:
+                logger.warning(
+                    "ocr_processing_failed",
+                    extra={"event": "ocr_processing_failed", "error": str(ocr_exc)},
+                )
+        elif not ocr_enabled:
+            if text_layer is not None and text_layer.fully_lost:
+                # Nothing here is readable and nothing may be invented for it.
+                return await _park_needs_review(
+                    session,
+                    job=job,
+                    reasons=[
+                        "NEEDS_REVIEW: no text layer on any page "
+                        f"({len(text_layer.lost_pages)} of {text_layer.page_count} page(s) "
+                        "are image-only); OCR is not enabled in this deployment, so the "
+                        "content was NOT read"
+                    ],
+                    disclosure=text_layer.disclosure(),
+                    stages=stages,
+                )
+            if text_layer is not None and text_layer.lost_pages:
+                lost_regions.append(text_layer.disclosure())
+
+    if parsed is None or parse_report is None:
+        try:
+            parsed, parse_report = await parse_with_precedence(
+                content,
+                mime_type=mime_type,
+                filename=document.source_filename if document else None,
+                metadata=parse_metadata,
+                budgets=budgets_from_env(max_output_elements=max_elements()),
+            )
+            ensure_element_limit(parsed.elements)  # BEFORE chunk/DB writes
+        except IngestPipelineError:
+            raise
+        except ParseBudgetExceeded as exc:
+            logger.warning(
+                "ingest_parse_budget_exceeded",
+                extra={
+                    "event": "ingest_parse_budget_exceeded",
+                    "job_id": str(job.id),
+                    "budget": exc.code,
+                    "error": exc.message,
+                },
+            )
+            raise IngestPipelineError(exc.code, exc.message, retryable=False) from exc
+        except IngestionError as exc:
+            raise IngestPipelineError(exc.code, exc.message, retryable=False) from exc
+        except Exception as exc:  # unexpected/transient -> retryable
+            raise IngestPipelineError(
+                "PARSE_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
+            ) from exc
 
     # T-V1-019 — PRE-WRITE gate. Everything below writes publication state
     # (chunk rows, FTS rows, vector points) and finally READY, so a generation
@@ -834,7 +910,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     #: T-V1-031: every chunk carries which parser read it and, when part of the
     #: source was unreadable, the lost regions — the answer layer reads this
     #: straight back off the retrieved items.
-    chunk_disclosure = parse_disclosure(parse_report, lost_regions)
+    chunk_disclosure = parse_disclosure(parse_report, lost_regions, ocr_report_meta)
     id_map: dict[str, uuid.UUID] = {}
     for chunk in result.chunks:
         # T-V1-016: stable publication ID — same generation + same chunk ⇒ same
@@ -896,7 +972,11 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                 content=c.text,
                 page=c.page,
                 section=c.section,
-                metadata={"language": result.language, **(c.metadata or {})},
+                metadata={
+                    "language": result.language,
+                    **(c.metadata or {}),
+                    **(chunk_disclosure or {}),
+                },
             )
             for c in result.chunks
         ]
@@ -950,14 +1030,21 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
 
     try:
         from models.adapters.openrouter_provider import OpenRouterProvider
+        from models.router_config import load_workspace_config
         from retrieval.adapters.qdrant_store import QdrantVectorStore
         from retrieval.embedding_identity import (
             merge_identity,
             observed_dimension,
             provider_identity,
         )
-
         coll = vector_collection()
+        _ws_cfg = load_workspace_config(str(job.workspace_id))
+        if _ws_cfg is not None and bool(getattr(_ws_cfg, "sensitive", False)):
+            raise IngestPipelineError(
+                "EMBED_UNAVAILABLE",
+                "sensitive workspace refuses cloud embedding egress",
+                retryable=False,
+            )
         embed_provider = OpenRouterProvider(call_site="ingest_pipeline")
         qdrant = QdrantVectorStore(collection=coll)
         try:
@@ -1008,7 +1095,11 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                     # T-R06: identity is merged AFTER caller metadata, so a
                     # chunk cannot overwrite embedding_* and mislabel its vector.
                     metadata=merge_identity(
-                        {"language": result.language, **(c.metadata or {})},
+                        {
+                            "language": result.language,
+                            **(c.metadata or {}),
+                            **(chunk_disclosure or {}),
+                        },
                         embed_identity,
                     ),
                 )

@@ -100,17 +100,49 @@ def detect_language(text: str) -> str | None:
 
 
 def tag_language(parsed: ParsedDocument) -> str:
-    """Language tag for a parsed document; every document gets a value."""
+    """Language tag for a parsed document; every document gets a value.
+
+    Declared-versus-detected policy (PD-008, consistent):
+    - A declared language ALWAYS wins, including unsupported declarations
+      (e.g. ``fr``, ``xx``). Detection never silently overwrites a declared
+      value, so provenance is preserved and conflicts stay observable.
+    - Detection is used only when no language is declared.
+    - When a declared (unsupported) language conflicts with a detected
+      supported language, the conflict is retained by the caller via
+      :func:`language_provenance` rather than resolved by overwriting.
+    """
     declared = (parsed.language or "").strip().lower()
-    if declared in SUPPORTED_LANGUAGES:
+    if declared:
         return declared
     combined = " ".join(element.text for element in parsed.elements)
     detected = detect_language(combined)
     if detected:
         return detected
-    if declared:
-        return declared
     return "unknown"
+
+
+def language_provenance(parsed: ParsedDocument) -> dict[str, object]:
+    """Return declared/detected language plus a conflict flag (PD-008).
+
+    ``conflict`` is True only when a declared *unsupported* language disagrees
+    with a detected supported language. Supported declarations never conflict
+    (they are authoritative).
+    """
+    declared = (parsed.language or "").strip().lower() or None
+    combined = " ".join(element.text for element in parsed.elements)
+    detected = detect_language(combined)
+    conflict = bool(
+        declared
+        and declared not in SUPPORTED_LANGUAGES
+        and detected is not None
+        and detected != declared
+    )
+    return {
+        "declared": declared,
+        "detected": detected,
+        "supported_declared": declared in SUPPORTED_LANGUAGES if declared else False,
+        "conflict": conflict,
+    }
 
 
 def extract_metadata(parsed: ParsedDocument, *, filename: str | None = None) -> DocumentMetadata:
@@ -126,6 +158,9 @@ def extract_metadata(parsed: ParsedDocument, *, filename: str | None = None) -> 
         title = sections[0]
     if title is None and filename:
         title = filename
+    extra = dict(parsed.metadata)
+    extra.update(language_provenance(parsed))
+    extra["language_tag"] = tag_language(parsed)
     return DocumentMetadata(
         title=title,
         language=tag_language(parsed),
@@ -134,5 +169,5 @@ def extract_metadata(parsed: ParsedDocument, *, filename: str | None = None) -> 
         element_count=len(parsed.elements),
         sections=sections,
         filename=filename,
-        extra=dict(parsed.metadata),
+        extra=extra,
     )

@@ -7,6 +7,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { useWorkspaces } from "@/components/workspace/workspace-provider";
 import { Empty } from "../collections-list";
 import { StatusChip } from "../status-chip";
+import { UploadPanel } from "@/components/upload/upload-panel";
 import { READS_UNAVAILABLE, listCollectionDocuments, type DocumentSummary } from "../contracts";
 
 /** Collection document list with status chips (`/knowledge/[collectionId]`). */
@@ -45,6 +46,10 @@ export function CollectionDocuments({ collectionId }: { collectionId: string }) 
         <ArrowLeft className="size-3.5" aria-hidden="true" /> Collections
       </Link>
       <h1 className="mt-2 text-xl font-semibold tracking-tight">Documents</h1>
+
+      <div className="mt-4">
+        <UploadPanel />
+      </div>
 
       <div className="mt-6">
         {status === "loading" && (

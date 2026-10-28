@@ -23,13 +23,17 @@ from app.auth.router import router as auth_router
 from app.auth.workspaces.invitations import router as invitations_router
 from app.auth.workspaces.router import router as workspaces_router
 from app.db import dispose_engine, run_migrations
+from app.documents.chunks import router as chunks_router
 from app.documents.delete import router as documents_delete_router
 from app.documents.reads import router as knowledge_reads_router
 from app.documents.upload import jobs_router as jobs_router
 from app.documents.upload import router as documents_router
+from app.eval.router import legacy_router as legacy_eval_router
 from app.eval.router import router as eval_router
+from app.models_config.router import router as models_config_router
 from app.search.search import legacy_router as legacy_search_router
 from app.search.search import router as search_router
+from app.sources.router import router as sources_router
 from app.workflows.router import router as workflow_router
 
 logger = logging.getLogger("knowledge_os.api")
@@ -54,6 +58,54 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "migrations_failed",
                 extra={"event": "migrations_failed", "error": f"{type(exc).__name__}: {exc}"},
             )
+
+    import os
+
+    from stores.agent_stores import set_agent_store_db
+
+    from app.agents.lifecycle_routes import agent_store_readiness
+
+    # T-IMP-001 (POLICE F4a/F4b): the durable agent store is resolved through
+    # the same settings/startup boundary the application uses. The store is
+    # installed ONLY when the configured path is a shared durable location;
+    # an unshared path (or none) in production/staging leaves the queue
+    # unusable and the queued-run endpoint refuses admission with 503.
+    readiness = agent_store_readiness()
+    agent_db = readiness.path
+    if readiness.admit and agent_db:
+        set_agent_store_db(agent_db)
+        logger.info(
+            "agent_store_installed",
+            extra={
+                "event": "agent_store_installed",
+                "path": agent_db,
+                "shared": readiness.shared,
+                "environment": readiness.environment,
+            },
+        )
+    elif readiness.shared:
+        logger.warning(
+            "agent_store_in_memory",
+            extra={
+                "event": "agent_store_in_memory",
+                "reason": "AGENT_STORE_DB unset; queued runs are process-local (dev/test only)",
+                "environment": readiness.environment,
+            },
+        )
+    else:
+        logger.error(
+            "agent_store_unavailable",
+            extra={
+                "event": "agent_store_unavailable",
+                "reason": readiness.reason,
+                "path": agent_db,
+                "environment": readiness.environment,
+                "shared_root": (
+                    os.environ.get("AGENT_STORE_SHARED_ROOT", "").strip()
+                    or "/app/.agent"
+                ),
+            },
+        )
 
     try:
         yield
@@ -98,13 +150,17 @@ def create_app() -> FastAPI:
     app.include_router(invitations_router)
     app.include_router(keys_router)
     app.include_router(documents_router)
+    app.include_router(models_config_router)
+    app.include_router(sources_router)
     app.include_router(documents_delete_router)
     app.include_router(jobs_router)
     app.include_router(knowledge_reads_router)
+    app.include_router(chunks_router)
     app.include_router(ask_router)
     app.include_router(search_router)
     app.include_router(legacy_search_router)
     app.include_router(eval_router)
+    app.include_router(legacy_eval_router)
     app.include_router(agent_router)
     app.include_router(research_router)
     app.include_router(workflow_router)

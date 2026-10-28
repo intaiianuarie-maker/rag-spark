@@ -55,6 +55,15 @@ class LlamaIndexUnavailableError(RuntimeError):
     """
 
 
+def is_available() -> bool:
+    """Probe the optional SDK inside its adapter, without loading model weights."""
+    try:
+        import llama_index.core  # noqa: F401 - preserves the actual importability probe
+    except ImportError:
+        return False
+    return True
+
+
 def whitespace_tokens(text: str) -> list[str]:
     """Deterministic token list (whitespace words) for the LlamaIndex splitter.
 

@@ -24,6 +24,8 @@ import torch
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
+from .adapters.cross_encoder import load_cross_encoder
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("rerank_sidecar")
@@ -54,14 +56,12 @@ class ModelCapabilityManager:
         """Load cross-encoder weights into memory on CPU."""
         t0 = time.perf_counter()
         try:
-            from sentence_transformers import CrossEncoder
-
             logger.info(
                 "Loading CrossEncoder model '%s' (threads=%d)...",
                 self.model_name,
                 NUM_THREADS,
             )
-            self.model = CrossEncoder(self.model_name, max_length=512, device="cpu")
+            self.model = load_cross_encoder(self.model_name)
             self.load_duration_seconds = time.perf_counter() - t0
             self.load_error = None
             logger.info("Model '%s' ready in %.2fs", self.model_name, self.load_duration_seconds)

@@ -30,6 +30,8 @@ import logging
 import os
 import re
 import uuid
+from collections.abc import AsyncIterator
+from typing import Any
 
 from answer.engine import AnswerEngine
 from answer.factory import build_answer_engine
@@ -37,7 +39,8 @@ from answer.models import Answer, AnswerStatus
 from core.auth import ACLScope, Principal
 from core.errors import ReasonCode, canonical_code, error_detail, spec_for
 from core.logging import request_id_ctx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 from models.adapters.litellm_provider import LLMProviderError
 from models.router_config import (
     LocalOnlyUnavailable,
@@ -49,6 +52,7 @@ from models.router_config import (
 from pydantic import BaseModel, Field
 from retrieval.interfaces import RetrievalMode
 
+from app.ask.stream import streaming_response
 from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
 
@@ -243,7 +247,31 @@ async def ask(
         },
     )
 
-    engine: AnswerEngine = build_answer_engine(model=resolved_model)
+    # T-A01b: carry the workspace egress policy into retrieval/embedding.
+    _workspace_config = load_workspace_config(str(workspace_id))
+    _egress_sensitive = (
+        _workspace_config.sensitive if _workspace_config is not None else False
+    )
+    engine: AnswerEngine = build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)
+    if not _egress_sensitive and getattr(engine, "semantic_verifier", None) is None:
+        try:
+            from answer.adapters.gemma_semantic_verifier import (
+                DEFAULT_GEMMA_MODEL,
+                GemmaSemanticVerifier,
+            )
+
+            engine.semantic_verifier = GemmaSemanticVerifier(
+                engine.llm,
+                model=DEFAULT_GEMMA_MODEL,
+            )
+        except Exception as exc:
+            logger.warning(
+                "semantic_verifier_initialization_failed",
+                extra={
+                    "event": "semantic_verifier_initialization_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
 
     try:
         answer = await engine.answer(
@@ -280,3 +308,144 @@ async def ask(
         )
 
     return answer
+
+
+class AskStreamRequest(BaseModel):
+    """POST /stream body (TASK-M4-001b REV-1 Finding 2).
+
+    Mirrors :class:`AskRequest`, including the per-request model override. The
+    streaming endpoint is POST (not GET) so the question text travels in the
+    request body and never lands in the request line, proxy access logs, or
+    browser history — the privacy invariant the task card requires ("no
+    source text in logs by default").
+    """
+
+    query: str = Field(min_length=1)
+    model: str | None = None
+    mode: RetrievalMode = RetrievalMode.HYBRID
+
+
+@router.post(
+    "/stream",
+    summary="Ask a question and receive a streaming SSE answer (TASK-M4-001b)",
+    response_class=StreamingResponse,
+)
+async def ask_stream(
+    workspace_id: uuid.UUID,
+    body: AskStreamRequest,
+    request: Request,
+    principal: Principal = Depends(get_principal),
+) -> StreamingResponse:
+    """Stream a grounded answer as SSE events.
+
+    SSE events:
+      - ``token`` — partial text deltas (no citation/evidence IDs mid-stream)
+      - ``citations`` — verified citations + status at end-of-stream
+      - ``error`` — service errors (503 taxonomy: LLM_UNAVAILABLE, etc.)
+
+    Error parity with POST /ask:
+      - LLM provider failure → error event with code=LLM_UNAVAILABLE
+      - Retrieval failure    → citations event with status=unavailable
+      - Insufficient evidence → citations event with status=insufficient_evidence
+    """
+    try:
+        require(principal, Action.DOCUMENT_READ, Resource(workspace_id=str(workspace_id)))
+    except ApiError as exc:
+        # Return an SSE error event instead of an HTTP error so the streaming
+        # client always receives a well-formed frame.
+        payload = _sse_error_payload(exc)
+        return StreamingResponse(
+            _error_only_stream(payload),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            status_code=payload["status_code"],
+        )
+
+    # Re-use the same model selection path as POST /ask (T-V1-038).
+    try:
+        resolved_model, reason = resolve_model(
+            str(workspace_id), query_class=classify_query(body.query), override_model=body.model
+        )
+    except LocalOnlyUnavailable as exc:
+        payload = _sse_error_payload(
+            ApiError(code=ReasonCode.LLM_UNAVAILABLE.value, message=str(exc), status_code=503)
+        )
+        payload["trace_id"] = request_id_ctx.get()
+        return StreamingResponse(
+            _error_only_stream(payload),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+            status_code=payload["status_code"],
+        )
+
+    logger.info(
+        "ask_stream_model_selected",
+        extra={
+            "event": "ask_stream_model_selected",
+            "workspace_id": str(workspace_id),
+            "model": resolved_model,
+            "provider": provider_identity(resolved_model),
+            "reason": reason,
+        },
+    )
+
+    # T-A01b: carry the workspace egress policy into retrieval/embedding.
+    _workspace_config = load_workspace_config(str(workspace_id))
+    _egress_sensitive = (
+        _workspace_config.sensitive if _workspace_config is not None else False
+    )
+    engine: AnswerEngine = build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)
+    if not _egress_sensitive and getattr(engine, "semantic_verifier", None) is None:
+        try:
+            from answer.adapters.gemma_semantic_verifier import (
+                DEFAULT_GEMMA_MODEL,
+                GemmaSemanticVerifier,
+            )
+
+            engine.semantic_verifier = GemmaSemanticVerifier(
+                engine.llm,
+                model=DEFAULT_GEMMA_MODEL,
+            )
+        except Exception as exc:
+            logger.warning(
+                "semantic_verifier_initialization_failed",
+                extra={
+                    "event": "semantic_verifier_initialization_failed",
+                    "error_type": type(exc).__name__,
+                },
+            )
+
+    engine_stream = engine.stream(
+        query=body.query,
+        acl_scope=ACLScope(
+            user_id=principal.user_id, workspace_ids=[str(workspace_id)]
+        ),
+        mode=body.mode,
+    )
+
+    return streaming_response(request, engine_stream=engine_stream)
+
+
+async def _error_only_stream(payload: dict[str, Any]) -> AsyncIterator[str]:
+    """Yield a single SSE error event and close."""
+    import json
+
+    data = json.dumps(
+        {
+            "error": payload["message"],
+            "code": payload["code"],
+            "trace_id": payload.get("trace_id"),
+        },
+        ensure_ascii=False,
+    )
+    yield f"event: error\ndata: {data}\n\n"
+
+
+def _sse_error_payload(exc: ApiError) -> dict[str, Any]:
+    """Map an ApiError to an SSE error payload dict."""
+    return {
+        "status_code": exc.status_code,
+        "message": exc.message,
+        "code": getattr(exc, "code", None) or "UNKNOWN",
+        "trace_id": request_id_ctx.get(),
+    }

@@ -24,7 +24,7 @@ import {
   runStateKey,
   timelineAfterKeyChange,
   type TimelineEntry,
-} from "./page";
+} from "./run-detail";
 
 const A_STATES: TimelineEntry[] = [
   { at: "2026-10-14T10:00:00.000Z", status: "queued", error_code: null },
@@ -97,7 +97,7 @@ describe("timeline keying (T-V3-030 / F-1)", () => {
 
 describe("the page is wired to that reset (wiring proof)", () => {
   const page = readFileSync(
-    fileURLToPath(new URL("./page.tsx", import.meta.url)),
+    fileURLToPath(new URL("./run-detail.tsx", import.meta.url)),
     "utf8",
   );
 

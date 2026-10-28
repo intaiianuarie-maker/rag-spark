@@ -136,9 +136,7 @@ def score_faithfulness(
     deterministic lexical proxy. Clamped to [0, 1] so a custom scorer can never
     emit an out-of-range value into the report.
     """
-    raw = scorer(answer, context) if scorer is not None else _lexical_faithfulness(
-        answer, context
-    )
+    raw = scorer(answer, context) if scorer is not None else _lexical_faithfulness(answer, context)
     if raw != raw:  # NaN guard
         return 0.0
     return max(0.0, min(1.0, raw))

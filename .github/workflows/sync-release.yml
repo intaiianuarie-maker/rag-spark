@@ -1,0 +1,147 @@
+name: Connector release validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [review/super-rag-2026-10-17]
+    paths:
+      - .github/workflows/sync-release.yml
+      - packages/connectors/**
+      - apps/worker/jobs/sync_worker.py
+      - apps/api/app/sources/**
+      - apps/api/alembic/versions/0015*
+      - apps/api/alembic/versions/0016*
+      - apps/api/alembic/versions/0017*
+      - tests/integration/test_sync*
+      - tests/integration/test_connector_migrations.py
+
+permissions:
+  contents: read
+
+jobs:
+  connector-release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16.15-alpine3.23
+        env:
+          POSTGRES_USER: knowledge
+          POSTGRES_PASSWORD: knowledge
+          POSTGRES_DB: knowledge
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U knowledge"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      redis:
+        image: redis:7.4.11-alpine
+        ports: ["6379:6379"]
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s --health-timeout 3s --health-retries 20
+      qdrant:
+        image: qdrant/qdrant:v1.19.2
+        ports: ["6333:6333"]
+    env:
+      DATABASE_URL: postgresql+psycopg://knowledge:knowledge@127.0.0.1:5432/knowledge
+      REDIS_URL: redis://127.0.0.1:6379/0
+      QDRANT_URL: http://127.0.0.1:6333
+      S3_ENDPOINT_URL: http://127.0.0.1:8333
+      S3_ACCESS_KEY: admin
+      S3_SECRET_KEY: admin
+      MIGRATIONS_ON_BOOT: "false"
+      LOG_JSON: "false"
+      APP_ENV: test
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Start isolated fixture S3 service
+        run: >-
+          docker run -d --name m6-s3 -p 127.0.0.1:8333:8333
+          --mount type=volume,destination=/data
+          -v "$GITHUB_WORKSPACE/infrastructure/seaweedfs/s3.json:/etc/seaweedfs/s3.json:ro"
+          chrislusf/seaweedfs:3.82 server -dir=/data -filer -s3
+          -s3.config=/etc/seaweedfs/s3.json
+      - name: Require all fixture services
+        run: |
+          python - <<'PY'
+          import socket, time
+          for port in (5432, 6379, 6333, 8333):
+              for attempt in range(60):
+                  try:
+                      with socket.create_connection(("127.0.0.1", port), timeout=1):
+                          break
+                  except OSError:
+                      time.sleep(1)
+              else:
+                  raise RuntimeError(f"fixture service port {port} unavailable")
+          PY
+      - name: Wait for an actual S3 round trip
+        run: |
+          python - <<'PY'
+          import os, time, uuid
+          import boto3
+          from botocore.config import Config
+          from botocore.exceptions import ClientError
+          client = boto3.client("s3", endpoint_url=os.environ["S3_ENDPOINT_URL"],
+                                aws_access_key_id=os.environ["S3_ACCESS_KEY"],
+                                aws_secret_access_key=os.environ["S3_SECRET_KEY"],
+                                config=Config(connect_timeout=2, read_timeout=2,
+                                              retries={"max_attempts": 0},
+                                              s3={"addressing_style": "path"}))
+          bucket = "m6-readiness-" + uuid.uuid4().hex
+          for attempt in range(60):
+              try:
+                  try:
+                      client.create_bucket(Bucket=bucket)
+                  except ClientError as error:
+                      if error.response["Error"]["Code"] not in {
+                          "BucketAlreadyOwnedByYou", "BucketAlreadyExists"
+                      }:
+                          raise
+                  client.put_object(Bucket=bucket, Key="probe", Body=b"ready")
+                  assert client.get_object(Bucket=bucket, Key="probe")["Body"].read() == b"ready"
+                  client.delete_object(Bucket=bucket, Key="probe")
+                  client.delete_bucket(Bucket=bucket)
+                  break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise RuntimeError("fixture S3 service never became ready")
+          PY
+      - name: Source admission and runtime regression gates
+        run: >-
+          pytest -q tests/unit/test_connector_config_validation.py
+          tests/unit/test_connector_source_contracts.py
+          tests/unit/test_local_connector_containment.py
+          tests/unit/test_sync_consumer.py tests/unit/test_sync_convergence.py
+          tests/unit/test_sync_deletion.py tests/integration/test_sources.py
+          tests/integration/test_sync_worker_production.py
+          tests/integration/test_connector_migrations.py
+          tests/integration/test_sync_adapters_live.py
+          --junitxml=connector-release.xml
+      - name: Require executed acceptance checks
+        run: |
+          python - <<'PY'
+          import xml.etree.ElementTree as ET
+          root = ET.parse("connector-release.xml").getroot()
+          cases = root.findall(".//testcase")
+          assert cases, "no connector tests executed"
+          skipped = [case.attrib.get("name") for case in cases if case.find("skipped") is not None]
+          assert not skipped, f"connector acceptance skipped: {skipped}"
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: connector-release-${{ github.sha }}
+          path: connector-release.xml
+          if-no-files-found: error
+      - name: Fixture service diagnostics
+        if: failure()
+        run: docker logs --tail 200 m6-s3

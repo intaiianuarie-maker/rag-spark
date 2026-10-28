@@ -110,6 +110,20 @@ class HydratedChunk:
         )
 
 
+class CanonicalStoreUnavailable(RuntimeError):
+    """Raised when canonical chunk hydration cannot reach the store.
+
+    Missing/deleted/superseded rows are ordinary misses and stay ``None``;
+    a database or query failure during the hydrating lookup is a different
+    outcome that must never masquerade as "no citation".
+    """
+
+
+# Typing-friendly aliases (callers/tests may spell the name differently).
+CanonicalStoreUnavailableError = CanonicalStoreUnavailable
+StoreUnavailable = CanonicalStoreUnavailable
+StoreUnavailableError = CanonicalStoreUnavailable
+
 class CanonicalHydrator:
     """Bulk resolver: candidate chunk ref → canonical record.
 

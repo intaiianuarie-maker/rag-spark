@@ -87,6 +87,24 @@ no `eval`/`exec`/`subprocess`/`pickle` exec surface (one `def compile(` method, 
 3. My working copy of this ledger has final §0d/§5 polish not yet in `f693338` —
    commit it with the merge.
 
+## 0e. Round-5 — regression guard + reporting protocol (2026-10-12, HEAD=`dd9ce11`)
+
+- **Reporting order (per museR):** rew1 reports verdicts to museR via prompt replies + dated
+  entries in `handoffs/COORDINATOR-HANDOFF.md` §4, and exchanges with dev11 via handoff files
+  only. Only museR dispatches reviews.
+- **Stream A regression guard (read-only):** 47 passed (3 mandated files), ruff clean, mypy
+  clean; Stream A files byte-identical to HEAD with no coupling to the dirty V1/V2 + Stream B
+  surface. **PASS** — verdict unchanged. Detail: `handoffs/REW1-REGRESSION-2026-10-12.md`.
+
+## 0f. Final verification (2026-10-12, merged HEAD=`46fbf67`)
+
+Final read-only verification on the merged HEAD (V1/V2 G2/G3 merge on top of `dd9ce11`):
+- pytest (3 mandated Stream A files) → **47 passed**; ruff clean; mypy clean (10 files)
+- Merge touched no `packages/agents`, `packages/research` or `packages/models` files; Stream A
+  files byte-identical to the accepted state (hashes unchanged through rounds 3–final)
+- Zero open findings. Final verdict file: `handoffs/REW1-FINAL-2026-10-12.md`; reported to
+  museR via `handoffs/COORDINATOR-HANDOFF.md` §4.
+
 ## VERDICT: ✅ **ACCEPTED** — forwarded to coordinator Antigravity for final merge
 
 > **Reading order:** §0 = round-2 verification, §0c = round-3 (final) verification.

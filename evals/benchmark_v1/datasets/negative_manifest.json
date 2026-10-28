@@ -1,0 +1,585 @@
+{
+  "count": 25,
+  "ids": [
+    "5ab7ff1d5542990e739ec7b9",
+    "5a7dbb605542997cc2c47486",
+    "5abd0803554299700f9d7979",
+    "5a7dbc175542995ed0d1666b",
+    "5a77b6535542995d83181274",
+    "5a88fa145542997e5c09a6e1",
+    "5ab85d6c55429919ba4e22cb",
+    "5ab480c45542990594ba9c36",
+    "5abbdb9a55429931dba145ad",
+    "5abae88c554299660624167e",
+    "5ac160605542994ab5c67d02",
+    "5abe024c5542991f661060a2",
+    "5ac4f7e955429924173fb523",
+    "5ae658855542992ae0d162e3",
+    "5a722a6855429971e9dc9320",
+    "5adf9ee75542992d7e9f93c0",
+    "5a89d3e15542992e4fca83d4",
+    "5ab29426554299545a2cf99f",
+    "5a77a3a355429967ab105211",
+    "5ae45b6b55429970de88d943",
+    "5ae638865542992ae0d1628c",
+    "5a7324e055429901807daf8f",
+    "5a792ad055429907847277d1",
+    "5a8f1672554299458435d558",
+    "5a774e415542994aec3b7280"
+  ],
+  "items": [
+    {
+      "id": "5ab7ff1d5542990e739ec7b9",
+      "type": "comparison",
+      "removed_supporting_titles": [
+        "The Black Keys",
+        "Polvo"
+      ],
+      "snapshot_files": [
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_2.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_3.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_4.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_5.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_6.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_7.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_8.txt",
+        "negatives/5ab7ff1d5542990e739ec7b9/doc_9.txt"
+      ],
+      "snapshot_sha256": "d0390a5339c52cfa76741f474ea75d46d3c9d9a3b5203ffb7b831fb82562252b",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a7dbb605542997cc2c47486",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Jack-in-the-box",
+        "Pop Goes the Weasel"
+      ],
+      "snapshot_files": [
+        "negatives/5a7dbb605542997cc2c47486/doc_0.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_1.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_2.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_3.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_5.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_6.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_7.txt",
+        "negatives/5a7dbb605542997cc2c47486/doc_9.txt"
+      ],
+      "snapshot_sha256": "79bc81c9973691a8e95fe0c3fad398b173563479004cfc98d9d689bd935b4b54",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5abd0803554299700f9d7979",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Caprice No. 5 (Paganini)",
+        "Niccolò Paganini"
+      ],
+      "snapshot_files": [
+        "negatives/5abd0803554299700f9d7979/doc_0.txt",
+        "negatives/5abd0803554299700f9d7979/doc_1.txt",
+        "negatives/5abd0803554299700f9d7979/doc_2.txt",
+        "negatives/5abd0803554299700f9d7979/doc_4.txt",
+        "negatives/5abd0803554299700f9d7979/doc_6.txt",
+        "negatives/5abd0803554299700f9d7979/doc_7.txt",
+        "negatives/5abd0803554299700f9d7979/doc_8.txt",
+        "negatives/5abd0803554299700f9d7979/doc_9.txt"
+      ],
+      "snapshot_sha256": "189d9b63f530b0b5a2a30bf5687423a6a8b9fdd989af60ae2573df3e82483f2f",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a7dbc175542995ed0d1666b",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Anatoly Lunacharsky",
+        "Vpered"
+      ],
+      "snapshot_files": [
+        "negatives/5a7dbc175542995ed0d1666b/doc_0.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_1.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_2.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_4.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_5.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_6.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_8.txt",
+        "negatives/5a7dbc175542995ed0d1666b/doc_9.txt"
+      ],
+      "snapshot_sha256": "b27f98a83cbe00a41cabd883fea4ccfa3d692d52fc7bc296c948c385535e88f0",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a77b6535542995d83181274",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Capellini",
+        "Taglierini"
+      ],
+      "snapshot_files": [
+        "negatives/5a77b6535542995d83181274/doc_0.txt",
+        "negatives/5a77b6535542995d83181274/doc_1.txt",
+        "negatives/5a77b6535542995d83181274/doc_2.txt",
+        "negatives/5a77b6535542995d83181274/doc_5.txt",
+        "negatives/5a77b6535542995d83181274/doc_6.txt",
+        "negatives/5a77b6535542995d83181274/doc_7.txt",
+        "negatives/5a77b6535542995d83181274/doc_8.txt",
+        "negatives/5a77b6535542995d83181274/doc_9.txt"
+      ],
+      "snapshot_sha256": "5cb7effe51daf9dc99ddfc025899e2adf2d5fac71d1ee602ac9d2690c281daf9",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a88fa145542997e5c09a6e1",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Orenda OE600",
+        "Pratt &amp; Whitney Canada PT6"
+      ],
+      "snapshot_files": [
+        "negatives/5a88fa145542997e5c09a6e1/doc_1.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_2.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_3.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_4.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_5.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_7.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_8.txt",
+        "negatives/5a88fa145542997e5c09a6e1/doc_9.txt"
+      ],
+      "snapshot_sha256": "9eae708a95d8fac6bf7ade6b71d8eaa1aef59f59b21363ccf86b0b0f9e15428b",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ab85d6c55429919ba4e22cb",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Guardians of the Galaxy Vol. 2",
+        "Henry Braham"
+      ],
+      "snapshot_files": [
+        "negatives/5ab85d6c55429919ba4e22cb/doc_0.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_1.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_2.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_3.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_5.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_7.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_8.txt",
+        "negatives/5ab85d6c55429919ba4e22cb/doc_9.txt"
+      ],
+      "snapshot_sha256": "963bcac3e03cd187f6379d5cd99092776972890c1f9f70c19298ab70f3e87d87",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ab480c45542990594ba9c36",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Norwegian heavy water sabotage",
+        "Jomar Brun"
+      ],
+      "snapshot_files": [
+        "negatives/5ab480c45542990594ba9c36/doc_0.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_2.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_3.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_4.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_5.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_7.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_8.txt",
+        "negatives/5ab480c45542990594ba9c36/doc_9.txt"
+      ],
+      "snapshot_sha256": "d7b8d50c6c22ea82ea62b05d852d9147e19c874cb6eefa631cc3c0c6aa5e9878",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5abbdb9a55429931dba145ad",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Stranger in Paradise (song)",
+        "Polovtsian Dances"
+      ],
+      "snapshot_files": [
+        "negatives/5abbdb9a55429931dba145ad/doc_1.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_2.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_4.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_5.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_6.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_7.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_8.txt",
+        "negatives/5abbdb9a55429931dba145ad/doc_9.txt"
+      ],
+      "snapshot_sha256": "e57cdcbd71d2a159d0d810e665124175dd91526e13bf0dc5c4aee805ab6f2bc0",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5abae88c554299660624167e",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Pseudaelurus",
+        "Pantherinae"
+      ],
+      "snapshot_files": [
+        "negatives/5abae88c554299660624167e/doc_0.txt",
+        "negatives/5abae88c554299660624167e/doc_1.txt",
+        "negatives/5abae88c554299660624167e/doc_2.txt",
+        "negatives/5abae88c554299660624167e/doc_3.txt",
+        "negatives/5abae88c554299660624167e/doc_4.txt",
+        "negatives/5abae88c554299660624167e/doc_6.txt",
+        "negatives/5abae88c554299660624167e/doc_7.txt",
+        "negatives/5abae88c554299660624167e/doc_9.txt"
+      ],
+      "snapshot_sha256": "3648db5ee25a19ad57b8bf8d6cade3dba44db076e67a4bb814d5fb3942aa9fb0",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ac160605542994ab5c67d02",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Eagle Feather",
+        "Jim Thorpe"
+      ],
+      "snapshot_files": [
+        "negatives/5ac160605542994ab5c67d02/doc_0.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_1.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_2.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_4.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_5.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_6.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_7.txt",
+        "negatives/5ac160605542994ab5c67d02/doc_8.txt"
+      ],
+      "snapshot_sha256": "f2a4a1c9c25054a930cdd31a55a0d7e2577e639fb28bb90084e37b59a0b4ade7",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5abe024c5542991f661060a2",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Robin Himmelmann",
+        "FC St. Pauli"
+      ],
+      "snapshot_files": [
+        "negatives/5abe024c5542991f661060a2/doc_0.txt",
+        "negatives/5abe024c5542991f661060a2/doc_3.txt",
+        "negatives/5abe024c5542991f661060a2/doc_4.txt",
+        "negatives/5abe024c5542991f661060a2/doc_5.txt",
+        "negatives/5abe024c5542991f661060a2/doc_6.txt",
+        "negatives/5abe024c5542991f661060a2/doc_7.txt",
+        "negatives/5abe024c5542991f661060a2/doc_8.txt",
+        "negatives/5abe024c5542991f661060a2/doc_9.txt"
+      ],
+      "snapshot_sha256": "4a22969f6293ba474809d0322556b9667fcd0a75180a4d7327b888c349426e2c",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ac4f7e955429924173fb523",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Jane Fearnley-Whittingstall",
+        "Hugh Fearnley-Whittingstall"
+      ],
+      "snapshot_files": [
+        "negatives/5ac4f7e955429924173fb523/doc_0.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_1.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_3.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_4.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_6.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_7.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_8.txt",
+        "negatives/5ac4f7e955429924173fb523/doc_9.txt"
+      ],
+      "snapshot_sha256": "3120d5cd3d62a3b794b87fea80cbe7d379e5f66f8ae03a4a97f9c07825ed4a07",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ae658855542992ae0d162e3",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Motörhead",
+        "On Parole"
+      ],
+      "snapshot_files": [
+        "negatives/5ae658855542992ae0d162e3/doc_1.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_2.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_3.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_5.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_6.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_7.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_8.txt",
+        "negatives/5ae658855542992ae0d162e3/doc_9.txt"
+      ],
+      "snapshot_sha256": "970e7027aa956a5cef5fea565ce07e8170e26801b591605525817f9e6050cb49",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a722a6855429971e9dc9320",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Tainy Sledstviya",
+        "Anna Kovalchuk"
+      ],
+      "snapshot_files": [
+        "negatives/5a722a6855429971e9dc9320/doc_1.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_2.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_3.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_4.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_5.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_6.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_7.txt",
+        "negatives/5a722a6855429971e9dc9320/doc_9.txt"
+      ],
+      "snapshot_sha256": "031ad6e2a8d0c65167dd16704b1c01e2e35dd9a33f7ab6efb7395f7db4cace98",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5adf9ee75542992d7e9f93c0",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Nickelodeon (Africa)",
+        "Di-Gata Defenders"
+      ],
+      "snapshot_files": [
+        "negatives/5adf9ee75542992d7e9f93c0/doc_0.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_1.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_2.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_3.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_5.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_6.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_7.txt",
+        "negatives/5adf9ee75542992d7e9f93c0/doc_8.txt"
+      ],
+      "snapshot_sha256": "f4c486f33233a9396b3dc01f8b62912488aedc1b63eb5456f0f9b5f45f76e35e",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a89d3e15542992e4fca83d4",
+      "type": "comparison",
+      "removed_supporting_titles": [
+        "Candlelight Red",
+        "The Telescopes"
+      ],
+      "snapshot_files": [
+        "negatives/5a89d3e15542992e4fca83d4/doc_0.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_1.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_3.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_4.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_6.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_7.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_8.txt",
+        "negatives/5a89d3e15542992e4fca83d4/doc_9.txt"
+      ],
+      "snapshot_sha256": "ae5773f25b7d22f46942f7d14dee460f138938fe027bbcf1f19db344ed7c8830",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ab29426554299545a2cf99f",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Calvin Murphy",
+        "Isaiah Thomas (basketball)"
+      ],
+      "snapshot_files": [
+        "negatives/5ab29426554299545a2cf99f/doc_1.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_2.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_3.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_5.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_6.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_7.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_8.txt",
+        "negatives/5ab29426554299545a2cf99f/doc_9.txt"
+      ],
+      "snapshot_sha256": "ebc4eb3a45e919c6c414c396801600f72c914a326bd86186364edb7786c6db11",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a77a3a355429967ab105211",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "James Davidson (Kentucky)",
+        "Harpe brothers"
+      ],
+      "snapshot_files": [
+        "negatives/5a77a3a355429967ab105211/doc_1.txt",
+        "negatives/5a77a3a355429967ab105211/doc_2.txt",
+        "negatives/5a77a3a355429967ab105211/doc_3.txt",
+        "negatives/5a77a3a355429967ab105211/doc_4.txt",
+        "negatives/5a77a3a355429967ab105211/doc_6.txt",
+        "negatives/5a77a3a355429967ab105211/doc_7.txt",
+        "negatives/5a77a3a355429967ab105211/doc_8.txt",
+        "negatives/5a77a3a355429967ab105211/doc_9.txt"
+      ],
+      "snapshot_sha256": "c08e0f28c2c4612a6bd8e2e51e84b26eaaf4dd08d4ab52c226b6c562503168aa",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ae45b6b55429970de88d943",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Elijah Wood",
+        "Flipper (1996 film)"
+      ],
+      "snapshot_files": [
+        "negatives/5ae45b6b55429970de88d943/doc_0.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_1.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_3.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_4.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_5.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_7.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_8.txt",
+        "negatives/5ae45b6b55429970de88d943/doc_9.txt"
+      ],
+      "snapshot_sha256": "8b0925583c007fe16dd28e1cacca35fa5bba4eac44cf361bd5aae37cb254e1e2",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5ae638865542992ae0d1628c",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Spy Hunter",
+        "Highway Pursuit"
+      ],
+      "snapshot_files": [
+        "negatives/5ae638865542992ae0d1628c/doc_0.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_1.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_2.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_3.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_4.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_5.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_7.txt",
+        "negatives/5ae638865542992ae0d1628c/doc_8.txt"
+      ],
+      "snapshot_sha256": "6ded98f34090a7915f23fba7a1b7b7b2a2dd8d229e652e11f4e1e92d572b53e2",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a7324e055429901807daf8f",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Ryan Babel",
+        "Wij zijn Ajax"
+      ],
+      "snapshot_files": [
+        "negatives/5a7324e055429901807daf8f/doc_1.txt",
+        "negatives/5a7324e055429901807daf8f/doc_2.txt",
+        "negatives/5a7324e055429901807daf8f/doc_3.txt",
+        "negatives/5a7324e055429901807daf8f/doc_4.txt",
+        "negatives/5a7324e055429901807daf8f/doc_6.txt",
+        "negatives/5a7324e055429901807daf8f/doc_7.txt",
+        "negatives/5a7324e055429901807daf8f/doc_8.txt",
+        "negatives/5a7324e055429901807daf8f/doc_9.txt"
+      ],
+      "snapshot_sha256": "4e7028aa94a15f84bb79ca91a11d81c63c27f76116489c3868f8dee7ff6bd22c",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a792ad055429907847277d1",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Mickey's Twice Upon a Christmas",
+        "Mickey's PhilharMagic"
+      ],
+      "snapshot_files": [
+        "negatives/5a792ad055429907847277d1/doc_0.txt",
+        "negatives/5a792ad055429907847277d1/doc_1.txt",
+        "negatives/5a792ad055429907847277d1/doc_2.txt",
+        "negatives/5a792ad055429907847277d1/doc_3.txt",
+        "negatives/5a792ad055429907847277d1/doc_5.txt",
+        "negatives/5a792ad055429907847277d1/doc_6.txt",
+        "negatives/5a792ad055429907847277d1/doc_8.txt",
+        "negatives/5a792ad055429907847277d1/doc_9.txt"
+      ],
+      "snapshot_sha256": "973b4ab2114dd30e1bbf7bc465c0e0bf690567de96b3be53925b4d30d4f15c06",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a8f1672554299458435d558",
+      "type": "comparison",
+      "removed_supporting_titles": [
+        "Dracula (plant)",
+        "Crowea"
+      ],
+      "snapshot_files": [
+        "negatives/5a8f1672554299458435d558/doc_1.txt",
+        "negatives/5a8f1672554299458435d558/doc_2.txt",
+        "negatives/5a8f1672554299458435d558/doc_3.txt",
+        "negatives/5a8f1672554299458435d558/doc_4.txt",
+        "negatives/5a8f1672554299458435d558/doc_6.txt",
+        "negatives/5a8f1672554299458435d558/doc_7.txt",
+        "negatives/5a8f1672554299458435d558/doc_8.txt",
+        "negatives/5a8f1672554299458435d558/doc_9.txt"
+      ],
+      "snapshot_sha256": "a927a7a66f0a960771eb94754b377f3fc4d65e3169ec574fede327d8626a5436",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    },
+    {
+      "id": "5a774e415542994aec3b7280",
+      "type": "bridge",
+      "removed_supporting_titles": [
+        "Rob Marciano",
+        "Kait Parker"
+      ],
+      "snapshot_files": [
+        "negatives/5a774e415542994aec3b7280/doc_0.txt",
+        "negatives/5a774e415542994aec3b7280/doc_1.txt",
+        "negatives/5a774e415542994aec3b7280/doc_2.txt",
+        "negatives/5a774e415542994aec3b7280/doc_3.txt",
+        "negatives/5a774e415542994aec3b7280/doc_6.txt",
+        "negatives/5a774e415542994aec3b7280/doc_7.txt",
+        "negatives/5a774e415542994aec3b7280/doc_8.txt",
+        "negatives/5a774e415542994aec3b7280/doc_9.txt"
+      ],
+      "snapshot_sha256": "5b063515b931f026544fdee64fa7dab077860908eb9f438cf4fcb140ecd047bb",
+      "certified_unanswerable": true,
+      "verdict": "CLEAN",
+      "audit": "answer string absent from retained snapshot; supporting titles removed"
+    }
+  ],
+  "certified_all": true,
+  "clean_count": 25,
+  "quarantined_count": 0
+}

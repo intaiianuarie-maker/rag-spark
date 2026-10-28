@@ -11,6 +11,7 @@ Implements:
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from retrieval.interfaces import RetrievalMethod, RetrievedItem
 
@@ -54,10 +55,21 @@ class GraphRetriever:
         )
 
         evidence_chunk_ids: set[str] = set()
+        chunk_scores: dict[str, float] = {}
         for ent in subgraph_entities:
-            evidence_chunk_ids.update(ent.chunk_ids)
+            for chunk_id in ent.chunk_ids:
+                evidence_chunk_ids.add(chunk_id)
+                chunk_scores[chunk_id] = min(chunk_scores.get(chunk_id, 0.0) + 1.0, 1.0)
         for rel in subgraph_rels:
-            evidence_chunk_ids.update(rel.chunk_ids)
+            for chunk_id in rel.chunk_ids:
+                evidence_chunk_ids.add(chunk_id)
+                chunk_scores[chunk_id] = min(chunk_scores.get(chunk_id, 0.0) + 1.0, 1.0)
+
+        # Rank evidence by graph relevance (mention support), not chunk id order.
+        ordered_evidence = sorted(
+            evidence_chunk_ids,
+            key=lambda chunk_id: (-chunk_scores.get(chunk_id, 0.0), chunk_id),
+        )
 
         # Generate summary description of extracted knowledge graph subgraph
         rel_descriptions = [
@@ -76,7 +88,7 @@ class GraphRetriever:
         return GraphSearchResult(
             entities=subgraph_entities,
             relationships=subgraph_rels,
-            evidence_chunk_ids=sorted(evidence_chunk_ids),
+            evidence_chunk_ids=ordered_evidence,
             summary=summary,
             score=1.0,
         )
@@ -85,30 +97,65 @@ class GraphRetriever:
         self,
         workspace_id: str,
         query: str,
+        *,
+        max_communities: int | None = None,
+        max_global_communities: int | None = None,
+        max_evidence_chunks: int | None = None,
+        **kwargs: Any,
     ) -> GraphSearchResult:
-        """Global graph retrieval: matches query terms against community summaries."""
+        """Global graph retrieval: matches query terms against community summaries.
+
+        Expansion is bounded (`max_communities`, `max_evidence_chunks`) so a
+        community tree cannot grow without limit; evidence is ranked by the
+        community term overlap that surfaced it instead of chunk id order.
+        """
+        if max_communities is None:
+            max_communities = max_global_communities
+        if max_communities is None:
+            max_communities = kwargs.get("max_communities", kwargs.get("max_global_communities", 5))
+        if max_evidence_chunks is None:
+            max_evidence_chunks = kwargs.get("max_evidence_chunks", kwargs.get("max_chunks", 20))
+        max_communities = max(1, int(max_communities))
+        max_evidence_chunks = max(1, int(max_evidence_chunks))
+
         communities = await self._store.get_communities(workspace_id)
         if not communities:
             return GraphSearchResult()
 
         tokens = set(re.findall(r"\w+", query.lower()))
-        matched_comms = []
-        evidence_chunks: set[str] = set()
-
+        scored_communities = []
         for comm in communities:
             comm_text = f"{comm.title} {comm.summary}".lower()
             overlap = sum(1 for t in tokens if t in comm_text)
             if overlap > 0:
-                matched_comms.append(comm)
-                for eid in comm.entity_ids:
-                    ent = await self._store.get_entity(workspace_id, eid)
-                    if ent:
-                        evidence_chunks.update(ent.chunk_ids)
+                scored_communities.append((overlap, comm))
+        scored_communities.sort(key=lambda item: (-item[0], item[1].title))
+        matched_communities = [comm for _, comm in scored_communities[:max_communities]]
 
-        summary_parts = [f"[{c.title}] {c.summary}" for c in matched_comms]
+        chunk_scores: dict[str, float] = {}
+        evidence_chunks: set[str] = set()
+        per_community_entity_limit = max(1, max_evidence_chunks)
+        matched_scored_communities = [
+            item for item in scored_communities if item[1] in matched_communities
+        ]
+        for overlap, comm in matched_scored_communities:
+            for eid in comm.entity_ids[:per_community_entity_limit]:
+                ent = await self._store.get_entity(workspace_id, eid)
+                if ent:
+                    for chunk_id in ent.chunk_ids:
+                        evidence_chunks.add(chunk_id)
+                        chunk_scores[chunk_id] = min(
+                            chunk_scores.get(chunk_id, 0.0) + float(overlap), 1.0
+                        )
+        ordered_evidence = sorted(
+            evidence_chunks,
+            key=lambda chunk_id: (-chunk_scores.get(chunk_id, 0.0), chunk_id),
+        )[:max_evidence_chunks]
+
+        summary_parts = [f"[{c.title}] {c.summary}" for c in matched_communities]
         return GraphSearchResult(
-            communities=matched_comms,
-            evidence_chunk_ids=sorted(evidence_chunks),
+            communities=matched_communities,
+            evidence_chunk_ids=ordered_evidence,
             summary="\n\n".join(summary_parts),
             score=0.9,
         )
@@ -133,14 +180,20 @@ class GraphRetriever:
         if not result.summary and not result.entities:
             return items
 
-        # Routing passage (hint only): overwritten by canonical hydration
-        # before context build, and never citable on its own — see above.
-        passage = f"[Knowledge Graph Context]\n{result.summary}"
+        # T-K02: graph items emit EMPTY content + routing_hint marker so no
+        # consumer mistakes the synthesized hint for evidence. Canonical
+        # hydration (``answer.hydration.HydratingOrchestrator``) fills the
+        # real text before prompt build; when hydration is unavailable the
+        # content stays empty — the routing hint never flows as evidence.
         # Primary item carrying chunk IDs for citation resolution
+        seen_chunks: set[str] = set()
         for chunk_id in result.evidence_chunk_ids:
+            if chunk_id in seen_chunks:
+                continue
+            seen_chunks.add(chunk_id)
             items.append(
                 RetrievedItem(
-                    content=passage,
+                    content="",
                     score=result.score,
                     method=RetrievalMethod.FUSED,
                     workspace_id=workspace_id,
@@ -157,7 +210,7 @@ class GraphRetriever:
         if not items and result.summary:
             items.append(
                 RetrievedItem(
-                    content=passage,
+                    content="",
                     score=result.score,
                     method=RetrievalMethod.FUSED,
                     workspace_id=workspace_id,

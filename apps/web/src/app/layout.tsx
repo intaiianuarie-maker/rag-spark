@@ -34,17 +34,20 @@ export default function RootLayout({ children }: { children: ReactNode }) {
       <body className="flex min-h-full flex-col bg-background text-foreground">
         <WorkspaceProvider>
           <header className="border-b border-neutral-200 dark:border-neutral-800">
-            <div className="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-6 py-4">
+            <div className="mx-auto flex w-full max-w-5xl flex-wrap items-center justify-between gap-4 px-6 py-4">
               <Link href="/" className="flex items-center gap-2 font-semibold tracking-tight">
                 <span className="flex h-6 w-6 items-center justify-center rounded-md bg-neutral-900 text-[10px] font-bold text-white dark:bg-white dark:text-neutral-900">
                   KO
                 </span>
                 Knowledge OS
               </Link>
-              <div className="flex items-center gap-3">
-                <nav aria-label="Primary" className="hidden text-sm text-neutral-500 sm:block dark:text-neutral-400">
+              <div className="flex flex-wrap items-center gap-3">
+                <nav aria-label="Primary" className="flex flex-wrap gap-y-2 text-sm text-neutral-500 dark:text-neutral-400">
                   <Link href="/ask" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Ask</Link>
                   <Link href="/search" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Search</Link>
+                  <Link href="/knowledge" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Knowledge</Link>
+                  <Link href="/sources" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Sources</Link>
+                  <Link href="/eval" className="px-2 hover:text-neutral-800 dark:hover:text-neutral-200">Evaluation</Link>
                 </nav>
                 <WorkspaceSwitcher />
               </div>

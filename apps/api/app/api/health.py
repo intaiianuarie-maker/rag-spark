@@ -7,6 +7,12 @@ from fastapi import APIRouter
 
 from app.adapters.readiness import check_dependencies
 from app.version import get_version_info
+from app.workflows.store import (
+    approvals_store_mode,
+    checkpoint_db_mode,
+    draft_store_mode,
+    runs_store_mode,
+)
 
 router = APIRouter(tags=["system"])
 
@@ -24,8 +30,16 @@ async def health() -> dict[str, str]:
 
 
 @router.get("/version", summary="Build/version info")
-async def version() -> dict[str, str]:
-    return get_version_info()
+async def version() -> dict[str, object]:
+    info: dict[str, object] = dict(get_version_info())
+    info["store_modes"] = {
+        "drafts": draft_store_mode(),
+        "runs": runs_store_mode(),
+        "approvals": approvals_store_mode(),
+        "checkpoints": checkpoint_db_mode(),
+    }
+    info["draft_migration"] = "applied" if draft_store_mode() == "persistent" else "pending"
+    return info
 
 
 @router.get("/ready", summary="Readiness probe (non-fatal dependency status)")
@@ -45,4 +59,11 @@ async def ready() -> dict[str, object]:
         "service": settings.app_name,
         "version": settings.version,
         "dependencies": {name: dep.model_dump() for name, dep in dependencies.items()},
+        "store_modes": {
+            "drafts": draft_store_mode(),
+            "runs": runs_store_mode(),
+            "approvals": approvals_store_mode(),
+            "checkpoints": checkpoint_db_mode(),
+        },
+        "draft_migration": "applied" if draft_store_mode() == "persistent" else "pending",
     }

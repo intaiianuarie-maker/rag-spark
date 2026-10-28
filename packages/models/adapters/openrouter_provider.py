@@ -35,6 +35,10 @@ from ..interfaces import (
     LLMProvider,
 )
 from ..router_config import LOCAL_ONLY_SENTINEL, is_local_endpoint
+from ..usage import StreamUsage, stream_usage_ctx
+from .openrouter_transport import (
+    OpenRouterTransport,
+)
 
 # ---------------------------------------------------------------------------
 # Constants & Model Pins
@@ -136,9 +140,7 @@ def _is_paid_gemini_generation(model: str) -> bool:
 def _guard_generation_model(model: str) -> None:
     lowered = model.lower().strip()
     if lowered == DEFAULT_EMBEDDING_MODEL.lower() or "embedding" in lowered:
-        raise ProviderPolicyError(
-            f"Embedding model '{model}' cannot be used for text generation"
-        )
+        raise ProviderPolicyError(f"Embedding model '{model}' cannot be used for text generation")
     if _is_paid_gemini_generation(model):
         raise ProviderPolicyError(
             f"Paid gemini-generation is locked by policy; generators must use gemma free-first "
@@ -190,6 +192,7 @@ class CallStats:
     total_tokens: int = 0
     cost_usd: float = 0.0
     cost_is_metered: bool = True
+    n_unreported_usage_calls: int = 0
 
     @property
     def failure_rate(self) -> float:
@@ -210,6 +213,7 @@ class CallStats:
             "total_tokens": self.total_tokens,
             "cost_usd": round(self.cost_usd, 8),
             "cost_is_metered": self.cost_is_metered,
+            "unreported_usage_calls": self.n_unreported_usage_calls,
             "failure_rate": round(self.failure_rate, 4),
         }
 
@@ -246,9 +250,9 @@ class AccountingRegistry:
         *,
         call_site: str = "default",
         model: str = "",
-        prompt_tokens: int = 0,
-        completion_tokens: int = 0,
-        cost_usd: float = 0.0,
+        prompt_tokens: int | None = 0,
+        completion_tokens: int | None = 0,
+        cost_usd: float | None = 0.0,
         retries: int = 0,
         failed: bool = False,
         fallback: bool = False,
@@ -269,10 +273,18 @@ class AccountingRegistry:
             elif model:
                 stats.n_paid_calls += 1
             stats.n_vectors += vectors
-            stats.prompt_tokens += prompt_tokens
-            stats.completion_tokens += completion_tokens
-            stats.total_tokens += prompt_tokens + completion_tokens
-            stats.cost_usd += cost_usd
+            if prompt_tokens is None or completion_tokens is None:
+                stats.n_unreported_usage_calls += 1
+            if prompt_tokens is not None:
+                stats.prompt_tokens += prompt_tokens
+                stats.total_tokens += prompt_tokens
+            if completion_tokens is not None:
+                stats.completion_tokens += completion_tokens
+                stats.total_tokens += completion_tokens
+            if cost_usd is None:
+                stats.cost_is_metered = False
+            else:
+                stats.cost_usd += cost_usd
 
     def record_failure(self, call_site: str = "default", retries: int = 0) -> None:
         with self._lock:
@@ -300,6 +312,8 @@ class AccountingRegistry:
                 total.completion_tokens += s.completion_tokens
                 total.total_tokens += s.total_tokens
                 total.cost_usd += s.cost_usd
+                total.n_unreported_usage_calls += s.n_unreported_usage_calls
+                total.cost_is_metered = total.cost_is_metered and s.cost_is_metered
             return {
                 "total": total.as_dict(),
                 "sites": sites_out,
@@ -349,6 +363,10 @@ def _trim_metadata(
     return meta
 
 
+# OpenRouter /embeddings rejects more than 100 inputs per request (HTTP 400, probed 2026-10-28).
+EMBEDDING_BATCH_LIMIT = 100
+
+
 def _check_embedding_response(payload: object, expected: int, endpoint: str) -> list[list[float]]:
     if not isinstance(payload, dict):
         raise EmbedderError(f"{endpoint}: response was {type(payload).__name__}, not JSON")
@@ -379,6 +397,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
     model_name: ClassVar[str] = DEFAULT_EMBEDDING_MODEL
     dimension: ClassVar[int] = DEFAULT_EMBEDDING_DIMENSION
     revision: ClassVar[str] = DEFAULT_EMBEDDING_MODEL
+    # Stable encoder identity, independent of the chat/HTTP adapter's Python
+    # class name. scripts/rebuild_with_manifest.GeminiEmbedding2 used the same
+    # OpenRouter /embeddings model + input payload and 3072-d output, with no
+    # task/pooling/vector transform. Keep its persisted label, not an alias in
+    # the strict identity comparison (model/revision/dimension stay mandatory).
+    embedding_identity_provider: ClassVar[str] = "GeminiEmbedding2"
 
     def __init__(
         self,
@@ -426,6 +450,16 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
 
         self._sync_client = sync_client
         self._owns_sync_client = sync_client is None
+
+        self.transport = OpenRouterTransport(
+            api_key=self.api_key,
+            base_url=self.base_url,
+            timeout=self.timeout,
+            max_retries=self.max_attempts,
+            backoff_base_seconds=self.backoff_base_seconds,
+            client=self._client,
+            sync_client=self._sync_client,
+        )
 
     @property
     def stats(self) -> CallStats:
@@ -663,6 +697,9 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                 "model": m,
                 "messages": _to_openai_messages(request.messages),
                 "stream": True,
+                # Compatibility for OpenAI-compatible gateways. OpenRouter
+                # itself now always reports final usage (include_usage is deprecated).
+                "stream_options": {"include_usage": True},
             }
             if request.temperature is not None:
                 p["temperature"] = request.temperature
@@ -674,7 +711,32 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
 
         active_model = primary_model
         fallback_triggered = False
-        chunks_emitted = 0
+        usage = stream_usage_ctx.get()
+        usage = usage if usage is not None else StreamUsage()
+        usage.model = active_model
+        usage.model_status = "selected"
+
+        def _decode(raw_data: str) -> str | None:
+            try:
+                obj = json.loads(raw_data)
+            except json.JSONDecodeError:
+                return None
+            if not isinstance(obj, dict):
+                return None
+            # Usage-only frames must be observed before looking at choices.
+            usage.observe(obj)
+            if obj.get("error") is not None:
+                GLOBAL_ACCOUNTING.record_failure(call_site=site)
+                raise LLMProviderError("OpenRouter stream reported an error")
+            choices = obj.get("choices")
+            if not isinstance(choices, list) or not choices or not isinstance(choices[0], dict):
+                return None
+            if choices[0].get("finish_reason") == "error":
+                GLOBAL_ACCOUNTING.record_failure(call_site=site)
+                raise LLMProviderError("OpenRouter stream reported an error")
+            delta = choices[0].get("delta")
+            chunk = delta.get("content") if isinstance(delta, dict) else None
+            return chunk if isinstance(chunk, str) and chunk else None
 
         # Attempt connect
         try:
@@ -715,15 +777,9 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                             raw_data = line[5:].strip()
                             if raw_data == "[DONE]":
                                 break
-                            try:
-                                obj = json.loads(raw_data)
-                                delta = (obj.get("choices") or [{}])[0].get("delta") or {}
-                                chunk = delta.get("content")
-                                if chunk:
-                                    chunks_emitted += 1
-                                    yield str(chunk)
-                            except Exception:
-                                continue
+                            chunk = _decode(raw_data)
+                            if chunk:
+                                yield chunk
         except LLMProviderError:
             raise
         except Exception as e:
@@ -735,6 +791,11 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                 raise LLMProviderError(f"LiteLLM stream failed: {e}") from e
 
         if fallback_triggered:
+            usage.model = active_model
+            usage.model_status = "selected"
+            # A failed primary response's usage must not describe its fallback.
+            usage.prompt_tokens = usage.completion_tokens = usage.total_tokens = None
+            usage.cost_usd = None
             try:
                 async with client.stream(
                     "POST",
@@ -756,29 +817,23 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                         raw_data = line[5:].strip()
                         if raw_data == "[DONE]":
                             break
-                        try:
-                            obj = json.loads(raw_data)
-                            delta = (obj.get("choices") or [{}])[0].get("delta") or {}
-                            chunk = delta.get("content")
-                            if chunk:
-                                chunks_emitted += 1
-                                yield str(chunk)
-                        except Exception:
-                            continue
+                        chunk = _decode(raw_data)
+                        if chunk:
+                            yield chunk
             except LLMProviderError:
                 raise
             except Exception as e:
                 GLOBAL_ACCOUNTING.record_failure(call_site=site)
                 raise LLMProviderError(f"LiteLLM stream failed: {e}") from e
 
-        # Stream accounting: at least count the call and stream status
-        cost_usd = compute_cost_usd(active_model, chunks_emitted * 2, chunks_emitted)
+        # Sum reported counts only; chunk boundaries are not token boundaries.
+        # Unknown usage/cost stays explicit instead of becoming a fabricated zero.
         GLOBAL_ACCOUNTING.record_call(
             call_site=site,
             model=active_model,
-            prompt_tokens=chunks_emitted * 2,
-            completion_tokens=chunks_emitted,
-            cost_usd=cost_usd,
+            prompt_tokens=usage.prompt_tokens,
+            completion_tokens=usage.completion_tokens,
+            cost_usd=usage.cost_usd,
             fallback=fallback_triggered,
         )
 
@@ -796,6 +851,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         batch = list(texts)
         if not batch:
             return []
+        if len(batch) > EMBEDDING_BATCH_LIMIT:
+            out: list[list[float]] = []
+            for start in range(0, len(batch), EMBEDDING_BATCH_LIMIT):
+                part = batch[start : start + EMBEDDING_BATCH_LIMIT]
+                out.extend(await self.embed_documents(part, call_site=site))
+            return out
 
         client = self._http()
         url = f"{self.base_url}/embeddings"
@@ -819,9 +880,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     await asyncio.sleep(self.backoff_base_seconds * (2 ** (attempt - 1)))
                     continue
                 GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                detail = ""
+                if isinstance(e, httpx.HTTPStatusError):
+                    detail = f" body={e.response.text[:300]!r}"
                 raise EmbedderError(
                     f"{DEFAULT_EMBEDDING_MODEL}: embedding failed after {self.max_attempts} "
-                    f"attempts (last error: {type(e).__name__}: {e})"
+                    f"attempts (last error: {type(e).__name__}: {e}{detail})"
                 ) from e
 
         for vec in vectors:
@@ -878,6 +942,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         batch = list(texts)
         if not batch:
             return []
+        if len(batch) > EMBEDDING_BATCH_LIMIT:
+            out: list[list[float]] = []
+            for start in range(0, len(batch), EMBEDDING_BATCH_LIMIT):
+                part = batch[start : start + EMBEDDING_BATCH_LIMIT]
+                out.extend(self.embed(part, call_site=site))
+            return out
 
         client = self._http_sync()
         url = f"{self.base_url}/embeddings"
@@ -901,9 +971,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     time.sleep(self.backoff_base_seconds * (2 ** (attempt - 1)))
                     continue
                 GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                detail = ""
+                if isinstance(e, httpx.HTTPStatusError):
+                    detail = f" body={e.response.text[:300]!r}"
                 raise EmbedderError(
                     f"{DEFAULT_EMBEDDING_MODEL}: embedding failed after {self.max_attempts} "
-                    f"attempts (last error: {type(e).__name__}: {e})"
+                    f"attempts (last error: {type(e).__name__}: {e}{detail})"
                 ) from e
 
         for vec in vectors:

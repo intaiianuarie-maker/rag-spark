@@ -127,6 +127,30 @@ x-backend-env: &backend-env
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set explicitly (>=32 chars, no shipped default) - see handoffs/CODE1-HANDOFF.md T-R01}
   # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
   CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
+  WORKFLOW_DRAFT_DB: ${WORKFLOW_DRAFT_DB:?WORKFLOW_DRAFT_DB must be set to the durable workflow draft sqlite path}
+  WORKFLOW_RUNS_DB: ${WORKFLOW_RUNS_DB:?WORKFLOW_RUNS_DB must be set to the durable workflow runs sqlite path}
+  WORKFLOW_APPROVALS_DB: ${WORKFLOW_APPROVALS_DB:?WORKFLOW_APPROVALS_DB must be set to the durable workflow approvals sqlite path}
+  WORKFLOW_CHECKPOINT_DB: ${WORKFLOW_CHECKPOINT_DB:?WORKFLOW_CHECKPOINT_DB must be set to the durable workflow checkpoint sqlite path}
+  # T-IMP-001 (POLICE F4b): the durable agent store MUST live on a volume
+  # shared by api and worker. The `agentdata` named volume is mounted at the
+  # RESOLVED shared root in BOTH services, and the store path defaults
+  # inside that root, so the admitted database is always on the same named
+  # volume. A path outside the shared root is refused by the application
+  # (503 / no consumer), because two containers with the same relative path
+  # have two different filesystems.
+  AGENT_STORE_SHARED_ROOT: ${AGENT_STORE_SHARED_ROOT:-/app/.agent}
+  # The path the shared agent volume is ACTUALLY mounted at (the compose
+  # mount target below). The application refuses to report the store as
+  # shared when the resolved root is not this mount (POLICE F4b).
+  AGENT_STORE_SHARED_MOUNT: ${AGENT_STORE_SHARED_ROOT:-/app/.agent}
+  # The other mount targets inside the container image tree. When the
+  # resolved shared root covers one of them, the agent volume is only present
+  # where nothing else is bound: the store file would live in a
+  # per-container filesystem and api and worker would open different files
+  # (POLICE F4b, P2 shadowing finding). The application refuses such a
+  # configuration instead of reporting the store as shared.
+  AGENT_STORE_SHADOW_MOUNTS: /app/apps/api,/app/apps/worker,/app/packages,/app/.graph,/app/.workflow
+  AGENT_STORE_DB: ${AGENT_STORE_DB:-${AGENT_STORE_SHARED_ROOT:-/app/.agent}/agent.db}
 
 services:
   postgres:
@@ -218,6 +242,11 @@ services:
       - ./packages:/app/packages
       # T-R11: shared with the worker so both open the SAME graph sqlite file.
       - graphdata:/app/.graph
+      - workflowdata:/app/.workflow
+      # T-IMP-001 (POLICE F4b): the durable agent store (run/step/checkpoint +
+      # queue) lives on a volume shared with the worker, mounted at the
+      # RESOLVED shared root so the admitted database is on that volume.
+      - agentdata:${AGENT_STORE_SHARED_ROOT:-/app/.agent}
     command:
       ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
@@ -237,6 +266,11 @@ services:
       # T-R11: same named volume as api. Extraction writes here and the api
       # reads here; without this the two processes never see each other's rows.
       - graphdata:/app/.graph
+      - workflowdata:/app/.workflow
+      # T-IMP-001 (POLICE F4b): same named volume as api, mounted at the same
+      # RESOLVED shared root — the durable agent queue the API writes to is
+      # the queue this worker consumes from.
+      - agentdata:${AGENT_STORE_SHARED_ROOT:-/app/.agent}
 
   web:
     # Frontend shell owned by code2 (apps/web). Uses the app's production
@@ -291,8 +325,12 @@ services:
       retries: 3
 
 volumes:
+  workflowdata:
   # T-R11: the ONE persistent graph store shared by api and worker.
   graphdata:
+  # T-IMP-001 (POLICE F4b): the ONE persistent agent store (runs, steps,
+  # checkpoints, queue) shared by api and worker.
+  agentdata:
   pgdata:
   redisdata:
   qdrantdata:

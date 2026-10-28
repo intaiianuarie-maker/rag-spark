@@ -30,3 +30,6 @@ data/
 .idea/
 .vscode/
 .graph/
+
+# T-X01: 818MB H2 embedding blob lives on disk, never in git
+evals/benchmark_v1/index/vectors.npy

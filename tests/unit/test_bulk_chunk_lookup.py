@@ -26,7 +26,7 @@ from typing import Any
 
 import pytest
 from answer.adapters.postgres_lookup import MemoryChunkLookup, PostgresChunkLookup
-from answer.hydration import CanonicalHydrator
+from answer.hydration import CanonicalHydrator, CanonicalStoreUnavailable
 
 os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
@@ -265,10 +265,11 @@ async def test_an_empty_batch_issues_no_query_at_all() -> None:
 
 
 async def test_a_store_failure_fails_closed() -> None:
-    """Like ``get`` returning None: no raise, no partial batch."""
+    """An outage raises, so it is never mistaken for "not found" or a partial batch."""
     lookup = PostgresChunkLookup(session_factory=_SessionFactory(_BrokenSession()))
 
-    assert await lookup.get_many([_uid(1), _uid(2)]) == {}
+    with pytest.raises(CanonicalStoreUnavailable):
+        await lookup.get_many([_uid(1), _uid(2)])
 
 
 # --------------------------------------------------------------------------------------

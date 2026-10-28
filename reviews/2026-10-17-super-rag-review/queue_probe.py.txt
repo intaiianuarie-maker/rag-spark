@@ -1,0 +1,78 @@
+from __future__ import annotations
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import json
+from pathlib import Path
+import re
+import sqlite3
+import subprocess
+import sys
+import tempfile
+import threading
+from types import SimpleNamespace
+
+REPO = Path('/root/code/Super Rag/knowledge-os')
+sys.path.insert(0, str(REPO / 'packages'))
+from stores.agent_stores import SqliteAgentRunQueue, get_queue
+
+with tempfile.TemporaryDirectory(prefix='super-rag-review-') as temp:
+    path = Path(temp) / 'queue.sqlite3'
+    one, two = SqliteAgentRunQueue(path), SqliteAgentRunQueue(path)
+    asyncio.run(one.enqueue('same-run'))
+    barrier = threading.Barrier(2)
+    class Connection:
+        def __init__(self, *args, **kwargs):
+            self.real = sqlite3.connect(*args, **kwargs)
+        def __enter__(self):
+            self.real.__enter__()
+            return self
+        def __exit__(self, *args):
+            return self.real.__exit__(*args)
+        def execute(self, sql, args=()):
+            cursor = self.real.execute(sql, args)
+            if sql == 'SELECT run_id FROM agent_ready LIMIT 1':
+                row = cursor.fetchone()
+                barrier.wait(timeout=10)
+                return SimpleNamespace(fetchone=lambda: row)
+            return cursor
+        def commit(self):
+            self.real.commit()
+    for queue in (one, two):
+        queue._sqlite3 = SimpleNamespace(connect=Connection)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        tasks = [pool.submit(asyncio.run, queue.claim(30)) for queue in (one, two)]
+        claims = [task.result(timeout=15) for task in tasks]
+    print(json.dumps({'sqlite_concurrent_claims': [str(c) if c else None for c in claims],
+                      'different_tokens': claims[0].token != claims[1].token,
+                      'ack_results': [asyncio.run(q.ack(c)) for q, c in zip((one, two), claims)]}))
+
+asyncio.run(get_queue().enqueue('parent-only-run'))
+child = subprocess.check_output([sys.executable, '-c',
+    "import sys,asyncio;sys.path.insert(0,sys.argv[1]);from stores.agent_stores import get_queue;print(asyncio.run(get_queue().depth()))",
+    str(REPO/'packages')], text=True)
+print(json.dumps({'default_queue_parent_depth': asyncio.run(get_queue().depth()),
+                  'default_queue_child_depth': int(child)}))
+
+patterns = {
+    'private-key': re.compile(rb'-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----'),
+    'openrouter-key': re.compile(rb'sk-or-v1-[A-Za-z0-9]{32,}'),
+    'github-token': re.compile(rb'(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,})'),
+    'aws-access-key': re.compile(rb'AKIA[0-9A-Z]{16}'),
+}
+paths = subprocess.check_output(['git','ls-files','-z','--cached','--others','--exclude-standard'],cwd=REPO).split(b'\0')
+hits = []
+large = []
+for raw in sorted(set(paths)):
+    if not raw:
+        continue
+    file = REPO / raw.decode()
+    if not file.is_file():
+        continue
+    if file.stat().st_size > 50_000_000:
+        large.append(str(file.relative_to(REPO)))
+        continue
+    data = file.read_bytes()
+    for label, pattern in patterns.items():
+        if pattern.search(data):
+            hits.append([str(file.relative_to(REPO)), label])
+print(json.dumps({'working_tree_credential_pattern_hits': hits, 'files_over_50MB': large}))

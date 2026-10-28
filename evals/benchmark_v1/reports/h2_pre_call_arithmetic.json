@@ -1,0 +1,23 @@
+{
+  "run_tag": "h2_retrieval_ab",
+  "computed_utc": "2026-10-16T12:11:55.697316+00:00",
+  "n_attempts": 3,
+  "query_embeds": 3,
+  "shared_drafts": 3,
+  "arms": 2,
+  "max_repairs_per_arm": 1,
+  "worst_case_repairs": 6,
+  "metered_units_per_attempt": 4,
+  "worst_embed_unit_usd": 1e-05,
+  "worst_gen_unit_usd": 0.00011097,
+  "worst_per_attempt_usd": 0.00034291,
+  "worst_total_usd": 0.001029,
+  "wave_cap_usd": 2.0,
+  "metered_spent_usd": 0.09403664,
+  "index_sunk_usd": 1.592577,
+  "remaining_cap_usd": 0.313386,
+  "note": "Worst case prices every generation leg at the paid-generation worst unit (P02 measured) and the per-query embed at a conservative 1e-5. The 66.6k corpus index is already built and recorded in budget_ledger.csv (cost_projection rows, run_tag h2-index) and is subtracted as sunk, so remaining_cap_usd is the real in-cap runtime headroom against the 2.00 USD wave budget.",
+  "verdict": "PROCEED",
+  "retrieval_k": 10,
+  "slices": "hotpot:150"
+}

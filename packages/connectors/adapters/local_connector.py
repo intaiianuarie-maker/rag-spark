@@ -88,11 +88,16 @@ class LocalFolderConnector(Connector):
         )
 
     async def fetch(self, config: ConnectorConfig, item: SourceItem) -> bytes:
-        root = self._root(config)
+        root = self._root(config).resolve()
         # Resolve within the root; refuse traversal (external_id is the rel path).
+        # Use path-component containment (not string prefix) so a sibling such
+        # as ``root/../root-evil`` cannot slip through, and resolve symlinks so
+        # an in-root symlink pointing outside is refused.
         target = (root / item.external_id).resolve()
-        if not str(target).startswith(str(root.resolve())):
-            raise ValueError(f"path escapes root: {item.external_id}")
+        try:
+            target.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"path escapes root: {item.external_id}") from exc
         if not target.is_file():
             raise KeyError(f"unknown external_id: {item.external_id}")
         return target.read_bytes()

@@ -12,6 +12,8 @@ built, i.e. when ``/ask`` is called.
 
 from __future__ import annotations
 
+import logging
+
 from models.adapters.litellm_provider import LiteLLMProvider
 from models.router_config import is_local_model, local_gateway_url
 
@@ -23,7 +25,46 @@ from .verification import ClaimGrounder, CrossLanguageGrounder, ExtractiveGround
 #: collection). T-V1-071: the EFFECTIVE name is ``core.config.vector_collection()``,
 #: so the ingest writer, the purge/cleanup paths and this reader can never drift
 #: onto different collections; this constant stays the documented default.
+logger = logging.getLogger("knowledge_os.answer.factory")
+
 DEFAULT_COLLECTION = "knowledge"
+
+def _is_egress_sensitive_value(value: object) -> bool:
+    """Duck-typed extraction of a sensitive/local-only verdict from a payload."""
+    if hasattr(value, "sensitive"):
+        return bool(value.sensitive)
+    if isinstance(value, dict):
+        if "sensitive" in value:
+            return bool(value.get("sensitive"))
+        if "local_only" in value:
+            return bool(value.get("local_only"))
+    if isinstance(value, (list, tuple)):
+        return any(_is_egress_sensitive_value(item) for item in value)
+    return bool(value)
+
+
+def _egress_sensitive(**kwargs) -> bool:
+    direct = (
+        kwargs.get("sensitive")
+        or kwargs.get("local_only")
+        or kwargs.get("workspace_sensitive")
+        or kwargs.get("is_sensitive")
+    )
+    if direct is True:
+        return True
+    if direct is False:
+        pass
+    for key, value in kwargs.items():
+        if not ("sensitive" in key or "local_only" in key or "egress" in key):
+            continue
+        if value is None:
+            continue
+        if _is_egress_sensitive_value(value):
+            return True
+    policy = kwargs.get("policy") or kwargs.get("egress_policy")
+    if policy is not None and _is_egress_sensitive_value(policy):
+        return True
+    return False
 
 
 def _llm_provider_for(model: str) -> LiteLLMProvider:
@@ -42,21 +83,41 @@ def _llm_provider_for(model: str) -> LiteLLMProvider:
     return LiteLLMProvider()
 
 
-def create_orchestrator(*, collection: str | None = None):
+def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
     """Dense (Qdrant) + lexical (PG FTS) + rerank (infinity) hybrid orchestrator.
 
-    G4 wiring: threads the optional graph retriever built by
-    ``graph.factory.create_graph_retriever``. When ``GRAPH_MODE=off`` (default)
-    the factory returns ``None`` and the orchestrator's graph leg no-ops, so
-    retrieval behavior is byte-identical to v1.
+    T-A01: ``policy_kwargs`` carries the workspace egress policy. A
+    sensitive/local-only workspace never builds the cloud embedding transport
+    (it gets a refusing embedder), and the orchestrator is constructed with
+    ``sensitive=True`` so semantic/hybrid retrieval refuses before any
+    embedding request; keyword-only retrieval is unaffected.
     """
     from core.config import vector_collection
-    from graph.factory import create_graph_retriever
     from ingestion.persistence import get_session_factory
     from models.adapters.openrouter_provider import OpenRouterProvider
     from retrieval.adapters.pg_fts import PostgresLexicalStore
     from retrieval.adapters.qdrant_store import QdrantVectorStore
     from retrieval.orchestrator import HybridRetrievalOrchestrator
+
+    # T-K01: the optional graph leg is construction-gated. A typo'd
+    # GRAPH_MODE, an import failure, or an unusable store must degrade to the
+    # v1 flag-off path with a loud log — v1 routes stay green. Never propagate
+    # optional-graph construction failures into /ask or /search.
+    graph_retriever = None
+    try:
+        from graph.factory import create_graph_retriever
+
+        graph_retriever = create_graph_retriever()
+    except Exception as exc:
+        logger.warning(
+            "graph_retriever_construction_failed",
+            extra={
+                "event": "graph_retriever_construction_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
+    sensitive = _egress_sensitive(**policy_kwargs)
 
     # T-V1-071: resolve here, not as a default argument (those freeze at import
     # time and would pin the production collection into the reader).
@@ -64,17 +125,36 @@ def create_orchestrator(*, collection: str | None = None):
     dense = QdrantVectorStore(collection=collection)
     lexical = PostgresLexicalStore(session_factory=get_session_factory())
     # T-ARCH-04: OpenRouter gemini-embedding-2 (3072-d) default embedding provider.
-    embedding = OpenRouterProvider(call_site="answer.orchestrator")
-    # T-ARCH-03: Local cross-encoder cut per user order; dense-only active with disclosure.
+    # T-A01: sensitive/local-only workspaces must never receive it.
     reranker = None
+    rerank_enabled = False
+    embedding: object
+    if sensitive:
+        from retrieval.orchestrator import RefusingEmbeddingProvider
+
+        embedding = RefusingEmbeddingProvider()
+    else:
+        # T-ARCH-04: OpenRouter gemini-embedding-2 (3072-d) default embedding provider.
+        embedding = OpenRouterProvider(call_site="answer.orchestrator")
+        import os
+
+        if os.environ.get("RERANK_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}:
+            from rerank.openrouter_provider import (
+                NemotronRerankProvider,
+                OpenRouterReranker,
+            )
+
+            reranker = OpenRouterReranker(NemotronRerankProvider(sensitive=False))
+            rerank_enabled = True
     return HybridRetrievalOrchestrator(
         dense=dense,
         embedding=embedding,
         lexical=lexical,
         collection=collection,
         reranker=reranker,
-        rerank_enabled=False,
-        graph=create_graph_retriever(),
+        rerank_enabled=rerank_enabled,
+        graph=graph_retriever,
+        sensitive=sensitive,
     )
 
 
@@ -84,6 +164,7 @@ def build_answer_engine(
     collection: str | None = None,
     cross_language: bool = False,
     claim_grounder: ClaimGrounder | None = None,
+    **policy_kwargs,
 ) -> AnswerEngine:
     """Construct the answer engine from settings (lazy; safe to call per request).
 
@@ -122,8 +203,19 @@ def build_answer_engine(
         from .adapters.postgres_lookup import PostgresChunkLookup
 
         chunk_lookup = PostgresChunkLookup()
-    except Exception:
-        pass
+    except Exception as exc:
+        # T-K02: never silent. A lookup construction failure (DB down, config
+        # error, import failure) logs a warning with the exception type and
+        # degrades to the legacy chunk_lookup=None path — the engine still
+        # builds and answers, but with existence/scope-only verification.
+        logger.warning(
+            "chunk_lookup_construction_failed",
+            extra={
+                "event": "chunk_lookup_construction_failed",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            },
+        )
 
     hydrator = CanonicalHydrator(chunk_lookup)
 
@@ -136,7 +228,10 @@ def build_answer_engine(
         grounder = ExtractiveGrounder()
 
     return AnswerEngine(
-        orchestrator=HydratingOrchestrator(create_orchestrator(collection=collection), hydrator),
+        orchestrator=HydratingOrchestrator(
+            create_orchestrator(collection=collection, **policy_kwargs),
+            hydrator,
+        ),
         llm=_llm_provider_for(model),
         model=model,
         # No store → None → legacy existence/scope-only verification.

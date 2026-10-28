@@ -14,6 +14,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from enum import StrEnum
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +31,9 @@ class ChatMessage(BaseModel):
     content: str
     name: str | None = None
     tool_call_id: str | None = None
+
+    def __getitem__(self, item: str) -> Any:
+        return getattr(self, item)
 
 
 class GenerationRequest(BaseModel):

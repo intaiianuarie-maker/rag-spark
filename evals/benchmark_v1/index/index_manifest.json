@@ -1,0 +1,8 @@
+{
+  "count": 66635,
+  "embed_model": "openrouter (pinned provider)",
+  "chunking": "one-vector-per-canonical-paragraph",
+  "content_sha256": "cb67996071b5b515389702dd77eb42d563a50ccf80c515bcd7e92be213467fd3",
+  "index_checksum": "60cea195c807a88c76db3236adce3502440cd564ad7b334b86c2f878a870420a",
+  "dim": 3072
+}

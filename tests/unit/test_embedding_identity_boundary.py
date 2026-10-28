@@ -61,7 +61,10 @@ OTHER_REV = EmbeddingIdentity(
 )
 #: Same model at another width: also not comparable.
 OTHER_DIM = EmbeddingIdentity(
-    provider="GemmaStub", model="google/gemini-embedding-2", revision="rev-gemini", dimension=DIM * 2
+    provider="GemmaStub",
+    model="google/gemini-embedding-2",
+    revision="rev-gemini",
+    dimension=DIM * 2,
 )
 UNKNOWN_MODEL = EmbeddingIdentity(
     provider="OtherProvider", model="text-embed-3", revision="rev-1", dimension=DIM

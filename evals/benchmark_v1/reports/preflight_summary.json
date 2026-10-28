@@ -1,0 +1,26 @@
+{
+  "n_drafts": 16,
+  "n_errors": 0,
+  "n_fallbacks": 16,
+  "free_tier_served": 0,
+  "spent_usd": 0.00089134,
+  "mean_cost_per_draft_usd": 5.571e-05,
+  "worst_cost_per_draft_usd": 0.00011097,
+  "cap_usd": 2.0,
+  "remaining_usd": 1.999109,
+  "reserve_fraction": 0.2,
+  "projection_shared_373_plus_reserve": 0.0249,
+  "projection_unshared_746_plus_reserve": 0.0499,
+  "worst_case_unshared_746_plus_reserve": 0.0993,
+  "total_calls": 32,
+  "prompt_tokens": 18547,
+  "completion_tokens": 319,
+  "verdict": "GO (draft legs) / BLOCKED-UNPRICED (corpus indexing)",
+  "corpus_indexing_cost_UNPRICED": {
+    "unique_paragraphs": 66635,
+    "empirical_usd_per_vector_upper_bound": 2.39299e-05,
+    "derived_indexing_cost_usd": 1.5946,
+    "pct_of_cap_if_indexed": 79.7,
+    "status": "NOT PRICED IN THIS PREFLIGHT \u2014 no HotpotQA corpus on disk to index; embedding model absent from the OpenRouter public catalogue so no rate card could be pinned"
+  }
+}

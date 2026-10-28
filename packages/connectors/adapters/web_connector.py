@@ -24,12 +24,37 @@ T-V1-034 (redirect / origin policy, pinned in code):
   origins, so a 302 cannot walk the crawler off its configured scope;
 - seeds must be plain ``http``/``https`` URLs; ``file:``, ``data:`` and
   ``javascript:`` are rejected loudly at configuration time.
+
+Politeness delay (TASK-M6-001a "delay"):
+- a bounded politeness delay is honored before each crawl fetch after the
+  first (global inter-request gap; there is one crawl worker). It defaults to
+  ``0`` (no delay) so the existing deterministic crawl tests stay green and is
+  configured via ``settings["politeness_delay"]`` (float seconds) or
+  ``settings["politeness_delay_ms"]`` (int ms), or the explicit
+  ``WebConnector(politeness_delay_seconds=...)`` constructor parameter; any
+  value is validated to a non-negative finite range (``ValueError``) the same
+  way the other bounds are. The gap is paced *before* the fetch (once a page
+  has already been fetched), so consecutive requests are spaced and no trailing
+  sleep is charged after the final page.
+- the sleep is an injectable seam (``sleep`` callable) defaulting to a real
+  ``asyncio.sleep``; tests inject a recording fake so the delay is verified
+  deterministically with no wall-clock sleeping.
+
+Redirect-hop pacing: the real httpx transport follows redirects manually,
+hop by hop; every hop after the first is paced by the same delay (a redirect
+chain is still N requests to the host). The client can be injected via
+``client_factory`` so tests drive the actual redirect-hop branch with an
+offline ``httpx.MockTransport``.
 """
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
+import ipaddress
 import logging
+import math
+import socket
 from collections.abc import Awaitable, Callable
 from email.utils import parsedate_to_datetime
 from typing import Any
@@ -51,12 +76,40 @@ logger = logging.getLogger("knowledge_os.connectors.web")
 #: A fetch seam: given a URL, return (bytes, headers). Injectable for tests.
 FetchFn = Callable[[str], Awaitable[tuple[bytes, dict[str, str]]]]
 
+#: A clock / sleep seam: an async sleep callable taking seconds. ``None``
+#: means the default ``asyncio.sleep`` (real wall clock); tests inject a fake
+#: that records the requested delay so the delay is verified deterministically
+#: with no real sleeping.
+SleepFn = Callable[[float], Awaitable[None]]
+
 #: Redirect status codes the manual hop loop understands.
 _REDIRECT_STATUSES = frozenset({301, 302, 303, 307, 308})
+
+#: A transport seam: an optional ``httpx.AsyncClient`` used by the real
+#: (non-injected) HTTP path so tests can drive the actual httpx redirect-hop
+#: loop with an offline ``MockTransport`` — no socket, no real network.
+ClientFactory = Callable[[], Any]
 
 #: Default bound on manual redirect hops per fetch (a redirect loop must not
 #: spin the crawler). Override with ``settings["max_redirects"]``.
 DEFAULT_MAX_REDIRECTS = 5
+
+#: Politeness delay (TASK-M6-001a "delay"): seconds to wait between two
+#: consecutive requests to a host. Default 0 keeps the existing zero-delay
+#: behaviour (fast deterministic tests, no wall-clock sleeps) and is overridden
+#: per connector via ``settings["politeness_delay"]`` (float seconds) or
+#: ``settings["politeness_delay_ms"]`` (int ms). Pacing is a *global*
+#: inter-request gap applied BEFORE every request after the first — in the
+#: crawl between pages, in the sync re-fetch loop between items, and inside
+#: ``_fetch_bytes`` between redirect hops — so a multi-page crawl, a re-fetch
+#: loop, and a redirect chain each spread their requests over the configured
+#: gap. The model is a single crawl worker pacing its own global request
+#: stream, not a per-host minimum interval.
+DEFAULT_POLITENESS_DELAY_SECONDS = 0.0
+
+#: A politeness delay must be a non-negative, finite number of seconds; a
+#: negative or unbounded value would stall the crawl or busy-loop it.
+_MAX_POLITENESS_DELAY_SECONDS = 3600.0
 
 
 def origin_of(url: str) -> str | None:
@@ -114,8 +167,35 @@ def resolve_redirect(
     return next_url
 
 
+def _assert_public_host(url: str) -> None:
+    """Refuse a fetch whose host resolves to a non-public address (SSRF guard).
+
+    ponytail: resolve-then-fetch. httpx resolves again on connect, so a record that
+    rebinds between this check and the connect still gets through. Upgrade: connect
+    to the vetted address directly.
+    """
+    host = urlparse(url).hostname or ""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror as exc:
+        raise OutOfScopeRedirect(f"cannot resolve {host!r}: {exc}") from exc
+    for info in infos:
+        addr = ipaddress.ip_address(info[4][0].split("%")[0])
+        if not addr.is_global:
+            raise OutOfScopeRedirect(f"{host!r} resolves to non-public address {addr}")
+
+
 def _default_headers(resp: Any) -> dict[str, str]:
     return {str(k).lower(): str(v) for k, v in dict(resp.headers).items()}
+
+
+async def _default_sleep(seconds: float) -> None:
+    """Default politeness-delay clock: a real wall-clock sleep.
+
+    Inject a fake via ``WebConnector(sleep=...)`` to make unit tests
+    deterministic (the fake records the requested delay instead of sleeping).
+    """
+    await asyncio.sleep(seconds)
 
 
 class WebConnector(Connector):
@@ -129,6 +209,9 @@ class WebConnector(Connector):
         max_pages: int = 500,
         max_depth: int = 1,
         fetch: FetchFn | None = None,
+        politeness_delay_seconds: float | None = None,
+        sleep: SleepFn | None = None,
+        client_factory: ClientFactory | None = None,
     ) -> None:
         if page_size < 1:
             raise ValueError(f"page_size must be >= 1, got {page_size}")
@@ -136,10 +219,24 @@ class WebConnector(Connector):
             raise ValueError(f"max_pages must be >= 1, got {max_pages}")
         if max_depth < 0:
             raise ValueError(f"max_depth must be >= 0, got {max_depth}")
+        # A politeness-delay given explicitly (not via settings) must already be
+        # a valid non-negative number; the settings path is validated separately
+        # in ``_resolve_politeness_delay`` against the same bounds.
+        if politeness_delay_seconds is not None:
+            self._validate_politeness_delay(politeness_delay_seconds)
         self._page_size = page_size
         self._max_pages = max_pages
         self._max_depth = max_depth
         self._fetch = fetch
+        # Default to the real wall-clock sleep; a test injects a recording fake
+        # so the delay is observed without sleeping.
+        self._politeness_delay_seconds = politeness_delay_seconds
+        self._sleep: SleepFn = sleep or _default_sleep
+        # Optional factory for the real httpx client; defaults to a follow
+        # redirects-off client with a 30s timeout. Tests inject a factory that
+        # returns a client wired to an offline MockTransport so the actual
+        # redirect-hop pacing branch is exercised without a socket.
+        self._client_factory = client_factory
 
     def _seeds(self, config: ConnectorConfig) -> list[str]:
         raw = config.settings.get("urls")
@@ -184,6 +281,44 @@ class WebConnector(Connector):
             raise ValueError("max_redirects must be >= 0")
         return value
 
+    def _validate_politeness_delay(self, seconds: float) -> None:
+        """Validate a politeness-delay value (seconds); raise if out of range.
+
+        The delay is a bounded, non-negative quantity: negative values would
+        stall the crawl backwards and a non-finite value would hang it. Same
+        ``ValueError`` style as the other bounds so a bad config fails loudly
+        at construction/configuration time, not mid-crawl.
+        """
+        if not math.isfinite(seconds):
+            raise ValueError(f"politeness_delay must be finite, got {seconds!r}")
+        if seconds < 0:
+            raise ValueError(f"politeness_delay must be >= 0, got {seconds!r}")
+        if seconds > _MAX_POLITENESS_DELAY_SECONDS:
+            raise ValueError(
+                f"politeness_delay must be <= {_MAX_POLITENESS_DELAY_SECONDS:g}s, got {seconds!r}"
+            )
+
+    def _resolve_politeness_delay(self, config: ConnectorConfig) -> float:
+        """Seconds to wait between consecutive crawl fetches.
+
+        Precedence: an explicit constructor value (already validated) wins over
+        the per-connector ``settings``. Within settings, ``politeness_delay``
+        (float seconds) is preferred; ``politeness_delay_ms`` (int ms) is a
+        convenience alias for operators thinking in milliseconds. When neither
+        is set the default (0 = no delay) applies, preserving the previous
+        zero-delay behaviour so the bounded-crawl contract tests stay green.
+        """
+        if self._politeness_delay_seconds is not None:
+            return self._politeness_delay_seconds
+        if "politeness_delay" in config.settings:
+            seconds = float(config.settings["politeness_delay"])
+        elif "politeness_delay_ms" in config.settings:
+            seconds = float(config.settings["politeness_delay_ms"]) / 1000.0
+        else:
+            return DEFAULT_POLITENESS_DELAY_SECONDS
+        self._validate_politeness_delay(seconds)
+        return seconds
+
     async def _fetch_bytes(
         self, config: ConnectorConfig, url: str
     ) -> tuple[bytes, dict[str, str]]:
@@ -203,9 +338,24 @@ class WebConnector(Connector):
         import httpx
 
         max_redirects = self._max_redirects(config)
-        async with httpx.AsyncClient(follow_redirects=False, timeout=30.0) as client:
+        # Politeness delay is applied between redirect hops as well: a redirect
+        # chain is still N separate HTTP requests to the host, so a one-page
+        # /redirect -> /target crawl must pace its hops the same way it paces
+        # inter-page fetches (once a hop has already been made, before the
+        # next). Origin validation runs before any hop so a disallowed hop is
+        # rejected before any transport is spent.
+        politeness_delay = self._resolve_politeness_delay(config)
+        if self._client_factory is not None:
+            client = self._client_factory()
+        else:
+            client = httpx.AsyncClient(follow_redirects=False, timeout=30.0)
+        try:
             current = url
             for hop in range(max_redirects + 1):
+                if hop > 0 and politeness_delay > 0:
+                    await self._sleep(politeness_delay)
+                if self._client_factory is None:
+                    _assert_public_host(current)
                 resp = await client.get(current)
                 location = resp.headers.get("location")
                 if resp.status_code in _REDIRECT_STATUSES and location:
@@ -219,6 +369,8 @@ class WebConnector(Connector):
                     continue
                 resp.raise_for_status()
                 return resp.content, _default_headers(resp)
+        finally:
+            await client.aclose()
         raise ValueError(f"exceeded {max_redirects} redirects fetching {url}")
 
     def _discover_links(
@@ -247,18 +399,33 @@ class WebConnector(Connector):
         """Breadth-first crawl from the seeds, bounded by depth/page caps.
 
         Returns items in discovery order (stable given the same inputs); the
-        cursor then pages this deterministic list.
+        cursor then pages this deterministic list. The politeness delay is
+        applied *before* each fetch attempt once at least one attempt has been
+        made — counting **attempts**, not just successes — so a leading
+        failed/dead request (404/timeout/DNS) still paces the gap and a dead
+        link cannot be used to skip an opening burst. No trailing sleep is
+        charged after the final attempt.
         """
         seeds = self._seeds(config)
         allowed_origins = self._allowed_origins(config)
+        politeness_delay = self._resolve_politeness_delay(config)
         seen: set[str] = set()
         items: list[SourceItem] = []
+        fetched_count = 0
         frontier: list[tuple[str, int]] = [(u, 0) for u in seeds]
         while frontier and len(items) < self._max_pages:
             url, depth = frontier.pop(0)
             if url in seen:
                 continue
             seen.add(url)
+            # Politeness delay is applied *before* the fetch attempt, once at
+            # least one attempt has been made — pacing the gap between
+            # consecutive requests regardless of outcome (0 = none, preserving
+            # the prior zero-delay behaviour). A leading failed/dead request is
+            # still an HTTP request to the host, so it must not skip a gap.
+            if fetched_count > 0 and politeness_delay > 0:
+                await self._sleep(politeness_delay)
+            fetched_count += 1
             try:
                 content, headers = await self._fetch_bytes(config, url)
             except OutOfScopeRedirect as exc:
@@ -321,12 +488,21 @@ class WebConnector(Connector):
         self, config: ConnectorConfig, cursor: str | None = None
     ) -> ConnectorSyncResult:
         discovery = await self.discover(config, cursor)
+        politeness_delay = self._resolve_politeness_delay(config)
         fetched = 0
+        attempted = 0
         errors: list[str] = []
         for item in discovery.items:
             if item.metadata.get("error"):
                 errors.append(f"{item.external_id}: {item.metadata['error']}")
                 continue
+            # Politeness delay is applied *before* the re-fetch attempt, once at
+            # least one attempt has been made — matching the crawl's pacing and
+            # counting attempts (not just successes) so a leading failed
+            # re-fetch still paces the gap that follows it.
+            if attempted > 0 and politeness_delay > 0:
+                await self._sleep(politeness_delay)
+            attempted += 1
             try:
                 await self.fetch(config, item)
                 fetched += 1

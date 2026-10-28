@@ -1,0 +1,42 @@
+{
+  "synthetic_only": true,
+  "results": [
+    {
+      "role": "generation",
+      "status": "ok",
+      "model": "google/gemma-4-26b-a4b-it",
+      "nonempty": true,
+      "expected_text": true
+    },
+    {
+      "role": "embedding",
+      "status": "ok",
+      "model": "google/gemini-embedding-2",
+      "dimensions": 3072,
+      "finite": true
+    },
+    {
+      "role": "reranking",
+      "status": "ok",
+      "model": "nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+      "top_index": 0,
+      "items": 1
+    }
+  ],
+  "observed_at": "2026-10-26T09:33:02.031921+00:00",
+  "source_revision": "601413b7ba89cf9fd0d11b731a93608836bba527",
+  "method": "Actual application OpenRouterProvider and NemotronRerankProvider; synthetic public text only",
+  "scope": "Provider connectivity and response shape only; not live browser, multilingual retrieval or debugger parity acceptance",
+  "stream_usage_probe": {
+    "expected_text": true,
+    "actual_model": "google/gemma-4-26b-a4b-it",
+    "model_status": "reported",
+    "prompt_tokens": 21,
+    "completion_tokens": 6,
+    "total_tokens": 27,
+    "cost_usd": 2.202e-06,
+    "usage_status": "reported",
+    "context_reset": true,
+    "method": "Actual OpenRouter SSE through current application provider with call-scoped usage collection"
+  }
+}

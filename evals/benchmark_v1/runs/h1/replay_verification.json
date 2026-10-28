@@ -1,0 +1,12 @@
+{
+  "traces_total": 348,
+  "traces_with_passage_text": 348,
+  "traces_missing_passage_text": 0,
+  "arm_records_replayed": 564,
+  "claims_replayed": 1260,
+  "score_mismatches": 0,
+  "mismatch_examples": [],
+  "replayable": true,
+  "verdict": "TRACE-GAP CLOSED: every trace carries passage text + candidate claims + citations + fork point, and both grounders reproduce their recorded scores offline with no model calls.",
+  "mirror_written": "evals/benchmark_v1/runs/h1/trace_inventory_h1.json"
+}

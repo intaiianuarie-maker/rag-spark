@@ -461,13 +461,30 @@ def test_probe1_flags_do_not_leak_into_the_import_graph() -> None:
 
 
 def _statements(path: Path) -> list[str]:
-    lines = []
+    """Split a migration into executable statements.
+
+    A naive ``;`` split breaks ``CREATE TRIGGER ... BEGIN ... END;`` bodies at
+    the semicolon inside the trigger, producing an "incomplete input" fragment.
+    ``sqlite3.complete_statement`` knows a semicolon inside a trigger body does
+    not terminate the statement, so accumulate lines and only close a statement
+    when a semicolon-terminated line is genuinely complete.
+    """
+    import sqlite3
+
+    buffer = ""
+    statements: list[str] = []
     for raw in path.read_text(encoding="utf-8").splitlines():
         stripped = raw.strip()
         if not stripped or stripped.startswith("--"):
             continue
-        lines.append(raw.split("--")[0].rstrip() if "--" in raw else raw)
-    return [s.strip() for s in "\n".join(lines).split(";") if s.strip()]
+        line = raw.split("--")[0].rstrip() if "--" in raw else raw
+        buffer = f"{buffer}\n{line}" if buffer else line
+        if line.rstrip().endswith(";") and sqlite3.complete_statement(buffer):
+            statements.append(buffer.strip())
+            buffer = ""
+    if buffer.strip():
+        statements.append(buffer.strip())
+    return [s for s in statements if s]
 
 
 @pytest.mark.unit

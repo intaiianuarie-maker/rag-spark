@@ -10,6 +10,7 @@ re-claimable with its checkpoint intact (kill-mid-run test with lease expiry).
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Any
 
 from .interfaces import AgentRunStatus, RunStatus
@@ -21,6 +22,9 @@ PARK_CODE_MISSING_CONTEXT = "MISSING_CONTEXT"
 PARK_CODE_NOT_ALLOWED = "TOOL_NOT_ALLOWED"
 PARK_CODE_BUDGET_EXCEEDED = "BUDGET_EXCEEDED"
 PARK_CODE_WORKER_ERROR = "WORKER_ERROR"
+
+
+logger = logging.getLogger("knowledge_os.agents.worker")
 
 
 class AgentWorker:
@@ -54,8 +58,8 @@ class AgentWorker:
             # No context — park visibly, don't re-queue forever
             try:
                 await self.queue.park(claim, PARK_CODE_MISSING_CONTEXT)
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("agent_queue_park_failed", extra={"error": str(exc)})
             return run_id
         context, goal = ctx_goal
         try:
@@ -115,8 +119,8 @@ class AgentWorker:
             # Recover any expired claims first (at-least-once)
             try:
                 await self.queue.recover_expired()
-            except Exception:
-                pass
+            except Exception as exc:
+                logger.warning("agent_queue_recover_failed", extra={"error": str(exc)})
             claimed = await self.run_once(lease_seconds)
             if claimed is None:
                 await asyncio.sleep(poll_interval)

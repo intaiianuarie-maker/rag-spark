@@ -134,3 +134,23 @@ export async function listDocumentJobs(
     throw error;
   }
 }
+export type UploadAccepted = {
+  job_id: string;
+  document_id: string;
+  version_id: string;
+  status: string;
+};
+
+/** POST /v1/workspaces/{ws}/documents (multipart) — upload + queue ingestion. */
+export async function uploadDocument(
+  workspaceId: string,
+  file: File,
+): Promise<UploadAccepted> {
+  const form = new FormData();
+  form.append("file", file);
+  const res = await auth.authFetch<UploadAccepted>(
+    `/v1/workspaces/${workspaceId}/documents`,
+    { method: "POST", body: form },
+  );
+  return res;
+}

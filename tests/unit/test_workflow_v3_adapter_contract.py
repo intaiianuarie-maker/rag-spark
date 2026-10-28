@@ -481,7 +481,7 @@ async def test_adapter_still_dispatches_the_same_request_shape() -> None:
 
     async def spy(request):
         seen.append(json.loads(json.dumps(request)))
-        return {"output": "ok"}
+        return {"status": "completed", "output_data": {"output": "ok"}}
 
     node = _node()
     executor = V3NodeExecutor(
@@ -521,3 +521,58 @@ def test_contract_is_only_types_and_pure_functions() -> None:
         if name.startswith("_"):
             continue
         assert name not in forbidden, f"{name} looks like a bridge entry point"
+
+
+@pytest.mark.asyncio
+async def test_a13_malformed_response_refused() -> None:
+    from pydantic import ValidationError
+    from workflow_engine.adapters.v3_adapter import V3NodeExecutor
+
+    async def spy(request):
+        return {"foo": "bar"}
+
+    exec_ = V3NodeExecutor(
+        agent_runner=spy,
+        manifest=CapabilityManifest(enabled_capabilities={"agent.run"}),
+        enabled=True,
+    )
+    with __import__("pytest").raises(ValidationError):
+        await exec_.execute_node(_node(), {"input": "text"}, "ws-1")
+
+
+@pytest.mark.asyncio
+async def test_a13_failed_status_maps_to_failure() -> None:
+    from workflow_engine.adapters.v3_adapter import V3ContractError, V3NodeExecutor
+
+    async def spy(request):
+        return {"status": "failed", "error": {"code": "provider_error", "message": "boom"}}
+
+    exec_ = V3NodeExecutor(
+        agent_runner=spy,
+        manifest=CapabilityManifest(enabled_capabilities={"agent.run"}),
+        enabled=True,
+    )
+    with __import__("pytest").raises(V3ContractError):
+        await exec_.execute_node(_node(), {"input": "text"}, "ws-1")
+
+
+@pytest.mark.asyncio
+async def test_a13_cancelled_maps_to_cancelled() -> None:
+    import asyncio as _asyncio
+
+    from workflow_engine.adapters.v3_adapter import V3NodeExecutor
+
+    async def spy(request):
+        return {
+            "status": "failed",
+            "cancelled": True,
+            "error": {"code": "cancelled", "message": "stopped"},
+        }
+
+    exec_ = V3NodeExecutor(
+        agent_runner=spy,
+        manifest=CapabilityManifest(enabled_capabilities={"agent.run"}),
+        enabled=True,
+    )
+    with __import__("pytest").raises(_asyncio.CancelledError):
+        await exec_.execute_node(_node(), {"input": "text"}, "ws-1")

@@ -1,8 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type JSX, type ReactElement } from "react";
 import type { AnswerPayload, AnswerStatus, Claim, Citation, Confidence } from "../contracts";
 import { CitationChip } from "./citation-chip";
+import { AnswerDebugger } from "@/components/debugger/answer-debugger";
 
 /**
  * Citation exactly as it is stored WITH the message that produced it
@@ -42,6 +43,10 @@ export type ChatMessage = {
   limitations?: string[];
   /** True when the turn failed client-side: no answer payload, no citations. */
   error?: boolean;
+  /** True when the stream was interrupted before the citations event arrived. */
+  interrupted?: boolean;
+  /** Raw answer payload for the debugger (optional, privacy-gated). */
+  debug?: AnswerPayload;
 };
 
 /** A user turn. Deliberately owns an EMPTY citation list, never a borrowed one. */
@@ -69,6 +74,7 @@ export function answerMessage(payload: AnswerPayload): ChatMessage {
     confidence: payload.confidence,
     limitations: [...(payload.limitations ?? [])],
     error: false,
+    debug: payload,
   };
 }
 
@@ -97,6 +103,32 @@ export function citationForChunk(
   chunkId: string,
 ): MessageCitation | null {
   return message.citations.find((citation) => citation.chunk_id === chunkId) ?? null;
+}
+
+/**
+ * Non-interactive, visually distinct marker for the part of a claim whose
+ * cited chunk(s) could not be resolved against THIS message's own citations.
+ *
+ * Never a link, never a button, never opens a source panel — it only discloses
+ * that part of the claim is unverified. Styled as neutral/gray so it can never
+ * be mistaken for a blue CitationChip (a source). Rendered once per claim that
+ * has at least one unresolvable chunk id, alongside the resolvable chips.
+ */
+function UnverifiedClaimMarker({ count }: { count: number }) {
+  return (
+    <span
+      aria-label="unverified claim"
+      className="inline-flex items-center gap-1 rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-500 ring-1 ring-inset ring-neutral-200 dark:bg-neutral-800/60 dark:text-neutral-400 dark:ring-neutral-800"
+      title={
+        count === 1
+          ? "Unverified claim — no passage in this answer cites this chunk"
+          : `Unverified claim — ${count} cited chunks do not resolve to a passage in this answer`
+      }
+    >
+      <span className="text-[10px]">unverified</span>
+      {count > 1 && <span className="text-[10px] opacity-70">+{count - 1}</span>}
+    </span>
+  );
 }
 
 const STATUS_LABEL: Record<AnswerStatus, string> = {
@@ -173,67 +205,167 @@ function MessageMeta({ message }: { message: ChatMessage }) {
 
 /**
  * Copy shown while the request the user sent has not been answered. It
- * states the fact (an answer is pending) and nothing about how the answer
- * will arrive.
+ * states the fact (an answer is being streamed) — the transport now delivers
+ * tokens incrementally, so the copy reflects that.
  */
-export const PENDING_LABEL = "Waiting for the answer…";
+export const PENDING_LABEL = "Streaming answer…";
 
 export function ChatWindow({
   pending,
   messages,
+  streamingContent,
   onSend,
+  onStop,
   onOpenSource,
+  onRegenerate,
+  onCopy,
+  onFeedback,
 }: {
-  /**
-   * True while a request the user sent has not been answered yet.
-   *
-   * Named `pending` on purpose (T-V1-033): the backend computes the whole
-   * answer and the browser receives it in one response, so this flag must
-   * not be dressed up as a feature the transport does not have. It gates the
-   * input and shows `PENDING_LABEL` — that is the entire claim.
-   */
   pending: boolean;
   messages: ChatMessage[];
+  /** Partial answer text being streamed (appended to the last assistant message). */
+  streamingContent?: string;
   onSend: (text: string) => void;
-  onOpenSource: (c: MessageCitation) => void;
+  onStop?: () => void;
+  onOpenSource: (c: MessageCitation, messageIndex: number) => void;
+  onRegenerate?: (query: string) => void;
+  onCopy?: (text: string) => void;
+  onFeedback?: (turnId: string, rating: "positive" | "negative" | "none", comment?: string) => void;
 }) {
   const [input, setInput] = useState("");
+  const [copied, setCopied] = useState<number | null>(null);
+
+  function handleCopy(index: number, text: string) {
+    if (onCopy) {
+      onCopy(text);
+    } else {
+      navigator.clipboard?.writeText(text).catch(() => undefined);
+    }
+    setCopied(index);
+    setTimeout(() => setCopied(null), 2000);
+  }
 
   return (
     <div className="flex flex-1 flex-col">
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="mx-auto max-w-3xl space-y-6">
-          {messages.map((msg, i) => (
-            <div key={i} className="space-y-3">
-              <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
-                {msg.role === "user" ? "You" : "Assistant"}
-              </div>
-              <div className="rounded-xl bg-neutral-50 p-4 text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
-                <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
-                {msg.claims.length > 0 && (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {msg.claims.map((claim, ci) => (
-                      <div key={ci} className="space-y-1">
-                        <p className="text-sm">{claim.text}</p>
-                        <div className="flex flex-wrap gap-1.5">
-                          {claim.chunk_ids.map((chunkId) => {
-                            // OWN citations only (T-V1-032): a chunk id that is
-                            // not on THIS message renders no chip at all.
-                            const cit = citationForChunk(msg, chunkId);
-                            if (!cit) return null;
-                            return (
-                              <CitationChip key={chunkId} citation={cit} onOpen={onOpenSource} />
+          {messages.map((msg, i) => {
+            const isLastAssistant =
+              msg.role === "assistant" && i === messages.length - 1 && !pending;
+            const isStreamingTarget =
+              msg.role === "assistant" && i === messages.length - 1 && pending;
+            const displayContent =
+              isStreamingTarget && streamingContent
+                ? msg.content + streamingContent
+                : msg.content;
+
+            return (
+              <div key={i} id={`message-${i}`} className="space-y-3">
+                <div className="text-xs font-semibold uppercase tracking-wide text-neutral-400">
+                  {msg.role === "user" ? "You" : "Assistant"}
+                </div>
+                <div className="rounded-xl bg-neutral-50 p-4 text-neutral-800 dark:bg-neutral-900 dark:text-neutral-200">
+                  <p className="whitespace-pre-wrap leading-relaxed">{displayContent}</p>
+                  {msg.interrupted && (
+                    <p className="mt-2 text-xs italic text-amber-600 dark:text-amber-400">
+                      (Interrupted)
+                    </p>
+                  )}
+                  {msg.claims.length > 0 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {msg.claims.map((claim, ci) => {
+                        const chips: JSX.Element[] = [];
+                        let unresolved = 0;
+                        claim.chunk_ids.forEach((chunkId) => {
+                          // OWN citations only (T-V1-032): a chunk id that is
+                          // not on THIS message renders no chip at all — that
+                          // unresolvable part of the claim is unverified.
+                          const cit = citationForChunk(msg, chunkId);
+                          if (cit) {
+                            chips.push(
+                              <CitationChip
+                                key={chunkId}
+                                citation={cit}
+                                onOpen={(c) => onOpenSource(c, i)}
+                              />
                             );
-                          })}
+                          } else {
+                            unresolved += 1;
+                          }
+                        });
+                        return (
+                          <div key={ci} className="space-y-1">
+                            <p className="text-sm">{claim.text}</p>
+                            <div className="flex flex-wrap gap-1.5">
+                              {chips}
+                              {unresolved > 0 && <UnverifiedClaimMarker count={unresolved} />}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                  <MessageMeta message={msg} />
+                  {msg.role === "assistant" && msg.debug && (
+                    <details className="mt-2 text-xs">
+                      <summary className="cursor-pointer text-neutral-500">Debug</summary>
+                      <AnswerDebugger payload={msg.debug} showSourceText={false} />
+                    </details>
+                  )}
+                  {/* Controls for completed assistant messages */}
+                  {msg.role === "assistant" && !msg.error && !isStreamingTarget && (
+                    <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-neutral-200 pt-2 dark:border-neutral-800">
+                      <button
+                        type="button"
+                        onClick={() => handleCopy(i, msg.content)}
+                        className="text-xs text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
+                        aria-label="Copy answer"
+                      >
+                        {copied === i ? "Copied!" : "Copy"}
+                      </button>
+                      {isLastAssistant && onRegenerate && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Find the last user message before this assistant message
+                            const userMsg = messages
+                              .slice(0, i)
+                              .reverse()
+                              .find((m) => m.role === "user");
+                            if (userMsg) onRegenerate(userMsg.content);
+                          }}
+                          className="text-xs text-neutral-500 hover:text-neutral-700 dark:text-neutral-400 dark:hover:text-neutral-200"
+                          aria-label="Regenerate answer"
+                        >
+                          Regenerate
+                        </button>
+                      )}
+                      {onFeedback && (
+                        <div className="ml-auto flex gap-1">
+                          <button
+                            type="button"
+                            onClick={() => onFeedback(String(i), "positive")}
+                            className="text-xs text-neutral-400 hover:text-emerald-600 dark:hover:text-emerald-400"
+                            aria-label="Thumbs up"
+                          >
+                            👍
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onFeedback(String(i), "negative")}
+                            className="text-xs text-neutral-400 hover:text-red-600 dark:hover:text-red-400"
+                            aria-label="Thumbs down"
+                          >
+                            👎
+                          </button>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <MessageMeta message={msg} />
+                      )}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          ))}
+            );
+          })}
           {pending && (
             <div
               className="rounded-xl bg-neutral-50 p-4 text-neutral-500 dark:bg-neutral-900 dark:text-neutral-400"
@@ -241,6 +373,16 @@ export function ChatWindow({
               aria-live="polite"
             >
               {PENDING_LABEL}
+              {onStop && (
+                <button
+                  type="button"
+                  onClick={onStop}
+                  className="ml-4 rounded-md bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700"
+                  aria-label="Stop generating"
+                >
+                  Stop
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -264,8 +406,13 @@ export function ChatWindow({
             disabled={pending}
           />
           <button
-            type="submit"
+            type="button"
             disabled={!input.trim() || pending}
+            onClick={() => {
+              if (!input.trim() || pending) return;
+              onSend(input.trim());
+              setInput("");
+            }}
             className="rounded-lg bg-blue-600 px-4 py-2.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Send

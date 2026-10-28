@@ -57,11 +57,15 @@ def _sections(elements: list[DocumentElement]) -> list[dict[str, Any]]:
     groups: list[dict[str, Any]] = []
     current: dict[str, Any] | None = None
     for element in elements:
+        is_ocr = bool(element.metadata and "extraction" in element.metadata)
         if current is None:
             new_section = True
         elif element.type in {ElementType.TITLE, ElementType.HEADING}:
             new_section = True
         elif element.section is not None and element.section != current["section"]:
+            new_section = True
+        elif (is_ocr or current.get("has_ocr")) and element.page != current["page"]:
+            # Prevent OCR-bearing chunks from crossing page boundaries
             new_section = True
         else:
             new_section = False
@@ -72,12 +76,18 @@ def _sections(elements: list[DocumentElement]) -> list[dict[str, Any]]:
                 "texts": [],
                 "types": [],
                 "page": element.page,
+                "has_ocr": is_ocr,
+                "extractions": [],
             }
             groups.append(current)
         if current is None:  # unreachable; keeps the type checker honest
             continue
         current["texts"].append(element.text)
         current["types"].append(element.type.value)
+        if is_ocr:
+            current["has_ocr"] = True
+            if element.metadata and "extraction" in element.metadata:
+                current["extractions"].append(element.metadata["extraction"])
         if current["page"] is None and element.page is not None:
             current["page"] = element.page
     return groups
@@ -165,6 +175,8 @@ def _make_chunk(
     document_metadata: DocumentMetadata | None,
 ) -> Chunk:
     metadata: dict[str, Any] = {"language": language}
+    if group.get("has_ocr") and group.get("extractions"):
+        metadata["extraction"] = group["extractions"][0]
     if document_metadata is not None:
         if document_metadata.title:
             metadata["title"] = document_metadata.title

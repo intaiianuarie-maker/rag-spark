@@ -464,6 +464,8 @@ _LANGFLOW_TYPE_PREFIX = "langflow.io."
 #: model.  Ownership of this list belongs to the coordinator / execution-policy
 #: layer; the adapter only enforces membership.
 VETTED_MODELS: frozenset[str] = frozenset({
+    "google/gemma-4-26b-a4b-it:free",
+    "google/gemma-4-26b-a4b-it",
     "gpt-4o-mini",
     "gpt-4o",
     "gpt-4.1-mini",

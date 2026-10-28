@@ -32,6 +32,7 @@ from workflow_engine import (
 )
 from workflow_engine.checkpoint import (
     MAX_CHECKPOINT_BYTES,
+    MAX_TEXT_CHARS,
     EvidenceRow,
     InMemoryCheckpointStore,
     ResumableExecutor,
@@ -236,17 +237,100 @@ async def test_checkpoint_payload_is_bounded() -> None:
 
 
 @pytest.mark.unit
-async def test_checkpoint_redacts_secrets() -> None:
-    """Secrets in node outputs/evidence never reach the durable record."""
+async def test_checkpoint_redacts_secrets_in_observability_copy() -> None:
+    """T-A18: secrets are redacted in the observability copy, not the resumable one.
+
+    The durable payload is the state a resumed run replays from, so it stays
+    byte-exact (see `test_oversized_node_output_persists_exactly`). Redaction
+    and per-field truncation apply to the observability view.
+    """
     cp = WorkflowCheckpoint(
         run_id="r1", workflow_id="w", revision_id="rev", workspace_id="ws-1",
         node_outputs={"n": {"authorization": "Bearer supersecretvalue1234567890",
                             "api_key": "sk-abcdefghijklmnopqrst"}},
     )
-    raw = cp.to_json()
+    raw = cp.to_observability_json()
     assert "supersecretvalue" not in raw
     assert "sk-abcdefghijklmnopqrst" not in raw
     assert "[REDACTED]" in raw
+
+    # The observability view is also available as data.
+    view = cp.observability_view()
+    blob = str(view)
+    assert "supersecretvalue" not in blob
+    assert "[REDACTED]" in blob
+
+    # The resumable payload keeps the values a resumed run must replay.
+    exact = cp.to_json()
+    assert "supersecretvalue1234567890" in exact
+
+
+@pytest.mark.unit
+async def test_oversized_node_output_persists_exactly(tmp_path) -> None:
+    """T-A18 metric: an over-MAX_TEXT_CHARS output survives the store intact.
+
+    Before the serialization split, `to_json()` redacted+truncated every text
+    field to MAX_TEXT_CHARS, so a reopened checkpoint carried a *different*
+    value than the in-memory one and a resumed run computed different results.
+    """
+    db = tmp_path / "cp.db"
+    long_text = "A" * (MAX_TEXT_CHARS * 3)  # 24576 chars, 3x the old cap
+    nested = {"out": {"blob": long_text, "n": [long_text, "tail-marker"]}}
+    cp = WorkflowCheckpoint(
+        run_id="r-exact", workflow_id="w", revision_id="rev", workspace_id="ws-1",
+        node_outputs={"big": nested},
+    )
+    assert len(cp.to_json()) > MAX_TEXT_CHARS  # exact payload is over the cap
+
+    store = SqliteCheckpointStore(db)
+    await store.append(cp)
+
+    # Reopen from disk: the value must be byte-identical, not truncated.
+    reopened = SqliteCheckpointStore(db)
+    latest = await reopened.latest("r-exact")
+    assert latest is not None
+    got = latest.node_outputs["big"]["out"]
+    assert got["blob"] == long_text
+    assert len(got["blob"]) == MAX_TEXT_CHARS * 3
+    assert got["n"] == [long_text, "tail-marker"]
+
+    # The observability copy of the same checkpoint IS bounded.
+    obs = json.loads(latest.to_observability_json())
+    obs_blob = obs["node_outputs"]["big"]["out"]["blob"]
+    assert len(obs_blob) == MAX_TEXT_CHARS
+    assert obs_blob != got["blob"]
+
+
+@pytest.mark.unit
+async def test_resumed_run_computes_identical_results_for_long_outputs(tmp_path) -> None:
+    """T-A18 metric: a resumed run's downstream result matches an uninterrupted one.
+
+    This is the bug the split fixes: the durable value was truncated, so a
+    downstream node consuming it computed a different result than in the
+    uninterrupted run.
+    """
+    db = tmp_path / "cp2.db"
+    long_text = "B" * (MAX_TEXT_CHARS * 2 + 17)  # not a multiple of the cap
+
+    # Uninterrupted reference: a downstream node receives the long text.
+    uninterrupted = long_text.upper()
+
+    # Persist it, reopen from disk, and hand the reopened value to a consumer.
+    cp = WorkflowCheckpoint(
+        run_id="r-resume-eq", workflow_id="w", revision_id="rev", workspace_id="ws-1",
+        node_outputs={"producer": {"out": {"value": long_text}}},
+    )
+    store = SqliteCheckpointStore(db)
+    await store.append(cp)
+
+    reopened = SqliteCheckpointStore(db)
+    latest = await reopened.latest("r-resume-eq")
+    assert latest is not None
+
+    # Simulate the resumed run consuming the checkpointed output downstream.
+    resumed_value = latest.node_outputs["producer"]["out"]["value"]
+    assert resumed_value.upper() == uninterrupted
+    assert resumed_value == long_text  # byte-exact, not the 8192-char truncation
 
 
 # ---------------------------------------------------------------------------

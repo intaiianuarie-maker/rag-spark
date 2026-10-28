@@ -2,8 +2,8 @@
 
 Stages: planning -> fan-out -> verify -> gaps -> contradictions -> synthesis.
 Every stage gated identically to T-021 (budget/approval/workspace via same
-get_principal + require + FREE-model-only). Report returns FULL honesty
-package (grounded sentences with citations, named unknowns, contradiction
+get_principal + require + Gemma free-first route resolver). Report returns FULL
+honesty package (grounded sentences with citations, named unknowns, contradiction
 sides, abstention with disclosure). No content lost vs in-process.
 
 Seam: create_research_pipeline() is the factory tests patch (like T-021's
@@ -24,7 +24,6 @@ from agents.unavailable import (
     UNAVAILABLE_CODE,
     Unavailable,
 )
-from agents.verifier import InMemoryChunkSource
 from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
@@ -75,7 +74,12 @@ def create_research_pipeline():
     llm = resolve_agent_llm_provider(call_site="agents.research")
     if llm is None:
         return None
-    return create_research_pipeline_runner(llm=llm)
+    from agents.canonical_source import CanonicalChunkSource
+
+    return create_research_pipeline_runner(
+        llm=llm,
+        chunk_source=CanonicalChunkSource(),
+    )
 
 
 class SubmitResearchRequest(BaseModel):
@@ -129,9 +133,26 @@ async def submit_research(
 ) -> SubmitResearchResponse:
     _require_workspace(principal, workspace_id)
 
+    # Widening is refused before any branch: with no pipeline wired, nothing else checks it.
+    from agents.policy import get_workspace_policy
+
+    policy = get_workspace_policy(str(workspace_id))
+    if body.max_questions is not None and body.max_questions > policy.max_steps:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={
+                "error": "policy_violation",
+                "message": f"max_questions={body.max_questions} exceeds workspace limit "
+                f"{policy.max_steps}",
+                "field": "max_questions",
+                "requested": body.max_questions,
+                "limit": policy.max_steps,
+            },
+        )
+
     # Free-model-only gate (standing rule) — body does not carry model, but
-    # if pipeline were to use a model, it must be FREE; skeleton checks the
-    # planner's FREE_MODELS seam so tests can prove paid -> BLOCKED.
+    # the pipeline resolves the Gemma route via policy.resolve_gemma_route
+    # (free-first, paid-fallback after workspace budget check, fail-closed).
     # For the skeleton we accept the topic and stage a minimal report with fakes.
     research_id = str(uuid.uuid4())
     created = datetime.now(UTC).isoformat()
@@ -139,7 +160,6 @@ async def submit_research(
     # Minimal staged report — mirrors in-process synthesis honesty package
     # Uses the same pipeline components as in-process, but with in-memory fakes
     # so the route mechanics are tested without live LLM.
-    source = InMemoryChunkSource()
     topic = body.topic.strip()
     # If pipeline factory is patched, use it; otherwise there is no research
     # capability at all.
@@ -181,7 +201,6 @@ async def submit_research(
                     "limit": exc.limit,
                 },
             ) from exc
-    _ = source  # retained: the wired pipeline path owns its own chunk source
 
     unavailable = report.get("error_code") == UNAVAILABLE_CODE
     status_value = "failed" if unavailable else "completed"

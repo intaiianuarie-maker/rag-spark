@@ -31,7 +31,7 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({ get: cookieGetMock })),
 }));
 
-import { forward, POST, APP_PROXY_TIMEOUT_MS } from "./route";
+import { forward, POST, APP_PROXY_TIMEOUT_MS } from "./handlers";
 
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
 

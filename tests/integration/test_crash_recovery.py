@@ -82,8 +82,6 @@ def _ensure_scratch_collection() -> None:
 
     asyncio.run(_run())
 
-_ensure_scratch_collection()
-
 pytestmark = pytest.mark.integration
 
 PASSWORD = "Correct-Horse-Battery-9"
@@ -151,6 +149,8 @@ def _port_open(port: int) -> bool:
 def client() -> Generator:
     if not (_port_open(5432) and _port_open(6379) and _port_open(6333)):
         pytest.skip("postgres/redis/qdrant not reachable; run `make up`")
+    # Provision only after the fixture's service check, never during collection.
+    _ensure_scratch_collection()
 
     from app.db import run_migrations
 

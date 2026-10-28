@@ -35,3 +35,13 @@ httpx==0.28.1
 # deterministic tokenizer/sentence splitter, so no model data is resolved at runtime.
 llama-index-core==0.14.25
 boto3==1.40.54
+
+# OCR rasterization and image processing (Apache-2.0 / MIT)
+pypdfium2==5.14.0
+pillow==12.3.0
+
+# Security: 2026.10.18 is the release that removed the emSign certificate
+# roots (the compromised set) from the bundle. Upstream re-added emSign roots
+# in later releases; this pin intentionally holds the fully-removed set
+# pending the incident review.
+certifi==2026.10.18

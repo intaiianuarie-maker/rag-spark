@@ -36,3 +36,11 @@ class EvaluationRun(BaseModel):
     config_snapshot: dict[str, Any] = Field(default_factory=dict)
     #: metric name -> mean over the dataset (0.0 when the dataset is empty).
     results: dict[str, float] = Field(default_factory=dict)
+    #: Total cost (USD) accumulated across questions.
+    cost: float = 0.0
+    #: Total latency in milliseconds accumulated across questions.
+    latency_ms: float = 0.0
+    #: Total tokens consumed across questions.
+    tokens: int = 0
+    #: False when an upstream retrieval adapter did not report its usage.
+    accounting_complete: bool = False

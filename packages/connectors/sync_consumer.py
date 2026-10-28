@@ -41,7 +41,7 @@ import json
 import logging
 import os
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -86,6 +86,7 @@ class ItemStatus(StrEnum):
     UPDATED = "updated"
     UNCHANGED = "unchanged"
     FAILED = "failed"
+    DELETED = "deleted"
 
 
 # ---- persisted shapes --------------------------------------------------------
@@ -161,6 +162,15 @@ class SyncProgress:
     items_updated: int = 0
     items_unchanged: int = 0
     items_failed: int = 0
+    items_deleted: int = 0
+    last_attempt_at: datetime | None = None
+    last_success_at: datetime | None = None
+    #: Durable source-level failure markers (root review): the discovery
+    #: failure that happens BEFORE any ItemOutcome (unreachable host, bad
+    #: credentials) used to be log-only, so the UI polled forever. Persisted
+    #: here, reset on success, so a run start/success/failure is durable.
+    last_error_code: str | None = None
+    last_finished_at: datetime | None = None
     updated_at: datetime | None = None
 
 
@@ -180,6 +190,7 @@ class SyncReport:
     updated: int
     unchanged: int
     failed: int
+    deleted: int = 0
     snapshot: str | None = None
     snapshot_drift: bool = False
     #: ``None`` when the run completed; otherwise the keyset cursor it stopped at.
@@ -249,6 +260,12 @@ class SyncQueue(Protocol):
 #: Publisher seam: called only for items that changed (created/updated), before
 #: their outcome is recorded, so a failed publish is retried by redelivery.
 Publisher = Callable[[SourceIdentity, SourceItem, bytes, str], Awaitable[None]]
+
+#: Deleter seam: called for items present in a previous run but absent from the
+#: current full listing, so their vectors/FTS rows can be tombstoned. Receives
+#: (identity, external_id, prior_outcome). Deletion propagation is best-effort;
+#: failures are recorded as ItemStatus.FAILED outcomes and retried on redelivery.
+Deleter = Callable[[SourceIdentity, str, ItemOutcome], Awaitable[None]]
 
 #: Workspace configuration seam (injectable for tests / a future DB store).
 SourceLoader = Callable[..., Sequence[ConnectorConfig]]
@@ -434,6 +451,7 @@ class QueuedSyncConsumer:
         connector_factory: Callable[[ConnectorConfig], Connector] | None = None,
         load_sources: SourceLoader = load_workspace_sources,
         publisher: Publisher | None = None,
+        deleter: Deleter | None = None,
         page_size: int = 100,
         max_pages: int = DEFAULT_MAX_PAGES,
     ) -> None:
@@ -446,6 +464,7 @@ class QueuedSyncConsumer:
         self._connector_factory = connector_factory
         self._load_sources = load_sources
         self._publisher = publisher
+        self._deleter = deleter
         self._page_size = page_size
         self._max_pages = max_pages
 
@@ -478,18 +497,34 @@ class QueuedSyncConsumer:
                     "sync_source_not_configured",
                     extra={"workspace_id": workspace_id, "connector_id": connector_id},
                 )
-            reports = [await self.run_sync(config) for config in configs]
-        except Exception:
-            logger.exception(
+            reports = []
+            for config in configs:
+                report = await self.run_sync(config)
+                if report.resumed:
+                    # The resumed suffix cannot prove full-list membership or
+                    # retry failed earlier pages. Reconcile once from the top
+                    # under THIS claim before retirement, with no new enqueue.
+                    report = await self.run_sync(config)
+                reports.append(report)
+        except Exception as exc:
+            logger.warning(
                 "sync_job_failed",
-                extra={"job_id": claim.job_id, "workspace_id": workspace_id},
+                extra={"job_id": claim.job_id, "workspace_id": workspace_id,
+                       "error_type": type(exc).__name__},
             )
             raise
+        # Ack only a CLEAN run — where "clean" includes the PERSISTED state,
+        # not just this run's counters (root review): a resumed run's report
+        # starts at zero, so an earlier page's FAILED item would otherwise be
+        # acked unpublished. run_sync recomputes report.failed from the
+        # generation's persisted outcomes at completion, which is what makes
+        # this check carry failures across resume/retry.
+        clean = all(report.failed == 0 for report in reports)
         summary = QueueRunSummary(
             job_id=claim.job_id,
             workspace_id=workspace_id,
             connector_id=connector_id,
-            acked=await self._queue.ack(claim),
+            acked=await self._queue.ack(claim) if clean else False,
             reports=reports,
         )
         return summary
@@ -497,7 +532,25 @@ class QueuedSyncConsumer:
     # -- one source ------------------------------------------------------------
 
     async def run_sync(self, config: ConnectorConfig) -> SyncReport:
-        """Sync one connector source from its persisted keyset cursor."""
+        """Run a traversal and persist safe terminal failures at source level."""
+        try:
+            return await self._run_sync(config)
+        except Exception:
+            # Fetch, publication and discovery failures all need an observable
+            # source outcome, including failures before any item existed.
+            identity = SourceIdentity.from_config(config)
+            try:
+                progress = await self._store.load(identity)
+                if progress is not None:
+                    progress.last_error_code = normalize_code(ReasonCode.INGESTION_ERROR)
+                    progress.last_finished_at = datetime.now(UTC)
+                    await self._store.save(progress)
+            except Exception as exc:
+                logger.warning("sync_failure_save_failed", extra={"error_type": type(exc).__name__})
+            raise
+
+    async def _run_sync(self, config: ConnectorConfig) -> SyncReport:
+        """Traverse from the durable keyset; completed pages are not republished."""
         identity = SourceIdentity.from_config(config)
         progress = await self._store.load(identity)
         if progress is None:
@@ -525,6 +578,7 @@ class QueuedSyncConsumer:
 
         resumed = progress.cursor is not None
         run_id = uuid.uuid4().hex
+        progress.last_attempt_at = datetime.now(UTC)
         if not resumed:
             progress.cursor = None
             progress.snapshot = None
@@ -533,7 +587,28 @@ class QueuedSyncConsumer:
             progress.items_updated = 0
             progress.items_unchanged = 0
             progress.items_failed = 0
+            progress.items_deleted = 0
 
+        # Durable attempt identity (root review): persist the attempt BEFORE
+        # the first discover so an unreachable host / bad credentials / crash
+        # still records that an attempt happened, and the API can correlate
+        # the current run via last_run_id (no client-clock comparisons).
+        progress.last_run_id = run_id
+        progress.last_error_code = None
+        progress.last_finished_at = None
+        try:
+            await self._store.save(progress)
+        except Exception:
+            # A store failure at attempt time is fatal for this run: no
+            # durable progress means no safe retry state.
+            logger.warning(
+                "sync_attempt_save_failed",
+                extra={
+                    "workspace_id": identity.workspace_id,
+                    "connector_id": identity.connector_id,
+                },
+            )
+            raise
         previous = await self._store.outcomes(identity, progress.generation)
         connector = self._connector(config)
         report = SyncReport(
@@ -553,6 +628,7 @@ class QueuedSyncConsumer:
         )
 
         cursor = progress.cursor
+        seen_ids: set[str] = set()
         for _page in range(self._max_pages):
             discovery = await connector.discover(config, cursor=cursor)
             if progress.snapshot is None:
@@ -565,15 +641,22 @@ class QueuedSyncConsumer:
                 # same snapshot.
                 report.snapshot_drift = True
             if not discovery.items:
-                # Nothing left after the cursor (source emptied out while the
-                # run was interrupted): clear it, otherwise the stale keyset
-                # would be re-read forever.
+                # Nothing left after the cursor — the listing is exhausted
+                # (a source that emptied out lands here too). The deletion
+                # sweep runs on the SAME completion path as a final page
+                # (root review: an empty listing must delete documents, not
+                # break before the sweep). The cursor is cleared so the stale
+                # keyset is not re-read forever.
+                await self._sweep_deletions(
+                    identity, progress, report, previous, seen_ids, run_id, resumed
+                )
                 progress.cursor = None
                 progress.snapshot = None
                 report.cursor = None
                 break
             report.pages += 1
             for item in discovery.items:
+                seen_ids.add(item.external_id)
                 report.discovered += 1
                 progress.items_seen += 1
                 outcome = await self._process_item(
@@ -602,8 +685,11 @@ class QueuedSyncConsumer:
                     report.errors.append(f"{item.external_id}: {outcome.error_code}")
 
             if discovery.next_cursor is None:
-                # Run complete: clear the cursor so the *next* run starts a
-                # fresh full listing (incremental detection is the checksums).
+                # Listing exhausted on a final page: the same completion path
+                # as the empty-page branch (sweep + clear + success stamp).
+                await self._sweep_deletions(
+                    identity, progress, report, previous, seen_ids, run_id, resumed
+                )
                 progress.cursor = None
                 progress.snapshot = None
                 report.cursor = None
@@ -624,6 +710,16 @@ class QueuedSyncConsumer:
                 f"sync exceeded max_pages={self._max_pages} without finishing"
             )
 
+        persisted = await self._store.outcomes(identity, progress.generation)
+        failed = [outcome for outcome in persisted.values() if outcome.status is ItemStatus.FAILED]
+        report.failed = len(failed)
+        progress.items_failed = len(failed)
+        progress.last_error_code = normalize_code(ReasonCode.INGESTION_ERROR) if failed else None
+        # A resumed suffix is still pending full reconciliation in run_once.
+        if not resumed:
+            progress.last_finished_at = datetime.now(UTC)
+            if not failed:
+                progress.last_success_at = progress.last_finished_at
         progress.last_run_id = run_id
         await self._store.save(progress)
         logger.info(
@@ -647,6 +743,70 @@ class QueuedSyncConsumer:
 
     # -- one item ---------------------------------------------------------------
 
+    async def _sweep_deletions(
+        self,
+        identity: SourceIdentity,
+        progress: SyncProgress,
+        report: SyncReport,
+        previous: MutableMapping[str, ItemOutcome],
+        seen_ids: set[str],
+        run_id: str,
+        resumed: bool,
+    ) -> None:
+        """Tombstone items present in a prior run but absent from THIS listing.
+
+        Two correctness rules (root review):
+
+        - only a run that traversed the FULL listing from its start may
+          delete. A RESUMED run starts mid-cursor, so earlier pages' items
+          are legitimately absent from ``seen_ids`` — deleting them would be
+          a false deletion. Resumed runs defer deletions to the next fresh
+          run (bounded latency, never a wrong tombstone).
+        - the sweep also covers a listing that is EMPTY (a source that
+          emptied out): every mapped item is absent and must go.
+        """
+        if resumed:
+            # Not this run's job: the traversal did not cover the listing.
+            return
+        deleted_ids = [eid for eid in list(previous.keys()) if eid not in seen_ids]
+        for eid in deleted_ids:
+            prior = previous.get(eid)
+            if prior is None or prior.status is ItemStatus.DELETED:
+                continue
+            try:
+                if self._deleter is not None:
+                    await self._deleter(identity, eid, prior)
+                outcome = ItemOutcome(
+                    external_id=eid,
+                    status=ItemStatus.DELETED,
+                    checksum=prior.checksum,
+                    size_bytes=prior.size_bytes,
+                    run_id=run_id,
+                    occurred_at=datetime.now(UTC),
+                    generation=progress.generation,
+                )
+            except Exception:
+                outcome = ItemOutcome(
+                    external_id=eid,
+                    status=ItemStatus.FAILED,
+                    checksum=prior.checksum,
+                    size_bytes=prior.size_bytes,
+                    error_code=normalize_code(ReasonCode.INGESTION_ERROR),
+                    error_message="connector operation failed",
+                    run_id=run_id,
+                    occurred_at=datetime.now(UTC),
+                    generation=progress.generation,
+                )
+            await self._store.record_outcome(identity, outcome)
+            previous[eid] = outcome
+            if outcome.status is ItemStatus.DELETED:
+                report.deleted += 1
+                progress.items_deleted += 1
+            else:
+                report.failed += 1
+                progress.items_failed += 1
+                report.errors.append(f"{eid}: {outcome.error_code}")
+
     async def _process_item(
         self,
         identity: SourceIdentity,
@@ -662,10 +822,20 @@ class QueuedSyncConsumer:
         prior = previous.get(item.external_id)
         advertised = item.metadata.get("checksum")
         advertised = advertised if isinstance(advertised, str) and len(advertised) == 64 else None
-        if advertised is not None and prior is not None and prior.checksum == advertised:
+        if (advertised is not None and prior is not None and prior.checksum == advertised
+                and prior.status is not ItemStatus.FAILED):
             # Adapter already told us the bytes are identical (its own scan
             # checksum) and we recorded that exact checksum → unchanged, no
             # second download. Anything we cannot prove is fetched again.
+            #
+            # EXCEPTION (root review): an item whose prior outcome is DELETED
+            # must REPUBLISH when it reappears — its document was tombstoned
+            # and the mapping dropped, so "unchanged" would leave the source
+            # without a live document forever.
+            if prior.status is ItemStatus.DELETED:
+                return await self._publish_item(
+                    identity, generation, run_id, config, connector, item, advertised
+                )
             return ItemOutcome(
                 external_id=item.external_id,
                 status=ItemStatus.UNCHANGED,
@@ -677,7 +847,7 @@ class QueuedSyncConsumer:
             )
         try:
             content = await connector.fetch(config, item)
-        except Exception as exc:
+        except Exception:
             return ItemOutcome(
                 external_id=item.external_id,
                 status=ItemStatus.FAILED,
@@ -685,15 +855,17 @@ class QueuedSyncConsumer:
                 size_bytes=item.size_bytes,
                 # T-V1-025: persist a canonical registry code, not a raw string.
                 error_code=normalize_code(ReasonCode.INGESTION_ERROR),
-                error_message=str(exc)[:500],
+                error_message="connector operation failed",
                 run_id=run_id,
                 occurred_at=now,
                 generation=generation,
             )
         checksum = hashlib.sha256(content).hexdigest()
-        if prior is None:
+        if prior is None or prior.status is ItemStatus.DELETED:
+            # A reappeared item (prior DELETED) is CREATED again — its
+            # document was tombstoned, so UNCHANGED would strand the source.
             status = ItemStatus.CREATED
-        elif prior.checksum != checksum:
+        elif prior.checksum != checksum or prior.status is ItemStatus.FAILED:
             status = ItemStatus.UPDATED
         else:
             status = ItemStatus.UNCHANGED
@@ -704,6 +876,56 @@ class QueuedSyncConsumer:
         return ItemOutcome(
             external_id=item.external_id,
             status=status,
+            checksum=checksum,
+            size_bytes=len(content),
+            run_id=run_id,
+            occurred_at=now,
+            generation=generation,
+        )
+
+    async def _publish_item(
+        self,
+        identity: SourceIdentity,
+        generation: int,
+        run_id: str,
+        config: ConnectorConfig,
+        connector: Connector,
+        item: SourceItem,
+        advertised_checksum: str,
+    ) -> ItemOutcome:
+        """Republish a reappeared (previously DELETED) item as CREATED.
+
+        The advertised checksum is taken only when the fetched bytes match it
+        (never on faith): a mismatch falls through to the normal fetch path
+        so the persisted checksum always describes the published bytes.
+        """
+        now = datetime.now(UTC)
+        try:
+            content = await connector.fetch(config, item)
+        except Exception:
+            return ItemOutcome(
+                external_id=item.external_id,
+                status=ItemStatus.FAILED,
+                checksum=None,
+                size_bytes=item.size_bytes,
+                error_code=normalize_code(ReasonCode.INGESTION_ERROR),
+                error_message="connector operation failed",
+                run_id=run_id,
+                occurred_at=now,
+                generation=generation,
+            )
+        checksum = hashlib.sha256(content).hexdigest()
+        if checksum != advertised_checksum:
+            # The adapter's claim did not hold — re-run the full comparison so
+            # nothing is published on an unverified checksum.
+            return await self._process_item(
+                identity, generation, run_id, config, connector, item, {}
+            )
+        if self._publisher is not None:
+            await self._publisher(identity, item, content, checksum)
+        return ItemOutcome(
+            external_id=item.external_id,
+            status=ItemStatus.CREATED,
             checksum=checksum,
             size_bytes=len(content),
             run_id=run_id,

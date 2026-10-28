@@ -30,6 +30,7 @@ from retrieval.adapters.qdrant_store import (
     REJECT_DIMENSION,
     REJECT_NON_FINITE,
     REJECT_ZERO,
+    SPARSE_NAME,
     QdrantVectorStore,
     VectorStoreError,
     VectorStoreInvalidVector,
@@ -96,7 +97,11 @@ class StubQdrantClient:
         return SimpleNamespace(
             config=SimpleNamespace(
                 params=SimpleNamespace(
-                    vectors={DENSE_NAME: SimpleNamespace(size=self.dimensions[target])}
+                    vectors={DENSE_NAME: SimpleNamespace(size=self.dimensions[target])},
+                    # Real hybrid collections (verified against a live Qdrant 1.19
+                    # instance) declare a named sparse vector; the store's
+                    # sparse-declared check (T-I09) reads exactly this shape.
+                    sparse_vectors={SPARSE_NAME: SimpleNamespace()},
                 )
             ),
             points_count=len(self.points.get(target, {})),

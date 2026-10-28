@@ -138,31 +138,33 @@ MODEL_REGISTRY: dict[str, ModelProfile] = {
 # OpenRouter cloud model registry (zero-RAM cloud execution)
 OPENROUTER_MODEL_REGISTRY: dict[str, ModelProfile] = {
     # Free tier model on OpenRouter
+    "google/gemma-4-26b-a4b-it:free": ModelProfile(
+        name="google/gemma-4-26b-a4b-it:free",
+        capabilities=("chat", "reasoning", "multilingual"),
+        cost="low",
+        local=False,
+        languages=("multilingual",),
+    ),
+    # Approved paid model
+    "google/gemma-4-26b-a4b-it": ModelProfile(
+        name="google/gemma-4-26b-a4b-it",
+        capabilities=("chat", "reasoning", "multilingual"),
+        cost="low",
+        local=False,
+        languages=("multilingual",),
+    ),
+    # Free Nemotron reranker
+    "nvidia/llama-nemotron-rerank-vl-1b-v2:free": ModelProfile(
+        name="nvidia/llama-nemotron-rerank-vl-1b-v2:free",
+        capabilities=("rerank", "multilingual"),
+        cost="low",
+        local=False,
+        languages=("multilingual",),
+    ),
+    # Legacy free reasoning model (non-China)
     "nvidia/nemotron-3.5-lightning:free": ModelProfile(
         name="nvidia/nemotron-3.5-lightning:free",
         capabilities=("chat", "reasoning"),
-        cost="low",
-        local=False,
-        languages=("multilingual",),
-    ),
-    # Ultra-cheap and reliable paid models ($0.03 - $0.15 / M tokens)
-    "qwen/qwen3.7-flash": ModelProfile(
-        name="qwen/qwen3.7-flash",
-        capabilities=("chat", "code", "multilingual"),
-        cost="low",
-        local=False,
-        languages=("multilingual",),
-    ),
-    "openai/gpt-4o-mini": ModelProfile(
-        name="openai/gpt-4o-mini",
-        capabilities=("chat", "multilingual", "reasoning"),
-        cost="low",
-        local=False,
-        languages=("multilingual",),
-    ),
-    "deepseek/deepseek-chat": ModelProfile(
-        name="deepseek/deepseek-chat",
-        capabilities=("chat", "code", "reasoning", "multilingual"),
         cost="low",
         local=False,
         languages=("multilingual",),
@@ -345,12 +347,14 @@ def load_workspace_config(workspace_id: str) -> WorkspaceModelConfig | None:
         data = json.loads(raw)
     except ValueError:
         logger.warning("workspace_model_config_unparseable", extra={"workspace_id": workspace_id})
-        return None
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
     if not isinstance(data, dict):
-        return None
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
     entry = data.get(workspace_id)
-    if not isinstance(entry, dict):
+    if entry is None:
         return None
+    if not isinstance(entry, dict):
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
     rules: list[RoutingRule] = []
     for raw_rule in entry.get("routing_rules", []) or []:
         if not isinstance(raw_rule, dict):

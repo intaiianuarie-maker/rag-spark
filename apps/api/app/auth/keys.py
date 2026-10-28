@@ -28,6 +28,9 @@ logger = logging.getLogger("knowledge_os.api.auth.keys")
 API_KEY_PREFIX = "kio_"
 _PREFIX_BYTES = 6  # -> 12 hex chars
 NAME_MAX = 120
+# Same Argon2 parameters as issued keys. Generated once at process startup,
+# never on an attacker-controlled rejection path (PD-007).
+_DUMMY_KEY_HASH = hash_password("api-key-verification-work-only-not-an-issued-key")
 
 
 class ApiKey(Base):
@@ -124,17 +127,25 @@ def extract_prefix(presented: str) -> str | None:
 
 
 async def get_active_key(session: AsyncSession, presented: str) -> ApiKey | None:
-    """Return the matching, non-revoked, non-expired key, or ``None``."""
+    """Return an eligible key after one real-or-dummy Argon2 verification.
+
+    Missing, malformed, revoked and expired candidates do the same dominant
+    verification work as an active prefix with an incorrect secret. Database
+    latency is not constant time; this removes the missing-Argon2 oracle.
+    """
     prefix = extract_prefix(presented)
-    if prefix is None:
-        return None
-    statement = select(ApiKey).where(ApiKey.prefix == prefix)
+    # Issued prefixes are nonempty. Keep one lookup even for malformed inputs.
+    statement = select(ApiKey).where(ApiKey.prefix == (prefix or ""))
     key = (await session.execute(statement)).scalar_one_or_none()
-    if key is None or key.revoked_at is not None:
-        return None
-    if key.expires_at is not None and key.expires_at <= datetime.now(UTC):
-        return None
-    if not verify_password(key.key_hash, presented):
+    eligible = (
+        prefix is not None
+        and key is not None
+        and key.revoked_at is None
+        and (key.expires_at is None or key.expires_at > datetime.now(UTC))
+    )
+    candidate_hash = key.key_hash if eligible and key is not None else _DUMMY_KEY_HASH
+    verified = verify_password(candidate_hash, presented)
+    if not eligible or not verified:
         return None
     return key
 

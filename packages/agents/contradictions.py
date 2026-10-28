@@ -148,7 +148,7 @@ class ContradictionDetector:
             # Check same subject (budget)
             if "budget" in lower_a and "budget" in lower_b:
                 return True
-        # Generic different statements on same Q -> treat as contradiction if both grounded  # noqa: E501
+        # Generic different statements on same Q -> treat as contradiction if both grounded
         # Fall back: if statements differ and share >=2 words, consider contradictory
         words_a = set(lower_a.split())
         words_b = set(lower_b.split())

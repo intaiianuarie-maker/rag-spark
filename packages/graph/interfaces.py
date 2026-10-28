@@ -101,14 +101,22 @@ class GraphStore(ABC):
 
     @abstractmethod
     async def upsert_entities(self, workspace_id: str, entities: Sequence[Entity]) -> int:
-        """Insert or update entities in the workspace graph; returns number written."""
+        """Insert or update entities in the workspace graph; returns number written.
+
+        T-IMP-006: On conflict, document_ids and chunk_ids are merged (union)
+        with existing provenance rather than replaced.
+        """
         raise NotImplementedError
 
     @abstractmethod
     async def upsert_relationships(
         self, workspace_id: str, relationships: Sequence[Relationship]
     ) -> int:
-        """Insert or update relationships in the workspace graph; returns number written."""
+        """Insert or update relationships in the workspace graph; returns number written.
+
+        T-IMP-006: On conflict, document_ids and chunk_ids are merged (union)
+        with existing provenance rather than replaced.
+        """
         raise NotImplementedError
 
     @abstractmethod
@@ -168,7 +176,23 @@ class GraphStore(ABC):
 
     @abstractmethod
     async def tombstone_document(self, workspace_id: str, document_id: str) -> int:
-        """Tombstone every node/edge whose provenance includes document_id."""
+        """Tombstone graph rows whose provenance includes document_id (granular).
+
+        T-IMP-006: Removes only the deleted document's contribution (document_ids
+        and chunk_ids) from each entity/relationship. If other documents still
+        support the entity/relationship, it remains live. Only entities/
+        relationships with no remaining active document_ids are fully tombstoned.
+        """
+        raise NotImplementedError
+
+    @abstractmethod
+    async def is_document_tombstoned(self, workspace_id: str, document_id: str) -> bool:
+        """Check whether a document is currently tombstoned (deleted/superseded).
+
+        T-IMP-005: Used as a re-entrancy fence by the graph extraction worker
+        before publishing a completed extraction to prevent resurrection of
+        deleted/superseded document graph rows.
+        """
         raise NotImplementedError
 
     @abstractmethod
