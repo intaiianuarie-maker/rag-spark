@@ -65,12 +65,11 @@ pip install -r requirements-dev.txt
 pytest -m unit
 ```
 
-Last run on Windows 11, Python 3.12.13, without Docker or any service running: 2220 passed, 26 skipped, 18 failed, 3 errors. The skips need a dataset that is not in the repo (MuSiQue, 2WikiMultiHopQA, HotpotQA) or a POSIX system. Most of the failures need a live service, which these tests should not depend on:
+Last run on Windows 11, Python 3.12.13, without Docker or any service running: 2220 passed, 26 skipped, 18 failed, 3 errors. The skips need a dataset that is not in the repo (MuSiQue, 2WikiMultiHopQA, HotpotQA) or a POSIX system. The 21 failures, by cause:
 
-- Postgres: `test_pg_fts_lifecycle_gate.py`, `test_lexical_regression.py`, and the purge test in `test_graph_lifecycle.py`.
-- Redis: the nine tests in `test_queue_semantics.py`. They hang in the worker's heartbeat call.
-
-Three more fail for reasons not yet analysed: `test_ingest_pipeline.py::test_worker_survives_process_one_failure`, `test_supersession_vector_cleanup.py`, and `test_v4_authoring_api.py::test_run_workflow_runtime_failure_returns_coded_error`.
+- Postgres (6 failed, 3 errors): `test_pg_fts_lifecycle_gate.py`, `test_lexical_regression.py`, and the purge test in `test_graph_lifecycle.py`.
+- Redis (11 failed): the nine tests in `test_queue_semantics.py`, `test_ingest_pipeline.py::test_worker_survives_process_one_failure`, and `test_supersede_then_crash_leaves_no_orphans` in `test_supersession_vector_cleanup.py`. Without Redis the retry is not queued, so the job is marked `SUPERSESSION_CLEANUP_FAILED` and the worker loops time out.
+- Stale test data (1 failed): `test_v4_authoring_api.py::test_run_workflow_runtime_failure_returns_coded_error` uses the model `x`, which the admission check rejects before the LLM call. It needs an admitted model and a stubbed provider.
 
 Integration tests need the running stack: `pytest -m integration`.
 
