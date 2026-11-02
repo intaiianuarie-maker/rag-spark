@@ -213,8 +213,27 @@ async def _vision_elements_for_pdf(
 
     total_pages = await asyncio.to_thread(get_pdf_page_count, content)
     wanted = sorted({p for p in pages if 1 <= p <= total_pages})[:VISION_MAX_PAGES]
-    base_url = os.environ.get("LITELLM_URL", "https://openrouter.ai/api/v1")
-    transport = _OpenRouterVisionTransport(base_url, api_key, DEFAULT_VISION_FREE_MODEL)
+    # Gateway and key resolve exactly as OpenRouterProvider does (the embed path). The
+    # OpenRouter key goes only to an openrouter.ai host; any other host gets the
+    # provider's own key, never the OpenRouter one, or the step skips.
+    from urllib.parse import urlsplit
+
+    from models.adapters.openrouter_provider import OpenRouterProvider
+
+    provider = OpenRouterProvider()
+    host = urlsplit(provider.base_url).hostname or ""
+    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
+        key = api_key
+    else:
+        own_key = provider.api_key or ""
+        key = "" if own_key == api_key else own_key
+    if not key:
+        logger.warning(
+            "vision_no_api_key",
+            extra={"event": "vision_no_api_key", "workspace_id": str(workspace_id), "host": host},
+        )
+        return []
+    transport = _OpenRouterVisionTransport(provider.base_url, key, DEFAULT_VISION_FREE_MODEL)
     adapter = OpenRouterVisionAdapter(
         transport=transport,
         free_model=DEFAULT_VISION_FREE_MODEL,

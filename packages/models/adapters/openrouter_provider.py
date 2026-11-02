@@ -955,7 +955,14 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                 vector = _check_embedding_response(data, 1, DEFAULT_EMBEDDING_MODEL)[0]
                 break
             except Exception as e:
-                if attempt < self.max_attempts:
+                # Only transient failures repeat (timeouts, connection errors, 408/429/5xx).
+                # A 4xx (bad input, auth, payment, not found) or a bad reply raises at once.
+                status = e.response.status_code if isinstance(e, httpx.HTTPStatusError) else 0
+                timeout_or_conn = isinstance(
+                    e, (httpx.TimeoutException, httpx.NetworkError, TimeoutError, ConnectionError)
+                )
+                transient = timeout_or_conn or status in (408, 429) or status >= 500
+                if transient and attempt < self.max_attempts:
                     retries_used += 1
                     await asyncio.sleep(self.backoff_base_seconds * (2 ** (attempt - 1)))
                     continue
@@ -965,7 +972,7 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     detail = f" body={e.response.text[:300]!r}"
                 raise EmbedderError(
                     f"{DEFAULT_EMBEDDING_MODEL}: multimodal embedding failed after "
-                    f"{self.max_attempts} attempts (last error: {type(e).__name__}: {e}{detail})"
+                    f"{attempt} attempt(s) (last error: {type(e).__name__}: {e}{detail})"
                 ) from e
 
         if len(vector) != DEFAULT_EMBEDDING_DIMENSION:

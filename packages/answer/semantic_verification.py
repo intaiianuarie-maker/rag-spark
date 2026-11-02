@@ -124,6 +124,9 @@ class CanonicalEvidence(BaseModel):
     page: int | None = None
     section: str | None = None
     document_id: str | None = None
+    #: Chunk provenance (``extraction_of`` the canonical chunk): ``"vision"`` marks
+    #: model-generated page text; ``None`` / other values are not model-generated.
+    extraction: str | None = None
 
 
 class SupportSpan(BaseModel):
@@ -248,6 +251,7 @@ def _evidence_from_citations(
                 page=citation.page,
                 section=citation.section,
                 document_id=citation.document_id,
+                extraction=citation.extraction,
             )
     return evidence
 

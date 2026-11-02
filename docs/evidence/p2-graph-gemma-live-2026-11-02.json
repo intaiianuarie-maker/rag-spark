@@ -1,0 +1,64 @@
+{
+  "scope": "P2 live graph run (GRAPH_MODE=llm): Gemma free->paid graph extraction + /ask answer + document delete purge",
+  "plan_gap": "G3 - V2 graph with Gemma",
+  "run_at": "2026-11-02T09:35:00Z",
+  "reproduced_at": "2026-11-02 (independent re-run on the same local stack; see reproduction)",
+  "environment": "docker compose local stack (api/worker/postgres/redis/qdrant/seaweedfs), GRAPH_MODE=llm, GRAPH_LLM_MODEL=google/gemma-4-26b-a4b-it:free",
+  "requested_model": "google/gemma-4-26b-a4b-it:free",
+  "served_model": "google/gemma-4-26b-a4b-it",
+  "served_model_note": "requested and served slugs differ (':free' dropped). This is NOT proof of a paid fallback: the api emits no fallback log, so a paid fallback and OpenRouter reporting the base slug cannot be told apart.",
+  "provider": "openrouter",
+  "document": {
+    "workspace_id": "9513016a-cf2e-4bef-8c56-5e09e5a00803",
+    "document_id": "5706c6c0-9fd2-43f6-8fe1-4c051550ae4d",
+    "filename": "synthetic.txt"
+  },
+  "graph_extraction": {
+    "entities": 12,
+    "relationships_active": 9,
+    "relationships_tombstoned": 1,
+    "communities_in_store": 2,
+    "communities_in_worker_log_at_extraction": 0,
+    "communities_note": "the worker log line reported 0 communities; the 2 appear in the store afterwards, so the figure is only visible post hoc",
+    "store": "shared graphdata volume /app/.graph/graph.db (api + worker)",
+    "sample_entities": ["Project Phoenix", "Dr. Elena Vasilescu", "National Institute of Informatics", "CERN", "University of Bucharest"],
+    "sample_relationships": [
+      ["Dr. Elena Vasilescu", "WORKS_FOR", "National Institute of Informatics"],
+      ["Project Phoenix", "PART_OF", "National Institute of Informatics"]
+    ],
+    "sample_relationships_note": "an earlier version listed 'Project Phoenix LOCATED_IN Bucharest'; it is not present in the store (LOCATED_IN links National Institute of Informatics to Bucharest in the reproduction run) and was removed"
+  },
+  "ask": {
+    "query": "Which organizations partner on Project Phoenix and who leads it?",
+    "answer": "Project Phoenix is a quantum computing initiative led by Dr. Elena Vasilescu at the National Institute of Informatics in Bucharest. The project partners with CERN and the University of Bucharest to build a 128-qubit superconducting processor.",
+    "citations_valid": true,
+    "citation_chunks": ["31495a40-5999-572c-b603-38d7e571f215"],
+    "semantic_verification": "all_supported",
+    "publication_status": "verified",
+    "retrieval_note": "the graph leg did not contribute: retrieval.stages.graph.status was 'not_run' in the reproduction, so the answer came from the dense leg only. This record shows graph extraction and persistence, not graph-assisted retrieval."
+  },
+  "delete_purge": {
+    "deleted_document_id": "5706c6c0-9fd2-43f6-8fe1-4c051550ae4d",
+    "graph_document_chunks_after_delete": 0,
+    "graph_tombstones_after_delete": 1,
+    "graph_retired_chunks_after_delete": 1,
+    "entities_tombstoned_when_document_was_only_source": true,
+    "entities_note": "the delete tombstones an entity only when the deleted document was its only source. In this workspace a second document (03f42d1d...) was uploaded afterwards and the 12 entities are still linked to it, so they are active today. The mechanism was reproduced on a fresh single-document workspace: 7 entities, 6 relationships and 1 community were all tombstoned with empty document and chunk links."
+  },
+  "reproduction": {
+    "method": "independent agent re-run against the already-running compose stack, plus manual re-runs",
+    "reproduced": [
+      "GRAPH_MODE=llm and the Gemma free route are active (worker logged graph_extraction_llm_route)",
+      "graph store is the shared sqlite file read by both api and worker",
+      "ask returns valid Stage 11 citations that resolve to the real chunk",
+      "served model slug differs from the requested ':free' slug",
+      "delete leaves graph_document_chunks at 0 with one tombstone and one retired chunk"
+    ],
+    "stage12": "In the first 3 reproduction asks semantic_verification, publication_gate and verifier_model were null. The cause was a stale long-running api worker (uvicorn --reload watches only apps/api, while the code under packages/ was being edited). After restarting the api container, 3 of 3 live asks ran Stage 12: verifier_model google/gemma-4-26b-a4b-it:free and a publication gate present. The per-claim outcome ('all_supported') was not captured in the re-run.",
+    "not_checked": [
+      "exact original document text, so counts cannot be compared one-to-one",
+      "whether a paid fallback actually fired"
+    ]
+  },
+  "acceptance": "G3 partially satisfied: Gemma extracts real entities and the graph leg persists to the shared store; citations resolve to canonical chunks; delete tombstones and removes document links. Not shown: graph-assisted retrieval in /ask."
+}

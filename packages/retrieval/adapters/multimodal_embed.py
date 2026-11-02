@@ -81,11 +81,18 @@ class MultimodalEmbeddingProfile:
             workspace_id=workspace_id,
             document_id=document_id,
             document_version_id=document_version_id,
+            page=part.page,  # persisted top-level by the store, like text points
             visual_citation=citation,
             media_type=part.media_type,
             metadata={
                 "page": part.page,
                 "figure_id": part.figure_id,
+                # The store persists ``metadata`` into the payload; the subclass
+                # fields above are not, so provenance rides here as plain JSON.
+                "media_type": part.media_type,
+                "visual_citation": citation.model_dump(
+                    mode="json", include={"page", "figure_id", "bbox"}
+                ),
                 "embedding_model": self.model_name,
                 "embedding_dimension": self.dimension,
                 "multimodal": True,
