@@ -151,6 +151,14 @@ x-backend-env: &backend-env
   # configuration instead of reporting the store as shared.
   AGENT_STORE_SHADOW_MOUNTS: /app/apps/api,/app/apps/worker,/app/packages,/app/.graph,/app/.workflow
   AGENT_STORE_DB: ${AGENT_STORE_DB:-${AGENT_STORE_SHARED_ROOT:-/app/.agent}/agent.db}
+  # Connector sync (Sources). Off by default. Only the worker reads
+  # SYNC_WORKER_ENABLED; the API and worker both read the two approval settings
+  # (see docs/SOURCES.md). Empty roots refuse local-folder sources. "{}" approves
+  # no S3 bucket. No host folder is mounted into the containers, so add a volume
+  # for the local root before you set CONNECTOR_LOCAL_ROOTS.
+  SYNC_WORKER_ENABLED: ${SYNC_WORKER_ENABLED:-false}
+  CONNECTOR_LOCAL_ROOTS: ${CONNECTOR_LOCAL_ROOTS:-}
+  CONNECTOR_S3_SOURCES: ${CONNECTOR_S3_SOURCES:-{}}
 
 services:
   postgres:

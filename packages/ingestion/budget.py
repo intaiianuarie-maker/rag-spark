@@ -47,6 +47,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import sys
 import threading
 import time
 from collections.abc import Coroutine
@@ -171,19 +172,24 @@ def active_guard() -> ParseBudgetGuard | None:
 
 def rss_bytes() -> int | None:
     """Best-effort resident set size; ``None`` when the platform cannot say."""
-    try:
-        with open("/proc/self/statm", encoding="ascii") as handle:
-            rss_pages = int(handle.read().split()[1])
-        return rss_pages * os.sysconf("SC_PAGE_SIZE")
-    except (OSError, IndexError, ValueError):
+    # The POSIX-only calls sit in the else branch so mypy checks them on Linux
+    # and skips them on Windows, instead of failing on each platform.
+    if sys.platform == "win32":
+        return None
+    else:
         try:
-            import resource
+            with open("/proc/self/statm", encoding="ascii") as handle:
+                rss_pages = int(handle.read().split()[1])
+            return rss_pages * os.sysconf("SC_PAGE_SIZE")
+        except (OSError, IndexError, ValueError):
+            try:
+                import resource
 
-            usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            # Linux reports kilobytes, macOS bytes.
-            return int(usage) * (1024 if os.uname().sysname != "Darwin" else 1)
-        except Exception:  # pragma: no cover - platform without rusage
-            return None
+                usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+                # Linux reports kilobytes, macOS bytes.
+                return int(usage) * (1024 if os.uname().sysname != "Darwin" else 1)
+            except Exception:  # pragma: no cover - platform without rusage
+                return None
 
 
 class ParseBudgetGuard:

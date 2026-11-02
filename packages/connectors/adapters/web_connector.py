@@ -180,7 +180,7 @@ def _assert_public_host(url: str) -> None:
     except socket.gaierror as exc:
         raise OutOfScopeRedirect(f"cannot resolve {host!r}: {exc}") from exc
     for info in infos:
-        addr = ipaddress.ip_address(info[4][0].split("%")[0])
+        addr = ipaddress.ip_address(str(info[4][0]).split("%")[0])
         if not addr.is_global:
             raise OutOfScopeRedirect(f"{host!r} resolves to non-public address {addr}")
 
