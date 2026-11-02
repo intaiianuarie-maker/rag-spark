@@ -18,6 +18,8 @@ from .interfaces import DocumentElement, ElementType, ParsedDocument
 from .metadata import DocumentMetadata, extract_metadata
 
 DEFAULT_MAX_TOKENS = 256
+#: ``extraction`` metadata value of model-generated (vision) page descriptions.
+VISION_EXTRACTION = "vision"
 
 
 class Chunk(BaseModel):
@@ -58,7 +60,12 @@ def _sections(elements: list[DocumentElement]) -> list[dict[str, Any]]:
     current: dict[str, Any] | None = None
     for element in elements:
         is_ocr = bool(element.metadata and "extraction" in element.metadata)
+        is_vision = (element.metadata or {}).get("extraction") == VISION_EXTRACTION
         if current is None:
+            new_section = True
+        elif is_vision != current["is_vision"]:
+            # Model-generated text never shares a chunk with document text, so a
+            # chunk's ``extraction`` provenance is exact.
             new_section = True
         elif element.type in {ElementType.TITLE, ElementType.HEADING}:
             new_section = True
@@ -77,6 +84,7 @@ def _sections(elements: list[DocumentElement]) -> list[dict[str, Any]]:
                 "types": [],
                 "page": element.page,
                 "has_ocr": is_ocr,
+                "is_vision": is_vision,
                 "extractions": [],
             }
             groups.append(current)

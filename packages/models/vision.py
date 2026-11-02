@@ -15,14 +15,15 @@ import logging
 from enum import StrEnum
 from typing import Any, Literal
 
+import httpx
 from pydantic import BaseModel, Field
 
 from .interfaces import MessageRole
 
 logger = logging.getLogger("knowledge_os.models.vision")
 
-DEFAULT_VISION_FREE_MODEL = "google/gemini-2.5-flash:free"
-DEFAULT_VISION_PAID_MODEL = "google/gemini-2.5-flash"
+DEFAULT_VISION_FREE_MODEL = "google/gemma-4-26b-a4b-it:free"
+DEFAULT_VISION_PAID_MODEL = "google/gemma-4-26b-a4b-it"
 MAX_IMAGE_PAYLOAD_BYTES = 5 * 1024 * 1024  # 5 MiB
 
 
@@ -196,6 +197,25 @@ class VisionGenerationResult(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+def _free_route_exhausted(exc: Exception) -> bool:
+    """Is this a "free pool unavailable" error (worth paying to retry)?
+
+    Only 402/429/5xx and timeout/connection failures qualify. A 400, a
+    malformed response or a null body would fail identically on the paid
+    route, so those propagate instead of spending money. Status codes are read
+    from the exception (``response.status_code`` / ``status_code``), never
+    parsed out of its message.
+    """
+    status = getattr(getattr(exc, "response", None), "status_code", None) or getattr(
+        exc, "status_code", None
+    )
+    if isinstance(status, int):
+        return status in (402, 429) or status >= 500
+    return isinstance(
+        exc, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.TransportError)
+    )
+
+
 class OpenRouterVisionAdapter:
     """OpenRouter vision adapter with free -> paid fallback and sensitive guard."""
 
@@ -276,6 +296,7 @@ class OpenRouterVisionAdapter:
                     not is_paid
                     and request.allow_paid_fallback
                     and not request.is_sensitive
+                    and _free_route_exhausted(exc)
                 ):
                     logger.info(
                         "Vision free endpoint exhausted (%s), falling back to paid model %s",

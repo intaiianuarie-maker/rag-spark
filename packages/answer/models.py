@@ -62,6 +62,24 @@ class Citation(BaseModel):
     #: skips grounding entirely and may verify a store lookup citation whose
     #: content was never hydrated — the sole documented None case.
     content: str | None = None
+    #: Chunk provenance (``chunk.metadata["extraction"]``): ``"vision"`` marks
+    #: model-generated page text, other values name an OCR engine, ``None`` is
+    #: plain document text. Lets clients label model-generated citations.
+    extraction: str | None = None
+
+
+def extraction_of(metadata: dict[str, Any] | None) -> str | None:
+    """The chunk's ``extraction`` provenance label, or ``None`` if absent/non-string.
+
+    Missing, non-dict metadata or a non-string value (e.g. the tesseract OCR
+    dict) all read as ``None`` = not model-generated.
+    """
+    value = metadata.get("extraction") if isinstance(metadata, dict) else None
+    return value if isinstance(value, str) else None
+
+
+#: ``extraction`` value of model-generated page descriptions: never standalone evidence.
+VISION_EXTRACTION = "vision"
 
 
 class Answer(BaseModel):

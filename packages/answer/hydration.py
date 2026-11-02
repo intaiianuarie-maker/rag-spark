@@ -89,6 +89,8 @@ class HydratedChunk:
     page: int | None = None
     section: str | None = None
     content: str | None = None
+    #: Canonical ``chunk_metadata["extraction"]`` label (``"vision"`` = model-generated).
+    extraction: str | None = None
 
     @property
     def has_text(self) -> bool:
@@ -107,6 +109,7 @@ class HydratedChunk:
             page=citation.page,
             section=citation.section,
             content=citation.content,
+            extraction=citation.extraction,
         )
 
 
@@ -287,6 +290,8 @@ class CanonicalHydrator:
             seen.add(item.chunk_id)
             metadata = dict(item.metadata or {})
             metadata["canonical"] = True
+            if chunk.extraction is not None:
+                metadata["extraction"] = chunk.extraction  # canonical label wins
             hydrated.append(
                 item.model_copy(
                     update={

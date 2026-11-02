@@ -48,8 +48,13 @@ from ingestion.adapters.registry import (
 )
 from ingestion.budget import ParseBudgetExceeded, budgets_from_env
 from ingestion.chunk import ChunkResult, chunk_document
-from ingestion.dedup import supersede_other_versions, vector_collection
+from ingestion.dedup import (
+    delete_multimodal_versions,
+    supersede_other_versions,
+    vector_collection,
+)
 from ingestion.interfaces import DocumentElement, ParsedDocument
+from ingestion.metadata import tag_language
 from ingestion.normalize import MAX_DOCUMENT_BYTES, IngestionError
 from ingestion.ocr import process_pdf_with_ocr
 from ingestion.persistence import (
@@ -72,6 +77,481 @@ from storage.originals import (
 logger = logging.getLogger("knowledge_os.worker.ingest")
 
 DEFAULT_MAX_ELEMENTS = 100_000
+
+#: Vision step (P4 / G4): off by default — opt in with VISION_ENABLED=true.
+#: Rendered page crops go through the Gemma vision adapter (free -> paid) and
+#: the emitted elements carry page/figure identity next to Tesseract evidence.
+VISION_ENABLED = (
+    os.environ.get("VISION_ENABLED", "false").strip().lower() in {"1", "true", "yes", "on"}
+)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Positive int from env; a bad value warns and falls back (never crashes import)."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        value = 0
+    if value < 1:
+        logger.warning("%s=%r is not a positive integer; using default %d", name, raw, default)
+        return default
+    return value
+
+
+#: Multimodal page embedding (google/gemini-embedding-2): off by default. Reuses
+#: the vision step's page rendering and VISION_* bounds; never fails ingest.
+MULTIMODAL_EMBED_ENABLED = (
+    os.environ.get("MULTIMODAL_EMBED_ENABLED", "false").strip().lower()
+    in {"1", "true", "yes", "on"}
+)
+
+VISION_MAX_PAGES = _env_int("VISION_MAX_PAGES", 5)
+VISION_DPI = _env_int("VISION_DPI", 150)
+VISION_IMAGE_BUDGET_BYTES = _env_int("VISION_IMAGE_BUDGET_BYTES", 5 * 1024 * 1024)
+
+
+class _OpenRouterVisionTransport:
+    """httpx transport satisfying OpenRouterVisionAdapter's ``post_completion`` seam.
+
+    Posts one chat-completion request to the OpenRouter-compatible gateway and
+    returns the parsed JSON response. No user-supplied URLs: images travel as
+    base64 data URIs rendered from the authorized stored original.
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0):
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._model = model
+        self._timeout = timeout
+
+    async def post_completion(self, payload: dict) -> dict:
+        import httpx
+
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                f"{self._base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
+
+
+def _vision_workspace_sensitive(workspace_id: str) -> bool:
+    """Is the workspace sensitive? Fails CLOSED: a config error means sensitive."""
+    try:
+        from models.router_config import load_workspace_config
+
+        return bool(getattr(load_workspace_config(workspace_id), "sensitive", False))
+    except Exception:
+        logger.warning("vision_workspace_config_failed", exc_info=True)
+        return True
+
+
+async def _vision_elements_for_pdf(
+    content: bytes,
+    *,
+    document,
+    workspace_id: uuid.UUID,
+    sensitive: bool,
+    pages,
+) -> list:
+    """Render the given PDF pages and call the Gemma vision adapter.
+
+    ``pages`` are the 1-based pages whose text extraction failed (the text
+    layer's lost pages): vision is for those difficult pages only, so an empty
+    ``pages`` renders nothing and makes no HTTP call.
+
+    Returns normalized ``DocumentElement`` entries carrying page/figure
+    identity. No user-supplied URLs: pages are rasterized from the authorized
+    stored original. Bounded by :data:`VISION_MAX_PAGES` (lowest page numbers
+    first) and :data:`VISION_IMAGE_BUDGET_BYTES`. Vision output is supplementary — it is
+    added alongside Tesseract text, never overwriting it. Each element's text
+    starts with a "[Model-generated page description, page N]" marker so it can
+    never be mistaken for document text. A failing page is skipped (the rest
+    are kept); a sensitive workspace raises ``VisionPolicyError`` before any
+    image leaves the process.
+    """
+    import asyncio
+
+    from ingestion.adapters.pdfium_render import get_pdf_page_count, render_pdf_page
+    from ingestion.interfaces import DocumentElement, ElementType
+    from models.interfaces import MessageRole
+    from models.vision import (
+        DEFAULT_VISION_FREE_MODEL,
+        DEFAULT_VISION_PAID_MODEL,
+        ImageContentPart,
+        ImageDetail,
+        MultimodalMessage,
+        OpenRouterVisionAdapter,
+        TextContentPart,
+        VisionGenerationRequest,
+        VisionPolicyError,
+    )
+
+    if not pages:
+        logger.info(
+            "vision_no_lost_pages",
+            extra={"event": "vision_no_lost_pages", "workspace_id": str(workspace_id)},
+        )
+        return []
+
+    api_key = os.environ.get("OPENROUTER_API_KEY", "")
+    if not api_key:
+        logger.warning(
+            "vision_no_api_key",
+            extra={"event": "vision_no_api_key", "workspace_id": str(workspace_id)},
+        )
+        return []
+
+    total_pages = await asyncio.to_thread(get_pdf_page_count, content)
+    wanted = sorted({p for p in pages if 1 <= p <= total_pages})[:VISION_MAX_PAGES]
+    base_url = os.environ.get("LITELLM_URL", "https://openrouter.ai/api/v1")
+    transport = _OpenRouterVisionTransport(base_url, api_key, DEFAULT_VISION_FREE_MODEL)
+    adapter = OpenRouterVisionAdapter(
+        transport=transport,
+        free_model=DEFAULT_VISION_FREE_MODEL,
+        paid_model=DEFAULT_VISION_PAID_MODEL,
+    )
+
+    elements: list[DocumentElement] = []
+    budget_used = 0
+    for page_number in wanted:
+        try:
+            png_bytes, width_pts, height_pts, _pixel_w, _pixel_h = await asyncio.to_thread(
+                render_pdf_page, content, page_number, dpi=VISION_DPI
+            )
+            if budget_used + len(png_bytes) > VISION_IMAGE_BUDGET_BYTES:
+                logger.info(
+                    "vision_budget_stop",
+                    extra={
+                        "event": "vision_budget_stop",
+                        "skipped_pages": [p for p in wanted if p >= page_number],
+                    },
+                )
+                break
+            budget_used += len(png_bytes)
+
+            part = ImageContentPart.from_bytes(
+                png_bytes,
+                media_type="image/png",
+                page=page_number,
+                detail=ImageDetail.AUTO,
+            )
+            request = VisionGenerationRequest(
+                messages=[
+                    MultimodalMessage(
+                        role=MessageRole.USER,
+                        parts=[
+                            TextContentPart(
+                                text=(
+                                    "Describe this page's visible content. Name any figures, "
+                                    "tables, charts or captions you can see, and state the page "
+                                    "number. Return plain text only."
+                                )
+                            ),
+                            part,
+                        ],
+                    )
+                ],
+                workspace_id=str(workspace_id),
+                is_sensitive=sensitive,
+                # Sensitive workspaces must not reach the paid cloud route either:
+                # the adapter then raises VisionPolicyError before any HTTP call.
+                allow_paid_fallback=not sensitive,
+                max_tokens=1024,
+                temperature=0.0,
+            )
+            result = await adapter.generate_vision(request)
+        except VisionPolicyError:
+            raise
+        except Exception as exc:  # one bad page must not discard the others
+            logger.warning(
+                "vision_page_failed",
+                extra={
+                    "event": "vision_page_failed",
+                    "page": page_number,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+            continue
+        if not result.text.strip():
+            continue
+        elements.append(
+            DocumentElement(
+                type=ElementType.TEXT,
+                text=f"[Model-generated page description, page {page_number}] {result.text}",
+                page=page_number,
+                metadata={
+                    "extraction": "vision",
+                    "vision_model": result.model,
+                    "vision_paid": result.is_paid,
+                    "page": page_number,
+                    "page_size_pts": [width_pts, height_pts],
+                },
+            )
+        )
+    return elements
+
+
+async def _apply_vision_step(
+    parsed: ParsedDocument, content: bytes, *, document, job, lost_pages
+) -> None:
+    """Supplementary stage: add vision elements for the lost pages; never raises."""
+    # A retried job (attempts > 1) skips vision: the first attempt already
+    # paid for these pages and a retry would pay again for the same result.
+    # ponytail: nothing is persisted between attempts, so a retry after a
+    # first-attempt vision failure has no vision elements either; persist
+    # per-page results if retries must recover them.
+    if job.attempts > 1:
+        logger.info(
+            "vision_skipped_retry",
+            extra={
+                "event": "vision_skipped_retry",
+                "job_id": str(job.id),
+                "attempts": job.attempts,
+            },
+        )
+        return
+    try:
+        elements = await _vision_elements_for_pdf(
+            content,
+            document=document,
+            workspace_id=job.workspace_id,
+            sensitive=_vision_workspace_sensitive(str(job.workspace_id)),
+            pages=list(lost_pages),
+        )
+    except Exception as exc:  # supplementary stage — never fails ingest
+        logger.warning(
+            "vision_step_failed",
+            extra={
+                "event": "vision_step_failed",
+                "job_id": str(job.id),
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        return
+    if not elements:
+        return
+    # English descriptions must not flip the document language (and with it
+    # the FTS config): pin it from the parsed text before they are appended.
+    if not parsed.language:
+        tagged = tag_language(parsed)
+        if tagged != "unknown":
+            parsed.language = tagged
+    parsed.elements.extend(elements)
+    logger.info(
+        "vision_elements_added",
+        extra={"event": "vision_elements_added", "job_id": str(job.id), "count": len(elements)},
+    )
+
+
+async def _multimodal_embed_for_pdf(
+    content: bytes,
+    *,
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+    sensitive: bool,
+) -> int:
+    """Embed rendered PDF pages into ``knowledge_multimodal``; returns points written.
+
+    The document's previous multimodal points are deleted first, so a
+    re-ingest/replace never leaves stale pages. A page that cannot be rendered,
+    is empty, or fails to embed is skipped and logged — an empty or missing
+    image is never embedded. Raises on store errors (the caller logs them).
+    """
+    import asyncio
+
+    from ingestion.adapters.pdfium_render import get_pdf_page_count, render_pdf_page
+    from ingestion.dedup import build_purge_filter
+    from models.adapters.openrouter_provider import OpenRouterProvider
+    from models.vision import ImageContentPart
+    from retrieval.adapters.multimodal_embed import (
+        DEFAULT_MULTIMODAL_COLLECTION,
+        MULTIMODAL_VECTOR_DIMENSION,
+        MultimodalEmbeddingProfile,
+    )
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+    from retrieval.embedding_identity import merge_identity, provider_identity
+
+    coll = DEFAULT_MULTIMODAL_COLLECTION
+    qdrant = QdrantVectorStore(collection=coll)
+    try:
+        await qdrant.delete_if_exists(
+            collection=coll, query_filter=build_purge_filter(workspace_id, document_id)
+        )
+        if sensitive or not os.environ.get("OPENROUTER_API_KEY", ""):
+            logger.warning(
+                "multimodal_step_skipped",
+                extra={
+                    "event": "multimodal_step_skipped",
+                    "workspace_id": str(workspace_id),
+                    "reason": "sensitive_workspace" if sensitive else "no_api_key",
+                },
+            )
+            return 0
+
+        provider = OpenRouterProvider(call_site="multimodal_embed")
+        profile = MultimodalEmbeddingProfile(provider=provider)
+        total_pages = await asyncio.to_thread(get_pdf_page_count, content)
+        records = []
+        budget_used = 0
+        for page_number in range(1, min(VISION_MAX_PAGES, total_pages) + 1):
+            try:
+                png_bytes, *_ = await asyncio.to_thread(
+                    render_pdf_page, content, page_number, dpi=VISION_DPI
+                )
+                if not png_bytes:
+                    logger.warning(
+                        "multimodal_page_skipped",
+                        extra={
+                            "event": "multimodal_page_skipped",
+                            "page": page_number,
+                            "reason": "no_image_bytes",
+                        },
+                    )
+                    continue
+                if budget_used + len(png_bytes) > VISION_IMAGE_BUDGET_BYTES:
+                    logger.info(
+                        "multimodal_budget_stop",
+                        extra={"event": "multimodal_budget_stop", "page": page_number},
+                    )
+                    break
+                budget_used += len(png_bytes)
+                part = ImageContentPart.from_bytes(
+                    png_bytes, media_type="image/png", page=page_number
+                )
+                record_key = f"{version_id}:mm:{page_number}"
+                record = await profile.embed_image_part(
+                    part,
+                    workspace_id=str(workspace_id),
+                    document_id=str(document_id),
+                    document_version_id=str(version_id),
+                    record_id=str(uuid.uuid5(PUBLICATION_NAMESPACE, record_key)),
+                )
+                record.metadata = merge_identity(
+                    {**(record.metadata or {})},
+                    provider_identity(provider, len(record.vector)),
+                )
+                records.append(record)
+            except Exception as exc:  # one bad page must not discard the others
+                logger.warning(
+                    "multimodal_page_failed",
+                    extra={
+                        "event": "multimodal_page_failed",
+                        "page": page_number,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+        if not records:
+            return 0
+        await qdrant.ensure_collection(collection=coll, dimension=MULTIMODAL_VECTOR_DIMENSION)
+        return await qdrant.upsert(collection=coll, records=records)
+    finally:
+        await qdrant.close()
+
+
+async def _run_multimodal_step(
+    content: bytes,
+    *,
+    job_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+) -> int:
+    """Supplementary stage: never raises, logs the failure with its error."""
+    try:
+        written = await _multimodal_embed_for_pdf(
+            content,
+            workspace_id=workspace_id,
+            document_id=document_id,
+            version_id=version_id,
+            sensitive=_vision_workspace_sensitive(str(workspace_id)),
+        )
+    except Exception as exc:
+        logger.warning(
+            "multimodal_step_failed",
+            extra={
+                "event": "multimodal_step_failed",
+                "job_id": str(job_id),
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+        return 0
+    logger.info(
+        "multimodal_step_done",
+        extra={"event": "multimodal_step_done", "job_id": str(job_id), "points": written},
+    )
+    return written
+
+
+async def _multimodal_after_publish(
+    session: AsyncSession,
+    content: bytes,
+    *,
+    job_id: uuid.UUID,
+    workspace_id: uuid.UUID,
+    document_id: uuid.UUID,
+    version_id: uuid.UUID,
+) -> None:
+    """Run the multimodal step on a published generation, then re-check it.
+
+    Called only after the READY/NEEDS_REVIEW commit, so no transaction is held
+    across the network calls and a job retry never re-embeds. A delete/replace
+    landing during the step would leave its upserts orphaned (``purge_document``
+    and the supersede cleanup already ran), so the fence is asked again and a
+    dead generation's points are removed here. Never raises: the job is READY.
+    """
+    written = await _run_multimodal_step(
+        content,
+        job_id=job_id,
+        workspace_id=workspace_id,
+        document_id=document_id,
+        version_id=version_id,
+    )
+    if not written:
+        return
+    try:
+        reason = await generation_publication_state(
+            session, document_id=document_id, version_id=version_id
+        )
+        await session.commit()  # close the read transaction; nothing is pending
+        if reason is None:
+            return
+        removed = await delete_multimodal_versions(
+            workspace_id=workspace_id, document_id=document_id, version_ids=[version_id]
+        )
+        logger.warning(
+            "multimodal_dead_generation_cleaned",
+            extra={
+                "event": "multimodal_dead_generation_cleaned",
+                "job_id": str(job_id),
+                "document_id": str(document_id),
+                "document_version_id": str(version_id),
+                "error_code": reason,
+                "points_removed": removed,
+            },
+        )
+    except Exception as exc:
+        logger.warning(
+            "multimodal_dead_generation_cleanup_failed",
+            extra={
+                "event": "multimodal_dead_generation_cleanup_failed",
+                "job_id": str(job_id),
+                "document_id": str(document_id),
+                "document_version_id": str(version_id),
+                "error": f"{type(exc).__name__}: {exc}",
+            },
+        )
+
 
 #: T-V1-016: UUID namespace for deterministic publication IDs. A document
 #: *generation* is one ``DocumentVersion`` row (a new upload mints a new
@@ -253,6 +733,27 @@ async def _unpublish_generation(
                 "fenced_generation_vector_cleanup_failed",
                 extra={
                     "event": "fenced_generation_vector_cleanup_failed",
+                    "document_id": str(document_id),
+                    "document_version_id": str(version_id),
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
+        # The generation's multimodal page points go too (flag-independent),
+        # scoped to the owning workspace; same best-effort contract as above.
+        try:
+            workspace_id = await session.scalar(
+                select(Document.workspace_id).where(Document.id == document_id)
+            )
+            if workspace_id is not None:
+                await delete_multimodal_versions(
+                    workspace_id=workspace_id, document_id=document_id, version_ids=[version_id]
+                )
+        except Exception as exc:  # best effort: the job is refused either way
+            logger.warning(
+                "fenced_generation_vector_cleanup_failed",
+                extra={
+                    "event": "fenced_generation_vector_cleanup_failed",
+                    "collection": "multimodal",
                     "document_id": str(document_id),
                     "document_version_id": str(version_id),
                     "error": f"{type(exc).__name__}: {exc}",
@@ -466,7 +967,7 @@ def resolved_chunking_backend() -> str:
 
 
 def _chunk(parsed: ParsedDocument, *, filename: str | None) -> ChunkResult:
-    """Chunk with the selected backend (both emit the identical Chunk model)."""
+    """Chunk with the selected backend (all emit the identical Chunk model)."""
     if CHUNKING_BACKEND == "builtin":
         return chunk_document(parsed, filename=filename)
     try:
@@ -757,6 +1258,7 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     parsed: ParsedDocument | None = None
     parse_report: ParseReport | None = None
     ocr_report_meta: dict | None = None
+    text_layer = None
 
     if mime_type == "application/pdf":
         ocr_enabled = (
@@ -874,6 +1376,20 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
             raise IngestPipelineError(
                 "PARSE_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
             ) from exc
+
+    # P4 (G4): vision step — render page crops from the authorized stored
+    # original, call the Gemma vision adapter, and emit page/figure-identity
+    # elements next to the Tesseract evidence. Opt-in via VISION_ENABLED;
+    # vision is supplementary and never fails ingest.
+    # Only pages whose text extraction failed (text layer lost pages) are sent.
+    if VISION_ENABLED and mime_type == "application/pdf" and parsed is not None:
+        await _apply_vision_step(
+            parsed,
+            content,
+            document=document,
+            job=job,
+            lost_pages=text_layer.lost_pages if text_layer is not None else (),
+        )
 
     # T-V1-019 — PRE-WRITE gate. Everything below writes publication state
     # (chunk rows, FTS rows, vector points) and finally READY, so a generation
@@ -1279,6 +1795,19 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
         await session.commit()
     stages.append(JobStage.READY.value)
     _log_stage(job, JobStage.READY.value)
+
+    # Optional multimodal page embedding (PDF only): runs only once the
+    # generation is published and committed, re-checks liveness after its
+    # upsert, and never fails or un-READYs the job.
+    if MULTIMODAL_EMBED_ENABLED and mime_type == "application/pdf":
+        await _multimodal_after_publish(
+            session,
+            content,
+            job_id=job.id,
+            workspace_id=job.workspace_id,
+            document_id=job.document_id,
+            version_id=version.id,
+        )
 
     logger.info(
         "ingest_job_ready" if not needs_review_reasons else "ingest_job_needs_review",

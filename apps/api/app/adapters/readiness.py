@@ -391,6 +391,120 @@ worker_liveness = _WorkerLivenessProbe()
 graph_store = _GraphStoreProbe()
 
 
+def _env_flag(name: str) -> bool:
+    """Same parsing as ``apps/worker/jobs/ingest_pipeline.py`` (default off)."""
+    return os.environ.get(name, "false").strip().lower() in {"1", "true", "yes", "on"}
+
+
+#: Reported for the opt-in worker layers. An env flag plus a key is configuration,
+#: not evidence of a product run (plan section 12), so it is "configured".
+_CONFIGURED_REASON = "configured (flag on + OPENROUTER_API_KEY); no product run recorded"
+
+
+def _flag_layer(flag: str, has_openrouter_key: bool) -> dict[str, object]:
+    """Opt-in worker layer: configured only when its env flag is on AND OPENROUTER_API_KEY is set.
+
+    The worker's vision/multimodal steps read ``OPENROUTER_API_KEY`` alone and
+    skip otherwise, so no other provider key may count here. ``enabled`` mirrors
+    ``configured`` only for backwards compatibility.
+    """
+    if not _env_flag(flag):
+        return {"enabled": False, "configured": False, "reason": f"{flag} is off (opt-in)"}
+    if not has_openrouter_key:
+        return {
+            "enabled": False,
+            "configured": False,
+            "reason": f"{flag} is on but OPENROUTER_API_KEY is not configured",
+        }
+    return {"enabled": True, "configured": True, "reason": _CONFIGURED_REASON}
+
+
+def effective_layer_status(
+    settings,
+    dependencies: dict[str, DependencyStatus],
+    *,
+    store_modes: dict[str, str] | None = None,
+) -> dict[str, dict[str, object]]:
+    """Effective enabled status for the product layers (plan section 12 / G8).
+
+    A layer is ``enabled`` only when its code path is wired AND its backing
+    capability is actually reachable — never silently replaced by a stub or
+    rule path. Each entry: ``{"enabled": bool, "reason": str}``; the opt-in
+    vision/multimodal entries also carry ``"configured": bool``.
+    """
+    store_modes = store_modes or {}
+    graph_mode = settings.graph_mode.strip().lower()
+    graph_on = graph_mode in {"rule", "llm"}
+
+    llm_gateway = dependencies.get("llm_gateway")
+    llm_ok = bool(llm_gateway and llm_gateway.reachable)
+    has_key = bool(
+        os.environ.get("OPENROUTER_API_KEY")
+        or os.environ.get("LITELLM_API_KEY")
+        or os.environ.get("DEEPSEEK_API_KEY")
+    )
+    agents_ok = llm_ok and has_key
+    has_openrouter_key = bool(os.environ.get("OPENROUTER_API_KEY", "").strip())
+
+    graph_store_dep = dependencies.get("graph_store")
+    # Only the LLM graph layer counts; GRAPH_MODE=rule is the rule graph.
+    graph_ok = graph_mode == "llm" and bool(graph_store_dep and graph_store_dep.reachable)
+
+    workflows_ok = all(
+        store_modes.get(name) == "persistent"
+        for name in ("drafts", "runs", "approvals", "checkpoints")
+    )
+
+    return {
+        "graph": {
+            "enabled": graph_ok,
+            "reason": (
+                "GRAPH_MODE=llm + graph store reachable"
+                if graph_ok
+                else (
+                    "rule mode is not the LLM graph layer"
+                    if graph_mode == "rule"
+                    else (
+                        f"GRAPH_MODE={graph_mode} is off"
+                        if not graph_on
+                        else "graph store unreachable"
+                    )
+                )
+            ),
+        },
+        "agents": {
+            "enabled": agents_ok,
+            "reason": (
+                "LLM gateway reachable + API key configured"
+                if agents_ok
+                else (
+                    "LLM gateway unreachable"
+                    if not llm_ok
+                    else "no LLM API key configured"
+                )
+            ),
+        },
+        "research": {
+            "enabled": agents_ok,
+            "reason": (
+                "research pipeline inherits the agent LLM route"
+                if agents_ok
+                else "agents layer not enabled"
+            ),
+        },
+        "workflows": {
+            "enabled": workflows_ok,
+            "reason": (
+                "durable workflow stores persistent"
+                if workflows_ok
+                else "workflow stores not all persistent"
+            ),
+        },
+        "multimodal": _flag_layer("MULTIMODAL_EMBED_ENABLED", has_openrouter_key),
+        "vision": _flag_layer("VISION_ENABLED", has_openrouter_key),
+    }
+
+
 async def _gather_fresh(
     probes: dict[str, Coroutine[Any, Any, DependencyStatus]],
     freshness_seconds: float,

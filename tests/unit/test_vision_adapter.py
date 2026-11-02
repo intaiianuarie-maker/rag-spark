@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 os.environ.setdefault("APP_ENV", "test")
@@ -132,11 +133,19 @@ async def test_vision_adapter_standard_workspace_free_route() -> None:
 
     res = await adapter.generate_vision(req)
     assert res.text == "Identified Table 1 on page 2."
-    assert res.model == "google/gemini-2.5-flash:free"
+    assert res.model == "google/gemma-4-26b-a4b-it:free"
     assert res.is_paid is False
     assert len(res.citations) == 1
     assert res.citations[0].page == 2
     assert res.citations[0].figure_id == "tbl-1"
+
+
+def _rate_limited() -> httpx.HTTPStatusError:
+    request = httpx.Request("POST", "https://openrouter.ai/api/v1/chat/completions")
+    response = httpx.Response(429, request=request)
+    return httpx.HTTPStatusError(
+        "429 Rate limit exceeded on free pool", request=request, response=response
+    )
 
 
 @pytest.mark.asyncio
@@ -144,7 +153,7 @@ async def test_vision_adapter_free_exhaustion_paid_fallback() -> None:
     mock_transport = AsyncMock()
     # First call fails (rate limit 429), second succeeds on paid fallback
     mock_transport.post_completion.side_effect = [
-        RuntimeError("429 Rate limit exceeded on free pool"),
+        _rate_limited(),
         {"choices": [{"message": {"content": "Paid fallback response."}}]},
     ]
 
@@ -163,9 +172,9 @@ async def test_vision_adapter_free_exhaustion_paid_fallback() -> None:
 
     res = await adapter.generate_vision(req)
     assert res.text == "Paid fallback response."
-    assert res.model == "google/gemini-2.5-flash"
+    assert res.model == "google/gemma-4-26b-a4b-it"
     assert res.is_paid is True
-    assert res.metadata.get("fallback_from") == "google/gemini-2.5-flash:free"
+    assert res.metadata.get("fallback_from") == "google/gemma-4-26b-a4b-it:free"
 
 
 @pytest.mark.asyncio
@@ -203,5 +212,5 @@ async def test_vision_adapter_sensitive_workspace_guard() -> None:
         allow_paid_fallback=True,
     )
     res = await adapter.generate_vision(req_allowed)
-    assert res.model == "google/gemini-2.5-flash"
+    assert res.model == "google/gemma-4-26b-a4b-it"
     assert res.is_paid is True

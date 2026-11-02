@@ -99,8 +99,15 @@ x-backend-env: &backend-env
   MINIO_ENDPOINT: ${MINIO_ENDPOINT:-http://seaweedfs:8333}
   OPENROUTER_API_KEY: ${OPENROUTER_API_KEY}
   LITELLM_URL: ${LITELLM_URL:-https://openrouter.ai/api/v1}
-  ANSWER_MODEL: ${ANSWER_MODEL:-nvidia/nemotron-3.5-lightning:free}
+  ANSWER_MODEL: ${ANSWER_MODEL:-google/gemma-4-26b-a4b-it:free}
   INFINITY_URL: ${INFINITY_URL:-}
+  # P1 (G1): OpenRouter Nemotron rerank is on by default for the ask leg
+  # (the local ``rerank`` profile sidecar stays out — it is a different service).
+  RERANK_ENABLED: ${RERANK_ENABLED:-true}
+  # P2 (G3): GRAPH_LLM_MODEL resolves the GRAPH_MODE=llm extractor to the Gemma
+  # free-then-paid route (graph.dispatch). GRAPH_MODE itself stays opt-in; set
+  # GRAPH_MODE=llm in .env to switch the graph leg on.
+  GRAPH_LLM_MODEL: ${GRAPH_LLM_MODEL:-google/gemma-4-26b-a4b-it:free}
   # T-R11: ONE shared persistent graph store. Previously graph_db_path() defaulted
   # to the RELATIVE "./.graph/graph.db", so every service resolved it inside its
   # own container filesystem and api, worker and extraction each held a PRIVATE
@@ -127,6 +134,14 @@ x-backend-env: &backend-env
   AUTH_JWT_SECRET: ${AUTH_JWT_SECRET:?AUTH_JWT_SECRET must be set explicitly (>=32 chars, no shipped default)}
   # Chunking backend (TASK-M2-002): llamaindex (default) | builtin.
   CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
+  # Vision (P4 / G4): off by default.
+  VISION_ENABLED: ${VISION_ENABLED:-false}
+  VISION_MAX_PAGES: ${VISION_MAX_PAGES:-5}
+  VISION_DPI: ${VISION_DPI:-150}
+  VISION_IMAGE_BUDGET_BYTES: ${VISION_IMAGE_BUDGET_BYTES:-5242880}
+  # Multimodal page embedding (google/gemini-embedding-2): off by default.
+  MULTIMODAL_EMBED_ENABLED: ${MULTIMODAL_EMBED_ENABLED:-false}
+  WORKSPACE_MODEL_CONFIG: ${WORKSPACE_MODEL_CONFIG:-}
   WORKFLOW_DRAFT_DB: ${WORKFLOW_DRAFT_DB:?WORKFLOW_DRAFT_DB must be set to the durable workflow draft sqlite path}
   WORKFLOW_RUNS_DB: ${WORKFLOW_RUNS_DB:?WORKFLOW_RUNS_DB must be set to the durable workflow runs sqlite path}
   WORKFLOW_APPROVALS_DB: ${WORKFLOW_APPROVALS_DB:?WORKFLOW_APPROVALS_DB must be set to the durable workflow approvals sqlite path}

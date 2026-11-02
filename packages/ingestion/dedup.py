@@ -176,14 +176,45 @@ _VECTOR_CLEANUP_ATTEMPTS = 3
 _VECTOR_CLEANUP_BACKOFF_SECONDS = (1.0, 2.0)
 
 
+async def delete_multimodal_versions(
+    *, workspace_id: uuid.UUID, document_id: uuid.UUID, version_ids: Sequence[uuid.UUID]
+) -> int:
+    """Delete these versions' page points from the optional multimodal collection.
+
+    Scoped by workspace AND document AND version, independent of
+    ``MULTIMODAL_EMBED_ENABLED`` (points written while the flag was on must
+    still die). A missing collection is a no-op; any other Qdrant error raises.
+    """
+    from retrieval.adapters.multimodal_embed import DEFAULT_MULTIMODAL_COLLECTION
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    coll = DEFAULT_MULTIMODAL_COLLECTION
+    qdrant = QdrantVectorStore(collection=coll)
+    try:
+        return await qdrant.delete_versions(
+            collection=coll,
+            version_ids=[str(v) for v in version_ids],
+            document_id=str(document_id),
+            workspace_id=str(workspace_id),
+            missing_ok=True,
+        )
+    finally:
+        await qdrant.close()
+
+
 async def _delete_superseded_points(
-    *, document_id: uuid.UUID | None, version_ids: Sequence[uuid.UUID]
+    *,
+    document_id: uuid.UUID | None,
+    version_ids: Sequence[uuid.UUID],
+    workspace_id: uuid.UUID | None = None,
 ) -> int:
     """Delete superseded versions' points, retrying a failure a bounded number of times.
 
     Raises the last failure once the budget is spent, so the caller's visible
     failure surface (marker + queued retry) still triggers — the retry here is
-    only about not *losing* the work to a one-off failure.
+    only about not *losing* the work to a one-off failure. With a workspace and
+    document in hand the multimodal page points go in the same attempt, so a
+    multimodal failure takes exactly the text cleanup's failure path.
     """
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
@@ -193,11 +224,18 @@ async def _delete_superseded_points(
     for attempt in range(1, _VECTOR_CLEANUP_ATTEMPTS + 1):
         qdrant = QdrantVectorStore(collection=collection)
         try:
-            return await qdrant.delete_versions(
+            removed = await qdrant.delete_versions(
                 collection=collection,
                 version_ids=ids,
                 document_id=str(document_id) if document_id is not None else None,
             )
+            # ponytail: a document-less global reconcile has no tenant scope, so it
+            # skips multimodal; the per-document reconcile on every supersede covers it.
+            if workspace_id is not None and document_id is not None:
+                removed += await delete_multimodal_versions(
+                    workspace_id=workspace_id, document_id=document_id, version_ids=version_ids
+                )
+            return removed
         except Exception as exc:
             last = exc
             if attempt == _VECTOR_CLEANUP_ATTEMPTS:
@@ -222,7 +260,10 @@ async def _delete_superseded_points(
 
 
 async def reconcile_superseded_vectors(
-    session: AsyncSession, *, document_id: uuid.UUID | None = None
+    session: AsyncSession,
+    *,
+    document_id: uuid.UUID | None = None,
+    workspace_id: uuid.UUID | None = None,
 ) -> int:
     """Delete every point whose version row is already superseded (T-V1-072).
 
@@ -243,7 +284,9 @@ async def reconcile_superseded_vectors(
     stale = (await session.execute(statement)).scalars().all()
     if not stale:
         return 0
-    removed = await _delete_superseded_points(document_id=document_id, version_ids=list(stale))
+    removed = await _delete_superseded_points(
+        document_id=document_id, version_ids=list(stale), workspace_id=workspace_id
+    )
     logger.info(
         "supersession_vectors_reconciled",
         extra={
@@ -329,9 +372,16 @@ async def supersede_other_versions(
         .values(superseded_at=datetime.now(UTC))
     )
     # T-V1-017 (2): Qdrant points for the superseded versions, via the store's
-    # version-scoped cleanup call (payload document_version_id).
+    # version-scoped cleanup call (payload document_version_id). The workspace
+    # scopes the multimodal page points that go with them.
+    owner = await session.get(Document, document_id)
+    workspace_id = owner.workspace_id if owner is not None else None
     await _cleanup_superseded_vectors(
-        session, document_id=document_id, version_ids=older, keep_version_id=keep_version_id
+        session,
+        document_id=document_id,
+        version_ids=older,
+        keep_version_id=keep_version_id,
+        workspace_id=workspace_id,
     )
     # T-V1-072: reconcile the whole document on every supersede. The targeted
     # cleanup above can still fail (and then only a queued retry stands between
@@ -339,7 +389,9 @@ async def supersede_other_versions(
     # version of this document, so a cleanup lost in an earlier run is repaired
     # the next time the document is replaced — no rebuild required.
     try:
-        await reconcile_superseded_vectors(session, document_id=document_id)
+        await reconcile_superseded_vectors(
+            session, document_id=document_id, workspace_id=workspace_id
+        )
     except Exception as exc:
         logger.warning(
             "supersession_vectors_reconcile_failed",
@@ -394,6 +446,7 @@ async def _cleanup_superseded_vectors(
     document_id: uuid.UUID,
     version_ids: Sequence[uuid.UUID],
     keep_version_id: uuid.UUID,
+    workspace_id: uuid.UUID | None = None,
 ) -> bool:
     """Remove superseded versions' Qdrant points; queue a retry when it fails.
 
@@ -406,7 +459,7 @@ async def _cleanup_superseded_vectors(
     ids = [str(v) for v in version_ids]
     try:
         removed = await _delete_superseded_points(
-            document_id=document_id, version_ids=list(version_ids)
+            document_id=document_id, version_ids=list(version_ids), workspace_id=workspace_id
         )
         logger.info(
             "supersession_vectors_cleaned",
@@ -541,6 +594,7 @@ async def purge_document(
     if not _STORE_PURGERS:
         # Default lazy registration of real store purgers (TASK-Q3 / M3-001a)
         try:
+            from retrieval.adapters.multimodal_embed import DEFAULT_MULTIMODAL_COLLECTION
             from retrieval.adapters.pg_fts import PostgresLexicalStore
             from retrieval.adapters.qdrant_store import QdrantVectorStore
 
@@ -553,8 +607,16 @@ async def purge_document(
                 collection = vector_collection()
                 qdrant = QdrantVectorStore(collection=collection)
                 filt = build_purge_filter(ws_id, doc_id)
-                await qdrant.delete(collection=collection, query_filter=filt)
-                await qdrant.close()
+                try:
+                    await qdrant.delete(collection=collection, query_filter=filt)
+                    # Multimodal page vectors (optional collection) share the fate
+                    # of the document; a missing collection is fine, a Qdrant
+                    # error fails this store exactly like the text purge.
+                    await qdrant.delete_if_exists(
+                        collection=DEFAULT_MULTIMODAL_COLLECTION, query_filter=filt
+                    )
+                finally:
+                    await qdrant.close()
 
             register_store_purger("fts", _purge_fts)
             register_store_purger("qdrant", _purge_qdrant)

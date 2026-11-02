@@ -927,6 +927,73 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         vectors = await self.embed_documents([text], call_site=call_site)
         return vectors[0]
 
+    async def embed_multimodal(self, part: Any, *, call_site: str | None = None) -> list[float]:
+        """Embed ONE image part with the multimodal embedding model (3072-d).
+
+        OpenRouter's /embeddings takes ``input=[{"content": [{"type":
+        "image_url", "image_url": {"url": <https or data: URI>}}]}]``. Raises
+        :class:`EmbedderError` on a missing image, an API error, an empty
+        vector or a dimension other than 3072 — never returns a placeholder.
+        """
+        site = call_site or self.default_call_site
+        url_value = (getattr(part, "image_url", None) or {}).get("url", "")
+        if not url_value or url_value.endswith("base64,"):
+            raise EmbedderError("embed_multimodal: no image data in the content part")
+
+        client = self._http()
+        url = f"{self.base_url}/embeddings"
+        payload = {
+            "model": DEFAULT_EMBEDDING_MODEL,
+            "input": [{"content": [{"type": "image_url", "image_url": {"url": url_value}}]}],
+        }
+        retries_used = 0
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                resp = await client.post(url, json=payload, headers=self._headers())
+                resp.raise_for_status()
+                data = resp.json()
+                vector = _check_embedding_response(data, 1, DEFAULT_EMBEDDING_MODEL)[0]
+                break
+            except Exception as e:
+                if attempt < self.max_attempts:
+                    retries_used += 1
+                    await asyncio.sleep(self.backoff_base_seconds * (2 ** (attempt - 1)))
+                    continue
+                GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                detail = ""
+                if isinstance(e, httpx.HTTPStatusError):
+                    detail = f" body={e.response.text[:300]!r}"
+                raise EmbedderError(
+                    f"{DEFAULT_EMBEDDING_MODEL}: multimodal embedding failed after "
+                    f"{self.max_attempts} attempts (last error: {type(e).__name__}: {e}{detail})"
+                ) from e
+
+        if len(vector) != DEFAULT_EMBEDDING_DIMENSION:
+            GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+            raise EmbedderError(
+                f"{DEFAULT_EMBEDDING_MODEL}: expected {DEFAULT_EMBEDDING_DIMENSION}-d, "
+                f"got {len(vector)}-d"
+            )
+
+        usage = data.get("usage") or {}
+        p_tokens = int(usage.get("prompt_tokens") or 0)
+        reported_cost = usage.get("cost")
+        GLOBAL_ACCOUNTING.record_call(
+            call_site=site,
+            model=DEFAULT_EMBEDDING_MODEL,
+            prompt_tokens=p_tokens,
+            completion_tokens=0,
+            cost_usd=compute_cost_usd(
+                DEFAULT_EMBEDDING_MODEL,
+                p_tokens,
+                0,
+                float(reported_cost) if reported_cost is not None else None,
+            ),
+            retries=retries_used,
+            vectors=1,
+        )
+        return vector
+
     # -----------------------------------------------------------------------
     # Sync helpers: embed & chat (for evals & scripts)
     # -----------------------------------------------------------------------

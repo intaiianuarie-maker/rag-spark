@@ -95,7 +95,7 @@ from retrieval.interfaces import RetrievedItem
 
 from .hydration import CanonicalHydrator, HydratedChunk, is_routing_hint
 from .interfaces import ChunkLookup
-from .models import Citation, Claim
+from .models import VISION_EXTRACTION, Citation, Claim, extraction_of
 
 logger = logging.getLogger("knowledge_os.answer.verification")
 
@@ -1082,8 +1082,10 @@ async def verify_claims(
     citations: list[Citation] = []
     for claim in claims:
         valid_ids: list[str] = []
+        claim_citations: list[Citation] = []
         for chunk_id in claim.chunk_ids:
             item = by_chunk.get(chunk_id)
+            extraction = extraction_of(item.metadata if item is not None else None)
             if hydrator is None:
                 # No store: legacy existence + scope from the retrieved item.
                 if item is None:
@@ -1125,6 +1127,8 @@ async def verify_claims(
                 page = canonical.page if canonical.page is not None else item_page
                 section = canonical.section or (item.section if item else None)
                 workspace_id = canonical.workspace_id or (item.workspace_id if item else None)
+                # Canonical label wins; fall back to the item's when the store has none.
+                extraction = canonical.extraction or extraction
 
             grounding_score: float | None = None
             span: tuple[int, int] | None = None
@@ -1142,7 +1146,7 @@ async def verify_claims(
                 # Fall back to a plain case-insensitive span location.
                 span = _span(claim.text, content_to_verify)
             valid_ids.append(chunk_id)
-            citations.append(
+            claim_citations.append(
                 Citation(
                     chunk_id=chunk_id,
                     document_id=doc_id,
@@ -1157,10 +1161,17 @@ async def verify_claims(
                     # on a grounder-gated path; the legacy existence-only
                     # path may carry None, documented on Citation.content).
                     content=content_to_verify,
+                    extraction=extraction,
                 )
             )
+        if claim_citations and all(c.extraction == VISION_EXTRACTION for c in claim_citations):
+            # Model-generated page descriptions are never standalone evidence:
+            # a claim backed only by them is not verified (prompt-injection
+            # via page images). Mixed support keeps them as labelled context.
+            continue
         if valid_ids:
             verified.append(Claim(text=claim.text, chunk_ids=valid_ids))
+            citations.extend(claim_citations)
 
     # (3) Revalidate lifecycle state immediately before returning: a document
     # deleted or superseded while the model was generating loses its citations

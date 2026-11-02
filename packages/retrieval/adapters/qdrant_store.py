@@ -1188,12 +1188,28 @@ class QdrantVectorStore(VectorStore):
         except Exception as e:
             raise VectorStoreError(f"delete failed for {collection}: {e}") from e
 
+    async def delete_if_exists(self, *, collection: str, query_filter: SearchFilter) -> int:
+        """``delete`` by filter, but a collection that does not exist is a no-op (0).
+
+        For optional collections (e.g. multimodal) that may never have been
+        created. Any other Qdrant failure still raises ``VectorStoreError``.
+        """
+        try:
+            exists = await self._client.collection_exists(collection)
+        except Exception as e:
+            raise VectorStoreError(f"collection_exists failed for {collection}: {e}") from e
+        if not exists:
+            return 0
+        return await self.delete(collection=collection, query_filter=query_filter)
+
     async def delete_versions(
         self,
         *,
         collection: str,
         version_ids: Sequence[str],
         document_id: str | None = None,
+        workspace_id: str | None = None,
+        missing_ok: bool = False,
     ) -> int:
         """Delete every point published for the given document versions (T-V1-017).
 
@@ -1203,6 +1219,8 @@ class QdrantVectorStore(VectorStore):
         points that existed and were removed. The count scroll must succeed:
         a cleanup that cannot be counted RAISES (``VectorStoreError``) so the
         caller queues a retry instead of reporting stale points as clean.
+        ``workspace_id`` narrows the match to one tenant; ``missing_ok`` makes a
+        collection that does not exist a no-op (optional collections).
         """
         if not version_ids:
             return 0
@@ -1210,6 +1228,8 @@ class QdrantVectorStore(VectorStore):
         if not coll:
             raise VectorStoreError("collection name required")
         try:
+            if missing_ok and not await self._client.collection_exists(coll):
+                return 0
             must: list[Any] = [
                 FieldCondition(
                     key="document_version_id",
@@ -1219,6 +1239,10 @@ class QdrantVectorStore(VectorStore):
             if document_id is not None:
                 must.append(
                     FieldCondition(key="document_id", match=MatchValue(value=str(document_id)))
+                )
+            if workspace_id is not None:
+                must.append(
+                    FieldCondition(key="workspace_id", match=MatchValue(value=str(workspace_id)))
                 )
             qfilter = Filter(must=must)
             scrolled, _ = await self._client.scroll(

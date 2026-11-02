@@ -40,7 +40,14 @@ from pydantic import BaseModel, Field
 from retrieval.interfaces import RetrievedItem
 
 from .interfaces import ChunkLookup
-from .models import CanonicalChunk, Citation, Claim, DocumentStatus
+from .models import (
+    VISION_EXTRACTION,
+    CanonicalChunk,
+    Citation,
+    Claim,
+    DocumentStatus,
+    extraction_of,
+)
 
 logger = logging.getLogger("knowledge_os.answer.citation_integrity")
 
@@ -78,6 +85,9 @@ class RejectionReason(StrEnum):
     SPAN_MISMATCH = "SPAN_MISMATCH"
     #: The cited region carries parse/OCR disclosure saying it was never read.
     UNREADABLE_SOURCE = "UNREADABLE_SOURCE"
+    #: The citation's only support is a model-generated (``extraction="vision"``)
+    #: page description, which is never a standalone citable quotation.
+    MODEL_GENERATED_ONLY = "MODEL_GENERATED_ONLY"
 
 
 class CandidateCitation(BaseModel):
@@ -465,6 +475,8 @@ async def validate_citation_integrity(
                 if retrieved is not None and retrieved.metadata
                 else {}
             )
+            if lookup_citation.extraction is not None:
+                item_meta["extraction"] = lookup_citation.extraction  # canonical label wins
             registry[chunk_id] = CanonicalChunk(
                 chunk_id=chunk_id,
                 workspace_id=lookup_citation.workspace_id,
@@ -481,7 +493,7 @@ async def validate_citation_integrity(
     accepted: list[Citation] = []
     rejected: list[RejectedCitation] = []
     omissions: list[str] = []
-    accepted_chunk_ids: set[str] = set()
+    passed: list[tuple[CandidateCitation, Citation]] = []
 
     for candidate in candidate_citations:
         chunk = registry.get(candidate.chunk_id)
@@ -607,7 +619,8 @@ async def validate_citation_integrity(
         omitted = _disclosure_omission(candidate.chunk_id, disclosure)
         if omitted:
             omissions.append(omitted)
-        accepted.append(
+        passed.append((
+            candidate,
             Citation(
                 chunk_id=chunk.chunk_id,
                 document_id=chunk.document_id,
@@ -618,16 +631,38 @@ async def validate_citation_integrity(
                 workspace_id=chunk.workspace_id,
                 grounding_score=None,
                 content=chunk.content,
+                extraction=extraction_of(chunk.metadata),
+            ),
+        ))
+
+    # 8. Model-generated (vision) page descriptions are never standalone
+    #    evidence: a vision citation counts only when the same claim also has a
+    #    surviving non-vision citation (it then stays as labelled context).
+    #    Missing / non-string ``extraction`` reads as non-vision.
+    text_backed = {
+        candidate.claim_text
+        for candidate, citation in passed
+        if citation.extraction != VISION_EXTRACTION
+    }
+    accepted_texts: set[str] = set()
+    for candidate, citation in passed:
+        if citation.extraction == VISION_EXTRACTION and candidate.claim_text not in text_backed:
+            rejected.append(
+                RejectedCitation(
+                    citation=candidate,
+                    reason=RejectionReason.MODEL_GENERATED_ONLY,
+                    detail=(
+                        f"chunk {candidate.chunk_id} is a model-generated page description; "
+                        "it is not citable evidence without a non-generated source"
+                    ),
+                )
             )
-        )
-        accepted_chunk_ids.add(candidate.chunk_id)
+            continue
+        accepted.append(citation)
+        if candidate.claim_text:
+            accepted_texts.add(candidate.claim_text)
 
     # Claims left with no surviving citation (every referenced id was rejected).
-    accepted_texts = {
-        c.claim_text
-        for c in candidate_citations
-        if c.claim_text and c.chunk_id in accepted_chunk_ids
-    }
     unverified_claims: list[str] = []
     for claim in claims:
         if _claim_had_citations(claim, candidate_citations) and claim.text not in accepted_texts:

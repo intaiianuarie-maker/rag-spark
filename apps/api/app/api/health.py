@@ -5,7 +5,7 @@ from __future__ import annotations
 from core.config import get_settings
 from fastapi import APIRouter
 
-from app.adapters.readiness import check_dependencies
+from app.adapters.readiness import check_dependencies, effective_layer_status
 from app.version import get_version_info
 from app.workflows.store import (
     approvals_store_mode,
@@ -53,17 +53,21 @@ async def ready() -> dict[str, object]:
     settings = get_settings()
     dependencies = await check_dependencies()
     all_reachable = all(dep.reachable for dep in dependencies.values())
+    store_modes = {
+        "drafts": draft_store_mode(),
+        "runs": runs_store_mode(),
+        "approvals": approvals_store_mode(),
+        "checkpoints": checkpoint_db_mode(),
+    }
     return {
         "status": "ok" if all_reachable else "degraded",
         "ready": all_reachable,
         "service": settings.app_name,
         "version": settings.version,
         "dependencies": {name: dep.model_dump() for name, dep in dependencies.items()},
-        "store_modes": {
-            "drafts": draft_store_mode(),
-            "runs": runs_store_mode(),
-            "approvals": approvals_store_mode(),
-            "checkpoints": checkpoint_db_mode(),
-        },
+        "layer_status": effective_layer_status(
+            settings, dependencies, store_modes=store_modes
+        ),
+        "store_modes": store_modes,
         "draft_migration": "applied" if draft_store_mode() == "persistent" else "pending",
     }

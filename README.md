@@ -46,7 +46,7 @@ Ports are bound to `127.0.0.1`, so only this machine can reach them. To reach th
 
 ### Optional: rerank sidecar
 
-The `rerank` service is off by default, and nothing in the API or the worker calls it. To start it anyway: `docker compose --profile rerank up -d`.
+OpenRouter Nemotron rerank is on by default for the ask leg (`RERANK_ENABLED=true`); nothing extra needs to run. The standalone `rerank` service (a local MiniLM sidecar) is off by default and is not called by the API or worker — start it only if you want the local route: `docker compose --profile rerank up -d`.
 
 ## Configuration
 

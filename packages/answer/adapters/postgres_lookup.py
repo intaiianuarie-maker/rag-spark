@@ -23,7 +23,7 @@ from ..hydration import (
     CanonicalStoreUnavailable,
 )
 from ..interfaces import ChunkLookup
-from ..models import Citation
+from ..models import Citation, extraction_of
 
 logger = logging.getLogger("knowledge_os.answer.lookup")
 
@@ -72,6 +72,7 @@ class MemoryChunkLookup(ChunkLookup):
             section=rec.get("section"),
             workspace_id=rec.get("workspace_id"),
             content=rec.get("content"),
+            extraction=extraction_of(rec),
         )
 
     async def get_content(self, chunk_id: str) -> str | None:
@@ -103,7 +104,7 @@ class PostgresChunkLookup(ChunkLookup):
     _SELECT = """
             SELECT c.id, c.workspace_id, dv.document_id, c.document_version_id,
                    c.text, c.page, c.section, d.source_filename,
-                   d.deleted_at, dv.superseded_at
+                   d.deleted_at, dv.superseded_at, c.chunk_metadata
             FROM chunks c
             JOIN document_versions dv ON c.document_version_id = dv.id
             JOIN documents d ON dv.document_id = d.id
@@ -127,6 +128,7 @@ class PostgresChunkLookup(ChunkLookup):
             section=row.section,
             workspace_id=str(row.workspace_id) if row.workspace_id else None,
             content=row.text,
+            extraction=extraction_of(getattr(row, "chunk_metadata", None)),
         )
 
     async def get(self, chunk_id: str) -> Citation | None:

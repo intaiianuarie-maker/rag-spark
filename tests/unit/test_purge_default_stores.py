@@ -94,6 +94,8 @@ class FakeVectorStore:
     """Stands in for ``QdrantVectorStore`` — records the filter it deletes with."""
 
     calls: ClassVar[list[tuple[str, SearchFilter]]] = []
+    mm_calls: ClassVar[list[tuple[str, SearchFilter]]] = []
+    mm_error: ClassVar[Exception | None] = None
     closed = 0
 
     def __init__(self, *args, **kwargs) -> None:
@@ -101,6 +103,12 @@ class FakeVectorStore:
 
     async def delete(self, *, collection=None, query_filter=None) -> None:
         FakeVectorStore.calls.append((collection, query_filter))
+
+    async def delete_if_exists(self, *, collection, query_filter) -> int:
+        if FakeVectorStore.mm_error is not None:
+            raise FakeVectorStore.mm_error
+        FakeVectorStore.mm_calls.append((collection, query_filter))
+        return 0
 
     async def close(self) -> None:
         FakeVectorStore.closed += 1
@@ -290,6 +298,8 @@ async def test_a_first_purge_reaches_all_three_stores_and_scopes_by_document(
     """
     FakeLexicalStore.calls.clear()
     FakeVectorStore.calls.clear()
+    FakeVectorStore.mm_calls.clear()
+    FakeVectorStore.mm_error = None
     FakeVectorStore.closed = 0
     monkeypatch.setattr("retrieval.adapters.pg_fts.PostgresLexicalStore", FakeLexicalStore)
     monkeypatch.setattr("retrieval.adapters.qdrant_store.QdrantVectorStore", FakeVectorStore)
@@ -318,6 +328,12 @@ async def test_a_first_purge_reaches_all_three_stores_and_scopes_by_document(
     assert vector_filter.document_ids == [str(document_id)]
     assert vector_filter.workspace_ids == [str(workspace_id)]
     assert FakeVectorStore.closed == 1
+    # The multimodal collection is purged with the same document scope.
+    assert len(FakeVectorStore.mm_calls) == 1
+    mm_collection, mm_filter = FakeVectorStore.mm_calls[0]
+    assert mm_collection == "knowledge_multimodal"
+    assert mm_filter.document_ids == [str(document_id)]
+    assert mm_filter.workspace_ids == [str(workspace_id)]
     # And the originals really left the store.
     assert store.deleted == [key]
     assert store.objects == {}
@@ -357,3 +373,83 @@ async def test_a_second_purge_in_the_same_process_still_purges_every_store(
     assert len(FakeLexicalStore.calls) == 2  # one per purge, never skipped
     assert len(FakeVectorStore.calls) == 2
     assert store.deleted == [second_key]
+
+
+# --- multimodal collection purge ---------------------------------------------
+
+
+async def test_multimodal_purge_error_fails_the_qdrant_store_like_the_text_purge(
+    monkeypatch: pytest.MonkeyPatch, purgers, store
+) -> None:
+    """A real Qdrant error on the multimodal purge surfaces as qdrant=False (207)."""
+    FakeVectorStore.mm_calls.clear()
+    FakeVectorStore.mm_error = RuntimeError("qdrant down")
+    monkeypatch.setattr("retrieval.adapters.pg_fts.PostgresLexicalStore", FakeLexicalStore)
+    monkeypatch.setattr("retrieval.adapters.qdrant_store.QdrantVectorStore", FakeVectorStore)
+    try:
+        workspace_id, document_id = uuid.uuid4(), uuid.uuid4()
+        report = await _purge(_session(workspace_id, [], []), workspace_id, document_id)
+    finally:
+        FakeVectorStore.mm_error = None
+    assert report["qdrant"] is False
+    assert report["fts"] is True
+
+
+class _FakeQdrantClient:
+    def __init__(self, *, exists=True, exists_error=None, delete_error=None) -> None:
+        self.exists, self.exists_error, self.delete_error = exists, exists_error, delete_error
+        self.deleted: list[str] = []
+
+    async def collection_exists(self, name: str) -> bool:
+        if self.exists_error:
+            raise self.exists_error
+        return self.exists
+
+    async def scroll(self, **kwargs):
+        return ([object(), object()], None)
+
+    async def delete(self, *, collection_name, points_selector) -> None:
+        if self.delete_error:
+            raise self.delete_error
+        self.deleted.append(collection_name)
+
+
+def _real_store(client: _FakeQdrantClient):
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    return QdrantVectorStore(client=client, collection="knowledge_multimodal")  # type: ignore[arg-type]
+
+
+def _doc_filter():
+    from ingestion.dedup import build_purge_filter
+
+    return build_purge_filter(uuid.uuid4(), uuid.uuid4())
+
+
+async def test_delete_if_exists_with_missing_collection_is_a_noop() -> None:
+    client = _FakeQdrantClient(exists=False)
+    removed = await _real_store(client).delete_if_exists(
+        collection="knowledge_multimodal", query_filter=_doc_filter()
+    )
+    assert removed == 0 and client.deleted == []
+
+
+async def test_delete_if_exists_deletes_when_collection_exists() -> None:
+    client = _FakeQdrantClient()
+    removed = await _real_store(client).delete_if_exists(
+        collection="knowledge_multimodal", query_filter=_doc_filter()
+    )
+    assert removed == 2 and client.deleted == ["knowledge_multimodal"]
+
+
+async def test_delete_if_exists_propagates_real_qdrant_errors() -> None:
+    from retrieval.adapters.qdrant_store import VectorStoreError
+
+    for client in (
+        _FakeQdrantClient(exists_error=RuntimeError("down")),
+        _FakeQdrantClient(delete_error=RuntimeError("down")),
+    ):
+        with pytest.raises(VectorStoreError):
+            await _real_store(client).delete_if_exists(
+                collection="knowledge_multimodal", query_filter=_doc_filter()
+            )

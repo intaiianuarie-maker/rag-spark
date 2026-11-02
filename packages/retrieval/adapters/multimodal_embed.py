@@ -51,21 +51,28 @@ class MultimodalEmbeddingProfile:
         workspace_id: str,
         document_id: str,
         record_id: str,
+        document_version_id: str | None = None,
     ) -> MultimodalVectorRecord:
-        """Embed an image part and attach its visual citation."""
+        """Embed an image part and attach its visual citation.
+
+        Fails loudly (no placeholder vectors) on a missing image, a missing or
+        incapable provider, an empty vector or a wrong dimension.
+        """
+        url = part.image_url.get("url", "")
+        if not url or url.endswith("base64,"):
+            raise ValueError("no image data in the content part; refusing to embed")
         citation = VisualCitation(
             page=part.page,
             figure_id=part.figure_id,
             bbox=part.bbox,
         )
 
-        # In production/test runtime with mock or provider
-        if self.provider is not None:
-            # Format input payload for multimodal embedding
-            embedding_vector = await self._call_provider_embed(part)
-        else:
-            # Deterministic offline vector fallback for testing (3072-d normalized)
-            embedding_vector = [0.01] * self.dimension
+        embedding_vector = await self._call_provider_embed(part)
+        if len(embedding_vector) != self.dimension:
+            raise ValueError(
+                f"multimodal embedding has {len(embedding_vector)} dimensions, "
+                f"expected {self.dimension}"
+            )
 
         return MultimodalVectorRecord(
             id=record_id,
@@ -73,6 +80,7 @@ class MultimodalEmbeddingProfile:
             content=f"[Image page={part.page or 1} figure={part.figure_id or 'none'}]",
             workspace_id=workspace_id,
             document_id=document_id,
+            document_version_id=document_version_id,
             visual_citation=citation,
             media_type=part.media_type,
             metadata={
@@ -85,23 +93,18 @@ class MultimodalEmbeddingProfile:
         )
 
     async def _call_provider_embed(self, part: ImageContentPart) -> list[float]:
-        """Call underlying provider for multimodal embedding.
+        """Call the provider's ``embed_multimodal`` — no fallbacks, no fake vectors.
 
-        ``embed_multimodal`` / ``embed_texts`` are OPTIONAL duck-typed
-        extensions on a concrete provider — they are not declared on the
-        ``LLMProvider`` ABC — so they are probed at runtime and narrowed
-        explicitly instead of being asserted on the declared type.
+        ``embed_multimodal`` is an OPTIONAL duck-typed extension on a concrete
+        provider (not on the ``LLMProvider`` ABC), so it is probed at runtime.
         """
         provider = self.provider
         if provider is None:
-            return [0.0] * self.dimension
+            raise RuntimeError("multimodal embedding requires a provider; none configured")
         embed_multimodal = getattr(provider, "embed_multimodal", None)
-        if callable(embed_multimodal):
-            vectors: list[float] = await embed_multimodal(part)
-            return vectors
-        embed_texts = getattr(provider, "embed_texts", None)
-        if callable(embed_texts):
-            # Fallback for text representation
-            res: list[list[float]] = await embed_texts([part.media_type])
-            return res[0]
-        return [0.0] * self.dimension
+        if not callable(embed_multimodal):
+            raise RuntimeError(
+                f"provider {type(provider).__name__} does not implement embed_multimodal"
+            )
+        vectors: list[float] = await embed_multimodal(part)
+        return vectors
