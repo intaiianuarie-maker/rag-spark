@@ -2,14 +2,14 @@
 
 Why this exists
 ---------------
-The old guard measured *elements after parse* (``ensure_element_limit``). By the
+The old guard measured *elements after parse* (a post-parse element count). By the
 time it could refuse, a pathological input had already spent its time, its
 memory and its text — the check was a verdict on work already done, not a
 budget. T-V1-031 requires the budgets to be enforced **pre-expansion**: the
 parse must stop *while* it is producing elements, not after it produced them.
 
-Four budgets, one per resource the ticket names (all env-tunable, all
-documented in ``docs/ingestion/FORMAT-MATRIX.md``):
+Four budgets, one per resource the ticket names (all env-tunable and unlimited
+unless set, all documented in ``docs/ingestion/FORMAT-MATRIX.md``):
 
 ===========================  ==========================================
 ``max_seconds``              wall clock for one parse (hard abandonment)
@@ -58,15 +58,6 @@ from typing import Any
 
 from .interfaces import DocumentParser, ParsedDocument
 
-#: Parse-time defaults (see ``docs/ingestion/FORMAT-MATRIX.md``).
-DEFAULT_PARSE_TIMEOUT_SECONDS = 120.0
-DEFAULT_PARSE_MAX_MEMORY_MB = 1024
-DEFAULT_PARSE_MAX_EXPANDED_CHARS = 2_000_000
-#: Mirrors ``jobs.ingest_pipeline.DEFAULT_MAX_ELEMENTS`` so the guard and the
-#: post-parse backstop agree on one number (the backstop stays: two independent
-#: guards with the same limit is not the same as one).
-DEFAULT_PARSE_MAX_OUTPUT_ELEMENTS = 100_000
-
 #: One parse at a time per worker job; a couple of slots so an abandoned parse
 #: cannot wedge the pool on its own (see the module docstring's disclosed limit).
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="parse-budget")
@@ -104,57 +95,54 @@ BUDGET_CODES: frozenset[str] = frozenset(
 )
 
 
-def _positive_float(raw: str | None, default: float) -> float:
-    if raw is None:
-        return default
+def _positive_float(raw: str | None) -> float | None:
+    """An env budget value; unset, malformed or non-positive means unlimited."""
     try:
         value = float(raw)
     except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
+        return None
+    return value if value > 0 else None
 
 
-def _positive_int(raw: str | None, default: int) -> int:
-    if raw is None:
-        return default
+def _positive_int(raw: str | None) -> int | None:
+    """An env budget value; unset, malformed or non-positive means unlimited."""
     try:
         value = int(raw)
     except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
+        return None
+    return value if value > 0 else None
+
+
+def _over(value: float, limit: float | None) -> bool:
+    return limit is not None and value > limit
 
 
 @dataclass(frozen=True)
 class ParseBudgets:
-    """The four pre-expansion budgets for one parse."""
+    """The four pre-expansion budgets for one parse. ``None`` means unlimited."""
 
-    max_seconds: float = DEFAULT_PARSE_TIMEOUT_SECONDS
-    max_memory_bytes: int = DEFAULT_PARSE_MAX_MEMORY_MB * 1024 * 1024
-    max_expanded_chars: int = DEFAULT_PARSE_MAX_EXPANDED_CHARS
-    max_output_elements: int = DEFAULT_PARSE_MAX_OUTPUT_ELEMENTS
+    max_seconds: float | None = None
+    max_memory_bytes: int | None = None
+    max_expanded_chars: int | None = None
+    max_output_elements: int | None = None
 
 
 def budgets_from_env(
     environ: dict[str, str] | None = None, *, max_output_elements: int | None = None
 ) -> ParseBudgets:
-    """Read the budgets from the environment (worker config, no migration)."""
+    """Read the budgets from the environment (worker config, no migration).
+
+    Unset means unlimited: production has no parse caps, and an operator opts in
+    per budget with the ``INGEST_PARSE_*`` variables.
+    """
     env = os.environ if environ is None else environ
+    memory_mb = _positive_int(env.get("INGEST_PARSE_MAX_MEMORY_MB"))
     return ParseBudgets(
-        max_seconds=_positive_float(
-            env.get("INGEST_PARSE_TIMEOUT_SECONDS"), DEFAULT_PARSE_TIMEOUT_SECONDS
-        ),
-        max_memory_bytes=_positive_int(
-            env.get("INGEST_PARSE_MAX_MEMORY_MB"), DEFAULT_PARSE_MAX_MEMORY_MB
-        )
-        * 1024
-        * 1024,
-        max_expanded_chars=_positive_int(
-            env.get("INGEST_PARSE_MAX_EXPANDED_CHARS"), DEFAULT_PARSE_MAX_EXPANDED_CHARS
-        ),
-        max_output_elements=_positive_int(
-            env.get("INGEST_PARSE_MAX_OUTPUT_ELEMENTS"),
-            max_output_elements or DEFAULT_PARSE_MAX_OUTPUT_ELEMENTS,
-        ),
+        max_seconds=_positive_float(env.get("INGEST_PARSE_TIMEOUT_SECONDS")),
+        max_memory_bytes=None if memory_mb is None else memory_mb * 1024 * 1024,
+        max_expanded_chars=_positive_int(env.get("INGEST_PARSE_MAX_EXPANDED_CHARS")),
+        max_output_elements=_positive_int(env.get("INGEST_PARSE_MAX_OUTPUT_ELEMENTS"))
+        or max_output_elements,
     )
 
 
@@ -270,7 +258,7 @@ class ParseBudgetGuard:
         if violation is not None:
             raise ParseBudgetExceeded(*violation)
         budgets = self.budgets
-        if self.elapsed_seconds > budgets.max_seconds:
+        if _over(self.elapsed_seconds, budgets.max_seconds):
             self.trip(
                 TIME_BUDGET,
                 f"parse exceeded the {budgets.max_seconds:g}s time budget "
@@ -282,13 +270,13 @@ class ParseBudgetGuard:
                 f"parse exceeded the {budgets.max_memory_bytes // (1024 * 1024)}MiB "
                 f"memory budget ({self.peak_rss_bytes // (1024 * 1024)}MiB peak RSS)",
             )
-        if self.expanded_chars > budgets.max_expanded_chars:
+        if _over(self.expanded_chars, budgets.max_expanded_chars):
             self.trip(
                 EXPANDED_TEXT_BUDGET,
                 f"parse exceeded the {budgets.max_expanded_chars} character "
                 f"expanded-text budget ({self.expanded_chars} chars produced)",
             )
-        if self.output_elements > budgets.max_output_elements:
+        if _over(self.output_elements, budgets.max_output_elements):
             self.trip(
                 OUTPUT_BUDGET,
                 f"parse exceeded the {budgets.max_output_elements} element output "

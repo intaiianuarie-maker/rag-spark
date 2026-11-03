@@ -111,7 +111,7 @@ def test_api_unapproved_write_blocked_parity_with_inprocess(monkeypatch) -> None
         workspace_id=WS_ID,
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tokens=100000, max_tool_calls=5),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish", "calculator"],
@@ -155,7 +155,7 @@ def test_api_over_budget_blocked_parity(monkeypatch) -> None:
         workspace_id=WS_ID,
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini", max_output_tokens=1),  # noqa: E501
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free", max_output_tokens=1),  # noqa: E501
         budget=tiny_budget,
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["calculator"],

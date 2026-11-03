@@ -5,15 +5,11 @@ are typed and non-retryable; unexpected/transient failures are retryable so the
 worker can back off and eventually park a poison message as failed.
 
 Guards applied before any chunk/DB write:
-- size cap (``MAX_DOCUMENT_BYTES``);
 - **pre-expansion parse budgets** (T-V1-031): parse wall clock, peak memory,
   expanded-text and output-element budgets are enforced *while* the parser
   expands the document (see :mod:`ingestion.budget`), not by counting elements
   after the fact — a document that would blow a budget is refused between
-  elements and parked non-retryably;
-- **element-count cap** (boss ruling: a 25 MiB pathological TXT can yield 1.46M
-  elements — refuse past N with a typed error before Postgres writes; kept as
-  the independent post-parse backstop);
+  elements and parked non-retryably. Budgets are unlimited unless set;
 - **generation fence** (T-V1-019): a job is bound to one document generation
   and may only publish it while that generation is still the document's live
   one — see :func:`assert_generation_is_publishable`.
@@ -25,12 +21,15 @@ every chunk, and the job ends in ``needs_review`` — never in ``ready``.
 
 from __future__ import annotations
 
+import contextlib
+import functools
 import logging
 import os
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
+from core.errors import spec_for
 from ingestion.adapters.llamaindex_chunker import LlamaIndexUnavailableError
 from ingestion.adapters.llamaindex_chunker import (
     backend_name as llamaindex_backend_name,
@@ -55,7 +54,7 @@ from ingestion.dedup import (
 )
 from ingestion.interfaces import DocumentElement, ParsedDocument
 from ingestion.metadata import tag_language
-from ingestion.normalize import MAX_DOCUMENT_BYTES, IngestionError
+from ingestion.normalize import IngestionError
 from ingestion.ocr import process_pdf_with_ocr
 from ingestion.persistence import (
     ChunkRow,
@@ -64,6 +63,9 @@ from ingestion.persistence import (
     IngestionJob,
     JobStage,
     JobStatus,
+)
+from models.adapters.openrouter_transport import (
+    OpenRouterVisionTransport as _OpenRouterVisionTransport,
 )
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -75,8 +77,6 @@ from storage.originals import (
 )
 
 logger = logging.getLogger("knowledge_os.worker.ingest")
-
-DEFAULT_MAX_ELEMENTS = 100_000
 
 #: Vision step (P4 / G4): off by default — opt in with VISION_ENABLED=true.
 #: Rendered page crops go through the Gemma vision adapter (free -> paid) and
@@ -101,6 +101,11 @@ def _env_int(name: str, default: int) -> int:
     return value
 
 
+def _env_limit(name: str) -> int | None:
+    """Optional cap from env: unset (or invalid, with a warning) means unlimited."""
+    return _env_int(name, 0) or None
+
+
 #: Multimodal page embedding (google/gemini-embedding-2): off by default. Reuses
 #: the vision step's page rendering and VISION_* bounds; never fails ingest.
 MULTIMODAL_EMBED_ENABLED = (
@@ -108,40 +113,15 @@ MULTIMODAL_EMBED_ENABLED = (
     in {"1", "true", "yes", "on"}
 )
 
-VISION_MAX_PAGES = _env_int("VISION_MAX_PAGES", 5)
 VISION_DPI = _env_int("VISION_DPI", 150)
-VISION_IMAGE_BUDGET_BYTES = _env_int("VISION_IMAGE_BUDGET_BYTES", 5 * 1024 * 1024)
 
-
-class _OpenRouterVisionTransport:
-    """httpx transport satisfying OpenRouterVisionAdapter's ``post_completion`` seam.
-
-    Posts one chat-completion request to the OpenRouter-compatible gateway and
-    returns the parsed JSON response. No user-supplied URLs: images travel as
-    base64 data URIs rendered from the authorized stored original.
-    """
-
-    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0):
-        self._base_url = base_url.rstrip("/")
-        self._api_key = api_key
-        self._model = model
-        self._timeout = timeout
-
-    async def post_completion(self, payload: dict) -> dict:
-        import httpx
-
-        headers = {
-            "Authorization": f"Bearer {self._api_key}",
-            "Content-Type": "application/json",
-        }
-        async with httpx.AsyncClient(timeout=self._timeout) as client:
-            response = await client.post(
-                f"{self._base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
-            response.raise_for_status()
-            return response.json()
+#: OpenRouter spend caps for vision and multimodal calls. Unset means unlimited,
+#: which is production (local LLMs); the test config sets them. Over a cap, the extra
+#: pages or images are skipped and logged, and the ingest still completes.
+VISION_MAX_PAGES = _env_limit("VISION_MAX_PAGES")
+VISION_MAX_IMAGE_BYTES = _env_limit("VISION_MAX_IMAGE_BYTES")
+MULTIMODAL_MAX_PAGES = _env_limit("MULTIMODAL_MAX_PAGES")
+MULTIMODAL_MAX_IMAGE_BYTES = _env_limit("MULTIMODAL_MAX_IMAGE_BYTES")
 
 
 def _vision_workspace_sensitive(workspace_id: str) -> bool:
@@ -171,8 +151,7 @@ async def _vision_elements_for_pdf(
 
     Returns normalized ``DocumentElement`` entries carrying page/figure
     identity. No user-supplied URLs: pages are rasterized from the authorized
-    stored original. Bounded by :data:`VISION_MAX_PAGES` (lowest page numbers
-    first) and :data:`VISION_IMAGE_BUDGET_BYTES`. Vision output is supplementary — it is
+    stored original, in ascending page order. Vision output is supplementary — it is
     added alongside Tesseract text, never overwriting it. Each element's text
     starts with a "[Model-generated page description, page N]" marker so it can
     never be mistaken for document text. A failing page is skipped (the rest
@@ -212,25 +191,38 @@ async def _vision_elements_for_pdf(
         return []
 
     total_pages = await asyncio.to_thread(get_pdf_page_count, content)
-    wanted = sorted({p for p in pages if 1 <= p <= total_pages})[:VISION_MAX_PAGES]
-    # Gateway and key resolve exactly as OpenRouterProvider does (the embed path). The
-    # OpenRouter key goes only to an openrouter.ai host; any other host gets the
-    # provider's own key, never the OpenRouter one, or the step skips.
+    wanted = sorted({p for p in pages if 1 <= p <= total_pages})
+    if VISION_MAX_PAGES is not None and len(wanted) > VISION_MAX_PAGES:
+        logger.warning(
+            "vision_page_cap_reached",
+            extra={
+                "event": "vision_page_cap_reached",
+                "workspace_id": str(workspace_id),
+                "cap": VISION_MAX_PAGES,
+                "skipped": len(wanted) - VISION_MAX_PAGES,
+            },
+        )
+        wanted = wanted[:VISION_MAX_PAGES]
+    # Gateway and key resolve exactly as OpenRouterProvider does (the embed path):
+    # models.credentials binds each key to its own host. Defence in depth: the
+    # OpenRouter key never goes to a non-OpenRouter host, whatever the provider holds.
     from urllib.parse import urlsplit
 
     from models.adapters.openrouter_provider import OpenRouterProvider
+    from models.credentials import is_openrouter_url
 
     provider = OpenRouterProvider()
-    host = urlsplit(provider.base_url).hostname or ""
-    if host == "openrouter.ai" or host.endswith(".openrouter.ai"):
-        key = api_key
-    else:
-        own_key = provider.api_key or ""
-        key = "" if own_key == api_key else own_key
+    key = provider.api_key or ""
+    if key == api_key and not is_openrouter_url(provider.base_url):
+        key = ""
     if not key:
         logger.warning(
             "vision_no_api_key",
-            extra={"event": "vision_no_api_key", "workspace_id": str(workspace_id), "host": host},
+            extra={
+                "event": "vision_no_api_key",
+                "workspace_id": str(workspace_id),
+                "host": urlsplit(provider.base_url).hostname or "",
+            },
         )
         return []
     transport = _OpenRouterVisionTransport(provider.base_url, key, DEFAULT_VISION_FREE_MODEL)
@@ -241,23 +233,22 @@ async def _vision_elements_for_pdf(
     )
 
     elements: list[DocumentElement] = []
-    budget_used = 0
     for page_number in wanted:
         try:
             png_bytes, width_pts, height_pts, _pixel_w, _pixel_h = await asyncio.to_thread(
                 render_pdf_page, content, page_number, dpi=VISION_DPI
             )
-            if budget_used + len(png_bytes) > VISION_IMAGE_BUDGET_BYTES:
-                logger.info(
-                    "vision_budget_stop",
+            if VISION_MAX_IMAGE_BYTES is not None and len(png_bytes) > VISION_MAX_IMAGE_BYTES:
+                logger.warning(
+                    "vision_image_over_cap",
                     extra={
-                        "event": "vision_budget_stop",
-                        "skipped_pages": [p for p in wanted if p >= page_number],
+                        "event": "vision_image_over_cap",
+                        "page": page_number,
+                        "cap": VISION_MAX_IMAGE_BYTES,
+                        "bytes": len(png_bytes),
                     },
                 )
-                break
-            budget_used += len(png_bytes)
-
+                continue
             part = ImageContentPart.from_bytes(
                 png_bytes,
                 media_type="image/png",
@@ -421,9 +412,19 @@ async def _multimodal_embed_for_pdf(
         provider = OpenRouterProvider(call_site="multimodal_embed")
         profile = MultimodalEmbeddingProfile(provider=provider)
         total_pages = await asyncio.to_thread(get_pdf_page_count, content)
+        if MULTIMODAL_MAX_PAGES is not None and total_pages > MULTIMODAL_MAX_PAGES:
+            logger.warning(
+                "multimodal_page_cap_reached",
+                extra={
+                    "event": "multimodal_page_cap_reached",
+                    "workspace_id": str(workspace_id),
+                    "cap": MULTIMODAL_MAX_PAGES,
+                    "skipped": total_pages - MULTIMODAL_MAX_PAGES,
+                },
+            )
+            total_pages = MULTIMODAL_MAX_PAGES
         records = []
-        budget_used = 0
-        for page_number in range(1, min(VISION_MAX_PAGES, total_pages) + 1):
+        for page_number in range(1, total_pages + 1):
             try:
                 png_bytes, *_ = await asyncio.to_thread(
                     render_pdf_page, content, page_number, dpi=VISION_DPI
@@ -438,13 +439,18 @@ async def _multimodal_embed_for_pdf(
                         },
                     )
                     continue
-                if budget_used + len(png_bytes) > VISION_IMAGE_BUDGET_BYTES:
-                    logger.info(
-                        "multimodal_budget_stop",
-                        extra={"event": "multimodal_budget_stop", "page": page_number},
+                image_cap = MULTIMODAL_MAX_IMAGE_BYTES
+                if image_cap is not None and len(png_bytes) > image_cap:
+                    logger.warning(
+                        "multimodal_image_over_cap",
+                        extra={
+                            "event": "multimodal_image_over_cap",
+                            "page": page_number,
+                            "cap": image_cap,
+                            "bytes": len(png_bytes),
+                        },
                     )
-                    break
-                budget_used += len(png_bytes)
+                    continue
                 part = ImageContentPart.from_bytes(
                     png_bytes, media_type="image/png", page=page_number
                 )
@@ -943,11 +949,23 @@ async def _refuse_raced_publication(
     )
 
 
-def max_elements() -> int:
-    try:
-        return int(os.environ.get("INGEST_MAX_ELEMENTS", str(DEFAULT_MAX_ELEMENTS)))
-    except ValueError:
-        return DEFAULT_MAX_ELEMENTS
+#: Codes whose raise-site message embeds exception text (parser keys, trailer
+#: dicts, driver errors). ``message`` is what lands in ``job.error_message`` and
+#: the job-poll API, so for these it is replaced by the registry's short coded
+#: message; the full detail is logged and kept on ``detail`` / ``str(exc)``.
+_DETAIL_BEARING_CODES = frozenset(
+    {
+        "PARSE_FAILED",
+        "PARSE_ERROR",
+        "CHUNK_FAILED",
+        "FTS_INDEXING_FAILED",
+        "QDRANT_INDEXING_FAILED",
+        "EMBED_UNAVAILABLE",
+        "STORE_WRITE_UNVERIFIED",
+        "GRAPH_ENQUEUE_FAILED",
+        "INTERNAL_ERROR",
+    }
+)
 
 
 class IngestPipelineError(Exception):
@@ -956,8 +974,16 @@ class IngestPipelineError(Exception):
     def __init__(self, code: str, message: str, *, retryable: bool = True) -> None:
         super().__init__(message)
         self.code = code
+        self.detail = message
         self.message = message
         self.retryable = retryable
+        if code in _DETAIL_BEARING_CODES:
+            spec = spec_for(code)
+            self.message = spec.message if spec is not None else "Ingestion failed."
+            logger.warning(
+                "ingest_error_detail",
+                extra={"event": "ingest_error_detail", "code": code, "detail": message[:2000]},
+            )
 
 
 def _log_stage(job: IngestionJob, stage: str) -> None:
@@ -970,33 +996,78 @@ def _log_stage(job: IngestionJob, stage: str) -> None:
 
 # Chunking backend selection (rag-fork-solution TASK-M2-002): LlamaIndex
 # sentence splitter by default, built-in whitespace chunker on
-# CHUNKING_BACKEND=builtin. Default falls back to the built-in chunker with a
-# loud warning when llama-index-core is missing from the image, so ingestion
-# never hard-fails on an optional dependency.
+# CHUNKING_BACKEND=builtin, Docling HybridChunker on CHUNKING_BACKEND=docling_hybrid
+# (plan G6; needs docling-core[chunking], imported lazily). Default (and any
+# unavailable / failing / unknown choice) falls back to the LlamaIndex splitter,
+# then to the built-in chunker, each time with a loud ``chunking_backend_fallback``
+# warning, so ingestion never hard-fails on an optional dependency. The stage log
+# records the backend that actually ran (``_chunk_with_backend``).
 CHUNKING_BACKEND = os.environ.get("CHUNKING_BACKEND", "llamaindex").strip().lower()
+_BUILTIN_BACKEND = "builtin-whitespace"
 
 
 def resolved_chunking_backend() -> str:
-    """Backend identifier actually in use (recorded in stage logs + debugger)."""
+    """Backend identifier expected to run (predicted; the stage log records the actual one)."""
     if CHUNKING_BACKEND == "builtin":
-        return "builtin-whitespace"
+        return _BUILTIN_BACKEND
+    if CHUNKING_BACKEND == "docling_hybrid":
+        try:
+            from ingestion.adapters.docling_chunker import BACKEND_NAME
+
+            return BACKEND_NAME
+        except Exception:  # optional dep; _chunk_with_backend warns
+            pass
     if not llamaindex_is_available():
-        return "builtin-whitespace"
+        return _BUILTIN_BACKEND
     return llamaindex_backend_name()
 
 
-def _chunk(parsed: ParsedDocument, *, filename: str | None) -> ChunkResult:
-    """Chunk with the selected backend (all emit the identical Chunk model)."""
+def _chunk_with_backend(
+    parsed: ParsedDocument, *, filename: str | None
+) -> tuple[ChunkResult, str]:
+    """Chunk with the selected backend; return the result and the backend that really ran."""
     if CHUNKING_BACKEND == "builtin":
-        return chunk_document(parsed, filename=filename)
+        return chunk_document(parsed, filename=filename), _BUILTIN_BACKEND
+    if CHUNKING_BACKEND == "docling_hybrid":
+        try:
+            from ingestion.adapters.docling_chunker import BACKEND_NAME, chunk_document_hybrid
+            from ingestion.chunk import DEFAULT_MAX_TOKENS
+
+            return (
+                chunk_document_hybrid(parsed, max_tokens=DEFAULT_MAX_TOKENS, filename=filename),
+                BACKEND_NAME,
+            )
+        except Exception as exc:  # ImportError or any chunker failure
+            logger.warning(
+                "chunking_backend_fallback",
+                extra={
+                    "event": "chunking_backend_fallback",
+                    "requested": CHUNKING_BACKEND,
+                    "reason": f"docling_hybrid: {type(exc).__name__}: {exc}",
+                },
+            )
+    elif CHUNKING_BACKEND != "llamaindex":
+        logger.warning(
+            "chunking_backend_fallback",
+            extra={
+                "event": "chunking_backend_fallback",
+                "requested": CHUNKING_BACKEND,
+                "reason": "unknown CHUNKING_BACKEND (expected llamaindex|builtin|docling_hybrid)",
+            },
+        )
     try:
-        return llamaindex_chunk_document(parsed, filename=filename)
+        return llamaindex_chunk_document(parsed, filename=filename), llamaindex_backend_name()
     except LlamaIndexUnavailableError as exc:
         logger.warning(
             "chunking_backend_fallback",
             extra={"event": "chunking_backend_fallback", "reason": str(exc)},
         )
-        return chunk_document(parsed, filename=filename)
+        return chunk_document(parsed, filename=filename), _BUILTIN_BACKEND
+
+
+def _chunk(parsed: ParsedDocument, *, filename: str | None) -> ChunkResult:
+    """Chunk with the selected backend (all emit the identical Chunk model)."""
+    return _chunk_with_backend(parsed, filename=filename)[0]
 
 
 @dataclass
@@ -1015,23 +1086,6 @@ class PipelineResult:
     #: The lost regions themselves (page lists), so a caller never has to
     #: re-derive them from the message text.
     lost_regions: list[dict] = field(default_factory=list)
-
-
-def ensure_element_limit(elements: list[DocumentElement], limit: int | None = None) -> None:
-    """Refuse a document that normalizes to more than ``limit`` elements.
-
-    Kept as an independent **post-parse backstop**: the pre-expansion budgets
-    (T-V1-031, :mod:`ingestion.budget`) are the enforcement point, this is the
-    belt that catches a parser which produced its elements without ever
-    hitting a checkpoint.
-    """
-    effective = max_elements() if limit is None else limit
-    if len(elements) > effective:
-        raise IngestPipelineError(
-            "TOO_MANY_ELEMENTS",
-            f"document produced {len(elements)} elements (limit {effective})",
-            retryable=False,
-        )
 
 
 #: Chunk-metadata keys carrying the T-V1-031 parse disclosure. They ride to
@@ -1217,6 +1271,110 @@ async def load_original_bytes(version: DocumentVersion) -> bytes:
         ) from exc
 
 
+#: Stages at which this run may already have written chunk rows / FTS rows /
+#: vector points for its generation.
+_WRITE_STAGES = frozenset(
+    {JobStage.CHUNKING.value, JobStage.INDEXING.value, JobStage.EMBEDDING.value}
+)
+_FENCE_CODES = frozenset({FENCE_SUPERSEDED, FENCE_DELETED, FENCE_GONE})
+
+
+async def _cleanup_skip_reason(
+    session: AsyncSession,
+    *,
+    job_id: uuid.UUID,
+    ids: tuple[uuid.UUID, uuid.UUID],
+    mine: tuple[int, datetime | None],
+) -> str | None:
+    """Why this run must NOT unpublish its generation (``None`` = it may).
+
+    Re-reads the job row fresh in a new short transaction. The lease owner is
+    a broker token the pipeline never sees, so run identity is the pair this
+    run stamped on the row at start (``attempts`` counter + ``started_at``): a
+    redelivered copy bumps both. Cleanup needs status still RUNNING (never
+    READY/FAILED/QUEUED), the same run, and the version still live per
+    :func:`generation_publication_state`. Any error here fails safe: skip.
+    """
+    try:
+        row = (
+            await session.execute(
+                select(
+                    IngestionJob.status, IngestionJob.attempts, IngestionJob.started_at
+                ).where(IngestionJob.id == job_id)
+            )
+        ).first()
+        if row is None:
+            return "job_missing"
+        status, attempts, started_at = row
+        if status != JobStatus.RUNNING.value:
+            return f"job_status_{status}"
+        if attempts != mine[0]:
+            return "attempt_changed"
+        if started_at != mine[1]:
+            return "lease_owner_changed"
+        if await generation_publication_state(
+            session, document_id=ids[0], version_id=ids[1]
+        ):
+            return "generation_not_live"
+        return None
+    except Exception as exc:  # fail safe: no deletion on an unverifiable claim
+        return f"recheck_failed: {type(exc).__name__}"
+
+
+def _unpublish_on_failure(run):
+    """Decorate ``process_job``: a failure after writes began unpublishes them.
+
+    INDEXING writes chunk + lexical rows before EMBEDDING can fail, and a failed
+    document must not stay searchable on that partial generation. Every attempt
+    that fails past the write gate takes its own generation back out (a retry
+    rebuilds it from stable chunk ids, so nothing is lost by cleaning first).
+    Fence refusals already unpublished and are not repeated.
+
+    Delivery is at-least-once, so a redelivered copy may run alongside this one:
+    the cleanup runs only if this run still owns the job (see
+    :func:`_cleanup_skip_reason`); the original error is re-raised either way.
+    """
+
+    @functools.wraps(run)
+    async def wrapper(session: AsyncSession, job_id: uuid.UUID) -> PipelineResult:
+        job = await session.get(IngestionJob, job_id)
+        ids = (job.document_id, job.document_version_id) if job is not None else None
+        try:
+            return await run(session, job_id)
+        except Exception as exc:
+            if (
+                ids is not None
+                and job is not None  # same fact as ids; narrows ``job`` for mypy
+                and job.stage in _WRITE_STAGES
+                and getattr(exc, "code", None) not in _FENCE_CODES
+            ):
+                # This run's identity, as stamped by process_job at start.
+                mine = (job.attempts, job.started_at)
+                await session.rollback()
+                reason = await _cleanup_skip_reason(
+                    session, job_id=job_id, ids=ids, mine=mine
+                )
+                if reason is None:
+                    await _unpublish_generation(session, document_id=ids[0], version_id=ids[1])
+                else:
+                    with contextlib.suppress(Exception):  # end the short read txn
+                        await session.rollback()
+                    logger.warning(
+                        "ingest_cleanup_skipped",
+                        extra={
+                            "event": "ingest_cleanup_skipped",
+                            "job_id": str(job_id),
+                            "document_id": str(ids[0]),
+                            "document_version_id": str(ids[1]),
+                            "reason": reason,
+                        },
+                    )
+            raise
+
+    return wrapper
+
+
+@_unpublish_on_failure
 async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResult:
     job = await session.get(IngestionJob, job_id)
     if job is None:
@@ -1256,8 +1414,6 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
 
     if not content:
         raise IngestPipelineError("EMPTY_DOCUMENT", "empty document", retryable=False)
-    if len(content) > MAX_DOCUMENT_BYTES:
-        raise IngestPipelineError("DOCUMENT_TOO_LARGE", "document too large", retryable=False)
 
     # T-V1-031 explicit-rejection cell (XLSX, images): the refusal happens
     # BEFORE any parser sees the bytes, and it is a typed, advertised answer —
@@ -1313,13 +1469,12 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                         stages=stages,
                     )
 
+                # No language here: the OCR guess lives in extraction_report only. Passing it
+                # as the declared language would make PD-008 treat a guess as fixed.
                 parsed = ParsedDocument(
                     elements=ocr_elements,
                     mime_type=mime_type,
                     page_count=extraction_report.total_pages,
-                    language=extraction_report.languages[0]
-                    if extraction_report.languages
-                    else None,
                     metadata={"extraction_report": ocr_report_meta},
                 )
                 parse_report = ParseReport(
@@ -1373,9 +1528,8 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
                 mime_type=mime_type,
                 filename=document.source_filename if document else None,
                 metadata=parse_metadata,
-                budgets=budgets_from_env(max_output_elements=max_elements()),
+                budgets=budgets_from_env(),
             )
-            ensure_element_limit(parsed.elements)  # BEFORE chunk/DB writes
         except IngestPipelineError:
             raise
         except ParseBudgetExceeded as exc:
@@ -1425,21 +1579,23 @@ async def process_job(session: AsyncSession, job_id: uuid.UUID) -> PipelineResul
     await session.commit()
     stages.append(JobStage.CHUNKING.value)
     _log_stage(job, JobStage.CHUNKING.value)
+
+    try:
+        result, backend_used = _chunk_with_backend(
+            parsed, filename=document.source_filename if document else None
+        )
+    except Exception as exc:
+        raise IngestPipelineError(
+            "CHUNK_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
+        ) from exc
     logger.info(
         "chunking_backend",
         extra={
             "event": "chunking_backend",
             "requested": CHUNKING_BACKEND,
-            "resolved": resolved_chunking_backend(),
+            "resolved": backend_used,
         },
     )
-
-    try:
-        result = _chunk(parsed, filename=document.source_filename if document else None)
-    except Exception as exc:
-        raise IngestPipelineError(
-            "CHUNK_FAILED", f"{type(exc).__name__}: {exc}", retryable=True
-        ) from exc
 
     await session.execute(delete(ChunkRow).where(ChunkRow.document_version_id == version.id))
     #: T-V1-031: every chunk carries which parser read it and, when part of the

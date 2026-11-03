@@ -86,6 +86,21 @@ def test_build_prompt_includes_chunk_ids_and_context() -> None:
     assert "Alpha evidence about permissions" in prompt
 
 
+def test_build_prompt_renders_bare_id_in_bracket_and_location_outside() -> None:
+    prompt = build_prompt("q?", _items())
+    assert "[chunk_id: c-1]\nLocation: page 1, Intro\nAlpha evidence about permissions" in prompt
+    assert "[chunk_id: c-2]\nLocation: page 2, Secret\n" in prompt
+    assert "(page" not in prompt
+    bare = build_prompt("q?", [make_item("x", 0.5, chunk_id="c-9", workspace_id="w")])
+    assert "[chunk_id: c-9]\nx" in bare and "Location:" not in bare
+
+
+def test_system_prompt_demands_bare_uuid_only() -> None:
+    from answer.prompts import SYSTEM_PROMPT
+
+    assert "ONLY the bare" in SYSTEM_PROMPT and "page" in SYSTEM_PROMPT
+
+
 def test_parse_model_output_plain_and_fenced() -> None:
     payload = (
         '{"answer": "Permissions are enforced.", '
@@ -120,6 +135,86 @@ def test_parse_model_output_drops_malformed_claims() -> None:
     )
     parsed = parse_model_output(text)
     assert parsed["claims"] == [{"text": "ok", "chunk_ids": ["c-1"]}]
+
+
+# --- citation id normalisation (page/section suffix copied by the model) ----
+
+_U1 = "9ab5ae76-1c2d-4e3f-8a9b-0c1d2e3f4a5b"
+_U2 = "11111111-2222-4333-8444-555555555555"
+
+
+def _ids_for(cid: str, known=(_U1, _U2)) -> list[str]:
+    payload = json.dumps({"answer": "a", "claims": [{"text": "t", "chunk_ids": [cid]}]})
+    return parse_model_output(payload, known_ids=known)["claims"][0]["chunk_ids"]
+
+
+@pytest.mark.parametrize(
+    "cited",
+    [
+        f"{_U1} (page 1)",
+        f"{_U1} (Quality rules)",
+        f"{_U1} (page 3, Section 2.1 (Scope) and more)",
+        f"{_U1} (Qualitätsregeln - Übersicht, 第1页)",
+        f"{_U1}\n(page 1)",
+        _U1.upper() + " (page 1)",
+        _U1.upper(),
+        _U1,
+    ],
+)
+def test_parse_normalises_uuid_with_suffix_to_supplied_id(cited: str) -> None:
+    assert _ids_for(cited) == [_U1]
+
+
+@pytest.mark.parametrize(
+    "cited",
+    [
+        f"{_U1} (page 1) {_U2}",  # two UUIDs: ambiguous
+        "deadbeef-0000-4000-8000-000000000000 (page 1)",  # not supplied
+        f"see {_U1}",  # does not begin with the UUID
+        f"{_U1}abc (page 1)",  # UUID glued to more id characters
+        "c-1 (page 1)",  # not a UUID at all
+    ],
+)
+def test_parse_leaves_ambiguous_or_unknown_ids_unchanged(cited: str) -> None:
+    assert _ids_for(cited) == [cited]
+
+
+def test_parse_without_known_ids_never_rewrites() -> None:
+    payload = json.dumps(
+        {"answer": "a", "claims": [{"text": "t", "chunk_ids": [f"{_U1} (page 1)"]}]}
+    )
+    assert parse_model_output(payload)["claims"][0]["chunk_ids"] == [f"{_U1} (page 1)"]
+
+
+async def test_normalised_citation_passes_verify_and_fabricated_is_rejected() -> None:
+    items = [
+        make_item(
+            "Alpha evidence about permissions",
+            0.9,
+            workspace_id="ws-a",
+            document_id="doc-a",
+            chunk_id=_U1,
+            page=1,
+            section="Quality rules",
+        )
+    ]
+    payload = json.dumps(
+        {
+            "answer": "a",
+            "claims": [
+                {"text": "Alpha evidence about permissions", "chunk_ids": [f"{_U1} (page 1)"]},
+                {
+                    "text": "Alpha evidence about permissions",
+                    "chunk_ids": ["deadbeef-0000-4000-8000-000000000000 (page 1)"],
+                },
+            ],
+        }
+    )
+    parsed = parse_model_output(payload, known_ids=[i.chunk_id for i in items])
+    claims = [Claim(text=c["text"], chunk_ids=c["chunk_ids"]) for c in parsed["claims"]]
+    verified, citations = await verify_claims(claims, items, allowed_workspace_ids={"ws-a"})
+    assert [c.chunk_ids for c in verified] == [[_U1]]
+    assert [c.chunk_id for c in citations] == [_U1]
 
 
 # --- verification -----------------------------------------------------------
@@ -1719,3 +1814,13 @@ async def test_t024_cross_language_limit_disclosed_not_scored(translation: str) 
         claim_grounder=ExtractiveGrounder(),
     )
     assert verified == [] and citations == []
+
+
+async def test_engine_language_becomes_retrieval_filter() -> None:
+    # Ask takes the same language filter as search; without one, retrieval runs unfiltered.
+    engine = _engine(_FakeLLM('{"answer": "x", "claims": []}'))
+    scope = ACLScope(user_id="u1", workspace_ids=["ws-a"])
+    await engine.answer(query="When is payment due?", acl_scope=scope, language="en")
+    assert engine.orchestrator.last_kwargs["extra_filter"].language == "en"
+    await engine.answer(query="When is payment due?", acl_scope=scope)
+    assert engine.orchestrator.last_kwargs["extra_filter"] is None

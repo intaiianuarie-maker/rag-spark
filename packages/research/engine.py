@@ -56,7 +56,7 @@ class ResearchModelPolicy(BaseModel):
         return self
 
 
-DEFAULT_RESEARCH_MODEL_POLICY = ResearchModelPolicy(planning_model="gpt-4o-mini")
+DEFAULT_RESEARCH_MODEL_POLICY = ResearchModelPolicy(planning_model="google/gemma-4-26b-a4b-it:free")
 
 
 class ResearchEngine:

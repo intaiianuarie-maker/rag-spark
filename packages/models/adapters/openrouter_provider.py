@@ -19,7 +19,6 @@ from __future__ import annotations
 import asyncio
 import dataclasses
 import json
-import os
 import threading
 import time
 from collections.abc import AsyncIterator, Sequence
@@ -28,6 +27,7 @@ from typing import Any, ClassVar
 import httpx
 from retrieval.interfaces import EmbeddingProvider
 
+from ..credentials import DEFAULT_GATEWAY_URL, is_openrouter_url, resolve_gateway
 from ..interfaces import (
     ChatMessage,
     GenerationRequest,
@@ -45,7 +45,7 @@ from .openrouter_transport import (
 # ---------------------------------------------------------------------------
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
-DEFAULT_BASE_URL = "http://localhost:4000"
+DEFAULT_BASE_URL = DEFAULT_GATEWAY_URL
 DEFAULT_TIMEOUT = 90.0
 
 DEFAULT_CHAT_FREE_MODEL = "google/gemma-4-26b-a4b-it:free"
@@ -153,6 +153,40 @@ def _is_exhausted(status_code: int, response_text: str) -> bool:
         return True
     lowered = response_text.lower()
     return any(marker in lowered for marker in EXHAUSTION_MARKERS)
+
+
+def _is_client_error(status_code: int) -> bool:
+    """4xx client errors must never be retried or escalated to paid fallback.
+
+    400/401/403 (bad request, auth, forbidden) and any other 4xx indicate a
+    permanent client-side problem — retrying or falling back to a paid model
+    would either waste money or leak requests past an auth boundary.
+    """
+    return 400 <= status_code < 500
+
+
+def _is_refusal(resp_text: str) -> bool:
+    """Detect a model refusal in the response body.
+
+    OpenRouter returns refusals either as an HTTP error with a refusal marker
+    in the body, or as a 200 whose message content is a refusal string.
+    Refusals must never be retried and must never go to paid fallback — they
+    are served locally only.
+    """
+    lowered = resp_text.lower()
+    return any(
+        marker in lowered
+        for marker in (
+            "refusal",
+            "refused",
+            "i cannot fulfill",
+            "i can't fulfill",
+            "i am unable to",
+            "i'm unable to",
+            "violates",
+            "policy violation",
+        )
+    )
 
 
 def compute_cost_usd(
@@ -419,21 +453,7 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         backoff_base_seconds: float = BACKOFF_BASE_SECONDS,
         allow_paid_fallback: bool = True,
     ) -> None:
-        env_openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
-        if base_url:
-            resolved_url = base_url
-        elif env_openrouter_key:
-            resolved_url = DEFAULT_OPENROUTER_BASE_URL
-        else:
-            resolved_url = os.environ.get("LITELLM_URL", DEFAULT_BASE_URL)
-
-        self.base_url = resolved_url.rstrip("/")
-        self.api_key = (
-            api_key
-            or os.environ.get("LITELLM_API_KEY")
-            or (env_openrouter_key if "openrouter.ai" in self.base_url else None)
-            or (os.environ.get("DEEPSEEK_API_KEY") if "deepseek.com" in self.base_url else None)
-        )
+        self.base_url, self.api_key = resolve_gateway(base_url=base_url, api_key=api_key)
         self.timeout = timeout
         self.default_call_site = call_site or default_call_site
         self.max_attempts = max_attempts
@@ -470,7 +490,7 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
         h: dict[str, str] = {"content-type": "application/json"}
         if self.api_key:
             h["authorization"] = f"Bearer {self.api_key}"
-        if "openrouter.ai" in self.base_url:
+        if is_openrouter_url(self.base_url):
             h["HTTP-Referer"] = "https://knowledge-os.local"
             h["X-Title"] = "Knowledge OS"
         return h
@@ -533,6 +553,14 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                 "messages": _to_openai_messages(request.messages),
                 "stream": False,
             }
+            # OpenRouter-specific controls carried on every generation payload.
+            # provider.only restricts routing to an explicitly allowed provider;
+            # data_collection opts the request out of model-training data collection.
+            provider_only = request.metadata.get("provider_only") if request.metadata else None
+            if provider_only:
+                p["provider"] = {"only": provider_only if isinstance(provider_only, list) else [provider_only]}
+            data_collection = request.metadata.get("data_collection", "off") if request.metadata else "off"
+            p["data_collection"] = data_collection
             if request.temperature is not None:
                 p["temperature"] = request.temperature
             if request.max_tokens is not None:
@@ -562,11 +590,22 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     active_model = fallback_model
                     break
                 resp.raise_for_status()
+                body = resp.text
+                if _is_refusal(body):
+                    GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                    raise LLMProviderError("model refusal: request refused by policy") from None
                 data = resp.json()
                 break
             except (httpx.HTTPStatusError, httpx.RequestError, json.JSONDecodeError) as e:
                 status_code = getattr(getattr(e, "response", None), "status_code", 0)
                 resp_text = getattr(getattr(e, "response", None), "text", "")
+                # Client errors (4xx) and refusals are terminal: no retry, no paid fallback.
+                if _is_client_error(status_code) or _is_refusal(resp_text):
+                    GLOBAL_ACCOUNTING.record_failure(call_site=site, retries=retries_used)
+                    snippet = resp_text[:500] if resp_text else str(e)
+                    if status_code:
+                        raise LLMProviderError(f"LiteLLM error {status_code}: {snippet}") from e
+                    raise LLMProviderError(f"LiteLLM request failed: {e}") from e
                 if (
                     active_model == primary_model
                     and fallback_model is not None
@@ -701,6 +740,12 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                 # itself now always reports final usage (include_usage is deprecated).
                 "stream_options": {"include_usage": True},
             }
+            # OpenRouter-specific controls carried on every streaming payload.
+            provider_only = request.metadata.get("provider_only") if request.metadata else None
+            if provider_only:
+                p["provider"] = {"only": provider_only if isinstance(provider_only, list) else [provider_only]}
+            data_collection = request.metadata.get("data_collection", "off") if request.metadata else "off"
+            p["data_collection"] = data_collection
             if request.temperature is not None:
                 p["temperature"] = request.temperature
             if request.max_tokens is not None:
@@ -757,17 +802,24 @@ class OpenRouterProvider(LLMProvider, EmbeddingProvider):
                     try:
                         resp.raise_for_status()
                     except httpx.HTTPStatusError as e:
+                        status_code = e.response.status_code
+                        # Client errors (4xx) and refusals are terminal: no retry, no paid fallback.
+                        if _is_client_error(status_code):
+                            GLOBAL_ACCOUNTING.record_failure(call_site=site)
+                            raise LLMProviderError(
+                                f"LiteLLM stream error {status_code}"
+                            ) from e
                         if (
                             active_model == primary_model
                             and fallback_model is not None
-                            and _is_exhausted(e.response.status_code, "")
+                            and _is_exhausted(status_code, "")
                         ):
                             fallback_triggered = True
                             active_model = fallback_model
                         else:
                             GLOBAL_ACCOUNTING.record_failure(call_site=site)
                             raise LLMProviderError(
-                                f"LiteLLM stream error {e.response.status_code}"
+                                f"LiteLLM stream error {status_code}"
                             ) from e
 
                     if not fallback_triggered:

@@ -11,11 +11,19 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from models.credentials import resolve_gateway
 from models.interfaces import LLMProvider
 
 from .runtime import AgentRuntime
 from .tools import CalculatorTool, KnowledgeReadTool, KnowledgeSearchTool, Tool, ToolRegistry
 from .unavailable import MISSING_LLM_PROVIDER, AgentUnavailableError
+
+
+def llm_gateway_configured() -> bool:
+    """True when a gateway is named and a key bound to *that host* is configured."""
+    if not (os.environ.get("LITELLM_URL") or os.environ.get("OPENROUTER_API_KEY")):
+        return False
+    return bool(resolve_gateway()[1])
 
 
 def resolve_agent_llm_provider(call_site: str = "agents.runtime") -> LLMProvider | None:
@@ -24,12 +32,7 @@ def resolve_agent_llm_provider(call_site: str = "agents.runtime") -> LLMProvider
     Uses the LiteLLM/OpenRouter provider seam (ARCH-02 surface) with Gemma free-first
     and automatic paid fallback. Returns None if gateway or key is missing.
     """
-    base_url = os.environ.get("LITELLM_URL") or os.environ.get("OPENROUTER_API_KEY")
-    has_key = any(
-        os.environ.get(name)
-        for name in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
-    )
-    if not base_url or not has_key:
+    if not llm_gateway_configured():
         return None
     try:
         from models.adapters.litellm_provider import create_llm_provider

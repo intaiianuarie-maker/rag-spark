@@ -1202,13 +1202,13 @@ class TestW22LlmTranslation:
         result = self._import_single(
             {
                 "input_value": "hi",
-                "model_name": {"value": "gpt-4o-mini"},
+                "model_name": {"value": "google/gemma-4-26b-a4b-it:free"},
                 "temperature": {"value": 0.2},
                 "max_tokens": {"value": 512},
             }
         )
         node = result.nodes[0]
-        assert node.config["model"] == "gpt-4o-mini"
+        assert node.config["model"] == "google/gemma-4-26b-a4b-it:free"
         assert node.config["temperature"] == 0.2
         assert node.config["max_tokens"] == 512
 
@@ -1680,7 +1680,7 @@ class TestW23RoundTripExport:
                 "ChatOpenAI",
                 template={
                     "input_value": {"value": "hi"},
-                    "model_name": {"value": "gpt-4o-mini"},
+                    "model_name": {"value": "google/gemma-4-26b-a4b-it:free"},
                     "temperature": {"value": 0.2},
                 },
                 display_name="Chat OpenAI",
@@ -1723,7 +1723,7 @@ class TestW23RoundTripExport:
             exported, workflow_id="wf-1", workspace_id="ws-1"
         )
         llm_node = next(n for n in reimported.nodes if n.id == "lf-llm")
-        assert llm_node.config["model"] == "gpt-4o-mini"
+        assert llm_node.config["model"] == "google/gemma-4-26b-a4b-it:free"
         assert llm_node.config["temperature"] == 0.2
 
     def test_exported_flow_passes_security_scan(self) -> None:
@@ -2226,8 +2226,8 @@ class TestB1VettedModelValidation:
     """B-1: model names must be vetted, not passed through inert."""
 
     def test_vetted_model_accepted(self) -> None:
-        result = _import_llm(_llm_template(model_name={"value": "gpt-4o-mini"}))
-        assert result.nodes[0].config["model"] == "gpt-4o-mini"
+        result = _import_llm(_llm_template(model_name={"value": "google/gemma-4-26b-a4b-it:free"}))
+        assert result.nodes[0].config["model"] == "google/gemma-4-26b-a4b-it:free"
 
     def test_unvetted_model_rejected(self) -> None:
         with pytest.raises(LangflowImportError) as exc_info:
@@ -2246,7 +2246,7 @@ class TestB1VettedModelValidation:
     def test_vetted_model_list_is_exported(self) -> None:
         from workflow_engine.adapters.langflow_adapter import VETTED_MODELS
 
-        assert "gpt-4o-mini" in VETTED_MODELS
+        assert "google/gemma-4-26b-a4b-it:free" in VETTED_MODELS
         assert isinstance(VETTED_MODELS, frozenset)
 
 

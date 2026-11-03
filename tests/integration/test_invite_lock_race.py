@@ -8,12 +8,12 @@ and return typed statuses (no unhandled 500).
 from __future__ import annotations
 
 import os
-import socket
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
 import httpx
 import pytest
+from service_probe import postgres_open, redis_open
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
@@ -26,17 +26,9 @@ PASSWORD = "Correct-Horse-Battery-9"
 BASE = os.environ.get("API_BASE_URL", "http://127.0.0.1:8000")
 
 
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture(scope="module")
 def api() -> str:
-    if not (_port_open(5432) and _port_open(6379)):
+    if not (postgres_open() and redis_open()):
         pytest.skip("postgres/redis not reachable; run `make up`")
     try:
         health = httpx.get(f"{BASE}/health", timeout=3.0)

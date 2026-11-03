@@ -45,7 +45,7 @@ def test_draft_bad_path_refuses(tmp_path):
 
 def test_draft_restart_read_and_parity():
     async def _run():
-        with tempfile.TemporaryDirectory() as d:
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
             db = Path(d) / "drafts.db"
             os.environ["WORKFLOW_DRAFT_DB"] = str(db)
 

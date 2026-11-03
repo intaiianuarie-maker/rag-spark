@@ -11,26 +11,9 @@ os.environ.setdefault("APP_ENV", "test")
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 
 from ingestion.adapters.registry import parser_for_mime, supported_mime_types
-from ingestion.interfaces import DocumentElement, ElementType
 from ingestion.normalize import ParseError, decode_text
-from jobs.ingest_pipeline import (
-    IngestPipelineError,
-    ensure_element_limit,
-)
 
 pytestmark = pytest.mark.unit
-
-
-def _element() -> DocumentElement:
-    return DocumentElement(type=ElementType.TEXT, text="x")
-
-
-def test_element_limit_refuses_past_n() -> None:
-    ensure_element_limit([_element() for _ in range(5)], 5)
-    with pytest.raises(IngestPipelineError) as excinfo:
-        ensure_element_limit([_element() for _ in range(6)], 5)
-    assert excinfo.value.code == "TOO_MANY_ELEMENTS"
-    assert excinfo.value.retryable is False
 
 
 def test_stable_chunk_id_is_deterministic_within_a_generation() -> None:

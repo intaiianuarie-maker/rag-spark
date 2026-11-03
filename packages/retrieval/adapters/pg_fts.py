@@ -208,11 +208,11 @@ class PostgresLexicalStore(LexicalStore):
             if query_filter.language:
                 cfg = _config_for(query_filter.language)
                 where.append(
-                    "ld.tsv @@ plainto_tsquery(CAST(:cfg AS regconfig), :q)"
+                    "ld.tsv @@ websearch_to_tsquery(CAST(:cfg AS regconfig), :q)"
                 )
                 params["cfg"] = cfg
             else:
-                where.append("ld.tsv @@ plainto_tsquery(ld.tsv_cfg::regconfig, :q)")
+                where.append("ld.tsv @@ websearch_to_tsquery(ld.tsv_cfg::regconfig, :q)")
 
             where_sql = " AND ".join(where)
             sql = text(
@@ -220,7 +220,7 @@ class PostgresLexicalStore(LexicalStore):
                 SELECT ld.id, ld.workspace_id, ld.document_id, ld.document_version_id,
                        ld.chunk_id, ld.content, ld.language, ld.metadata,
                        ld.page, ld.section,
-                       ts_rank(ld.tsv, plainto_tsquery(
+                       ts_rank(ld.tsv, websearch_to_tsquery(
                          COALESCE(ld.tsv_cfg, 'simple')::regconfig, :q)) AS score
                 FROM lexical_docs ld
                 {LIFECYCLE_JOINS}
@@ -250,6 +250,150 @@ class PostgresLexicalStore(LexicalStore):
                     )
                 )
             return items
+
+    async def resolve_chunks(
+        self, *, chunk_ids: Sequence[str], query_filter: SearchFilter
+    ) -> list[RetrievedItem]:
+        """Canonical rows for graph-derived chunk refs (graph leg gate).
+
+        Reads the authoritative ``chunks`` table (the same one answer
+        hydration uses), never the graph store's claim. A ref survives only
+        when its chunk exists, lives in one of ``query_filter.workspace_ids``
+        (and ``document_ids`` when set), and its document is not deleted, its
+        version not superseded and — when the document names a current
+        version — is that version. Non-UUID refs can never name a row and are
+        dropped before the query. Returned items carry no score of their own.
+        """
+        if not query_filter.workspace_ids:
+            return []
+        ids: list[str] = []
+        for chunk_id in dict.fromkeys(chunk_ids):
+            try:
+                ids.append(str(uuid.UUID(str(chunk_id))))
+            except ValueError:
+                continue
+        if not ids:
+            return []
+        where = [
+            "c.id = ANY(CAST(:ids AS uuid[]))",
+            "c.workspace_id::text = ANY(:wss)",
+            "d.deleted_at IS NULL",
+            "dv.superseded_at IS NULL",
+            "(d.current_version_id IS NULL OR d.current_version_id = c.document_version_id)",
+        ]
+        params: dict[str, Any] = {"ids": ids, "wss": list(query_filter.workspace_ids)}
+        if query_filter.document_ids:
+            where.append("d.id::text = ANY(:dids)")
+            params["dids"] = list(query_filter.document_ids)
+        if query_filter.language:
+            where.append("c.language = :lang")
+            params["lang"] = query_filter.language
+        for k, v in (query_filter.metadata or {}).items():
+            if not _KEY_RE.match(k):
+                raise ValueError(f"metadata key not allowed: {k!r}")
+            where.append(f"c.chunk_metadata->>'{k}' = :meta_{k}")
+            params[f"meta_{k}"] = str(v)
+        sql = text(
+            f"""
+            SELECT c.id::text AS chunk_id, c.workspace_id::text AS workspace_id,
+                   d.id::text AS document_id, c.document_version_id::text AS document_version_id,
+                   c.text AS content, c.page, c.section, c.chunk_metadata AS metadata
+            FROM chunks c
+            JOIN document_versions dv ON dv.id = c.document_version_id
+            JOIN documents d ON d.id = dv.document_id
+            WHERE {" AND ".join(where)}
+            """
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(sql, params)).mappings().all()
+        return [
+            RetrievedItem(
+                content=str(row["content"]),
+                score=0.0,
+                method=RetrievalMethod.LEXICAL,
+                workspace_id=row["workspace_id"],
+                document_id=row["document_id"],
+                document_version_id=row["document_version_id"],
+                chunk_id=row["chunk_id"],
+                page=row["page"],
+                section=row["section"],
+                metadata=dict(row["metadata"] or {}),
+            )
+            for row in rows
+        ]
+
+    async def resolve_page_chunks(
+        self, *, pairs: Sequence[tuple[str, int]], query_filter: SearchFilter
+    ) -> list[RetrievedItem]:
+        """Live canonical text chunks for ``(document_version_id, page)`` pairs.
+
+        Multimodal leg seam: a page-level visual hit has no chunk id, so it is
+        mapped to the ``chunks`` rows of that version on that page, in document
+        order. Same authority and predicates as :meth:`resolve_chunks` (scope,
+        document filter, tombstone, superseded/non-current version). A page with
+        no chunk yields nothing; non-UUID versions can never name a row.
+        """
+        if not query_filter.workspace_ids:
+            return []
+        vs: list[str] = []
+        pgs: list[int] = []
+        for version, page in dict.fromkeys(pairs):
+            try:
+                vs.append(str(uuid.UUID(str(version))))
+            except ValueError:
+                continue
+            pgs.append(int(page))
+        if not vs:
+            return []
+        where = [
+            "c.workspace_id::text = ANY(:wss)",
+            "d.deleted_at IS NULL",
+            "dv.superseded_at IS NULL",
+            "(d.current_version_id IS NULL OR d.current_version_id = c.document_version_id)",
+        ]
+        params: dict[str, Any] = {"vs": vs, "pgs": pgs, "wss": list(query_filter.workspace_ids)}
+        if query_filter.document_ids:
+            where.append("d.id::text = ANY(:dids)")
+            params["dids"] = list(query_filter.document_ids)
+        if query_filter.language:
+            where.append("c.language = :lang")
+            params["lang"] = query_filter.language
+        for k, v in (query_filter.metadata or {}).items():
+            if not _KEY_RE.match(k):
+                raise ValueError(f"metadata key not allowed: {k!r}")
+            where.append(f"c.chunk_metadata->>'{k}' = :meta_{k}")
+            params[f"meta_{k}"] = str(v)
+        sql = text(
+            f"""
+            SELECT c.id::text AS chunk_id, c.workspace_id::text AS workspace_id,
+                   d.id::text AS document_id, c.document_version_id::text AS document_version_id,
+                   c.text AS content, c.page, c.section, c.chunk_metadata AS metadata
+            FROM chunks c
+            JOIN unnest(CAST(:vs AS text[]), CAST(:pgs AS int[])) AS p(v, pg)
+              ON p.v = c.document_version_id::text AND p.pg = c.page
+            JOIN document_versions dv ON dv.id = c.document_version_id
+            JOIN documents d ON d.id = dv.document_id
+            WHERE {" AND ".join(where)}
+            ORDER BY c.document_version_id, c.page, c.chunk_index
+            """
+        )
+        async with self._session_factory() as session:
+            rows = (await session.execute(sql, params)).mappings().all()
+        return [
+            RetrievedItem(
+                content=str(row["content"]),
+                score=0.0,
+                method=RetrievalMethod.LEXICAL,
+                workspace_id=row["workspace_id"],
+                document_id=row["document_id"],
+                document_version_id=row["document_version_id"],
+                chunk_id=row["chunk_id"],
+                page=row["page"],
+                section=row["section"],
+                metadata=dict(row["metadata"] or {}),
+            )
+            for row in rows
+        ]
 
     async def delete(
         self,

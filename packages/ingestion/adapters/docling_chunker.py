@@ -1,12 +1,26 @@
-"""Docling HybridChunker adapter (T-OR-09).
+"""Docling HybridChunker adapter (T-OR-09, plan G6).
 
 Integrates Docling's layout- and structure-aware HybridChunker into the
 project-owned chunking interface. Operates on normalized `ParsedDocument` /
-`DocumentElement` structures and outputs normalized `Chunk` / `ChunkResult`
-models with provenance, table header repetition, and token caps.
+`DocumentElement` structures and outputs the same normalized `Chunk` /
+`ChunkResult` models as the built-in and LlamaIndex chunkers.
+
+Contract shared with ``ingestion.chunk`` (the other two backends):
+
+* **Vision isolation.** Model-generated page descriptions
+  (``metadata["extraction"] == "vision"``) never share a chunk with document
+  text, and vision-only chunks carry ``metadata["extraction"] == "vision"``.
+  OCR-bearing runs never cross a page boundary. Both rules are enforced by
+  chunking each *run* of elements as its own ``DoclingDocument`` (see ``_runs``)
+  — HybridChunker only ever merges peers inside one document.
+* **Pages from sources.** Every item added to Docling is mapped back to its
+  source ``DocumentElement`` by item ref, so a chunk's page / extraction /
+  element types come from the elements it really contains, not from an index.
+* **Tables** are real Docling ``TableItem``s so ``repeat_table_header`` works.
 
 No docling vendor types leak beyond this module. Tokenization is deterministic
-and offline: no runtime network calls or unapproved HuggingFace model downloads.
+and offline: the tokenizer is always injected (no HuggingFace download, no
+network at chunk time).
 """
 
 from __future__ import annotations
@@ -15,18 +29,25 @@ import logging
 from collections.abc import Callable
 from typing import Any
 
-from docling.chunking import HybridChunker
+from docling_core.transforms.chunker.hierarchical_chunker import (
+    ChunkingDocSerializer,
+    ChunkingSerializerProvider,
+)
+from docling_core.transforms.chunker.hybrid_chunker import HybridChunker
 from docling_core.transforms.chunker.tokenizer.base import BaseTokenizer
-from docling_core.types.doc import DocItemLabel, DoclingDocument
+from docling_core.transforms.serializer.markdown import MarkdownTableSerializer
+from docling_core.types.doc import DocItemLabel, DoclingDocument, TableCell, TableData
 
-from ..chunk import Chunk, ChunkResult
-from ..interfaces import ElementType, ParsedDocument
+from ..chunk import VISION_EXTRACTION, Chunk, ChunkResult
+from ..interfaces import DocumentElement, ElementType, ParsedDocument
 from ..metadata import DocumentMetadata, extract_metadata
 
 logger = logging.getLogger("knowledge_os.ingestion.adapters.docling_chunker")
 
 DEFAULT_MAX_TOKENS = 512
 DEFAULT_OVERLAP_TOKENS = 0
+
+BACKEND_NAME = "docling-hybrid-chunker"
 
 
 class WhitespaceTokenizer(BaseTokenizer):
@@ -41,7 +62,8 @@ class WhitespaceTokenizer(BaseTokenizer):
         return self.max_tokens
 
     def get_tokenizer(self) -> Any:
-        return self
+        # semchunk (oversized plain text) needs a callable token counter.
+        return self.count_tokens
 
 
 class ApproxGeminiTokenizer(BaseTokenizer):
@@ -66,7 +88,87 @@ class ApproxGeminiTokenizer(BaseTokenizer):
         return self.max_tokens
 
     def get_tokenizer(self) -> Any:
-        return self
+        # semchunk (oversized plain text) needs a callable token counter.
+        return self.count_tokens
+
+
+class _MarkdownTableSerializerProvider(ChunkingSerializerProvider):
+    """Markdown tables (like the parsers emit) instead of Docling's default triplets.
+
+    ``repeat_table_header`` only repeats a real header row, which exists in the
+    Markdown form; the triplet form has no header lines to repeat.
+    """
+
+    def get_serializer(self, doc: DoclingDocument) -> ChunkingDocSerializer:
+        return ChunkingDocSerializer(doc=doc, table_serializer=MarkdownTableSerializer())
+
+
+def _is_vision(element: DocumentElement) -> bool:
+    return (element.metadata or {}).get("extraction") == VISION_EXTRACTION
+
+
+def _runs(elements: list[DocumentElement]) -> list[list[DocumentElement]]:
+    """Split the element stream where chunks must not span (``chunk._sections`` rules).
+
+    A new run starts when vision/non-vision flips (model text never shares a
+    chunk with document text) or when an OCR-bearing run would cross a page.
+    Elements without text are dropped.
+    """
+    runs: list[list[DocumentElement]] = []
+    current: list[DocumentElement] = []
+    is_vision = has_ocr = False
+    page: int | None = None
+    for element in elements:
+        if not (element.text or "").strip():
+            continue
+        el_ocr = bool(element.metadata and "extraction" in element.metadata)
+        el_vision = _is_vision(element)
+        if current and (el_vision != is_vision or ((el_ocr or has_ocr) and element.page != page)):
+            runs.append(current)
+            current = []
+        if not current:
+            is_vision, has_ocr, page = el_vision, False, element.page
+        current.append(element)
+        has_ocr = has_ocr or el_ocr
+        if page is None:
+            page = element.page
+    if current:
+        runs.append(current)
+    return runs
+
+
+def _table_rows(element: DocumentElement) -> tuple[list[list[str]], int]:
+    """Rows + header row count of a TABLE element (structured table, else markdown)."""
+    st = (element.metadata or {}).get("structured_table")
+    if isinstance(st, dict) and st.get("rows"):
+        return [[str(c) for c in r] for r in st["rows"]], int(st.get("header_rows", 1))
+    rows: list[list[str]] = []
+    for line in element.text.strip().splitlines():
+        line = line.strip()
+        if not (line.startswith("|") and line.endswith("|")):
+            return [], 0  # not a pipe table: caller falls back to plain text
+        cells = [c.strip() for c in line.strip("|").split("|")]
+        if all(set(c) <= set("-: ") and c for c in cells):
+            continue  # markdown separator row
+        rows.append(cells)
+    return rows, 1
+
+
+def _table_data(rows: list[list[str]], header_rows: int) -> TableData:
+    num_cols = max(len(r) for r in rows)
+    cells = [
+        TableCell(
+            text=r[c] if c < len(r) else "",
+            start_row_offset_idx=i,
+            end_row_offset_idx=i + 1,
+            start_col_offset_idx=c,
+            end_col_offset_idx=c + 1,
+            column_header=i < header_rows,
+        )
+        for i, r in enumerate(rows)
+        for c in range(num_cols)
+    ]
+    return TableData(num_rows=len(rows), num_cols=num_cols, table_cells=cells)
 
 
 class DoclingHybridChunker:
@@ -102,7 +204,7 @@ class DoclingHybridChunker:
                     return self.max_tokens
 
                 def get_tokenizer(self) -> Any:
-                    return self
+                    return self.count_tokens
 
             self.tokenizer = CallableTokenizer()
         else:
@@ -111,6 +213,7 @@ class DoclingHybridChunker:
         self._chunker = HybridChunker(
             tokenizer=self.tokenizer,
             repeat_table_header=self.repeat_table_header,
+            serializer_provider=_MarkdownTableSerializerProvider(),
         )
 
     def chunk(
@@ -124,115 +227,132 @@ class DoclingHybridChunker:
         doc_meta = document_metadata or extract_metadata(parsed, filename=filename)
         doc_name = filename or doc_meta.filename or "document"
 
-        # Build internal DoclingDocument representation
-        docling_doc = DoclingDocument(name=doc_name)
-        page_map: list[int | None] = []
-        section_map: list[str | None] = []
-        table_meta_map: dict[int, dict[str, Any]] = {}
+        chunks: list[Chunk] = []
+        title: str | None = None
+        heading: str | None = None
+        for run in _runs(parsed.elements):
+            vision = _is_vision(run[0])
+            docling_doc = DoclingDocument(name=doc_name)
+            by_ref: dict[str, DocumentElement] = {}
 
-        current_section: str | None = None
+            # Re-state the enclosing heading context for a run that starts
+            # mid-section (after a vision page / an OCR page break).
+            if not vision:
+                if title and run[0].type != ElementType.TITLE:
+                    docling_doc.add_title(text=title)
+                if heading and run[0].type not in (ElementType.TITLE, ElementType.HEADING):
+                    docling_doc.add_heading(text=heading, level=1)
 
-        for el in parsed.elements:
-            el_text = (el.text or "").strip()
-            if not el_text:
-                continue
+            for el in run:
+                text = el.text.strip()
+                if el.type == ElementType.TITLE:
+                    title, heading = text, None
+                    item = docling_doc.add_title(text=text)
+                elif el.type == ElementType.HEADING:
+                    heading = text
+                    item = docling_doc.add_heading(text=text, level=1)
+                else:
+                    rows, header_rows = _table_rows(el) if el.type == ElementType.TABLE else ([], 0)
+                    if rows:
+                        item = docling_doc.add_table(data=_table_data(rows, header_rows))
+                    else:
+                        item = docling_doc.add_text(label=DocItemLabel.TEXT, text=text)
+                by_ref[item.self_ref] = el
 
-            if el.section:
-                current_section = el.section
-
-            if el.type == ElementType.TITLE:
-                current_section = el_text
-                docling_doc.add_text(label=DocItemLabel.TITLE, text=el_text)
-                page_map.append(el.page)
-                section_map.append(current_section)
-            elif el.type == ElementType.HEADING:
-                current_section = el_text
-                docling_doc.add_text(label=DocItemLabel.SECTION_HEADER, text=el_text)
-                page_map.append(el.page)
-                section_map.append(current_section)
-            elif el.type == ElementType.TABLE:
-                st = el.metadata.get("structured_table") if el.metadata else None
-                table_text = (st.get("markdown") if st and isinstance(st, dict) else "") or el_text
-                docling_doc.add_text(label=DocItemLabel.TEXT, text=table_text)
-                t_idx = len(page_map)
-                if st:
-                    table_meta_map[t_idx] = st
-                page_map.append(el.page)
-                section_map.append(current_section)
-            else:
-                docling_doc.add_text(label=DocItemLabel.TEXT, text=el_text)
-                page_map.append(el.page)
-                section_map.append(current_section)
-
-        # Run HybridChunker
-        doc_chunks = list(self._chunker.chunk(docling_doc))
-        result_chunks: list[Chunk] = []
-
-        for i, d_chunk in enumerate(doc_chunks):
-            chunk_text = (d_chunk.text or "").strip()
-            if not chunk_text:
-                continue
-
-            # Contextual headings from docling meta
-            headings = getattr(d_chunk.meta, "headings", None) or []
-            section = headings[-1] if headings else (current_section or None)
-
-            # Determine page from item mapping or element provenance
-            page: int | None = None
-            if i < len(page_map) and page_map[i] is not None:
-                page = page_map[i]
-            elif parsed.elements:
-                page = parsed.elements[0].page
-
-            token_count = self.tokenizer.count_tokens(chunk_text)
-
-            meta: dict[str, Any] = {
-                "language": doc_meta.language,
-                "chunking_backend": "docling_hybrid",
-                "tokenizer": type(self.tokenizer).__name__,
-            }
-            if doc_meta.title:
-                meta["title"] = doc_meta.title
-            if doc_meta.filename:
-                meta["filename"] = doc_meta.filename
-            if headings:
-                meta["headings"] = headings
-
-            # Parent-child tracking
-            parent_id: str | None = None
-            if i > 0 and len(result_chunks) > 0:
-                prev = result_chunks[-1]
-                if prev.section == section and prev.page == page:
-                    parent_id = prev.parent_id or prev.id
-
-            elem_types = ["text"]
-            if i in table_meta_map:
-                meta["table_provenance"] = table_meta_map[i]
-                elem_types.append("table")
-            elif "|" in chunk_text and chunk_text.count("|") >= 2:
-                elem_types.append("table")
-
-            if any(h in chunk_text for h in headings):
-                elem_types.append("heading")
-
-            result_chunks.append(
-                Chunk(
-                    id=f"chunk-{len(result_chunks):04d}",
-                    index=len(result_chunks),
-                    text=chunk_text,
-                    token_count=token_count,
-                    parent_id=parent_id,
-                    section=section,
-                    page=page,
-                    element_types=list(dict.fromkeys(elem_types)),
-                    metadata=meta,
+            run_chunks = 0
+            parent_ids: dict[tuple[str, ...], str] = {}
+            for d_chunk in self._chunker.chunk(docling_doc):
+                # Contextualized text = enclosing headings + body, the form the
+                # token cap is enforced on (builtin chunks also carry heading text).
+                chunk_text = (self._chunker.contextualize(d_chunk) or "").strip()
+                if not chunk_text:
+                    continue
+                headings = list(getattr(d_chunk.meta, "headings", None) or [])
+                sources = [
+                    by_ref[i.self_ref]
+                    for i in getattr(d_chunk.meta, "doc_items", [])
+                    if i.self_ref in by_ref
+                ]
+                chunks.append(
+                    self._make(
+                        len(chunks),
+                        chunk_text,
+                        sources=sources or run,
+                        headings=headings,
+                        parent_id=parent_ids.get(tuple(headings)),
+                        doc_meta=doc_meta,
+                    )
                 )
-            )
+                parent_ids.setdefault(tuple(headings), chunks[-1].id)
+                run_chunks += 1
 
-        return ChunkResult(
-            chunks=result_chunks,
-            language=doc_meta.language,
-            metadata=doc_meta,
+            if not run_chunks:
+                # Heading-only run: Docling emits no chunk for bare headings, but
+                # the built-in chunkers keep that text, so keep it here too.
+                chunks.append(
+                    self._make(
+                        len(chunks),
+                        " ".join(e.text.strip() for e in run),
+                        sources=run,
+                        headings=[],
+                        parent_id=None,
+                        doc_meta=doc_meta,
+                    )
+                )
+
+        return ChunkResult(chunks=chunks, language=doc_meta.language, metadata=doc_meta)
+
+    def _make(
+        self,
+        index: int,
+        text: str,
+        *,
+        sources: list[DocumentElement],
+        headings: list[str],
+        parent_id: str | None,
+        doc_meta: DocumentMetadata,
+    ) -> Chunk:
+        meta: dict[str, Any] = {
+            "language": doc_meta.language,
+            "chunking_backend": "docling_hybrid",
+            "tokenizer": type(self.tokenizer).__name__,
+        }
+        if doc_meta.title:
+            meta["title"] = doc_meta.title
+        if doc_meta.filename:
+            meta["filename"] = doc_meta.filename
+        if headings:
+            meta["headings"] = headings
+        extraction = next(
+            (e.metadata["extraction"] for e in sources if "extraction" in (e.metadata or {})),
+            None,
+        )
+        if extraction is not None:
+            meta["extraction"] = extraction
+        table_prov = next(
+            (
+                e.metadata["structured_table"]
+                for e in sources
+                if e.type == ElementType.TABLE and (e.metadata or {}).get("structured_table")
+            ),
+            None,
+        )
+        if table_prov:
+            meta["table_provenance"] = table_prov
+
+        types = [e.type.value for e in sources]
+        if headings:
+            types.append(ElementType.HEADING.value)
+        return Chunk(
+            id=f"chunk-{index:04d}",
+            index=index,
+            text=text,
+            token_count=self.tokenizer.count_tokens(text),
+            parent_id=parent_id,
+            section=sources[0].section or (headings[-1] if headings else None),
+            page=next((e.page for e in sources if e.page is not None), None),
+            element_types=list(dict.fromkeys(types)),
+            metadata=meta,
         )
 
 

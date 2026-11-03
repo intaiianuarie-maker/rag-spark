@@ -592,7 +592,15 @@ def _build_status_response(rec: DurableRunRecord) -> StatusResponse:
     try:
         step_store = get_step_store()
         steps = step_store.list(rec.run_id)
-        if steps:
+        if rec.usage is not None:
+            # Authoritative: written by whichever process ran the run (survives process boundary).
+            usage_dict = {
+                "prompt_tokens": rec.usage.prompt_tokens,
+                "completion_tokens": rec.usage.completion_tokens,
+                "tool_calls": rec.usage.tool_calls,
+                "cost_usd": float(rec.usage.cost_usd or 0.0),
+            }
+        elif steps:
             total_prompt = sum(getattr(s.usage, "prompt_tokens", 0) for s in steps)
             total_completion = sum(getattr(s.usage, "completion_tokens", 0) for s in steps)
             total_tools = sum(getattr(s.usage, "tool_calls", 0) for s in steps)
@@ -835,14 +843,9 @@ async def get_agent_readiness(
     never a fake ready-state.
     """
     _require_workspace(principal, workspace_id)
-    import os
+    from agents.factories import llm_gateway_configured
 
-    base_url = os.environ.get("LITELLM_URL") or os.environ.get("OPENROUTER_API_KEY")
-    has_key = any(
-        os.environ.get(name)
-        for name in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
-    )
-    if bool(base_url and has_key):
+    if llm_gateway_configured():
         return ReadinessResponse(
             workspace_id=str(workspace_id),
             ready=True,

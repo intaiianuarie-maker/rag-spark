@@ -633,13 +633,11 @@ def test_docs_page_documents_every_budget_and_its_env_var() -> None:
     ):
         assert variable in text, variable
         assert code in text, code
-    # The budget defaults in the docs are the defaults in code.
+    # Unset means unlimited, in the code and in the docs.
     from ingestion.budget import budgets_from_env
 
-    defaults = budgets_from_env({})
-    assert str(int(defaults.max_seconds)) in text
-    assert str(defaults.max_memory_bytes // (1024 * 1024)) in text
-    assert f"{defaults.max_expanded_chars:,}".replace(",", "_") in text
+    assert budgets_from_env({}) == ParseBudgets()
+    assert "unlimited" in text
 
 
 def test_docs_page_states_the_disclosed_limits_rather_than_hiding_them() -> None:

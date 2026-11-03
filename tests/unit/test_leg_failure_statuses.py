@@ -537,6 +537,19 @@ def test_search_discloses_a_degraded_optional_leg(monkeypatch) -> None:
     assert body["trace_id"]
 
 
+class _NoModelConfigRows:
+    """A request session whose model_configs read finds no row (the default)."""
+
+    async def execute(self, *_args, **_kwargs):
+        return self
+
+    def mappings(self):
+        return self
+
+    def all(self):
+        return []
+
+
 def test_ask_maps_retrieval_unavailable_to_503_with_tracking_id(
     monkeypatch,
 ) -> None:
@@ -561,9 +574,12 @@ def test_ask_maps_retrieval_unavailable_to_503_with_tracking_id(
                 trace_id="trace-ask-1",
             )
 
+    from app.auth.db import get_session
+
     monkeypatch.setattr(router, "build_answer_engine", lambda **_: _Engine())
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
+    app.dependency_overrides[get_session] = lambda: _NoModelConfigRows()
     client = TestClient(app)
     response = client.post(
         f"/v1/workspaces/{WS_ID}/ask", json={"query": "what governs access?"}
@@ -596,9 +612,12 @@ def test_ask_empty_corpus_stays_a_200_abstention(monkeypatch) -> None:
                 trace_id="trace-empty-1",
             )
 
+    from app.auth.db import get_session
+
     monkeypatch.setattr(router, "build_answer_engine", lambda **_: _Engine())
     app = create_app()
     app.dependency_overrides[get_principal] = lambda: _principal()
+    app.dependency_overrides[get_session] = lambda: _NoModelConfigRows()
     client = TestClient(app)
     response = client.post(f"/v1/workspaces/{WS_ID}/ask", json={"query": "nothing here"})
     assert response.status_code == 200, response.text

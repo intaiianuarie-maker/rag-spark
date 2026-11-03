@@ -78,7 +78,7 @@ class AgentConfig(BaseModel):
     instructions: str = (
         "You are a helpful knowledge agent. Solve user tasks step-by-step using tools."
     )
-    model: str = "gpt-4o-mini"
+    model: str = "google/gemma-4-26b-a4b-it:free"
     max_steps: int = 10
     budget_tokens: int = 100000
     allowed_tools: list[str] = Field(default_factory=list)

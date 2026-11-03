@@ -25,6 +25,7 @@ import os
 import uuid
 
 import pytest
+from service_probe import postgres_open, redis_open
 
 # T-V1-071: the REAL ingest pipeline, never into the live `knowledge` collection.
 # Export before any app import — pydantic settings cache on first read.
@@ -51,14 +52,7 @@ PASSWORD = "Correct-Horse-Battery-9"
 
 @pytest.fixture
 def client():
-    import socket
-
-    def _port_open(port: int) -> bool:
-        with socket.socket() as probe:
-            probe.settimeout(0.5)
-            return probe.connect_ex(("127.0.0.1", port)) == 0
-
-    if not (_port_open(5432) and _port_open(6379)):
+    if not (postgres_open() and redis_open()):
         pytest.skip("postgres/redis not reachable; run `make up`")
 
     from app.db import run_migrations

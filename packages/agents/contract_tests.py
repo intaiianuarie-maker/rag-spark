@@ -59,7 +59,7 @@ def _sample_context() -> RunContext:
         workspace_id="ws-0001",
         principal_id="user-0001",
         authz_policy_revision="pol-0001",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(),
         deadline=datetime.now(UTC),
         allowed_tools=["calculator"],

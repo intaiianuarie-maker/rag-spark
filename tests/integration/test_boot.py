@@ -5,7 +5,7 @@ with per-service reachability entries (non-fatal by design). When compose
 services are up, a stricter check asserts every enabled dependency is
 reachable; otherwise it skips with a clear message (never a silent pass).
 
-T-V1-027: `DEPENDENCIES` pins the EXACT `/ready` set, identical to the literal
+T-V1-027: `BASE_DEPENDENCIES` (+ `graph_store` if enabled) pins the EXACT `/ready` set, same literal
 in `tests/fixtures/scripts/m004_ready_degraded.py` and
 `tests/integration/test_live_endpoints.py`: the stores (postgres/redis/qdrant/
 minio/infinity), the model (`llm_gateway`) and the queue consumer (`worker`),
@@ -30,8 +30,18 @@ os.environ.setdefault("LITELLM_URL", "https://openrouter.ai/api/v1")
 
 # T-V1-027 — pinned exact set, same expression in all 3 places.
 BASE_DEPENDENCIES = ("postgres", "redis", "qdrant", "minio", "infinity", "llm_gateway", "worker")
-GRAPH_ENABLED = os.environ.get("GRAPH_MODE", "off").strip().lower() not in {"", "off"}
-DEPENDENCIES = BASE_DEPENDENCIES + (("graph_store",) if GRAPH_ENABLED else ())
+
+
+def expected_dependencies() -> tuple[str, ...]:
+    """BASE + ``graph_store`` per the *effective* config the app loads (``.env`` included).
+
+    Reading ``os.environ`` here would miss a ``GRAPH_MODE`` that only the repo
+    ``.env`` sets, so the expectation would disagree with the app under test.
+    """
+    from core.config import get_settings
+
+    graph = get_settings().graph_mode.strip().lower() not in {"", "off"}
+    return BASE_DEPENDENCIES + (("graph_store",) if graph else ())
 
 
 @pytest.mark.integration
@@ -55,9 +65,10 @@ def test_boot_health_and_ready_shape() -> None:
     assert isinstance(body["ready"], bool)
     # Exact set: no dependency may be added to or dropped from /ready without
     # updating this contract (and the two sibling pins).
-    assert set(body["dependencies"]) == set(DEPENDENCIES)
+    expected = expected_dependencies()
+    assert set(body["dependencies"]) == set(expected)
     assert tuple(body["dependencies"]) == probe_names_for_current_mode()
-    for name in DEPENDENCIES:
+    for name in expected:
         dependency = body["dependencies"][name]
         assert dependency["name"] == name
         assert isinstance(dependency["reachable"], bool)
@@ -93,7 +104,7 @@ def test_ready_reports_all_dependencies_reachable() -> None:
         body = client.get("/ready").json()
 
     unreachable = [
-        name for name in DEPENDENCIES if not body["dependencies"][name]["reachable"]
+        name for name in expected_dependencies() if not body["dependencies"][name]["reachable"]
     ]
     if unreachable:
         details = {name: body["dependencies"][name] for name in unreachable}

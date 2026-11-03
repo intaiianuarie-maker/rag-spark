@@ -8,8 +8,7 @@
  *   2. length + SHA-256 equal at all three stages — pre-transport / at the
  *      upload handler / stored;
  *   3. multipart fields intact after the trip;
- *   4. oversize → clean reject with NO partial file;
- *   5. cancel → NO partial file;
+ *   4. cancel → NO partial file;
  *   plus the ordinary JSON upload path staying green (success criteria).
  *
  * Everything runs against the REAL `forward()` from `./route.ts` with only the
@@ -27,7 +26,7 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({ get: cookieGetMock })),
 }));
 
-import { forward, MAX_UPLOAD_BYTES } from "./handlers";
+import { forward } from "./handlers";
 
 /** Global fetch stub = the "network"; every test drives the real `forward()`. */
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
@@ -85,11 +84,6 @@ function chunkedUploadRequest(contentType: string): Request {
   } as RequestInit);
 }
 
-interface StoreOptions {
-  /** Keep the bytes in memory (needed to assert stored-stage identity). */
-  retain?: boolean;
-}
-
 /**
  * Stand-in for the backend document store: bytes streamed in are "on disk"
  * only after `commit()`, which the handler calls when — and only when — the
@@ -100,16 +94,11 @@ class UploadStore {
   readonly persisted: Buffer[] = [];
   commits = 0;
   inFlightBytes = 0;
-  private readonly retain: boolean;
   private chunks: Buffer[] = [];
-
-  constructor(options: StoreOptions = {}) {
-    this.retain = options.retain ?? true;
-  }
 
   add(chunk: Uint8Array): void {
     this.inFlightBytes += chunk.byteLength;
-    if (this.retain) this.chunks.push(Buffer.from(chunk));
+    this.chunks.push(Buffer.from(chunk));
   }
 
   commit(): void {
@@ -118,7 +107,7 @@ class UploadStore {
     this.chunks = [];
   }
 
-  /** Partial files left on disk (metric: must stay 0 on reject/cancel). */
+  /** Partial files left on disk (metric: must stay 0 on cancel). */
   partialFiles(): number {
     return this.persisted.length;
   }
@@ -146,7 +135,6 @@ function newEvidence(): UploadEvidence {
 function uploadStoreHandler(
   store: UploadStore,
   evidence: UploadEvidence,
-  accumulate = true,
 ): (input: RequestInfo, init?: RequestInit) => Promise<Response> {
   return async (_input, init) => {
     expect(init?.body).toBeInstanceOf(ReadableStream);
@@ -156,7 +144,7 @@ function uploadStoreHandler(
     const onAbort = (): void => {
       evidence.upstreamAborted = true;
       // Emulate undici's teardown of an aborted upload: cancel the body it
-      // was handed, which propagates through the bounded stream to the client.
+      // was handed, which propagates back to the client's request body.
       void reader.cancel().catch(() => undefined);
     };
     signal?.addEventListener("abort", onAbort);
@@ -165,7 +153,7 @@ function uploadStoreHandler(
         const { done, value } = await reader.read();
         if (done) break;
         if (evidence.firstChunk === undefined) evidence.firstChunk = value;
-        if (accumulate) evidence.received = Buffer.concat([evidence.received, Buffer.from(value)]);
+        evidence.received = Buffer.concat([evidence.received, Buffer.from(value)]);
         store.add(value);
       }
       if (signal?.aborted) {
@@ -344,68 +332,6 @@ describe("T-V1-013 upload byte-identity proof", () => {
     expect(sha256(stored[3].value)).toBe(sha256(HOSTILE_FILE_BYTES));
     expect(sha256(evidence.received)).toBe(sha256(HOSTILE_MULTIPART_BODY));
     expect(sha256(store.persisted[0])).toBe(sha256(HOSTILE_MULTIPART_BODY));
-  });
-
-  it("oversize (declared Content-Length) → clean 413, backend never contacted, no partial file", async () => {
-    const store = new UploadStore();
-    const request = uploadRequest(new Uint8Array(HOSTILE_MULTIPART_BODY), HOSTILE_CONTENT_TYPE, {
-      "content-length": String(MAX_UPLOAD_BYTES + 1),
-    });
-
-    const response = await forward(request, [...UPLOAD_PATH]);
-
-    expect(response.status).toBe(413);
-    const payload = (await response.json()) as { ok: boolean; error: { code: string } };
-    expect(payload.ok).toBe(false);
-    expect(payload.error.code).toBe("upload_too_large");
-    expect(backendFetch).not.toHaveBeenCalled(); // not a byte crossed, no contact
-    expect(store.inFlightBytes).toBe(0);
-    expect(store.partialFiles()).toBe(0); // metric: partial-file leaks = 0
-  });
-
-  it("oversize (actual count, lying/absent length) → clean 413, hostile bytes crossed but no partial file", async () => {
-    // 4 MiB of the hostile fixture repeated — no declared length, so only the
-    // bounded byte counter can stop it; chunk #7 (28 MiB) must never cross.
-    const hostileChunk = Buffer.alloc(4 * 1024 * 1024);
-    for (let i = 0; i < hostileChunk.byteLength; i += 1) {
-      hostileChunk[i] = HOSTILE_MULTIPART_BODY[i % HOSTILE_MULTIPART_BODY.byteLength];
-    }
-    let pulls = 0;
-    const source = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(hostileChunk); // infinite on purpose: only the cap stops it
-      },
-    });
-    const request = new Request(UPLOAD_URL, {
-      method: "POST",
-      body: source,
-      headers: { "content-type": HOSTILE_CONTENT_TYPE },
-      ...({ duplex: "half" } as object),
-    } as RequestInit);
-
-    const store = new UploadStore({ retain: false });
-    const evidence = newEvidence();
-    backendFetch.mockImplementationOnce(uploadStoreHandler(store, evidence, false));
-
-    const response = await forward(request, [...UPLOAD_PATH]);
-
-    expect(response.status).toBe(413);
-    const payload = (await response.json()) as { ok: boolean; error: { code: string } };
-    expect(payload.ok).toBe(false);
-    expect(payload.error.code).toBe("upload_too_large");
-    // Exactly the 6 full chunks under the cap crossed (24 MiB); #7 was cut.
-    expect(store.inFlightBytes).toBe(6 * 4 * 1024 * 1024);
-    // Handler never completed → nothing persisted, i.e. NO partial file.
-    expect(store.commits).toBe(0);
-    expect(store.partialFiles()).toBe(0); // metric: partial-file leaks = 0
-    // The bytes that did cross were the hostile ones (prefix + invalid byte).
-    expect(evidence.firstChunk).toBeDefined();
-    const firstChunk = Buffer.from(evidence.firstChunk as Uint8Array);
-    expect(firstChunk.equals(hostileChunk.subarray(0, firstChunk.byteLength))).toBe(true);
-    expect(firstChunk.includes(0xff)).toBe(true);
-    // Infinite source torn down early — a drained pipe would pull forever.
-    expect(pulls).toBeLessThan(15);
   });
 
   it("client cancel → 499, upstream aborted, inbound body torn down, no partial file", async () => {

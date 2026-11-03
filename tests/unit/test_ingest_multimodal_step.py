@@ -78,8 +78,6 @@ class _Env:
         monkeypatch.setattr("retrieval.adapters.qdrant_store.QdrantVectorStore", Qdrant)
         monkeypatch.setattr(ip, "_vision_workspace_sensitive", lambda _w: sensitive)
         monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-        monkeypatch.setattr(ip, "VISION_MAX_PAGES", 5)
-        monkeypatch.setattr(ip, "VISION_IMAGE_BUDGET_BYTES", 100_000)
 
     def run(self):
         return asyncio.run(
@@ -160,10 +158,29 @@ def test_wrong_dimension_embeds_nothing_and_never_upserts(monkeypatch, caplog) -
     assert len(failed) == 2
 
 
-def test_byte_budget_stops_rendering_extra_pages(monkeypatch) -> None:
+def test_every_page_is_embedded_with_no_page_or_byte_cap(monkeypatch) -> None:
+    monkeypatch.setattr(ip, "MULTIMODAL_MAX_PAGES", None)  # production: unlimited
+    monkeypatch.setattr(ip, "MULTIMODAL_MAX_IMAGE_BYTES", None)
+    env = _Env(monkeypatch, pages=8, png=lambda p: b"x" * (1024 * 1024))  # 8 MiB in total
+    assert env.run() == 8  # past the old 5-page cap and the old 5 MiB budget
+
+
+def test_multimodal_page_cap_embeds_only_the_first_pages(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(ip, "MULTIMODAL_MAX_PAGES", 2)
     env = _Env(monkeypatch, pages=5)
-    monkeypatch.setattr(ip, "VISION_IMAGE_BUDGET_BYTES", 120)  # 50-byte pngs
-    assert env.run() == 2
+    with caplog.at_level(logging.WARNING, logger=ip.logger.name):
+        assert env.run() == 2
+    assert [r.visual_citation.page for r in env.records] == [1, 2]
+    assert any(getattr(r, "event", "") == "multimodal_page_cap_reached" for r in caplog.records)
+
+
+def test_multimodal_image_cap_skips_oversized_pages(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(ip, "MULTIMODAL_MAX_IMAGE_BYTES", 1024)
+    env = _Env(monkeypatch, pages=2, png=lambda p: b"x" * 2048)
+    with caplog.at_level(logging.WARNING, logger=ip.logger.name):
+        assert env.run() == 0
+    assert env.embedded_urls == []
+    assert any(getattr(r, "event", "") == "multimodal_image_over_cap" for r in caplog.records)
 
 
 def test_qdrant_upsert_failure_is_logged_not_raised(monkeypatch, caplog) -> None:

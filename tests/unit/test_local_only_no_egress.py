@@ -28,6 +28,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+import httpx
 import pytest
 
 REPO = Path(__file__).resolve().parents[2]
@@ -46,6 +47,7 @@ from answer.models import Answer  # noqa: E402
 from app.ask.router import AskRequest, ask, load_model_config  # noqa: E402
 from core.auth import Principal, Role  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
+from harness_fakes import make_item  # noqa: E402
 from models.adapters.litellm_provider import (  # noqa: E402
     LiteLLMProvider,
     LLMProviderError,
@@ -336,7 +338,7 @@ def test_factory_keeps_the_cloud_path_for_cloud_models(monkeypatch):
     keeps the existing gateway default resolution, unchanged."""
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     monkeypatch.setenv("LITELLM_URL", _EXTERNAL_URL)
-    engine = _build_engine(monkeypatch, "gpt-4o-mini")
+    engine = _build_engine(monkeypatch, "google/gemma-4-26b-a4b-it:free")
     assert engine.llm.base_url == _EXTERNAL_URL
 
 
@@ -473,7 +475,184 @@ def test_provider_identity_labels_local_models(monkeypatch):
     never leaks host/URL/credential material."""
     monkeypatch.setenv(LOCAL_ONLY_MODEL_ENV, _LOCAL_MODEL)
     assert provider_identity(_LOCAL_MODEL) == "local"
-    for model in ("gpt-4o-mini", "openai/gpt-4o-mini", "unknown-model"):
+    for model in ("google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it:free", "unknown-model"):
         ident = provider_identity(model)
         assert ident in {"litellm", "openrouter"}
         assert "http" not in ident and "key" not in ident.lower()
+
+
+# ---------------------------------------------------------------------------
+# 5. B7: the ask path reads the model-config row. A sensitive row is served by
+#    the local transport or refused, with zero outbound calls. The spy sits on
+#    the httpx transports, so it records every request the real adapters send.
+# ---------------------------------------------------------------------------
+
+_OPERATOR_CLOUD_MODEL = "google/gemma-4-26b-a4b-it"
+_CANNED_CHAT = {
+    "id": "spy",
+    "choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}],
+    "usage": {},
+}
+_SENSITIVE_ROW = [{"routing_rules": [], "sensitive": True}]
+
+
+class _ConfigRows:
+    """Request session whose ``model_configs`` read returns the given rows."""
+
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> _ConfigRows:
+        return self
+
+    def mappings(self) -> _ConfigRows:
+        return self
+
+    def all(self) -> list[dict[str, Any]]:
+        return list(self._rows)
+
+
+class _UnreachableSession:
+    """Request session whose ``model_configs`` read cannot reach the database."""
+
+    async def execute(self, *_args: Any, **_kwargs: Any) -> None:
+        raise ConnectionRefusedError("database unreachable")
+
+
+class _EvidenceOrchestrator:
+    """Retrieval stand-in with one canned passage. Retrieval is not under test."""
+
+    async def retrieve(self, *, query, acl_scope, mode=None, **kwargs) -> list:
+        return [make_item("The confidential budget is 42 thousand euro.")]
+
+
+@pytest.fixture
+def egress_spy(monkeypatch) -> list[str]:
+    """Spy transport: records the URL of EVERY outbound httpx request.
+
+    Each request is answered in memory with a canned chat body, so nothing
+    leaves the process. Works whatever client the real adapters built.
+    """
+    calls: list[str] = []
+
+    async def _async_send(self, request):
+        calls.append(str(request.url))
+        return httpx.Response(200, json=_CANNED_CHAT, request=request)
+
+    def _sync_send(self, request):
+        calls.append(str(request.url))
+        return httpx.Response(200, json=_CANNED_CHAT, request=request)
+
+    monkeypatch.setattr(httpx.AsyncHTTPTransport, "handle_async_request", _async_send)
+    monkeypatch.setattr(httpx.HTTPTransport, "handle_request", _sync_send)
+    return calls
+
+
+@pytest.fixture
+def ask_wiring(monkeypatch, egress_spy):
+    """The REAL ask route and REAL engine factory, with retrieval canned.
+
+    Only retrieval and the Postgres chunk lookup are stood in. The LLM and the
+    embedding adapters are the real ones, and their HTTP goes through the spy.
+    The operator default is a cloud model behind a planted external gateway.
+    """
+    from answer import factory as factory_mod
+    from answer.adapters import postgres_lookup
+
+    class _NoDatabase:
+        def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+            raise RuntimeError("no database in unit tests")
+
+    monkeypatch.setattr(postgres_lookup, "PostgresChunkLookup", _NoDatabase)
+    monkeypatch.setattr(factory_mod, "create_orchestrator", lambda **_: _EvidenceOrchestrator())
+    monkeypatch.setattr(factory_mod, "HydratingOrchestrator", lambda inner, _hydrator: inner)
+    monkeypatch.delenv(WORKSPACE_MODEL_CONFIG_ENV, raising=False)
+    monkeypatch.delenv(LOCAL_ONLY_MODEL_ENV, raising=False)
+    monkeypatch.setenv("ANSWER_MODEL", _OPERATOR_CLOUD_MODEL)
+    monkeypatch.setenv("OPENROUTER_API_KEY", "sk-planted-external")
+    monkeypatch.setenv("LITELLM_URL", _EXTERNAL_URL)
+    return egress_spy
+
+
+def _post_to_ask(workspace_id: uuid.UUID, session: Any, path: str = "ask"):
+    """POST the real route, with the request session injected as its dependency."""
+    from app.auth.db import get_session
+    from app.authz.principal import get_principal
+    from app.main import create_app
+    from fastapi.testclient import TestClient
+
+    app = create_app()
+    app.dependency_overrides[get_principal] = lambda: _principal(workspace_id)
+    app.dependency_overrides[get_session] = lambda: session
+    body = {"query": "What is the confidential budget?"}
+    return TestClient(app).post(f"/v1/workspaces/{workspace_id}/{path}", json=body)
+
+
+def _cloud_calls(urls: list[str]) -> list[str]:
+    return [url for url in urls if not is_local_endpoint(url)]
+
+
+@pytest.mark.parametrize(
+    "session",
+    [_ConfigRows(_SENSITIVE_ROW), _UnreachableSession()],
+    ids=["sensitive-row", "database-unreachable"],
+)
+def test_sensitive_workspace_refuses_with_zero_outbound_calls(ask_wiring, session):
+    """B7, fail closed: a sensitive row, or a store we cannot read, with no
+    explicitly allowed local model is a 503, and the spy sees nothing at all."""
+    response = _post_to_ask(uuid.uuid4(), session)
+    assert ask_wiring == [], f"outbound calls under the sensitive policy: {ask_wiring}"
+    assert response.status_code == 503, response.text
+    assert response.json()["detail"]["error"] == "llm_unavailable"
+
+
+def test_sensitive_workspace_is_served_only_by_the_local_transport(ask_wiring, monkeypatch):
+    """B7, local route: a sensitive row with an explicitly allowed local model is
+    answered on the local endpoint, and no cloud host is ever contacted."""
+    monkeypatch.setenv(LOCAL_ONLY_MODEL_ENV, _LOCAL_MODEL)
+    monkeypatch.setenv(LOCAL_GATEWAY_URL_ENV, "http://127.0.0.1:11434/v1")
+    response = _post_to_ask(uuid.uuid4(), _ConfigRows(_SENSITIVE_ROW))
+    assert response.status_code == 200, response.text
+    assert ask_wiring, "the local model must actually be called"
+    assert _cloud_calls(ask_wiring) == []
+    assert all(url.startswith("http://127.0.0.1:11434/") for url in ask_wiring)
+
+
+def test_sensitive_workspace_stream_refuses_with_zero_outbound_calls(ask_wiring):
+    """B7, the streaming route: the same fail-closed rule, as an SSE error."""
+    response = _post_to_ask(uuid.uuid4(), _ConfigRows(_SENSITIVE_ROW), path="ask/stream")
+    assert ask_wiring == [], f"outbound calls under the sensitive policy: {ask_wiring}"
+    assert response.status_code == 503, response.text
+    assert "LLM_UNAVAILABLE" in response.text
+
+
+def test_missing_row_keeps_the_default_cloud_path(ask_wiring):
+    """Failure path, row missing: a workspace that never configured a model has no
+    row, so it keeps the operator default exactly as before. This is also the
+    positive control: it proves the spy really records a cloud call."""
+    response = _post_to_ask(uuid.uuid4(), _ConfigRows([]))
+    assert response.status_code == 200, response.text
+    assert _cloud_calls(ask_wiring), "the default path must reach the cloud model"
+
+
+async def test_store_loader_fails_closed_and_env_can_only_tighten(monkeypatch):
+    from models.router_config import load_workspace_config_from_store
+
+    ws = str(uuid.uuid4())
+    monkeypatch.delenv(WORKSPACE_MODEL_CONFIG_ENV, raising=False)
+    plain = [{"routing_rules": [], "sensitive": False}]
+    # Failure path: the DB is unreachable, so the workspace is treated as sensitive.
+    unreachable = await load_workspace_config_from_store(_UnreachableSession(), ws)
+    assert unreachable is not None and unreachable.sensitive is True
+    # Row missing and no env entry: the default (None), as before.
+    assert await load_workspace_config_from_store(_ConfigRows([]), ws) is None
+    # Any sensitive row wins over a plain one; a plain row alone stays plain.
+    mixed = [*plain, {"routing_rules": [], "sensitive": True}]
+    assert (await load_workspace_config_from_store(_ConfigRows(mixed), ws)).sensitive is True
+    assert (await load_workspace_config_from_store(_ConfigRows(plain), ws)).sensitive is False
+    # The env opt-in can tighten a plain row, and applies when there is no row.
+    monkeypatch.setenv(WORKSPACE_MODEL_CONFIG_ENV, json.dumps({ws: {"sensitive": True}}))
+    assert (await load_workspace_config_from_store(_ConfigRows(plain), ws)).sensitive is True
+    assert (await load_workspace_config_from_store(_ConfigRows([]), ws)).sensitive is True
+    # No session (a direct call): the env loader's answer, unchanged.
+    assert (await load_workspace_config_from_store(None, ws)).sensitive is True

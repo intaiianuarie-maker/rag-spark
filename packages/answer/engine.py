@@ -62,6 +62,7 @@ from retrieval.interfaces import (
     RetrievalMode,
     RetrievalOrchestrator,
     RetrievedItem,
+    SearchFilter,
 )
 from retrieval.orchestrator import RetrievalResult, RetrievalStatus, pop_retrieval_outcome
 
@@ -484,7 +485,12 @@ class AnswerEngine:
 
     @trace_answer
     async def answer(
-        self, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
+        self,
+        *,
+        query: str,
+        acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        language: str | None = None,
     ) -> Answer:
         """Retrieve, generate, parse and verify a grounded answer.
 
@@ -492,13 +498,14 @@ class AnswerEngine:
         it is passed straight through to ``orchestrator.retrieve`` so callers
         can opt into ``GRAPH``/``HYBRID_GRAPH`` once ``GRAPH_MODE`` enables the
         graph leg (G4). ACL-before-ranking and citation verification apply to
-        every mode.
+        every mode. ``language`` applies the same filter as search (``None`` = no filter).
         """
         try:
             items = await self.orchestrator.retrieve(
                 query=query,
                 acl_scope=acl_scope,
                 mode=mode,
+                extra_filter=SearchFilter(language=language) if language else None,
                 context_top_k=self.max_context_items,
             )
         except CanonicalStoreUnavailable as exc:
@@ -595,7 +602,9 @@ class AnswerEngine:
             raise
 
         try:
-            parsed = parse_model_output(result.text)
+            parsed = parse_model_output(
+                result.text, known_ids=[i.chunk_id for i in items if i.chunk_id]
+            )
         except ValueError:
             # Never fabricate structure or return raw prose as a factual answer.
             # T-V1-051: log the registry's safe PARSE_FALLBACK message (never
@@ -667,6 +676,26 @@ class AnswerEngine:
             logger.warning(
                 "stage11_integrity_check_failed",
                 extra={"event": "stage11_integrity_check_failed", "error_type": type(exc).__name__},
+            )
+            # A5: Stage 11 exception -> abstain. Citation-integrity failure
+            # means we cannot trust any citation; never publish as verified.
+            return await self._finalize(
+                Answer(
+                    answer="I cannot answer this question based on the provided documents.",
+                    status=AnswerStatus.INSUFFICIENT_EVIDENCE,
+                    reason_code="CITATION_INVALID",
+                    reason="Citation integrity check failed during verification; no claims can be trusted.",
+                    confidence=Confidence(
+                        level=ConfidenceLevel.LOW,
+                        basis="Stage 11 citation integrity check failed",
+                    ),
+                    trace_id=request_id_ctx.get(),
+                    claims=[],
+                    citations=[],
+                    citation_integrity=None,
+                ),
+                items=items,
+                outcome=outcome if "outcome" in locals() else None,
             )
 
         try:
@@ -799,7 +828,8 @@ class AnswerEngine:
                 integrity_report=stage11_report,
                 verifier=self.semantic_verifier,
             )
-            verifier_model_id = getattr(self.semantic_verifier, "_model", self.verifier_model)
+            # A1: verifier_model reports the serving generation model, not the Gemma verifier model.
+            verifier_model_id = self.model
             gate_result = await evaluate_publication_gate(
                 claims=claims,
                 integrity_report=stage11_report,
@@ -911,7 +941,7 @@ class AnswerEngine:
             pub_status = (
                 gate_result.status.value
                 if gate_result
-                else ("verified" if verified else None)
+                else None  # A5: never claim "verified" without gate validation
             )
             return await self._finalize(
                 Answer(
@@ -948,7 +978,7 @@ class AnswerEngine:
         pub_status = (
             gate_result.status.value
             if gate_result
-            else ("verified" if citations else None)
+            else None  # A5: never claim "verified" without gate validation
         )
         return await self._finalize(
             Answer(
@@ -1165,7 +1195,12 @@ class AnswerEngine:
 
     @trace_stream
     async def stream(
-        self, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
+        self,
+        *,
+        query: str,
+        acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        language: str | None = None,
     ) -> AsyncIterator[tuple[str, Any]]:
         """Yield ``("token", text_chunk)`` events then a final ``("verified", answer)`` event.
 
@@ -1191,6 +1226,7 @@ class AnswerEngine:
                 query=query,
                 acl_scope=acl_scope,
                 mode=mode,
+                extra_filter=SearchFilter(language=language) if language else None,
                 context_top_k=self.max_context_items,
             )
         except CanonicalStoreUnavailable as exc:
@@ -1300,7 +1336,9 @@ class AnswerEngine:
 
         # --- Parse + Verify (same contract as .answer) --------------------
         try:
-            parsed = parse_model_output(raw_text)
+            parsed = parse_model_output(
+                raw_text, known_ids=[i.chunk_id for i in items if i.chunk_id]
+            )
         except ValueError:
             logger.warning(
                 "answer_parse_fallback",
@@ -1545,7 +1583,8 @@ class AnswerEngine:
                 integrity_report=stage11_report,
                 verifier=self.semantic_verifier,
             )
-            verifier_model_id = getattr(self.semantic_verifier, "_model", self.verifier_model)
+            # A1: verifier_model reports the serving generation model, not the Gemma verifier model.
+            verifier_model_id = self.model
             gate_result = await evaluate_publication_gate(
                 claims=claims,
                 integrity_report=stage11_report,
@@ -1670,7 +1709,7 @@ class AnswerEngine:
             pub_status = (
                 gate_result.status.value
                 if gate_result
-                else ("verified" if verified else None)
+                else None  # A5: never claim "verified" without gate validation
             )
             yield (
                 "verified",
@@ -1713,7 +1752,7 @@ class AnswerEngine:
         pub_status = (
             gate_result.status.value
             if gate_result
-            else ("verified" if citations else None)
+            else None  # A5: never claim "verified" without gate validation
         )
         yield (
             "verified",

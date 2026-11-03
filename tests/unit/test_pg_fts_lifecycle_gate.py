@@ -39,6 +39,21 @@ def _normalise(sql: str) -> str:
     return re.sub(r"\s+", " ", sql).strip().lower()
 
 
+async def _org_id(session: Any) -> str:
+    """An existing organization, or a new one on a fresh (CI) database."""
+    from sqlalchemy import text
+
+    found = (await session.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar()
+    if found is not None:
+        return str(found)
+    org = str(uuid.uuid4())
+    await session.execute(
+        text("INSERT INTO organizations (id, name) VALUES (:id, 't-i03')"), {"id": org}
+    )
+    await session.commit()
+    return org
+
+
 async def _seed_lifecycle(
     session: Any,
     *,
@@ -165,7 +180,7 @@ async def test_retained_tombstone_row_is_not_returned_or_ranked(session_factory)
     from sqlalchemy import text
 
     async with session_factory() as s:
-        org_id = str((await s.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one())
+        org_id = await _org_id(s)
 
     doc = str(uuid.uuid4())
     ver = str(uuid.uuid4())
@@ -192,10 +207,9 @@ async def test_retained_tombstone_row_is_not_returned_or_ranked(session_factory)
 
 async def test_superseded_version_row_is_not_returned_or_ranked(session_factory) -> None:
     """A row for a SUPERSEDED version of a live document must not surface."""
-    from sqlalchemy import text
 
     async with session_factory() as s:
-        org_id = str((await s.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one())
+        org_id = await _org_id(s)
 
     doc = str(uuid.uuid4())
     ver_old, ver_new = str(uuid.uuid4()), str(uuid.uuid4())
@@ -217,10 +231,9 @@ async def test_live_row_still_returned_so_the_gate_does_not_over_block(
     session_factory,
 ) -> None:
     """The current version of a live document must still rank."""
-    from sqlalchemy import text
 
     async with session_factory() as s:
-        org_id = str((await s.execute(text("SELECT id FROM organizations LIMIT 1"))).scalar_one())
+        org_id = await _org_id(s)
 
     doc = str(uuid.uuid4())
     ver_old, ver_new = str(uuid.uuid4()), str(uuid.uuid4())

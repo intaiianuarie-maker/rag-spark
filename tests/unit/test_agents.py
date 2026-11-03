@@ -171,7 +171,7 @@ def _sample_context() -> RunContext:
         workspace_id="ws-0001",
         principal_id="user-0001",
         authz_policy_revision="pol-0001",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(),
         deadline=datetime.now(UTC),
         allowed_tools=["calculator"],
@@ -987,7 +987,7 @@ def test_knowledge_search_runtime_blocks_model_supplied_workspace_id() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["knowledge_search"],
@@ -1014,7 +1014,7 @@ def test_knowledge_search_strict_schema_rejects_extra_fields() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["knowledge_search"],
@@ -1265,7 +1265,7 @@ def test_knowledge_read_strict_schema_and_runtime_block() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["knowledge_read"],
@@ -1302,7 +1302,7 @@ def test_knowledge_read_runtime_blocks_workspace_id_override() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["knowledge_read"],
@@ -1398,7 +1398,7 @@ def test_unknown_action_blocked_never_exec() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["calculator"],
@@ -1431,7 +1431,7 @@ def test_fuzz_10kb_garbage_blocked_no_hang() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["calculator"],
@@ -1478,7 +1478,7 @@ def test_prose_never_persisted_as_evidence() -> None:
         workspace_id="ws-allowed",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["calculator"],
@@ -1629,7 +1629,7 @@ def test_tool_timeout_retries_n_then_failed_attempts_persisted() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=10, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["flaky_timeout"],
@@ -1691,7 +1691,7 @@ def test_tool_not_allowed_never_retried_attempts_one() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=10, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["allowed_tool"],
@@ -1800,7 +1800,7 @@ def test_usage_survives_simulated_retry_and_cap_still_enforced() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini", max_output_tokens=5),  # noqa: E501
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free", max_output_tokens=5),  # noqa: E501
         budget=small_budget,
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["calculator"],
@@ -1868,7 +1868,7 @@ def test_zero_model_calls_after_deadline() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tokens=100000, max_tool_calls=5, max_wall_clock_s=300),
         deadline=past_deadline,
         allowed_tools=["calculator"],
@@ -1895,7 +1895,7 @@ def test_spend_after_exceeded_refused_overspend_zero() -> None:
         id="run-t306-exceeded",
         workspace_id="ws-1",
         goal="test",
-        model="gpt-4o-mini",
+        model="google/gemma-4-26b-a4b-it:free",
         status=AgentRunStatus.MAX_STEPS_EXCEEDED,
         total_tokens=100,
         steps=[],
@@ -1907,7 +1907,7 @@ def test_spend_after_exceeded_refused_overspend_zero() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tokens=10, max_tool_calls=1, max_wall_clock_s=300),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["calculator"],
@@ -1960,7 +1960,7 @@ def test_mid_tool_cancel_stops_loop_no_further_dispatches() -> None:
         id=run_id,
         workspace_id="ws-1",
         goal="cancel mid tool",
-        model="gpt-4o-mini",
+        model="google/gemma-4-26b-a4b-it:free",
         status=AgentRunStatus.RUNNING,
         created_at=datetime.now(UTC).isoformat(),
     )
@@ -2001,7 +2001,7 @@ def test_mid_tool_cancel_stops_loop_no_further_dispatches() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="pol-1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=10, max_tool_calls=10, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["cancel_tool"],
@@ -2059,7 +2059,7 @@ def test_cancel_after_completed_is_clean_noop_byte_identical() -> None:
         id="run-noop",
         workspace_id="ws-1",
         goal="test",
-        model="gpt-4o-mini",
+        model="google/gemma-4-26b-a4b-it:free",
         status=AgentRunStatus.COMPLETED,
         steps=[
             AgentStep(
@@ -2090,7 +2090,7 @@ def test_cancel_after_completed_is_clean_noop_byte_identical() -> None:
         id="run-noop2",
         workspace_id="ws-1",
         goal="test",
-        model="gpt-4o-mini",
+        model="google/gemma-4-26b-a4b-it:free",
         status=AgentRunStatus.COMPLETED,
         created_at=datetime.now(UTC).isoformat(),
     )
@@ -2226,7 +2226,7 @@ def test_approval_scoped_cross_run_and_cross_principal_both_fail() -> None:
         workspace_id="ws-1",
         principal_id="P",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],
@@ -2258,7 +2258,7 @@ def test_approval_scoped_cross_run_and_cross_principal_both_fail() -> None:
         workspace_id="ws-1",
         principal_id="Q",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],
@@ -2311,7 +2311,7 @@ def test_unapproved_write_never_executes() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],
@@ -2365,7 +2365,7 @@ def test_approved_write_resumes_and_succeeds() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],
@@ -2421,7 +2421,7 @@ def test_resume_rechecks_acl_and_policy_revision_stale_approval_reblocks() -> No
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],
@@ -2447,7 +2447,7 @@ def test_resume_rechecks_acl_and_policy_revision_stale_approval_reblocks() -> No
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="rev2",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],
@@ -2694,12 +2694,12 @@ def test_adapter_state_delegates_to_runstate_transition_to() -> None:
         workspace_id="ws-1",
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
     )
     run = AgentRun(
-        id=ctx.run_id, workspace_id=ctx.workspace_id, goal="test", model="gpt-4o-mini", created_at=datetime.now(UTC).isoformat()  # noqa: E501
+        id=ctx.run_id, workspace_id=ctx.workspace_id, goal="test", model="google/gemma-4-26b-a4b-it:free", created_at=datetime.now(UTC).isoformat()  # noqa: E501
     )
     lg_state = StateAdapter.build_state(state, ctx, run)
     assert lg_state["run_state"] is state
@@ -2925,7 +2925,7 @@ def test_checkpoint_written_on_every_approval_and_terminal() -> None:
             workspace_id="ws-1",
             principal_id="user-1",
             authz_policy_revision="rev1",
-            model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+            model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
             budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
             deadline=datetime.now(UTC) + timedelta(seconds=30),
             allowed_tools=["publish"],
@@ -3006,7 +3006,7 @@ def test_resume_from_checkpoint_trace_equality_kill_and_resume() -> None:
             workspace_id="ws-1",
             principal_id="user-1",
             authz_policy_revision="rev1",
-            model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+            model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
             budget=RunBudget(max_steps=10, max_tool_calls=10, max_tokens=100000),
             deadline=datetime.now(UTC) + timedelta(seconds=30),
             allowed_tools=["publish", "calculator"],
@@ -3118,7 +3118,7 @@ def test_checkpoint_persists_runstate_usage_budget_approvals() -> None:
             workspace_id="ws-1",
             principal_id="user-1",
             authz_policy_revision="rev1",
-            model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini", max_output_tokens=5),  # noqa: E501
+            model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free", max_output_tokens=5),  # noqa: E501
             budget=RunBudget(max_steps=5, max_tool_calls=3, max_tokens=50),
             deadline=datetime.now(UTC) + timedelta(seconds=30),
             allowed_tools=["publish"],
@@ -3269,7 +3269,7 @@ def test_worker_killed_mid_run_resumes_identically_via_checkpoint_lease() -> Non
                 workspace_id="ws-1",
                 principal_id="user-1",
                 authz_policy_revision="rev1",
-                model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),  # noqa: E501
+                model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),  # noqa: E501
                 budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
                 deadline=datetime.now(UTC) + timedelta(seconds=30),
                 allowed_tools=["publish", "calculator"],
@@ -3313,7 +3313,7 @@ def test_worker_killed_mid_run_resumes_identically_via_checkpoint_lease() -> Non
                 workspace_id="ws-1",
                 principal_id="user-1",
                 authz_policy_revision="rev1",
-                model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),  # noqa: E501
+                model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),  # noqa: E501
                 budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
                 deadline=datetime.now(UTC) + timedelta(seconds=30),
                 allowed_tools=["publish", "calculator"],
@@ -3873,7 +3873,7 @@ def test_planner_free_model_only_paid_blocked_never_substituted() -> None:
         plan = await planner_ok.create_plan("topic", run_id="run-free")
         assert len(plan.perspectives) <= MAX_PERSPECTIVES
         assert llm.calls[0] == "nvidia/nemotron-3.5-lightning:free"
-        planner_paid = StormPlanner(llm=llm, plan_store=store, model_name="gpt-4o-mini", max_output_tokens=2000)  # noqa: E501
+        planner_paid = StormPlanner(llm=llm, plan_store=store, model_name="unlisted/arbitrary-paid-model", max_output_tokens=2000)  # noqa: E501
         try:
             await planner_paid.create_plan("topic", run_id="run-paid")
             raise AssertionError("paid model must be BLOCKED")
@@ -4541,7 +4541,7 @@ def test_failure_tool_not_allowed_surface() -> None:
             workspace_id="ws-1",
             principal_id="user-1",
             authz_policy_revision="rev1",
-            model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+            model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
             budget=RunBudget(max_steps=5, max_tokens=100000, max_tool_calls=5),
             deadline=datetime.now(UTC) + timedelta(seconds=30),
             allowed_tools=["publish"],

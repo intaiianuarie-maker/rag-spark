@@ -62,8 +62,6 @@ class _Env:
         monkeypatch.setattr(pdfium_render, "render_pdf_page", render)
         monkeypatch.setattr(ip, "_OpenRouterVisionTransport", Transport)
         monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-        monkeypatch.setattr(ip, "VISION_MAX_PAGES", 5)
-        monkeypatch.setattr(ip, "VISION_IMAGE_BUDGET_BYTES", 10_000)
 
     def run(self, sensitive=False):
         return asyncio.run(
@@ -98,18 +96,31 @@ def test_one_failing_page_is_skipped_others_kept(monkeypatch, caplog) -> None:
     assert len(failed) == 1 and failed[0].page == 2
 
 
-def test_budget_stop_keeps_earlier_pages_and_logs_skipped(monkeypatch, caplog) -> None:
-    _Env(monkeypatch, pages=5)
-    monkeypatch.setattr(ip, "VISION_IMAGE_BUDGET_BYTES", 250)
+def test_every_lost_page_is_sent_with_no_page_or_byte_cap(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(ip, "VISION_MAX_PAGES", None)  # production: unlimited
+    monkeypatch.setattr(ip, "VISION_MAX_IMAGE_BYTES", None)
+    env = _Env(monkeypatch, pages=8, png_size=1024 * 1024)  # 8 MiB: past the old 5 MiB budget
     with caplog.at_level(logging.INFO, logger=ip.logger.name):
-        elements = asyncio.run(
-            ip._vision_elements_for_pdf(
-                b"%PDF", document=None, workspace_id=WS, sensitive=False, pages=range(1, 6)
-            )
-        )
+        elements = env.run()
+    assert [e.page for e in elements] == list(range(1, 9))  # past the old 5-page cap
+    assert _events(caplog, "vision_budget_stop") == []
+    assert not hasattr(ip, "VISION_IMAGE_BUDGET_BYTES")
+
+
+def test_vision_page_cap_skips_extra_pages_and_logs(monkeypatch, caplog) -> None:
+    monkeypatch.setattr(ip, "VISION_MAX_PAGES", 2)
+    env = _Env(monkeypatch, pages=4)
+    with caplog.at_level(logging.WARNING, logger=ip.logger.name):
+        elements = env.run()
     assert [e.page for e in elements] == [1, 2]
-    stop = _events(caplog, "vision_budget_stop")
-    assert len(stop) == 1 and stop[0].skipped_pages == [3, 4, 5]
+    assert len(_events(caplog, "vision_page_cap_reached")) == 1
+
+
+def test_vision_image_cap_skips_oversized_pages_without_a_call(monkeypatch) -> None:
+    monkeypatch.setattr(ip, "VISION_MAX_IMAGE_BYTES", 1024)
+    env = _Env(monkeypatch, pages=2, png_size=4096)
+    assert env.run() == []
+    assert env.calls == []  # nothing was sent to OpenRouter
 
 
 def test_text_has_model_generated_prefix_and_vision_metadata(monkeypatch) -> None:

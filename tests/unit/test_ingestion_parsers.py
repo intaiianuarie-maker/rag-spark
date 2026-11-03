@@ -37,7 +37,6 @@ pytestmark = pytest.mark.unit
 DOCX_MIME = (
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"
 )
-MAX = 25 * 1024 * 1024
 
 
 def _fixture(fixtures_dir: Path, name: str) -> bytes:
@@ -85,11 +84,6 @@ async def test_mime_spoofed_html_as_pdf_raises() -> None:
 async def test_empty_document_rejected_by_parser() -> None:
     with pytest.raises(EmptyDocumentError):
         await CSV.parse(b"", mime_type="text/csv")
-
-
-async def test_oversized_document_rejected_by_parser() -> None:
-    with pytest.raises(DocumentTooLargeError):
-        await TEXT.parse(b"x" * (MAX + 1), mime_type="text/plain")
 
 
 # ---- direct element assertions (beyond the manifest) ------------------------

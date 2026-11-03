@@ -15,16 +15,15 @@ import logging
 from enum import StrEnum
 from typing import Any, Literal
 
-import httpx
 from pydantic import BaseModel, Field
 
+from .adapters.openrouter_transport import NETWORK_ERRORS
 from .interfaces import MessageRole
 
 logger = logging.getLogger("knowledge_os.models.vision")
 
 DEFAULT_VISION_FREE_MODEL = "google/gemma-4-26b-a4b-it:free"
 DEFAULT_VISION_PAID_MODEL = "google/gemma-4-26b-a4b-it"
-MAX_IMAGE_PAYLOAD_BYTES = 5 * 1024 * 1024  # 5 MiB
 
 
 class VisionPolicyError(RuntimeError):
@@ -74,11 +73,6 @@ class ImageContentPart(BaseModel):
         bbox: BoundingBox | None = None,
         detail: ImageDetail = ImageDetail.AUTO,
     ) -> ImageContentPart:
-        if len(data) > MAX_IMAGE_PAYLOAD_BYTES:
-            raise ValueError(
-                f"Image payload size ({len(data)} bytes) exceeds maximum "
-                f"allowed ({MAX_IMAGE_PAYLOAD_BYTES} bytes)"
-            )
         b64 = base64.b64encode(data).decode("utf-8")
         data_uri = f"data:{media_type};base64,{b64}"
         return cls(
@@ -211,9 +205,7 @@ def _free_route_exhausted(exc: Exception) -> bool:
     )
     if isinstance(status, int):
         return status in (402, 429) or status >= 500
-    return isinstance(
-        exc, (TimeoutError, ConnectionError, httpx.TimeoutException, httpx.TransportError)
-    )
+    return isinstance(exc, NETWORK_ERRORS)
 
 
 class OpenRouterVisionAdapter:
@@ -247,7 +239,7 @@ class OpenRouterVisionAdapter:
             target_model = self.paid_model
             is_paid = True
 
-        # Check image payload limits across all parts
+        # Rough image byte count for telemetry only; there is no size cap.
         total_image_bytes = 0
         visual_citations: list[VisualCitation] = []
         for msg in request.messages:
@@ -266,11 +258,6 @@ class OpenRouterVisionAdapter:
                                 source_url=part.image_url.get("url"),
                             )
                         )
-
-        if total_image_bytes > MAX_IMAGE_PAYLOAD_BYTES * 2:
-            raise VisionPolicyError(
-                f"Total image payload ({total_image_bytes} bytes) exceeds envelope budget."
-            )
 
         # Execute through transport if configured, else mock/offline fallback
         if self.transport is not None:

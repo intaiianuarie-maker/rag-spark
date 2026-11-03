@@ -2,7 +2,7 @@
 
 Verifies:
 - TextContentPart and ImageContentPart modeling, base64 data URIs, and detail levels
-- Maximum image payload limit enforcement
+- Image payloads of any size are accepted (no per-image size cap)
 - MultimodalMessage serialization to OpenAI/OpenRouter compatible format
 - to_content_parts migration helper from strings/dicts
 - VisualCitation extraction from image parts with page/figure/bbox provenance
@@ -62,10 +62,10 @@ def test_text_and_image_content_parts() -> None:
     assert img_part.image_url["url"].startswith("data:image/png;base64,")
 
 
-def test_image_payload_limit_enforced() -> None:
-    large_bytes = b"x" * (6 * 1024 * 1024)  # 6 MiB (exceeds 5 MiB ceiling)
-    with pytest.raises(ValueError, match="exceeds maximum allowed"):
-        ImageContentPart.from_bytes(large_bytes)
+def test_large_image_payload_is_not_refused() -> None:
+    large_bytes = b"x" * (6 * 1024 * 1024)  # 6 MiB: past the old 5 MiB ceiling
+    part = ImageContentPart.from_bytes(large_bytes)
+    assert part.image_url["url"].startswith("data:image/png;base64,")
 
 
 def test_multimodal_message_serialization() -> None:

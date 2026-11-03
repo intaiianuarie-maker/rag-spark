@@ -8,6 +8,7 @@ and produces an ExtractionReport with provenance.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import time
 from io import BytesIO
@@ -69,13 +70,39 @@ def classify_pdf_pages(data: bytes) -> dict[int, PageClassification]:
     return classifications
 
 
+def _merge_reading_order(
+    native: list[DocumentElement], ocr: list[DocumentElement]
+) -> list[DocumentElement]:
+    def page_of(el: DocumentElement) -> int:
+        return el.page if el.page is not None else 0
+
+    merged: list[DocumentElement] = []
+    for page in sorted({page_of(e) for e in native} | {page_of(e) for e in ocr}):
+        nat = [e for e in native if page_of(e) == page]
+        # OCR lines keep Tesseract's block order (column by column). Each one is placed
+        # against native lines only, never against other OCR lines, so columns stay whole.
+        slots: dict[int, list[DocumentElement]] = {}
+        for o in (e for e in ocr if page_of(e) == page):
+            pos = len(nat)
+            if o.bbox is not None:
+                pos = next(
+                    (i for i, n in enumerate(nat) if n.bbox is not None and n.bbox.y0 > o.bbox.y0),
+                    len(nat),
+                )
+            slots.setdefault(pos, []).append(o)
+        for i, n in enumerate(nat):
+            merged.extend(slots.get(i, []))
+            merged.append(n)
+        merged.extend(slots.get(len(nat), []))
+    return merged
+
+
 async def process_pdf_with_ocr(
     data: bytes,
     *,
     languages: str = DEFAULT_LANGUAGES,
     dpi: int = 300,
     psm: int = DEFAULT_PSM,
-    max_pages: int = 50,
     timeout_per_page: float = DEFAULT_TIMEOUT_SECONDS,
     filename: str | None = None,
 ) -> tuple[list[DocumentElement], ExtractionReport]:
@@ -104,6 +131,7 @@ async def process_pdf_with_ocr(
             uncertain_pages.append(page_num)
 
     all_elements: list[DocumentElement] = []
+    ocr_elements: list[DocumentElement] = []
     successful_ocr_pages: list[int] = []
     failed_pages: list[int] = []
 
@@ -127,16 +155,20 @@ async def process_pdf_with_ocr(
             ocr_pages_todo.sort()
             native_pages.clear()
 
-    # 2. Process OCR pages
-    engine_ver = get_tesseract_version()
-    for page_num in ocr_pages_todo[:max_pages]:
+    # 2. Process OCR pages. PDFium and Tesseract block, so each page runs in a worker
+    # thread (one at a time) and the event loop keeps renewing the job lease.
+    # ponytail: not killable; child-process isolation (Tesseract plan §7) is the upgrade path.
+    engine_ver = await asyncio.to_thread(get_tesseract_version)
+    for page_num in ocr_pages_todo:
         try:
-            png_bytes, w_pts, h_pts, pix_w, pix_h = render_pdf_page(
+            png_bytes, w_pts, h_pts, pix_w, pix_h = await asyncio.to_thread(
+                render_pdf_page,
                 data,
                 page_num,
                 dpi=dpi,
             )
-            page_result = ocr_page_image(
+            page_result = await asyncio.to_thread(
+                ocr_page_image,
                 png_bytes,
                 page_number=page_num,
                 width_pts=w_pts,
@@ -149,24 +181,17 @@ async def process_pdf_with_ocr(
             )
             if page_result.words:
                 successful_ocr_pages.append(page_num)
-                all_elements.extend(page_result.elements)
+                ocr_elements.extend(page_result.elements)
             else:
                 # No text recognized on this image page
                 failed_pages.append(page_num)
         except Exception:
             failed_pages.append(page_num)
 
-    # If document exceeded max_pages limit for OCR
-    if len(ocr_pages_todo) > max_pages:
-        failed_pages.extend(ocr_pages_todo[max_pages:])
-
-    # 3. Sort merged elements in reading order: page number, then vertical coordinate
-    def _element_sort_key(el: DocumentElement) -> tuple[int, float]:
-        page = el.page if el.page is not None else 0
-        y0 = el.bbox.y0 if el.bbox is not None else 0.0
-        return (page, y0)
-
-    all_elements.sort(key=_element_sort_key)
+    # 3. Merge in reading order: page-local, native text keeps source order,
+    # OCR elements slot in by y only against native elements that have a bbox;
+    # otherwise they stay after the native text (stable by original index).
+    all_elements = _merge_reading_order(all_elements, ocr_elements)
 
     # 4. Determine overall detected languages
     sample_text = " ".join(el.text for el in all_elements[:20])

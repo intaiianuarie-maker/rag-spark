@@ -1102,3 +1102,59 @@ async def test_stream_endpoint_without_model_uses_operator_default(monkeypatch, 
     assert len(events) == 1
     assert events[0].reason == "operator_default"
     assert events[0].model == "operator-model-a"
+
+
+async def test_stream_language_becomes_retrieval_filter():
+    engine = _make_engine()
+    seen: dict = {}
+
+    async def recording_retrieve(**kwargs):
+        seen["extra_filter"] = kwargs.get("extra_filter")
+        return engine.orchestrator.items
+
+    engine.orchestrator.retrieve = recording_retrieve
+    async for _event in engine.stream(
+        query="Revenue?",
+        acl_scope=ACLScope(workspace_ids=["ws-1"]),
+        language="en",
+    ):
+        pass
+    assert seen["extra_filter"].language == "en"
+
+
+@pytest.mark.asyncio
+async def test_ask_and_stream_routes_forward_language(monkeypatch):
+    """Ask takes the same optional language filter as search and hands it to the engine."""
+    engine, _seen = _install_fake_factory(monkeypatch, _full_answer())
+    monkeypatch.setenv("ANSWER_MODEL", "operator-model-a")
+    monkeypatch.delenv("WORKSPACE_MODEL_CONFIG", raising=False)
+    received: dict = {}
+    real_answer, real_stream = engine.answer, engine.stream
+
+    async def answer_spy(**kwargs):
+        received.setdefault("answer", []).append(kwargs.get("language"))
+        return await real_answer(**kwargs)
+
+    def stream_spy(**kwargs):
+        received.setdefault("stream", []).append(kwargs.get("language"))
+        return real_stream(**kwargs)
+
+    engine.answer = answer_spy
+    engine.stream = stream_spy
+
+    from app.ask.router import AskRequest, AskStreamRequest, ask, ask_stream
+
+    workspace_id = uuid.uuid4()
+    principal = _owner(workspace_id)
+    await ask(workspace_id, AskRequest(query="When is payment due?", language="en"), principal)
+    await ask(workspace_id, AskRequest(query="When is payment due?"), principal)
+    response = await ask_stream(
+        workspace_id,
+        AskStreamRequest(query="When is payment due?", language="en"),
+        principal=principal,
+        request=_FakeRequest(),
+    )
+    async for _chunk in response.body_iterator:
+        pass  # drain: the handler wires the stream before returning
+
+    assert received == {"answer": ["en", None], "stream": ["en"]}

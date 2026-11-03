@@ -10,7 +10,7 @@ PKG = os.path.abspath("packages")
 
 def _run(script: str, db: str, env_extra=None) -> subprocess.CompletedProcess:
     env = dict(os.environ)
-    env["PYTHONPATH"] = f"{PKG}:{os.path.abspath('apps/api')}"
+    env["PYTHONPATH"] = os.pathsep.join([PKG, os.path.abspath("apps/api")])
     env["AGENT_STORE_DB"] = db
     if env_extra:
         env.update(env_extra)

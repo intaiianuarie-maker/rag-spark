@@ -2,6 +2,11 @@
 #
 #   docker compose up -d --build
 #
+# The api and worker images are self-contained: the code is COPY'd in at build
+# time, nothing from the host source tree is mounted, no --reload. After pulling
+# new code, re-run the command above. Contributors who want live-editing use
+# docker-compose.dev.yml (see README).
+#
 # Starts: web (Next.js), api (FastAPI), worker, postgres, redis, qdrant, seaweedfs (optional, PD-005).
 # All settings have defaults; copy .env.example to .env to override.
 #
@@ -136,9 +141,7 @@ x-backend-env: &backend-env
   CHUNKING_BACKEND: ${CHUNKING_BACKEND:-llamaindex}
   # Vision (P4 / G4): off by default.
   VISION_ENABLED: ${VISION_ENABLED:-false}
-  VISION_MAX_PAGES: ${VISION_MAX_PAGES:-5}
   VISION_DPI: ${VISION_DPI:-150}
-  VISION_IMAGE_BUDGET_BYTES: ${VISION_IMAGE_BUDGET_BYTES:-5242880}
   # Multimodal page embedding (google/gemini-embedding-2): off by default.
   MULTIMODAL_EMBED_ENABLED: ${MULTIMODAL_EMBED_ENABLED:-false}
   WORKSPACE_MODEL_CONFIG: ${WORKSPACE_MODEL_CONFIG:-}
@@ -260,8 +263,6 @@ services:
       seaweedfs:
         condition: service_started
     volumes:
-      - ./apps/api:/app/apps/api
-      - ./packages:/app/packages
       # T-R11: shared with the worker so both open the SAME graph sqlite file.
       - graphdata:/app/.graph
       - workflowdata:/app/.workflow
@@ -269,8 +270,6 @@ services:
       # queue) lives on a volume shared with the worker, mounted at the
       # RESOLVED shared root so the admitted database is on that volume.
       - agentdata:${AGENT_STORE_SHARED_ROOT:-/app/.agent}
-    command:
-      ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
 
   worker:
     build:
@@ -283,8 +282,6 @@ services:
       redis:
         condition: service_healthy
     volumes:
-      - ./apps/worker:/app/apps/worker
-      - ./packages:/app/packages
       # T-R11: same named volume as api. Extraction writes here and the api
       # reads here; without this the two processes never see each other's rows.
       - graphdata:/app/.graph

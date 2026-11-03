@@ -10,7 +10,7 @@
  * and the real `forward()` / route `DELETE()` handlers are driven.
  *
  * Extended (T-V1-012) with the raw-upload forwarding block: byte-identity at
- * three stages, multipart boundary preservation, size limit + cancellation.
+ * three stages, multipart boundary preservation, cancellation.
  */
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -21,7 +21,7 @@ vi.mock("next/headers", () => ({
   cookies: vi.fn(async () => ({ get: cookieGetMock })),
 }));
 
-import { forward, DELETE, POST, MAX_UPLOAD_BYTES, UploadTooLargeError, boundedBodyStream } from "./handlers";
+import { forward, DELETE, POST } from "./handlers";
 
 const backendFetch = vi.fn<(input: RequestInfo, init?: RequestInit) => Promise<Response>>();
 
@@ -129,8 +129,8 @@ describe("/api/backend proxy forwarding", () => {
  * which mutates invalid-UTF-8 binary (134→140-byte corruption). These tests
  * pin the replacement: raw/stream forwarding with byte identity proven at
  * three stages (pre-transport / at-handler / stored), multipart
- * content-type+boundary preservation, the size limit (declared AND actual),
- * defined cancellation, and the JSON path staying byte-identical
+ * content-type+boundary preservation, defined cancellation, and the JSON path
+ * staying byte-identical
  * (T-V1-010 transport contract: never re-serialize JSON bodies).
  * ------------------------------------------------------------------------ */
 
@@ -313,64 +313,6 @@ describe("T-V1-012 raw upload forwarding", () => {
     });
   });
 
-  it("rejects declared-oversize uploads (Content-Length fence) with 413 before contacting the backend", async () => {
-    const request = uploadRequest(new Uint8Array(multipartFixture()), MULTIPART_CT, {
-      "content-length": String(MAX_UPLOAD_BYTES + 1),
-    });
-
-    const response = await forward(request, [...UPLOAD_PATH]);
-
-    expect(response.status).toBe(413);
-    const payload = (await response.json()) as {
-      ok: boolean;
-      error: { code: string; message: string };
-    };
-    expect(payload.ok).toBe(false);
-    expect(payload.error.code).toBe("upload_too_large");
-    expect(backendFetch).not.toHaveBeenCalled(); // no bytes touched, backend not contacted
-  });
-
-  it("bounds the ACTUAL byte count mid-stream (absent/lying Content-Length) → 413, no partial store", async () => {
-    // Stream body: no declared length, so only the bounded counter can stop
-    // it. 4 MiB chunks vs the 25 MiB cap: chunk #7 (28 MiB) must never cross.
-    const chunk = new Uint8Array(4 * 1024 * 1024);
-    let pulls = 0;
-    const source = new ReadableStream<Uint8Array>({
-      pull(controller) {
-        pulls += 1;
-        controller.enqueue(chunk); // infinite on purpose: only the cap can stop it
-      },
-    });
-    const request = new Request(UPLOAD_URL, {
-      method: "POST",
-      body: source,
-      headers: { "content-type": MULTIPART_CT },
-      ...({ duplex: "half" } as object),
-    } as RequestInit);
-
-    const evidence: UploadEvidence = {
-      firstChunk: undefined,
-      received: Buffer.alloc(0),
-      stored: Buffer.alloc(0),
-    };
-    backendFetch.mockImplementationOnce(captureUploadHandler(evidence));
-
-    const response = await forward(request, [...UPLOAD_PATH]);
-
-    expect(response.status).toBe(413);
-    const payload = (await response.json()) as { ok: boolean; error: { code: string } };
-    expect(payload.ok).toBe(false);
-    expect(payload.error.code).toBe("upload_too_large");
-    // Exactly the 6 full chunks under the cap were forwarded (24 MiB); the
-    // 7th (28 MiB cumulative) was cut — nothing past the limit ever crossed.
-    expect(evidence.received.byteLength).toBe(6 * 4 * 1024 * 1024);
-    // Handler never completed → nothing persisted (reviewer #3: no partial).
-    expect(evidence.stored.byteLength).toBe(0);
-    // The infinite source was torn down early — a drained pipe would pull
-    // without bound.
-    expect(pulls).toBeLessThan(15);
-  });
-
   it("client cancellation aborts the upstream call and cancels the inbound body (499)", async () => {
     const abortController = new AbortController();
     let sourceCancelled = false;
@@ -399,8 +341,7 @@ describe("T-V1-012 raw upload forwarding", () => {
         init?.signal?.addEventListener("abort", () => {
           upstreamSawAbort = true;
           // emulate undici's abort teardown: the sender cancels the body
-          // stream it was handed (propagates through the bounded stream to
-          // the original request body).
+          // stream it was handed (propagates to the original request body).
           void reader.cancel().catch(() => undefined);
           reject(new DOMException("This operation was aborted", "AbortError"));
         });
@@ -420,48 +361,5 @@ describe("T-V1-012 raw upload forwarding", () => {
     expect(payload.error.code).toBe("client_disconnected");
     expect(upstreamSawAbort).toBe(true); // upstream request cancelled
     expect(sourceCancelled).toBe(true); // inbound body torn down, no dangling upload
-  });
-
-  it("boundedBodyStream passes bytes through verbatim and errors exactly past the limit", async () => {
-    const chunkA = new Uint8Array(600).fill(0xab);
-    const chunkB = new Uint8Array(600).fill(0xcd);
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(chunkA);
-        controller.enqueue(chunkB);
-        controller.close();
-      },
-    });
-
-    const bounded = boundedBodyStream(source, 1024);
-    const reader = bounded.getReader();
-
-    // First chunk forwarded UNCHANGED (raw passthrough, no mutation).
-    const first = await reader.read();
-    expect(first.done).toBe(false);
-    expect(sha256(first.value as Uint8Array)).toBe(sha256(chunkA));
-    // Second chunk crosses the limit: stream errors with the typed error
-    // (never buffered past the cap), which forward() maps to 413.
-    await expect(reader.read()).rejects.toBeInstanceOf(UploadTooLargeError);
-  });
-
-  it("boundedBodyStream propagates cancellation to the source (client-disconnect path)", async () => {
-    let cancelReason: unknown = null;
-    const source = new ReadableStream<Uint8Array>({
-      start(controller) {
-        controller.enqueue(new Uint8Array([9]));
-      },
-      cancel(reason) {
-        cancelReason = reason;
-      },
-    });
-
-    const bounded = boundedBodyStream(source, 1024);
-    await bounded.cancel("client hung up");
-    // Cancel propagates asynchronously: readable → transform writable →
-    // pipeTo teardown → original source.
-    await new Promise((resolve) => setTimeout(resolve, 10));
-
-    expect(cancelReason).toBe("client hung up");
   });
 });

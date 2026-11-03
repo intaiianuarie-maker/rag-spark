@@ -286,10 +286,10 @@ async def test_unconfigured_falls_back_to_policy_fallback(monkeypatch, caplog):
 
 
 def test_provider_identity_is_non_secret():
-    assert provider_identity(FALLBACK_MODEL) == "litellm"
+    assert provider_identity(FALLBACK_MODEL) == "openrouter"
     assert provider_identity("nvidia/nemotron-3.5-lightning:free") == "openrouter"
     # Never leaks host/url/credential material.
-    for model in (FALLBACK_MODEL, "openai/gpt-4o-mini", "unknown-model"):
+    for model in (FALLBACK_MODEL, "google/gemma-4-26b-a4b-it:free", "unknown-model"):
         ident = provider_identity(model)
         assert ident in {"litellm", "openrouter"}
         assert "http" not in ident and "key" not in ident.lower()
@@ -325,7 +325,7 @@ def test_handler_path_has_no_model_literal_or_default(monkeypatch):
     import app.ask.router as router_mod
 
     source = Path(router_mod.__file__).read_text(encoding="utf-8")
-    assert "gpt-4o-mini" not in source
+    assert "google/gemma-4-26b-a4b-it:free" not in source
     assert "DEFAULT_ANSWER_MODEL" not in source
     assert "engine.model =" not in source
 
@@ -345,7 +345,7 @@ def test_factory_has_no_silent_default_model():
     assert "DEFAULT_ANSWER_MODEL" not in source  # constant fully removed
     assert "DEFAULT_ANSWER_MODEL" not in code
     assert 'os.environ.get("ANSWER_MODEL"' not in code  # no env-based default in code
-    assert 'model="gpt-4o-mini"' not in code  # no literal default passed in code
+    assert 'model="google/gemma-4-26b-a4b-it:free"' not in code  # no literal default passed in code
     func = next(
         node
         for node in ast.walk(tree)

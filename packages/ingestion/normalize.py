@@ -19,9 +19,6 @@ from .budget import ParseBudgetExceeded as ParseBudgetExceeded
 from .budget import active_guard
 from .interfaces import BBox, DocumentElement, ElementType
 
-#: Refuse documents above this size before parsing (task: oversized → typed error).
-MAX_DOCUMENT_BYTES = 25 * 1024 * 1024
-
 _NUMBERED_HEADING = re.compile(r"^\s*\d+(?:\.\d+)*\.?\s+\S")
 _NUMBERING_PREFIX = re.compile(r"^\s*\d+(?:\.\d+)*\.?\s+")
 
@@ -63,14 +60,14 @@ def validate_input(
     mime_type: str,
     supported_mime_types: frozenset[str],
     *,
-    max_bytes: int = MAX_DOCUMENT_BYTES,
+    max_bytes: int | None = None,
 ) -> None:
     """Validate size/mime before handing bytes to a third-party parser."""
     if mime_type not in supported_mime_types:
         raise UnsupportedMimeTypeError(f"unsupported mime type: {mime_type}")
     if not data:
         raise EmptyDocumentError("empty document")
-    if len(data) > max_bytes:
+    if max_bytes is not None and len(data) > max_bytes:
         raise DocumentTooLargeError(f"document exceeds {max_bytes} bytes")
 
 

@@ -30,7 +30,6 @@ import atexit
 import json
 import os
 import signal
-import socket
 import subprocess
 import sys
 import tempfile
@@ -41,6 +40,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 import pytest
+from service_probe import postgres_open, qdrant_open, redis_open
 
 # T-V1-071: this suite runs the REAL ingest pipeline, which used to write
 # into the live `knowledge` collection (T-V1-069: 373 flat vectors). Point it
@@ -137,17 +137,9 @@ def _queue_namespace() -> Generator[None, None, None]:
 # --------------------------------------------------------------------------------------
 
 
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture(scope="module")
 def client() -> Generator:
-    if not (_port_open(5432) and _port_open(6379) and _port_open(6333)):
+    if not (postgres_open() and redis_open() and qdrant_open()):
         pytest.skip("postgres/redis/qdrant not reachable; run `make up`")
     # Provision only after the fixture's service check, never during collection.
     _ensure_scratch_collection()
@@ -347,7 +339,9 @@ def _stores(version_id: str) -> dict[str, int]:
 def _redis():
     import redis as redis_sync
 
-    return redis_sync.Redis.from_url("redis://localhost:6379/0", decode_responses=True)
+    return redis_sync.Redis.from_url(
+        os.environ.get("REDIS_URL", "redis://localhost:6379/0"), decode_responses=True
+    )
 
 
 def _queue_keys() -> dict[str, str]:
@@ -414,12 +408,15 @@ _ORPHAN_PATTERN = "t021_crash[_]worker"
 
 def _live_orphan_pids() -> list[int]:
     """PIDs of any ``t021_crash_worker`` still alive on this box (a real pgrep)."""
-    result = subprocess.run(
-        ["pgrep", "-f", _ORPHAN_PATTERN],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", _ORPHAN_PATTERN],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:  # no pgrep (Windows): these tests need a POSIX box anyway
+        return []
     return [int(line) for line in result.stdout.split() if line.strip().isdigit()]
 
 

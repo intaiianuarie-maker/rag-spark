@@ -249,10 +249,17 @@ def _observed(engine: Any, trace: _Trace) -> Any:
 def trace_answer(fn: Callable[..., Awaitable[Answer]]) -> Callable[..., Awaitable[Answer]]:
     @wraps(fn)
     async def call(
-        engine: Any, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
+        engine: Any,
+        *,
+        query: str,
+        acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        **kwargs: Any,
     ) -> Answer:
         trace = _Trace(query=query, scope=acl_scope, mode=mode)
-        answer = await fn(_observed(engine, trace), query=query, acl_scope=acl_scope, mode=mode)
+        answer = await fn(
+            _observed(engine, trace), query=query, acl_scope=acl_scope, mode=mode, **kwargs
+        )
         answer.debug_trace = trace.payload(answer)
         return answer
 
@@ -264,10 +271,15 @@ def trace_stream(
 ) -> Callable[..., AsyncIterator[tuple[str, Any]]]:
     @wraps(fn)
     async def call(
-        engine: Any, *, query: str, acl_scope: ACLScope, mode: RetrievalMode = RetrievalMode.HYBRID
+        engine: Any,
+        *,
+        query: str,
+        acl_scope: ACLScope,
+        mode: RetrievalMode = RetrievalMode.HYBRID,
+        **kwargs: Any,
     ) -> AsyncIterator[tuple[str, Any]]:
         trace = _Trace(query=query, scope=acl_scope, mode=mode)
-        events = fn(_observed(engine, trace), query=query, acl_scope=acl_scope, mode=mode)
+        events = fn(_observed(engine, trace), query=query, acl_scope=acl_scope, mode=mode, **kwargs)
         try:
             async for kind, value in events:
                 if kind == "verified" and isinstance(value, Answer):

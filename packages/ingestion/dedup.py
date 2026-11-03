@@ -608,7 +608,9 @@ async def purge_document(
                 qdrant = QdrantVectorStore(collection=collection)
                 filt = build_purge_filter(ws_id, doc_id)
                 try:
-                    await qdrant.delete(collection=collection, query_filter=filt)
+                    # A missing text collection (document deleted before any
+                    # ingest) is a clean no-op, not a purge failure.
+                    await qdrant.delete_if_exists(collection=collection, query_filter=filt)
                     # Multimodal page vectors (optional collection) share the fate
                     # of the document; a missing collection is fine, a Qdrant
                     # error fails this store exactly like the text purge.

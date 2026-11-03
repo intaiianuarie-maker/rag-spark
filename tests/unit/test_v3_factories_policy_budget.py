@@ -119,7 +119,7 @@ def test_policy_derivation_narrows_limits_successfully() -> None:
         max_cost_usd=1.00,
         max_tool_cost_usd=0.50,
         max_wall_clock_s=120.0,
-        allowed_models=("google/gemma-4-26b-a4b-it:free", "openai/gpt-4o-mini"),
+        allowed_models=("google/gemma-4-26b-a4b-it:free", "google/gemma-4-26b-a4b-it:free"),
         default_model="google/gemma-4-26b-a4b-it:free",
         allowed_tools=("calculator", "knowledge_search", "knowledge_read"),
     )
@@ -127,7 +127,7 @@ def test_policy_derivation_narrows_limits_successfully() -> None:
     effective = derive_effective_run_config(
         policy,
         goal="calculate 2+2",
-        requested_model="openai/gpt-4o-mini",
+        requested_model="google/gemma-4-26b-a4b-it:free",
         requested_tools=["calculator"],
         requested_steps=4,
         requested_tokens=10000,
@@ -137,7 +137,7 @@ def test_policy_derivation_narrows_limits_successfully() -> None:
         requested_wall_clock_s=60.0,
     )
 
-    assert effective.model == "openai/gpt-4o-mini"
+    assert effective.model == "google/gemma-4-26b-a4b-it:free"
     assert effective.allowed_tools == ["calculator"]
     assert effective.max_steps == 4
     assert effective.max_tokens == 10000
@@ -343,7 +343,7 @@ async def test_tool_budget_trips_loudly_with_spend_stated() -> None:
         workspace_id=WS_ID,
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=budget,
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["costly_tool"],
@@ -393,7 +393,7 @@ async def test_total_cost_cap_trips_loudly_before_first_tool_dispatch() -> None:
         workspace_id=WS_ID,
         principal_id="user-1",
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=budget,
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["costly_tool"],

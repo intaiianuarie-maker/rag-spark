@@ -17,6 +17,7 @@ fake path byte-identical, plus a subprocess parity run).
 
 from __future__ import annotations
 
+import os
 import subprocess
 import sys
 from collections.abc import Mapping
@@ -44,6 +45,9 @@ from workflow_engine.adapters.v3_adapter import (
     V3NodeExecutor,
     resolve_node_executor,
 )
+
+# Windows cannot start a Python child (asyncio import) without SYSTEMROOT.
+_WIN_ENV = {k: v for k, v in os.environ.items() if k == "SYSTEMROOT"}
 
 
 class _DelegationSpy:
@@ -257,6 +261,7 @@ class TestNoDirectV3Imports:
             text=True,
             env={
                 "PYTHONPATH": str(repo_root / "packages"),
+                **_WIN_ENV,
                 "PATH": "/usr/bin:/bin",
             },
             check=True,
@@ -335,6 +340,7 @@ class TestFlagOffUnchanged:
             text=True,
             env={
                 "PYTHONPATH": str(repo_root / "packages"),
+                **_WIN_ENV,
                 "PATH": "/usr/bin:/bin",
             },
             check=True,

@@ -4,8 +4,8 @@
   "principal_id": "user-0001",
   "authz_policy_revision": "pol-0001",
   "model_policy": {
-    "allowed_models": ["gpt-4o-mini"],
-    "default_model": "gpt-4o-mini",
+    "allowed_models": ["google/gemma-4-26b-a4b-it:free"],
+    "default_model": "google/gemma-4-26b-a4b-it:free",
     "max_output_tokens": 4096,
     "temperature": 0.0
   },

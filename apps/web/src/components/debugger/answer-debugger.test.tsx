@@ -35,7 +35,7 @@ describe("AnswerDebugger", () => {
         filters: { workspace_ids: ["ws-1"], include_public: false, mode: "hybrid" },
         retrieval: { status: "ok", latency_ms: 12, candidate_scope: "returned_context_only", items: [{ chunk_id: "chunk-1", document_id: "d", workspace_id: "ws-1", score: 0.9, scores: { dense: 0.8 } }] },
         context: { chunk_ids: ["chunk-1"], source_text_included: false },
-        generation: { status: "ok", model: "gpt-4o-mini", prompt_template_sha256: "sha", latency_ms: 100, prompt_tokens: null, completion_tokens: null, usage_status: "not_reported" },
+        generation: { status: "ok", model: "google/gemma-4-26b-a4b-it:free", prompt_template_sha256: "sha", latency_ms: 100, prompt_tokens: null, completion_tokens: null, usage_status: "not_reported" },
         verification: { phase: "parse_verify_publish", status: "verified", latency_ms: 5, usage_status: "not_reported" },
         total_latency_ms: 120,
       },
@@ -44,7 +44,7 @@ describe("AnswerDebugger", () => {
     expect(html).toContain("abc");
     expect(html).toContain("returned_context_only");
     expect(html).toContain("chunk-1");
-    expect(html).toContain("gpt-4o-mini");
+    expect(html).toContain("google/gemma-4-26b-a4b-it:free");
     expect(html).toContain("parse_verify_publish");
     expect(html).toContain("120");
   });

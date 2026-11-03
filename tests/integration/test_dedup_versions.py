@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import socket
 import uuid
 
 import pytest
+from service_probe import postgres_open, redis_open
 
 # T-V1-071: this suite runs the REAL ingest pipeline, which used to write
 # into the live `knowledge` collection (T-V1-069: 373 flat vectors). Point it
@@ -32,17 +32,9 @@ pytestmark = pytest.mark.integration
 PASSWORD = "Correct-Horse-Battery-9"
 
 
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture(scope="module")
 def client():
-    if not (_port_open(5432) and _port_open(6379)):
+    if not (postgres_open() and redis_open()):
         pytest.skip("postgres/redis not reachable; run `make up`")
 
     from app.db import run_migrations
@@ -1116,6 +1108,12 @@ def _candidate(
     )
 
 
+def _gate_identity():
+    from retrieval.embedding_identity import EmbeddingIdentity
+
+    return EmbeddingIdentity("stub", "stub-model", "r1", 1024)
+
+
 def _gate_store(points: list, resolver):
     from retrieval.adapters.qdrant_store import QdrantVectorStore
 
@@ -1125,6 +1123,8 @@ def _gate_store(points: list, resolver):
         client=client,  # type: ignore[arg-type]
         active_version_resolver=resolver,
     )
+    # The stub has no stamped records: pin the identity the store would have read.
+    store._collection_identity[VECTOR_COLLECTION] = _gate_identity()
     return store, client
 
 
@@ -1137,6 +1137,7 @@ def _gate_search(store, top_k: int = 10) -> list:
             vector=[0.1] * 1024,
             top_k=top_k,
             query_filter=SearchFilter(workspace_ids=["ws-a"]),
+            query_identity=_gate_identity(),
         )
 
     return asyncio.run(run())

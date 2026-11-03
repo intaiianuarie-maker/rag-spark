@@ -389,6 +389,193 @@ async def test_bounded_retries_and_loud_exhaustion(monkeypatch: pytest.MonkeyPat
 
 
 # ---------------------------------------------------------------------------
+# 10. A1: client errors (400/401/403) are terminal — no retry, no paid fallback
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_client_error_400_not_retried_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("asyncio.sleep", _noop)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            400,
+            json={"error": {"message": "bad request"}},
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = OpenRouterProvider(
+        base_url="http://fake-gateway",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=transport),
+        default_call_site="client_error_400",
+        max_attempts=3,
+        backoff_base_seconds=0.001,
+        allow_paid_fallback=True,
+    )
+
+    with pytest.raises(LLMProviderError, match="400"):
+        await provider.generate(_make_request())
+
+    assert calls == 1, "400 must not be retried"
+    stats = GLOBAL_ACCOUNTING.get_stats("client_error_400")
+    assert stats.n_fallbacks == 0, "400 must not trigger paid fallback"
+
+
+@pytest.mark.asyncio
+async def test_client_error_401_not_retried_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("asyncio.sleep", _noop)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            401,
+            json={"error": {"message": "invalid API key"}},
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = OpenRouterProvider(
+        base_url="http://fake-gateway",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=transport),
+        default_call_site="client_error_401",
+        max_attempts=3,
+        backoff_base_seconds=0.001,
+        allow_paid_fallback=True,
+    )
+
+    with pytest.raises(LLMProviderError, match="401"):
+        await provider.generate(_make_request())
+
+    assert calls == 1, "401 must not be retried"
+    stats = GLOBAL_ACCOUNTING.get_stats("client_error_401")
+    assert stats.n_fallbacks == 0, "401 must not trigger paid fallback"
+
+
+@pytest.mark.asyncio
+async def test_client_error_403_not_retried_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("asyncio.sleep", _noop)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            403,
+            json={"error": {"message": "forbidden"}},
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = OpenRouterProvider(
+        base_url="http://fake-gateway",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=transport),
+        default_call_site="client_error_403",
+        max_attempts=3,
+        backoff_base_seconds=0.001,
+        allow_paid_fallback=True,
+    )
+
+    with pytest.raises(LLMProviderError, match="403"):
+        await provider.generate(_make_request())
+
+    assert calls == 1, "403 must not be retried"
+    stats = GLOBAL_ACCOUNTING.get_stats("client_error_403")
+    assert stats.n_fallbacks == 0, "403 must not trigger paid fallback"
+
+
+@pytest.mark.asyncio
+async def test_refusal_not_retried_no_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
+    async def _noop(_: float) -> None:
+        pass
+
+    monkeypatch.setattr("asyncio.sleep", _noop)
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-refusal",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "I cannot fulfill this request. I am unable to help with that.",
+                            "finish_reason": "stop",
+                        }
+                    }
+                ],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 10},
+                "model": DEFAULT_CHAT_FREE_MODEL,
+            },
+        )
+
+    transport = httpx.MockTransport(handler)
+    provider = OpenRouterProvider(
+        base_url="http://fake-gateway",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=transport),
+        default_call_site="refusal_site",
+        max_attempts=3,
+        backoff_base_seconds=0.001,
+        allow_paid_fallback=True,
+    )
+
+    with pytest.raises(LLMProviderError, match="refusal"):
+        await provider.generate(_make_request())
+
+    assert calls == 1, "refusal must not be retried"
+    stats = GLOBAL_ACCOUNTING.get_stats("refusal_site")
+    assert stats.n_fallbacks == 0, "refusal must not trigger paid fallback"
+
+
+@pytest.mark.asyncio
+async def test_payload_carries_provider_only_and_data_collection() -> None:
+    seen_payloads: list[dict[str, Any]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen_payloads.append(json.loads(request.content.decode()))
+        return httpx.Response(200, json=_chat_ok_body("ok", DEFAULT_CHAT_FREE_MODEL, 5, 3))
+
+    transport = httpx.MockTransport(handler)
+    provider = OpenRouterProvider(
+        base_url="http://fake-gateway",
+        api_key="sk-test",
+        client=httpx.AsyncClient(transport=transport),
+        default_call_site="payload_site",
+    )
+
+    req = GenerationRequest(
+        model=DEFAULT_CHAT_FREE_MODEL,
+        messages=[ChatMessage(role=MessageRole.USER, content="Hello")],
+        metadata={"provider_only": "openrouter", "data_collection": "off"},
+    )
+    await provider.generate(req)
+
+    assert len(seen_payloads) == 1
+    payload = seen_payloads[0]
+    assert payload.get("provider") == {"only": ["openrouter"]}
+    assert payload.get("data_collection") == "off"
+
+
+# ---------------------------------------------------------------------------
 # 8. Embedding dimension check
 # ---------------------------------------------------------------------------
 

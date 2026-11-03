@@ -231,8 +231,7 @@ def test_upload_envelope_codes_are_canonical_uppercase() -> None:
     envelope = set(re.findall(r'"error":\s*"([A-Za-z_]+)"', source))
     persisted = set(re.findall(r'error_code\s*=\s*"([A-Za-z_]+)"', source))
     literals = envelope | persisted
-    assert literals == {
-        "DOCUMENT_TOO_LARGE",
+    assert literals == {  # no DOCUMENT_TOO_LARGE: the upload size guard is gone
         "EMPTY_DOCUMENT",
         "INVALID_CHARSET",
         "JOB_NOT_FOUND",

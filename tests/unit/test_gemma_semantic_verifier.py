@@ -125,7 +125,7 @@ async def test_supported_claim_english() -> None:
     response_json = """{
       "verdict": "supported",
       "reason_code": "DIRECT_SUPPORT",
-      "support_spans": [{"evidence_id": "ch-1", "start": 0, "end": 28}],
+      "support_spans": [{"evidence_id": "ch-1", "quote": "The company was founded in 2020"}],
       "contradictions": []
     }"""
     provider = FakeLLMProvider([response_json])
@@ -138,8 +138,9 @@ async def test_supported_claim_english() -> None:
     assert verdict.reason_code == "DIRECT_SUPPORT"
     assert len(verdict.support_spans) == 1
     assert verdict.support_spans[0].evidence_id == "ch-1"
+    # Offsets are recomputed server-side from the quote against the original text.
     assert verdict.support_spans[0].start == 0
-    assert verdict.support_spans[0].end == 28
+    assert verdict.support_spans[0].end == 31
 
 
 @pytest.mark.asyncio
@@ -147,7 +148,9 @@ async def test_supported_claim_romanian_diacritics() -> None:
     response_json = """{
       "verdict": "supported",
       "reason_code": "DIRECT_SUPPORT",
-      "support_spans": [{"evidence_id": "ch-ro-1", "start": 0, "end": 45}],
+      "support_spans": [
+        {"evidence_id": "ch-ro-1", "quote": "Veniturile operaționale au crescut cu 15%"}
+      ],
       "contradictions": []
     }"""
     provider = FakeLLMProvider([response_json])
@@ -272,7 +275,9 @@ async def test_partially_supported_recheck_moves_to_supported() -> None:
     resp2 = """{
       "verdict": "supported",
       "reason_code": "DIRECT_SUPPORT",
-      "support_spans": [{"evidence_id": "ch-1", "start": 0, "end": 15}],
+      "support_spans": [
+        {"evidence_id": "ch-1", "quote": "Evidence text confirming the claim fully."}
+      ],
       "contradictions": []
     }"""
     provider = FakeLLMProvider([resp1, resp2])
@@ -390,28 +395,29 @@ async def test_fail_closed_unexpected_exception() -> None:
 
 @pytest.mark.asyncio
 async def test_local_span_validation_bounds() -> None:
+    # Changed: spans are verbatim quotes now. For a non-SUPPORTED verdict invalid spans
+    # (not in evidence / unknown id) are pruned and the verdict is kept; for SUPPORTED the
+    # same invalid spans downgrade the verdict (see test_semantic_verifier_prompt_injection).
     response_json = """{
-      "verdict": "supported",
-      "reason_code": "DIRECT_SUPPORT",
+      "verdict": "partially_supported",
+      "reason_code": "PARTIAL_SUPPORT",
       "support_spans": [
-        {"evidence_id": "ch-1", "start": 0, "end": 10},
-        {"evidence_id": "ch-1", "start": 50, "end": 100},
-        {"evidence_id": "ch-fake", "start": 0, "end": 5}
+        {"evidence_id": "ch-1", "quote": "Short text sample."},
+        {"evidence_id": "ch-1", "quote": "text that is not in the evidence"},
+        {"evidence_id": "ch-fake", "quote": "Short text sample."}
       ]
     }"""
-    provider = FakeLLMProvider([response_json])
+    provider = FakeLLMProvider([response_json, response_json])
     verifier = GemmaSemanticVerifier(provider)
 
-    # Content length is only 20 chars
     evidence = [_make_evidence("ch-1", "Short text sample.")]
     verdict = await verifier.verify_claim("Claim", evidence)
 
-    assert verdict.verdict == Verdict.SUPPORTED
-    # Out of bounds span (50-100) and nonexistent chunk (ch-fake) must be pruned
+    assert verdict.verdict == Verdict.PARTIALLY_SUPPORTED
     assert len(verdict.support_spans) == 1
     assert verdict.support_spans[0].evidence_id == "ch-1"
     assert verdict.support_spans[0].start == 0
-    assert verdict.support_spans[0].end == 10
+    assert verdict.support_spans[0].end == len("Short text sample.")
 
 
 # ---------------------------------------------------------------------------

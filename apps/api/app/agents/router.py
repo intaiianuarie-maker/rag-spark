@@ -17,6 +17,7 @@ stores). Production would use the StepStore/DB seam.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -38,6 +39,7 @@ from core.auth import Principal
 from fastapi import APIRouter, Depends, HTTPException, status
 from models.router_config import load_workspace_config, route
 from pydantic import BaseModel, Field
+from stores.agent_stores import DurableRunRecord, get_checkpoint_store, get_run_store
 
 from app.agents.lifecycle_routes import subrouter as lifecycle_subrouter
 from app.authz import Action, Resource, require
@@ -69,14 +71,9 @@ def _resolve_llm_provider():
     configuration state, not a runtime failure, and the caller turns it into a
     typed UNAVAILABLE rather than inventing an answer.
     """
-    import os
+    from agents.factories import llm_gateway_configured
 
-    base_url = os.environ.get("LITELLM_URL") or os.environ.get("OPENROUTER_API_KEY")
-    has_key = any(
-        os.environ.get(name)
-        for name in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
-    )
-    if not base_url or not has_key:
+    if not llm_gateway_configured():
         return None
     try:
         from models.adapters.litellm_provider import create_llm_provider
@@ -267,6 +264,7 @@ async def start_run(
         unavailable_detail = exc.detail
         missing_piece = exc.missing
 
+    sync_state = sync_output = sync_usage = None
     run_status: str
     error_code: str | None
     # Optional: the runtime reports no detail on some terminal states.
@@ -280,22 +278,56 @@ async def start_run(
     else:
         # Run through the SAME runtime path as in-process — parity by construction.
         # The runtime enforces budget reservation, approval gates, tool allowlist.
-        from agents.runtime import _PERSISTED_RUNS, _PERSISTED_STATES
+        from agents.runtime import _PERSISTED_RUNS, _PERSISTED_STATES, _PERSISTED_USAGES
 
         # Clear any stale state for this run_id (test isolation)
         _PERSISTED_RUNS.pop(run_id, None)
         _PERSISTED_STATES.pop(run_id, None)
 
-        agent_run = await runtime.run_enforced(context=ctx, goal=body.goal)
+        # Durable step/checkpoint store (the one /history reads), not the in-memory default.
+        agent_run = await runtime.run_enforced(
+            context=ctx, goal=body.goal, checkpoint_store=get_checkpoint_store()
+        )
 
         # Read the persisted RunState for the canonical status/error_code
         state = _PERSISTED_STATES.get(run_id)
         run_status = state.status.value if state else agent_run.status.value
         error_code = state.error_code.value if state and state.error_code else None
         error_detail = state.error_detail if state else agent_run.error
+        sync_state, sync_output = state, agent_run.final_output
+        sync_usage = _PERSISTED_USAGES.get(run_id)
 
     if missing_piece is not None:
         error_detail = f"{error_detail or UNAVAILABLE_CODE} (missing: {missing_piece})"
+
+    # Same durable store as the queued path: /status, /history and GET /runs/{id} serve this
+    # run (output, usage, budget, steps) from any process. A store failure must not hide a
+    # result the caller already paid for, so it is logged and the response still returns.
+    try:
+        rec = DurableRunRecord(
+            run_id=run_id,
+            workspace_id=ws_id_str,
+            principal_id=principal.user_id,
+            goal=body.goal,
+            context=ctx,
+            final_output=sync_output,
+            usage=sync_usage,
+        )
+        if sync_state is not None:
+            rec.state = sync_state
+            rec.status = sync_state.status
+            rec.error, rec.error_code = sync_state.error_detail, sync_state.error_code
+        else:
+            rec.update_status(
+                RunStatus(run_status),
+                error=error_detail,
+                error_code=AgentErrorCode(error_code) if error_code else None,
+            )
+        get_run_store().create_run(rec)
+    except Exception:
+        logging.getLogger("knowledge_os.api.agent").exception(
+            "sync_run_persist_failed", extra={"run_id": run_id}
+        )
 
     # Store for status/cancel
     _RUNS[run_id] = {
@@ -323,10 +355,8 @@ async def get_run_status(
 ) -> StatusResponse:
     _require_workspace(principal, workspace_id)
     rec = _RUNS.get(run_id)
-    if rec is None:
-        from stores.agent_stores import get_run_store
-
-        durable_rec = get_run_store().get_run(run_id)
+    durable_rec = get_run_store().get_run(run_id)
+    if durable_rec is not None or rec is None:
         if durable_rec is not None:
             if durable_rec.workspace_id != str(workspace_id):
                 raise HTTPException(
@@ -449,6 +479,15 @@ async def cancel_run(
             rec["status"] = RunStatus.CANCELLED.value
             rec["error_code"] = AgentErrorCode.CANCELLED.value
             rec["error"] = "run cancelled"
+
+    if rec["status"] == RunStatus.CANCELLED.value:
+        # Keep the durable record (what GET/status/history serve) in step with the cancel.
+        get_run_store().update_status(
+            run_id,
+            RunStatus.CANCELLED,
+            error=rec["error"],
+            error_code=AgentErrorCode.CANCELLED,
+        )
 
     return StatusResponse(
         run_id=run_id,

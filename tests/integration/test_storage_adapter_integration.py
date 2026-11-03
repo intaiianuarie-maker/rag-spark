@@ -12,9 +12,14 @@ from __future__ import annotations
 import os
 
 import pytest
+from service_probe import tcp_open
 
 from packages.storage.adapters.seaweedfs_s3 import SeaweedFSAdapter
 from packages.storage.interfaces import StorageError, StorageObject
+
+_ENDPOINT = os.getenv("S3_ENDPOINT_URL") or os.getenv("SEAWEEDFS_ENDPOINT") or ""
+# Configured is not enough: the tests/conftest.py defaults set it even when no store listens.
+_STORE_UP = bool(_ENDPOINT) and tcp_open(_ENDPOINT)
 
 
 def _env_adapter() -> SeaweedFSAdapter:
@@ -41,8 +46,8 @@ def bucket(adapter: SeaweedFSAdapter) -> str:
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not os.getenv("S3_ENDPOINT_URL") and not os.getenv("SEAWEEDFS_ENDPOINT"),
-    reason="No S3 endpoint configured (loud skip: set SEAWEEDFS_ENDPOINT or S3_ENDPOINT_URL)",
+    not _STORE_UP,
+    reason="S3 endpoint not configured or not reachable (loud skip; set S3_ENDPOINT_URL)",
 )
 async def test_adapter_round_trip(adapter: SeaweedFSAdapter, bucket: str) -> None:
     key = "integration/test/object"
@@ -74,8 +79,8 @@ async def test_adapter_round_trip(adapter: SeaweedFSAdapter, bucket: str) -> Non
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not os.getenv("S3_ENDPOINT_URL") and not os.getenv("SEAWEEDFS_ENDPOINT"),
-    reason="No S3 endpoint configured (loud skip)",
+    not _STORE_UP,
+    reason="S3 endpoint not configured or not reachable (loud skip)",
 )
 async def test_adapter_delete_missing(adapter: SeaweedFSAdapter, bucket: str) -> None:
     result = await adapter.delete_object(bucket, "integration/test/nonexistent")
@@ -84,8 +89,8 @@ async def test_adapter_delete_missing(adapter: SeaweedFSAdapter, bucket: str) ->
 
 @pytest.mark.asyncio
 @pytest.mark.skipif(
-    not os.getenv("S3_ENDPOINT_URL") and not os.getenv("SEAWEEDFS_ENDPOINT"),
-    reason="No S3 endpoint configured (loud skip)",
+    not _STORE_UP,
+    reason="S3 endpoint not configured or not reachable (loud skip)",
 )
 async def test_adapter_list_and_delete_propagation(adapter: SeaweedFSAdapter, bucket: str) -> None:
     # Tombstone reconciliation depends on LIST before delete.

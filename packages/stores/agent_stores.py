@@ -54,6 +54,7 @@ class DurableRunRecord(BaseModel):
     context: RunContext | None = None
     state: RunState = Field(default_factory=lambda: RunState(status=RunStatus.QUEUED))
     final_output: str | None = None
+    usage: Usage | None = None
     created_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
     updated_at: str = Field(default_factory=lambda: datetime.now(UTC).isoformat())
 
@@ -102,6 +103,15 @@ class RunStore(ABC):
     ) -> DurableRunRecord | None:
         """Update the status of a run record."""
         raise NotImplementedError
+
+    def save_result(self, run_id: str, final_output: str | None, usage: Usage | None) -> None:
+        """Persist the run's output/usage without touching status or state (race-free for
+        the cancel path, which writes status concurrently)."""
+        rec = self.get_run(run_id)
+        if rec is not None:
+            rec.final_output = final_output
+            rec.usage = usage
+            self.update_run(rec)
 
     @abstractmethod
     def list_runs(self, workspace_id: str) -> list[DurableRunRecord]:
@@ -190,6 +200,18 @@ class SqliteRunStore(RunStore):
                 """
             )
             con.execute("CREATE INDEX IF NOT EXISTS idx_runs_ws ON durable_runs(workspace_id)")
+            # Backward compatible: files created before these columns existed are upgraded in
+            # place (nullable, so old rows read as "no output / no usage recorded").
+            # api and worker open the same file at first boot: the loser of the race gets
+            # "duplicate column name", which just means the column is already there.
+            have = {r[1] for r in con.execute("PRAGMA table_info(durable_runs)")}
+            for col in ("final_output", "usage_json"):
+                if col not in have:
+                    try:
+                        con.execute(f"ALTER TABLE durable_runs ADD COLUMN {col} TEXT")
+                    except sqlite3.OperationalError as exc:
+                        if "duplicate column name" not in str(exc):
+                            raise
             con.commit()
 
     def create_run(self, record: DurableRunRecord) -> DurableRunRecord:
@@ -209,8 +231,9 @@ class SqliteRunStore(RunStore):
                     """
                     INSERT INTO durable_runs (
                         run_id, workspace_id, principal_id, goal, status,
-                        error, error_code, context_json, state_json, created_at, updated_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        error, error_code, context_json, state_json, created_at, updated_at,
+                        final_output, usage_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         record.run_id,
@@ -224,6 +247,8 @@ class SqliteRunStore(RunStore):
                         state_json,
                         record.created_at,
                         record.updated_at,
+                        record.final_output,
+                        record.usage.model_dump_json() if record.usage else None,
                     ),
                 )
                 con.commit()
@@ -242,6 +267,8 @@ class SqliteRunStore(RunStore):
             state_json,
             created_at,
             updated_at,
+            final_output,
+            usage_json,
         ) = row
 
         context = RunContext.model_validate_json(context_json) if context_json else None
@@ -260,6 +287,8 @@ class SqliteRunStore(RunStore):
             error_code=AgentErrorCode(error_code_val) if error_code_val else None,
             context=context,
             state=state,
+            final_output=final_output,
+            usage=Usage.model_validate_json(usage_json) if usage_json else None,
             created_at=created_at,
             updated_at=updated_at,
         )
@@ -270,7 +299,8 @@ class SqliteRunStore(RunStore):
                 cur = con.execute(
                     """
                     SELECT run_id, workspace_id, principal_id, goal, status,
-                           error, error_code, context_json, state_json, created_at, updated_at
+                           error, error_code, context_json, state_json, created_at, updated_at,
+                           final_output, usage_json
                     FROM durable_runs WHERE run_id = ?
                     """,
                     (run_id,),
@@ -308,6 +338,15 @@ class SqliteRunStore(RunStore):
                 con.commit()
                 return record
 
+    def save_result(self, run_id: str, final_output: str | None, usage: Usage | None) -> None:
+        with self._lock:
+            with sqlite3.connect(self.path) as con:
+                con.execute(
+                    "UPDATE durable_runs SET final_output = ?, usage_json = ? WHERE run_id = ?",
+                    (final_output, usage.model_dump_json() if usage else None, run_id),
+                )
+                con.commit()
+
     def update_status(
         self,
         run_id: str,
@@ -316,11 +355,48 @@ class SqliteRunStore(RunStore):
         error: str | None = None,
         error_code: AgentErrorCode | None = None,
     ) -> DurableRunRecord | None:
-        record = self.get_run(run_id)
-        if record is None:
-            return None
-        record.update_status(status, error=error, error_code=error_code)
-        return self.update_run(record)
+        # Targeted UPDATE of status/error/state only (never output/usage). The read-modify-write
+        # runs under BEGIN IMMEDIATE so a concurrent process cannot interleave.
+        with self._lock:
+            with sqlite3.connect(self.path, isolation_level=None, timeout=30) as con:
+                con.execute("BEGIN IMMEDIATE")
+                try:
+                    cur = con.execute(
+                        """
+                        SELECT run_id, workspace_id, principal_id, goal, status,
+                               error, error_code, context_json, state_json, created_at,
+                               updated_at, final_output, usage_json
+                        FROM durable_runs WHERE run_id = ?
+                        """,
+                        (run_id,),
+                    )
+                    row = cur.fetchone()
+                    if row is None:
+                        con.execute("ROLLBACK")
+                        return None
+                    record = self._row_to_record(row)
+                    record.update_status(status, error=error, error_code=error_code)
+                    con.execute(
+                        """
+                        UPDATE durable_runs SET
+                            status = ?, error = ?, error_code = ?, state_json = ?, updated_at = ?
+                        WHERE run_id = ?
+                        """,
+                        (
+                            record.status.value,
+                            record.error,
+                            record.error_code.value if record.error_code else None,
+                            record.state.model_dump_json(),
+                            record.updated_at,
+                            run_id,
+                        ),
+                    )
+                    con.execute("COMMIT")
+                except BaseException:
+                    if con.in_transaction:
+                        con.execute("ROLLBACK")
+                    raise
+                return record
 
     def list_runs(self, workspace_id: str) -> list[DurableRunRecord]:
         with self._lock:
@@ -328,7 +404,8 @@ class SqliteRunStore(RunStore):
                 cur = con.execute(
                     """
                     SELECT run_id, workspace_id, principal_id, goal, status,
-                           error, error_code, context_json, state_json, created_at, updated_at
+                           error, error_code, context_json, state_json, created_at, updated_at,
+                           final_output, usage_json
                     FROM durable_runs WHERE workspace_id = ? ORDER BY created_at DESC
                     """,
                     (workspace_id,),

@@ -73,6 +73,7 @@ from .interfaces import (
     SearchFilter,
     VectorStore,
 )
+from .multimodal_leg import MultimodalNotRun
 
 logger = logging.getLogger("knowledge_os.retrieval.orchestrator")
 
@@ -103,6 +104,29 @@ GRAPH_LEG_WEIGHT: Final[dict[RetrievalMode, float]] = {
 # the total graph vote mass regardless of how many chunks the graph leg
 # surfaced (the "table-mode graph capped" proof).
 GRAPH_FUSION_CAP: Final[int] = 10
+
+#: Upper bound (seconds) on each graph-store call and on canonical resolution.
+#: The leg is optional: a hung graph store degrades the answer, never stalls it.
+GRAPH_LEG_TIMEOUT_S: float = 5.0
+
+# --- optional multimodal (visual page) leg ------------------------------------
+#: Upper bound (seconds) on the whole leg: query embed + Qdrant + canonical
+#: page resolution. Optional: a slow leg degrades the answer, never stalls it.
+MULTIMODAL_LEG_TIMEOUT_S: float = 8.0
+
+#: Page-level visual hits are coarse, so like the graph leg they supplement
+#: dense/lexical evidence in fusion rather than dominate it.
+MULTIMODAL_LEG_WEIGHT: Final[float] = 0.5
+
+#: A chunk reached ONLY through a visual page hit is model-derived support: it
+#: carries the same ``extraction`` label as vision page descriptions, so Stage
+#: 11/12 never accept it as standalone evidence. Pinned equal to
+#: ``answer.models.VISION_EXTRACTION`` by a test (retrieval must not import answer).
+VISUAL_ONLY_EXTRACTION: Final[str] = "vision"
+
+#: Reason for a failed multimodal leg: the generic degraded code, since
+#: ``LEG_REASON_CODES`` is a closed registry and defines no multimodal code.
+MULTIMODAL_REASON_CODE: Final[ReasonCode] = ReasonCode.DEGRADED_RESULT
 
 
 # --- T-V1-026: honest per-leg failure statuses ------------------------------
@@ -332,6 +356,12 @@ def _item_key(item: RetrievedItem) -> str:
     return item.chunk_id or item.content
 
 
+def _as_visual_only(item: RetrievedItem) -> RetrievedItem:
+    return item.model_copy(update={"metadata": {
+        **(item.metadata or {}), "extraction": VISUAL_ONLY_EXTRACTION, "visual_only": True,
+    }})
+
+
 class CloudEmbeddingEgressRefused(RuntimeError):
     """Fail-closed: a sensitive/local-only workspace cannot use a cloud embedder.
 
@@ -380,7 +410,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         sensitive: bool = False,
         local_only: bool = False,
         workspace_sensitive: bool = False,
+        multimodal: Any | None = None,
     ) -> None:
+        self.multimodal = multimodal
         self.dense = dense
         self.embedding = embedding
         self.lexical = lexical
@@ -501,8 +533,65 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         )
         return dense_items, sparse_items, lexical_items
 
+    async def _graph_search(self, query: str, ws_id: str) -> list[RetrievedItem]:
+        assert self.graph is not None  # callers guard on ``self.graph is None``
+        local_res = await self.graph.local_search(workspace_id=ws_id, query=query)
+        local_items = self.graph.to_retrieved_items(local_res, workspace_id=ws_id)
+        global_res = await self.graph.global_search(workspace_id=ws_id, query=query)
+        global_items = self.graph.to_retrieved_items(global_res, workspace_id=ws_id)
+        # Each graph retrieval mode contributes each chunk ref at most once,
+        # so the same evidence cannot double-vote during RRF fusion.
+        seen: set[str] = set()
+        items: list[RetrievedItem] = []
+        for item in local_items + global_items:
+            key = item.chunk_id or item.content
+            if key in seen:
+                continue
+            seen.add(key)
+            items.append(item)
+        return items
+
+    async def _canonical_graph_items(
+        self, items: list[RetrievedItem], query_filter: SearchFilter, resolve: Any
+    ) -> list[RetrievedItem]:
+        """Keep only graph refs naming a LIVE canonical chunk inside the filter.
+
+        The graph store labels every ref with the workspace it was *queried*
+        for, so that label is not proof of ownership. The canonical chunk row
+        is: a foreign-workspace, deleted, superseded, missing or ref-less chunk
+        is dropped here, before fusion, so it can neither take a context slot
+        nor be counted as a graph candidate. Canonical text/provenance replace
+        the empty routing-hint payload; the graph markers and graph score stay
+        (no lexical score is copied, so no leg is credited that did not run).
+        """
+        refs = [item.chunk_id for item in items if item.chunk_id]
+        if not refs:
+            return []
+        rows = {row.chunk_id: row for row in await resolve(chunk_ids=refs,
+                                                            query_filter=query_filter)}
+        resolved: list[RetrievedItem] = []
+        for item in items:
+            row = rows.get(item.chunk_id) if item.chunk_id else None
+            if row is None:
+                continue
+            resolved.append(item.model_copy(update={
+                "content": row.content,
+                "workspace_id": row.workspace_id,
+                "document_id": row.document_id,
+                "document_version_id": row.document_version_id,
+                "page": row.page,
+                "section": row.section,
+                "metadata": {**(row.metadata or {}), **(item.metadata or {})},
+            }))
+        return resolved
+
     async def _graph_leg(
-        self, query: str, workspace_ids: Sequence[str], *, report: _LegReport
+        self,
+        query: str,
+        workspace_ids: Sequence[str],
+        *,
+        report: _LegReport,
+        query_filter: SearchFilter | None = None,
     ) -> list[RetrievedItem]:
         if self.graph is None:
             report.not_configured("graph")
@@ -511,21 +600,28 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         items: list[RetrievedItem] = []
         for ws_id in workspace_ids:
             try:
-                local_res = await self.graph.local_search(workspace_id=ws_id, query=query)
-                local_items = self.graph.to_retrieved_items(local_res, workspace_id=ws_id)
-                global_res = await self.graph.global_search(workspace_id=ws_id, query=query)
-                global_items = self.graph.to_retrieved_items(global_res, workspace_id=ws_id)
-                # Each graph retrieval mode contributes each chunk ref at most once,
-                # so the same evidence cannot double-vote during RRF fusion.
-                seen: set[str] = set()
-                for item in local_items + global_items:
-                    key = item.chunk_id or item.content
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    items.append(item)
-            except Exception as exc:
+                items.extend(await asyncio.wait_for(
+                    self._graph_search(query, ws_id), GRAPH_LEG_TIMEOUT_S
+                ))
+            except Exception as exc:  # TimeoutError included: optional leg degrades
                 report.record("graph", exc, LEG_REASON_CODES["graph"])
+        # Canonical gate: the production lexical store (pg_fts) exposes
+        # ``resolve_chunks``; test doubles without it keep the legacy refs,
+        # which answer-side canonical hydration still guards.
+        resolve = getattr(self.lexical, "resolve_chunks", None)
+        dropped: int | None = None
+        if items and resolve is not None and query_filter is not None:
+            try:
+                validated = await asyncio.wait_for(
+                    self._canonical_graph_items(items, query_filter, resolve),
+                    GRAPH_LEG_TIMEOUT_S,
+                )
+            except Exception as exc:
+                # Unvalidated refs never pass: drop them all, degrade honestly.
+                report.record("graph", exc, LEG_REASON_CODES["graph"])
+                validated = []
+            dropped = len(items) - len(validated)
+            items = validated
         if report.failed("graph"):
             report.stages["graph"] = {"status": "failed", "candidate_count": None,
                                        "latency_ms": (perf_counter() - started) * 1000,
@@ -533,6 +629,35 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         else:
             report.completed("graph", started, 0)
             report.candidates("graph", items)
+            if dropped is not None:
+                report.stages["graph"]["dropped_refs"] = dropped
+        return items
+
+    async def _multimodal_leg(
+        self, query: str, query_filter: SearchFilter, *, report: _LegReport
+    ) -> list[RetrievedItem]:
+        """Optional visual-page leg; only ever called with ``self.multimodal`` set.
+
+        ``MultimodalNotRun`` (no key, collection absent) is reported as
+        ``not_run`` with its reason and does NOT degrade the result; any other
+        error, a timeout included, degrades it.
+        """
+        assert self.multimodal is not None  # only called when the leg is configured
+        started = perf_counter()
+        try:
+            items = await asyncio.wait_for(
+                self.multimodal.search(query=query, query_filter=query_filter),
+                MULTIMODAL_LEG_TIMEOUT_S,
+            )
+        except MultimodalNotRun as exc:
+            report.stages["multimodal"]["reason"] = exc.reason
+            return []
+        except Exception as exc:
+            report.record("multimodal", exc, MULTIMODAL_REASON_CODE)
+            report.stages["multimodal"]["latency_ms"] = (perf_counter() - started) * 1000
+            return []
+        report.completed("multimodal", started, 0)
+        report.candidates("multimodal", items)
         return items
 
     # --- ACL --------------------------------------------------------------
@@ -568,6 +693,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         trace_id = request_id_ctx.get() or new_request_id()
         report = _LegReport(allowed=set(acl_scope.workspace_ids),
                             include_public=acl_scope.include_public)
+        if self.multimodal is not None:  # flag off => no key at all (trace unchanged)
+            report.stages["multimodal"] = {"status": "not_run", "candidate_count": None,
+                                           "latency_ms": None, "returned_context_count": 0}
 
         # G0: empty/unscoped scope fails closed, before any retriever call.
         # Not a failure: nothing was attempted.
@@ -651,8 +779,9 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
         sparse_items: list[RetrievedItem] = []
         lexical_items: list[RetrievedItem] = []
         graph_items: list[RetrievedItem] = []
+        multimodal_items: list[RetrievedItem] = []
         if mode in (RetrievalMode.HYBRID, RetrievalMode.HYBRID_GRAPH):
-            dense_items, sparse_items, lexical_items = await self._fan_out(
+            fan_out = self._fan_out(
                 query,
                 query_filter,
                 dense_top_k=dense_top_k,
@@ -660,12 +789,20 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 lexical_top_k=lexical_top_k,
                 report=report,
             )
+            if self.multimodal is None:
+                dense_items, sparse_items, lexical_items = await fan_out
+            else:  # runs beside the text legs: no added latency
+                (dense_items, sparse_items, lexical_items), multimodal_items = await asyncio.gather(
+                    fan_out, self._multimodal_leg(query, query_filter, report=report)
+                )
             if mode == RetrievalMode.HYBRID_GRAPH:
                 graph_items = await self._graph_leg(
-                    query, acl_scope.workspace_ids, report=report
+                    query, acl_scope.workspace_ids, report=report, query_filter=query_filter
                 )
         elif mode == RetrievalMode.GRAPH:
-            graph_items = await self._graph_leg(query, acl_scope.workspace_ids, report=report)
+            graph_items = await self._graph_leg(
+                query, acl_scope.workspace_ids, report=report, query_filter=query_filter
+            )
         elif mode == RetrievalMode.SEMANTIC:
             dense_items = await self._dense_leg(
                 query, dense_top_k, query_filter, report=report
@@ -700,6 +837,7 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
             "sparse": [i for i in sparse_items if self._in_scope(i, allowed, public)],
             "lexical": [i for i in lexical_items if self._in_scope(i, allowed, public)],
             "graph": [i for i in graph_items if self._in_scope(i, allowed, public)],
+            "multimodal": [i for i in multimodal_items if self._in_scope(i, allowed, public)],
         }
 
         # T-K08 cross-leg dedup: a graph chunk ref already surfaced by a
@@ -760,6 +898,20 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 key = _item_key(item)
                 trace.setdefault(key, {}).setdefault("graph", item.score)
                 by_key.setdefault(key, item)
+
+        # Multimodal ranking: an extra, damped RRF leg. A chunk no text leg
+        # surfaced is reached ONLY through a visual page hit, so it is labelled
+        # model-derived (Stage 11/12 never take it as standalone evidence); a
+        # chunk a text or graph leg also surfaced keeps its canonical item.
+        non_visual_keys = non_graph_keys | {_item_key(i) for i in legs["graph"]}
+        if legs["multimodal"]:
+            rankings.append([_item_key(item) for item in legs["multimodal"]])
+            leg_weights.append(MULTIMODAL_LEG_WEIGHT)
+            for item in legs["multimodal"]:
+                key = _item_key(item)
+                trace.setdefault(key, {}).setdefault("multimodal", item.score)
+                if key not in non_visual_keys:
+                    by_key[key] = _as_visual_only(by_key.get(key, item))
 
         fused = reciprocal_rank_fusion(rankings, k=self.rrf_k, weights=leg_weights)
         ranked_keys = sort_fused(fused)[:fusion_top_k]
@@ -852,9 +1004,12 @@ class HybridRetrievalOrchestrator(RetrievalOrchestrator):
                 item.metadata["rerank_disclosure"] = rerank_disclosure
         report.completed("context", context_started, len(selected))
         report.stages["context"]["returned_context_count"] = len(selected)
-        for stage, key in (("dense", "dense"), ("sparse", "sparse"),
-                           ("lexical", "lexical"), ("graph", "graph"),
-                           ("fusion", "rrf"), ("rerank", "rerank")):
+        stage_keys = [("dense", "dense"), ("sparse", "sparse"),
+                      ("lexical", "lexical"), ("graph", "graph"),
+                      ("fusion", "rrf"), ("rerank", "rerank")]
+        if "multimodal" in report.stages:
+            stage_keys.append(("multimodal", "multimodal"))
+        for stage, key in stage_keys:
             report.stages[stage]["returned_context_count"] = sum(
                 1 for item in selected
                 if isinstance((value := item.scores.get(key)), (int, float))

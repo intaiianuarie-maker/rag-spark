@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import math
-import os
 import time
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
+from models.credentials import credential_for_url
 from retrieval.interfaces import Reranker as _Reranker
 from retrieval.interfaces import RetrievedItem
 
@@ -103,7 +103,7 @@ class NemotronRerankProvider:
             raise RerankAvailabilityError(
                 "rerank refused: sensitive/local-only workspace cannot call cloud reranker"
             )
-        self.api_key = api_key if api_key is not None else os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = api_key if api_key is not None else (credential_for_url(base_url) or "")
         self.base_url = base_url
         self.model = model
         self.min_score = min_score

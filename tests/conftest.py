@@ -60,6 +60,14 @@ if "TMPDIR" not in os.environ and _LOCAL_TMP.is_dir():
     os.environ["TMPDIR"] = str(_LOCAL_TMP)
     tempfile.tempdir = None
 
+# OpenRouter spend caps for vision and multimodal calls. Production runs uncapped
+# (local LLMs); tests cap them so a live run cannot run up OpenRouter usage. An
+# explicit value in the environment still wins (setdefault).
+os.environ.setdefault("VISION_MAX_PAGES", "5")
+os.environ.setdefault("VISION_MAX_IMAGE_BYTES", str(5 * 1024 * 1024))
+os.environ.setdefault("MULTIMODAL_MAX_PAGES", "5")
+os.environ.setdefault("MULTIMODAL_MAX_IMAGE_BYTES", str(5 * 1024 * 1024))
+
 # Same defaults as tests/unit/test_health.py so the app never touches real
 # services unless a test explicitly opts in.
 os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
@@ -92,6 +100,15 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
             print(f"[T-V1-071] dropped scratch collection {name}")
         except Exception as exc:  # never fail a green session over cleanup
             print(f"[T-V1-071] could not drop {name}: {exc}")
+
+
+if sys.platform == "win32":
+    import asyncio
+
+    @pytest.fixture(scope="session")
+    def event_loop_policy():
+        """psycopg's async mode cannot run on Windows' default ProactorEventLoop."""
+        return asyncio.WindowsSelectorEventLoopPolicy()
 
 
 def pytest_configure(config: pytest.Config) -> None:

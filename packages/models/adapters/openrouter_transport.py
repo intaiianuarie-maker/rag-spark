@@ -32,6 +32,8 @@ from typing import Any
 
 import httpx
 
+from ..credentials import credential_for_url
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
@@ -104,6 +106,44 @@ class RefusalError(NonRetryableError):
 
 class BudgetExceededError(NonRetryableError):
     """Account credit exhausted or budget ceiling reached (402, quota limits)."""
+
+
+#: Transient network failures: the route is unavailable, not the request wrong.
+NETWORK_ERRORS: tuple[type[Exception], ...] = (
+    TimeoutError,
+    ConnectionError,
+    httpx.TimeoutException,
+    httpx.TransportError,
+)
+
+
+class OpenRouterVisionTransport:
+    """httpx transport satisfying OpenRouterVisionAdapter's ``post_completion`` seam.
+
+    Posts one chat-completion request to the OpenRouter-compatible gateway and
+    returns the parsed JSON response. No user-supplied URLs: images travel as
+    base64 data URIs rendered from the authorized stored original.
+    """
+
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: float = 60.0):
+        self._base_url = base_url.rstrip("/")
+        self._api_key = api_key
+        self._model = model
+        self._timeout = timeout
+
+    async def post_completion(self, payload: dict) -> dict:
+        headers = {
+            "Authorization": f"Bearer {self._api_key}",
+            "Content-Type": "application/json",
+        }
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                f"{self._base_url}/chat/completions",
+                headers=headers,
+                json=payload,
+            )
+            response.raise_for_status()
+            return response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -214,7 +254,7 @@ class OpenRouterTransport:
         sync_client: httpx.Client | None = None,
         ledger: DurableBudgetLedger | None = None,
     ) -> None:
-        self.api_key = api_key or os.environ.get("OPENROUTER_API_KEY", "")
+        self.api_key = api_key or credential_for_url(base_url) or ""
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
         self.max_retries = max(1, max_retries)

@@ -112,14 +112,14 @@ def build_llm_provider(env: dict[str, str] | None = None) -> LLMProvider:
     half-built llm-mode extractor, and must certainly not receive the rule one.
     """
     source = os.environ if env is None else env
-    has_key = any(
-        source.get(key)
-        for key in ("LITELLM_API_KEY", "OPENROUTER_API_KEY", "DEEPSEEK_API_KEY")
-    )
-    if not has_key:
+    from models.credentials import resolve_gateway
+
+    base_url, api_key = resolve_gateway(source)
+    if not api_key:
         raise GraphModeUnsupported(
-            "GRAPH_MODE=llm requires an LLM provider, but no LITELLM_API_KEY / "
-            "OPENROUTER_API_KEY / DEEPSEEK_API_KEY is configured; refusing to "
+            f"GRAPH_MODE=llm requires an LLM provider, but no API key is configured for "
+            f"the gateway host ({base_url}): OPENROUTER_API_KEY for openrouter.ai, "
+            "DEEPSEEK_API_KEY for deepseek.com, LITELLM_API_KEY otherwise; refusing to "
             "silently run the rule extractor instead"
         )
     from models.adapters.litellm_provider import create_llm_provider

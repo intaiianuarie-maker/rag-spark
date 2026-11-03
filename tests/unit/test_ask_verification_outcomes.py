@@ -256,7 +256,10 @@ async def test_ask_router_egress_sensitive_guard(monkeypatch):
     mock_ws = MagicMock()
     mock_ws.sensitive = True
     mock_ws.routing_rules = ()
-    monkeypatch.setattr("apps.api.app.ask.router.load_workspace_config", lambda wid: mock_ws)
+    async def _store(session, wid):
+        return mock_ws
+
+    monkeypatch.setattr("apps.api.app.ask.router.load_workspace_config_from_store", _store)
 
     # Mock principal with permissions
     principal = MagicMock()

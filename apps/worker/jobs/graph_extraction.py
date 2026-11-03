@@ -204,6 +204,16 @@ async def process_graph_job(job_id: str) -> dict:
                 f"graph extraction failed for all {len(failed_chunks)} chunks: "
                 + ",".join(failed_chunks)
             )
+        if failed_chunks:
+            logger.warning(
+                "graph_extraction_partial",
+                extra={
+                    "event": "graph_extraction_partial",
+                    "job_id": job_id,
+                    "failed_chunks": failed_chunks,
+                    "extracted_chunks": len(extraction_result.chunk_ids),
+                },
+            )
 
     # Community detection (T-V2-007): connected components, deterministic,
     # no new deps. Summaries via free model, bounded, with provenance.

@@ -45,7 +45,7 @@ def test_veto_fails_closed_when_no_local_model_is_configured():
     503 upstream) instead.
     """
     config = _with_rules(
-        preferred_model="gpt-4o-mini",
+        preferred_model="google/gemma-4-26b-a4b-it:free",
         override_model="o3-mini",
         sensitive=True,
     )
@@ -59,7 +59,7 @@ def test_veto_resolves_to_the_configured_local_model(monkeypatch):
     and rules on a sensitive workspace — and it is a real model, not the label."""
     monkeypatch.setenv(LOCAL_ONLY_MODEL_ENV, "llama3.1:8b")
     config = _with_rules(
-        preferred_model="gpt-4o-mini",
+        preferred_model="google/gemma-4-26b-a4b-it:free",
         override_model="o3-mini",
         sensitive=True,
     )
@@ -68,7 +68,7 @@ def test_veto_resolves_to_the_configured_local_model(monkeypatch):
 
 
 def test_simple_fast():
-    assert route("simple", _with_rules()) == "gpt-4o-mini"
+    assert route("simple", _with_rules()) == "google/gemma-4-26b-a4b-it:free"
 
 
 def test_complex_reasoning():
@@ -80,12 +80,12 @@ def test_code_coding():
 
 
 def test_multilingual():
-    assert route("multilingual", _with_rules()) == "gpt-4o-mini"
+    assert route("multilingual", _with_rules()) == "google/gemma-4-26b-a4b-it:free"
 
 
 def test_override_wins_except_veto():
     config = _with_rules(
-        preferred_model="gpt-4o-mini",
+        preferred_model="google/gemma-4-26b-a4b-it:free",
         override_model="o3-mini",
     )
     assert route("simple", config) == "o3-mini"
@@ -118,8 +118,8 @@ def test_preferred_honored_when_no_rule_matches():
 
 def test_preferred_honored_when_no_rules_and_no_preferred():
     config = WorkspaceModelConfig(workspace_id="ws-bare")
-    assert route("code", config) == "gpt-4o-mini"
-    assert route("unknown-class-xyz", config) == "gpt-4o-mini"
+    assert route("code", config) == "google/gemma-4-26b-a4b-it:free"
+    assert route("unknown-class-xyz", config) == "google/gemma-4-26b-a4b-it:free"
 
 
 def test_rule_contents_change_outcome():

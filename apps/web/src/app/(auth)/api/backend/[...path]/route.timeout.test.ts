@@ -44,7 +44,7 @@ const SLOW_UPSTREAM_MS = 16_000;
 function askRequest(signal?: AbortSignal): Request {
   return new Request("http://web.local/api/backend/v1/ask", {
     method: "POST",
-    body: '{"query":"retrieval precision RP-06?","model":"gpt-4o-mini"}',
+    body: '{"query":"retrieval precision RP-06?","model":"google/gemma-4-26b-a4b-it:free"}',
     headers: { "content-type": "application/json" },
     signal,
   });

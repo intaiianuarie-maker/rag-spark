@@ -192,8 +192,10 @@ class _ModelGatewayProbe:
             latency = (time.perf_counter() - start) * 1000
             return DependencyStatus(
                 name=name,
-                # T-V1-005 rule: any sub-500 answer proves the process is up.
-                reachable=response.status_code < 500,
+                # T-V1-005 rule: only 2xx/3xx proves the process is up.
+                # A 404 (missing health route) or other 4xx is unreachable —
+                # a gateway without that route must not look ready (B16).
+                reachable=200 <= response.status_code < 400,
                 latency_ms=round(latency, 2),
                 detail=f"GET {path or '/'} -> {response.status_code}",
             )

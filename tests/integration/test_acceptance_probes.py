@@ -86,7 +86,7 @@ async def test_acceptance_1_golden_path_grounded_answer_with_real_citation() -> 
         }
     )
     llm = MockAcceptanceLLM(response_text=llm_output)
-    engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="gpt-4o-mini")
+    engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="google/gemma-4-26b-a4b-it:free")
 
     scope = ACLScope(user_id="user-1", workspace_ids=["ws-golden"])
     result = await engine.answer(query="What does Antigravity provide?", acl_scope=scope)
@@ -179,7 +179,7 @@ async def test_acceptance_4_citation_integrity_fabricated_chunk_rejected() -> No
         '"claims": [{"text": "Hallucinated claim", "chunk_ids": ["hallucinated-chunk-999"]}]}'
     )
     llm = MockAcceptanceLLM(response_text=llm_output)
-    engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="gpt-4o-mini")
+    engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="google/gemma-4-26b-a4b-it:free")
 
     scope = ACLScope(user_id="u1", workspace_ids=["ws-auth"])
     result = await engine.answer(query="Explain options", acl_scope=scope)
@@ -203,7 +203,7 @@ async def test_acceptance_4_citation_integrity_fabricated_chunk_rejected() -> No
         )
     )
     ungrounded_engine = AnswerEngine(
-        orchestrator=orchestrator, llm=ungrounded_llm, model="gpt-4o-mini"
+        orchestrator=orchestrator, llm=ungrounded_llm, model="google/gemma-4-26b-a4b-it:free"
     )
     ungrounded_result = await ungrounded_engine.answer(
         query="Explain options", acl_scope=scope
@@ -237,7 +237,7 @@ async def test_acceptance_5_multilingual_cross_language_retrieval() -> None:
         }
     )
     llm = MockAcceptanceLLM(response_text=llm_output)
-    engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="gpt-4o-mini")
+    engine = AnswerEngine(orchestrator=orchestrator, llm=llm, model="google/gemma-4-26b-a4b-it:free")
 
     scope = ACLScope(user_id="u1", workspace_ids=["ws-multi"])
     result = await engine.answer(query="Ce tip de autentificare este acceptat?", acl_scope=scope)
@@ -284,7 +284,7 @@ async def test_acceptance_6_cross_language_translation_abstains() -> None:
             )
         )
         engine = AnswerEngine(
-            orchestrator=orchestrator, llm=llm, model="gpt-4o-mini"
+            orchestrator=orchestrator, llm=llm, model="google/gemma-4-26b-a4b-it:free"
         )
         result = await engine.answer(
             query="Care este capitala Franței?", acl_scope=scope

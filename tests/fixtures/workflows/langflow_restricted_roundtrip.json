@@ -57,7 +57,7 @@
                 "required": false,
                 "value": "Answer only from retrieved evidence."
               },
-              "model_name": {"type": "str", "required": false, "value": "gpt-4o-mini"},
+              "model_name": {"type": "str", "required": false, "value": "google/gemma-4-26b-a4b-it:free"},
               "temperature": {"type": "float", "required": false, "value": 0.2},
               "max_tokens": {"type": "int", "required": false, "value": 256},
               "stream": {"type": "bool", "required": false, "value": false}

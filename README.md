@@ -44,6 +44,18 @@ Stop the stack with `docker compose down`. Your data stays in Docker volumes. `d
 
 Ports are bound to `127.0.0.1`, so only this machine can reach them. To reach the stack from another device, change the `127.0.0.1:` prefix in `docker-compose.yml` and read the security notes below first.
 
+The api and worker images contain the code as of the build; nothing from your checkout is mounted into them. After `git pull`, run `docker compose up -d --build` again to pick up the changes.
+
+### Contributor mode (live reload)
+
+To edit code and see it without rebuilding, add the dev override. It bind-mounts `apps/` and `packages/` into the api and worker and runs the api with `--reload`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+```
+
+The override sets `--reload-dir` for both `apps/api` and `packages/`; uvicorn watches only the working directory by default, so without it edits under `packages/` are silently ignored. The worker has no reload watcher: restart it after editing (`docker compose -f docker-compose.yml -f docker-compose.dev.yml restart worker`). Don't use this mode for a normal install, because it runs whatever is on your disk.
+
 ### Optional: rerank sidecar
 
 OpenRouter Nemotron rerank is on by default for the ask leg (`RERANK_ENABLED=true`); nothing extra needs to run. The standalone `rerank` service (a local MiniLM sidecar) is off by default and is not called by the API or worker — start it only if you want the local route: `docker compose --profile rerank up -d`.
@@ -65,13 +77,27 @@ pip install -r requirements-dev.txt
 pytest -m unit
 ```
 
-Last run on Windows 11, Python 3.12.13, without Docker or any service running: 2220 passed, 26 skipped, 18 failed, 3 errors. The skips need a dataset that is not in the repo (MuSiQue, 2WikiMultiHopQA, HotpotQA) or a POSIX system. The 21 failures, by cause:
+The unit and contract tests need a Postgres and a Redis, as CI provides them (`postgres:16.15-alpine3.23` and `redis:7.4.11-alpine`, the images in `docker-compose.yml`). Start your own, apply the migrations, and point the tests at them. Don't point them at a running stack you care about:
 
-- Postgres (6 failed, 3 errors): `test_pg_fts_lifecycle_gate.py`, `test_lexical_regression.py`, and the purge test in `test_graph_lifecycle.py`.
-- Redis (11 failed): the nine tests in `test_queue_semantics.py`, `test_ingest_pipeline.py::test_worker_survives_process_one_failure`, and `test_supersede_then_crash_leaves_no_orphans` in `test_supersession_vector_cleanup.py`. Without Redis the retry is not queued, so the job is marked `SUPERSESSION_CLEANUP_FAILED` and the worker loops time out.
-- Stale test data (1 failed): `test_v4_authoring_api.py::test_run_workflow_runtime_failure_returns_coded_error` uses the model `x`, which the admission check rejects before the LLM call. It needs an admitted model and a stubbed provider.
+```bash
+docker run -d --name test-pg -e POSTGRES_USER=knowledge -e POSTGRES_PASSWORD=knowledge -e POSTGRES_DB=knowledge -p 127.0.0.1:55432:5432 postgres:16.15-alpine3.23
+docker run -d --name test-redis -p 127.0.0.1:56379:6379 redis:7.4.11-alpine
+export DATABASE_URL=postgresql+psycopg://knowledge:knowledge@127.0.0.1:55432/knowledge
+export REDIS_URL=redis://127.0.0.1:56379/0
+(cd apps/api && PYTHONPATH=../../packages alembic upgrade head)
+pytest -q --ignore=tests/integration
+```
 
-Integration tests need the running stack: `pytest -m integration`.
+Last run on Windows 11, Python 3.12, against throwaway Postgres 16 and Redis 7 containers: 3485 passed, 35 skipped, 0 failed. Skips are conditional on the environment:
+
+- Datasets that are not in the repo: MuSiQue, 2WikiMultiHopQA, HotpotQA, `/tmp/g5_mappings.json`.
+- POSIX-only tests, and one `file://` containment test on Windows (the product runs in Linux containers).
+- The end-to-end OCR tests need the `tesseract` binary with the `ron`, `por` and `eng` packs, plus the DejaVu font. CI installs them (`apt-get install tesseract-ocr tesseract-ocr-eng tesseract-ocr-ron tesseract-ocr-por fonts-dejavu-core`); elsewhere they skip.
+- `test_live_stability` pins one operator's live Qdrant index; set `G5_LIVE_QDRANT_CHECK=1` to run it.
+
+Without Postgres or Redis, the tests that use them fail instead of skipping: `test_pg_fts_lifecycle_gate.py`, `test_lexical_regression.py`, `test_queue_semantics.py` and a few others.
+
+Integration tests need the running stack, and CI skips them: `pytest -m integration`.
 
 Lint and types: `ruff check .` and `mypy`.
 

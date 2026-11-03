@@ -305,7 +305,7 @@ class TestBypassIsZero:
     @pytest.mark.parametrize(
         ("config_key", "valid"),
         [
-            ("model", "gpt-4o-mini"),
+            ("model", "google/gemma-4-26b-a4b-it:free"),
             ("temperature", 0.2),
             ("max_tokens", 512),
             ("top_k", 5),
@@ -338,7 +338,7 @@ class TestBypassIsZero:
         raw_node = _lf_node(
             "lf-llm",
             "ChatOpenAI",
-            template=_llm_template(model_name={"value": "gpt-4o-mini"}, temperature={"value": 0.2}),
+            template=_llm_template(model_name={"value": "google/gemma-4-26b-a4b-it:free"}, temperature={"value": 0.2}),
         )
         assert LangflowAdapter._check_config_values(raw_node, "lf-llm", spec) == []
 
@@ -380,14 +380,14 @@ class TestEveryRuleEnforcedAtThePoint:
             "ChatOpenAI",
             {
                 "input_value": {"value": "hi"},
-                "model_name": {"value": "gpt-4o-mini"},
+                "model_name": {"value": "google/gemma-4-26b-a4b-it:free"},
                 "temperature": {"value": 0.2},
                 "max_tokens": {"value": 512},
                 "stream": {"value": False},
             },
         )
         node = llm.nodes[0]
-        assert node.config["model"] == "gpt-4o-mini"
+        assert node.config["model"] == "google/gemma-4-26b-a4b-it:free"
         assert node.config["temperature"] == 0.2
         assert node.config["max_tokens"] == 512
         assert node.config["stream"] is False
@@ -422,7 +422,7 @@ class TestNoOverRejection:
             _lf_node(
                 "lf-llm",
                 "ChatOpenAI",
-                template={"input_value": "hi", "model_name": {"value": "gpt-4o-mini"}},
+                template={"input_value": "hi", "model_name": {"value": "google/gemma-4-26b-a4b-it:free"}},
             ),
             _lf_node("lf-out", "ChatOutput"),
         ]
@@ -434,7 +434,7 @@ class TestNoOverRejection:
             _flow(nodes, edges), workflow_id="wf-1", workspace_id="ws-1"
         )
         assert [n.id for n in definition.nodes] == ["lf-trigger", "lf-llm", "lf-out"]
-        assert definition.nodes[1].config["model"] == "gpt-4o-mini"
+        assert definition.nodes[1].config["model"] == "google/gemma-4-26b-a4b-it:free"
 
     def test_boundary_values_accepted_at_the_point(self) -> None:
         _import_component(

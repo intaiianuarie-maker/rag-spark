@@ -102,17 +102,18 @@ is never silently indexed as an empty document.
 
 ## Parse budgets, enforced before expansion
 
-The pipeline refuses a document on **four budgets**, all env-tunable, all
+The pipeline refuses a document on **four budgets**, all env-tunable and unlimited
+unless set, all
 enforced *while the parser expands the document* — never by counting elements
 after the fact. Counting afterwards is a verdict on work already paid for; a
 budget has to stop the work.
 
 | Budget | Env var | Default | Code |
 |---|---|---|---|
-| Parse wall clock | `INGEST_PARSE_TIMEOUT_SECONDS` | `120` | `parse_time_budget` |
-| Peak memory (RSS) | `INGEST_PARSE_MAX_MEMORY_MB` | `1024` | `parse_memory_budget` |
-| Expanded text | `INGEST_PARSE_MAX_EXPANDED_CHARS` | `2_000_000` | `parse_expanded_text_budget` |
-| Output elements | `INGEST_PARSE_MAX_OUTPUT_ELEMENTS` | `100_000` | `parse_output_budget` |
+| Parse wall clock | `INGEST_PARSE_TIMEOUT_SECONDS` | unlimited | `parse_time_budget` |
+| Peak memory (RSS) | `INGEST_PARSE_MAX_MEMORY_MB` | unlimited | `parse_memory_budget` |
+| Expanded text | `INGEST_PARSE_MAX_EXPANDED_CHARS` | unlimited | `parse_expanded_text_budget` |
+| Output elements | `INGEST_PARSE_MAX_OUTPUT_ELEMENTS` | unlimited | `parse_output_budget` |
 
 All four raise `ParseBudgetExceeded` and are parked as **non-retryable** —
 retrying a deterministic budget breach can only spend the same budget again.
@@ -138,9 +139,9 @@ the breach (budget + 1, not "the whole document").
    case this budget exists for — but a call wedged inside a third-party C
    routine keeps its thread-pool slot until it returns.
 
-The old element-count guard (`ensure_element_limit`, `INGEST_MAX_ELEMENTS`) is
-**kept** as an independent post-parse backstop. Two guards on the same limit is
-not the same as one.
+The old post-parse element-count backstop (`ensure_element_limit`,
+`INGEST_MAX_ELEMENTS`) is **removed**. The output-element budget above is now the
+only element cap, so set `INGEST_PARSE_MAX_OUTPUT_ELEMENTS` to cap elements.
 
 ## Disclosure reaches answers, and answers are never confident
 

@@ -60,8 +60,6 @@ class _Pipe:
         monkeypatch.setattr(pdfium_render, "render_pdf_page", render)
         monkeypatch.setattr(ip, "_OpenRouterVisionTransport", Transport)
         monkeypatch.setenv("OPENROUTER_API_KEY", "k")
-        monkeypatch.setattr(ip, "VISION_MAX_PAGES", 5)
-        monkeypatch.setattr(ip, "VISION_IMAGE_BUDGET_BYTES", 10_000)
 
     def run(self, pages, sensitive=False):
         return asyncio.run(
@@ -80,11 +78,12 @@ def test_no_lost_pages_means_no_render_and_no_http(monkeypatch, caplog) -> None:
     assert len(logged) == 1
 
 
-def test_many_lost_pages_are_sorted_and_capped_at_max_pages(monkeypatch) -> None:
+def test_many_lost_pages_are_all_sent_sorted_and_deduped(monkeypatch) -> None:
+    monkeypatch.setattr(ip, "VISION_MAX_PAGES", None)  # production: unlimited
     p = _Pipe(monkeypatch)
     elements = p.run([30, 3, 12, 7, 7, 20, 1, 25])
-    assert p.renders == [1, 3, 7, 12, 20]  # sorted, deduped, first VISION_MAX_PAGES
-    assert [e.page for e in elements] == [1, 3, 7, 12, 20]
+    assert p.renders == [1, 3, 7, 12, 20, 25, 30]  # sorted and deduped, none dropped
+    assert [e.page for e in elements] == [1, 3, 7, 12, 20, 25, 30]
 
 
 def test_sensitive_workspace_with_lost_pages_still_makes_no_call(monkeypatch) -> None:

@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import socket
 import uuid
 
 import pytest
+from service_probe import redis_open
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
@@ -22,17 +22,9 @@ os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 pytestmark = pytest.mark.integration
 
 
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture
 async def queue_mod(monkeypatch: pytest.MonkeyPatch):
-    if not _port_open(6379):
+    if not redis_open():
         pytest.skip("redis not reachable; run `make up`")
 
     import ingestion.adapters.redis_queue as rq

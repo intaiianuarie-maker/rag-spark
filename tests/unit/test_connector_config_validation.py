@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import traceback
 
 import pytest
@@ -40,6 +41,11 @@ def test_local_paths_are_canonical_and_cannot_escape(kind, key, tmp_path, monkey
         validate_settings(kind, {key: str(root)})
 
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="file:// URL path handling uses unquote(), which keeps the leading '/' of "
+    "'/C:/...'; the product runs in Linux containers, so this is Windows-host only",
+)
 def test_git_file_url_is_decoded_before_containment(tmp_path, monkeypatch):
     root, outside = tmp_path / "approved", tmp_path / "outside"
     root.mkdir()

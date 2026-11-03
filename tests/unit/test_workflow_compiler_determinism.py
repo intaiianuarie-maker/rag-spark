@@ -18,6 +18,7 @@ its stated barrier, plus the refusal of an undeclared join.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -185,6 +186,8 @@ def _subprocess_compile(seed: str, tmp_path: Path) -> bytes:
         "PYTHONHASHSEED": seed,
         "PYTHONPATH": str(repo_root / "packages"),
         "PATH": "/usr/bin:/bin",
+        # Windows cannot start a Python child (asyncio import) without SYSTEMROOT.
+        **{k: v for k, v in os.environ.items() if k == "SYSTEMROOT"},
     }
     out = subprocess.run(
         [sys.executable, str(script)],

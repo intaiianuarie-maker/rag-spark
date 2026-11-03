@@ -83,6 +83,40 @@ def _llm_provider_for(model: str) -> LiteLLMProvider:
     return LiteLLMProvider()
 
 
+def _multimodal_leg(embedding, lexical):
+    """Optional visual-page leg, built only under the worker's own flag.
+
+    Flag off -> ``None`` (the orchestrator and its trace are exactly the
+    pre-multimodal ones). Flag on without ``OPENROUTER_API_KEY`` still builds
+    the leg with no embedder, so the trace says ``not_run: no_api_key`` instead
+    of staying silent. Construction failures degrade to "no leg" with a log.
+    """
+    import os
+
+    if os.environ.get("MULTIMODAL_EMBED_ENABLED", "false").strip().lower() not in {
+        "1", "true", "yes", "on",
+    }:
+        return None
+    try:
+        from retrieval.adapters.multimodal_embed import DEFAULT_MULTIMODAL_COLLECTION
+        from retrieval.adapters.qdrant_store import QdrantVectorStore
+        from retrieval.multimodal_leg import MultimodalLeg
+
+        return MultimodalLeg(
+            store=QdrantVectorStore(collection=DEFAULT_MULTIMODAL_COLLECTION),
+            embedder=embedding if os.environ.get("OPENROUTER_API_KEY", "").strip() else None,
+            resolve_pages=lexical.resolve_page_chunks,
+            collection=DEFAULT_MULTIMODAL_COLLECTION,
+        )
+    except Exception as exc:
+        logger.warning(
+            "multimodal_leg_construction_failed",
+            extra={"event": "multimodal_leg_construction_failed",
+                   "error_type": type(exc).__name__},
+        )
+        return None
+
+
 def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
     """Dense (Qdrant) + lexical (PG FTS) + rerank (infinity) hybrid orchestrator.
 
@@ -146,6 +180,8 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
 
             reranker = OpenRouterReranker(NemotronRerankProvider(sensitive=False))
             rerank_enabled = True
+    # Sensitive workspaces never egress a query embedding, so no visual leg.
+    multimodal = None if sensitive else _multimodal_leg(embedding, lexical)
     return HybridRetrievalOrchestrator(
         dense=dense,
         embedding=embedding,
@@ -155,6 +191,7 @@ def create_orchestrator(*, collection: str | None = None, **policy_kwargs):
         rerank_enabled=rerank_enabled,
         graph=graph_retriever,
         sensitive=sensitive,
+        **({"multimodal": multimodal} if multimodal is not None else {}),
     )
 
 

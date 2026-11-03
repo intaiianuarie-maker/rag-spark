@@ -37,7 +37,7 @@ from pydantic import BaseModel, Field
 
 from .citation_integrity import CitationIntegrityReport
 from .interfaces import ChunkLookup
-from .models import Citation, Claim
+from .models import VISION_EXTRACTION, Citation, Claim
 
 logger = logging.getLogger("knowledge_os.answer.semantic_verification")
 
@@ -47,11 +47,14 @@ __all__ = [
     "REASON_MODEL_REFUSED",
     "REASON_NO_EVIDENCE",
     "REASON_PARTIAL_SUPPORT",
+    "REASON_SPAN_NOT_VERIFIED",
     "REASON_SUPPORTED",
     "REASON_TIMEOUT",
     "REASON_UNKNOWN_VERDICT",
     "REASON_UPSTREAM_429_EXHAUSTED",
     "REASON_VERIFIER_OUTAGE",
+    "REASON_VERIFIER_UNRESPONSIVE",
+    "REASON_VISION_ONLY_SUPPORT",
     "CanonicalEvidence",
     "ClaimVerdict",
     "PublicationGateResult",
@@ -61,7 +64,9 @@ __all__ = [
     "SemanticVerificationReport",
     "SupportSpan",
     "Verdict",
+    "enforce_support",
     "evaluate_publication_gate",
+    "locate_quote",
     "verify_semantic_claims",
 ]
 
@@ -79,6 +84,7 @@ class Verdict(StrEnum):
     UNSUPPORTED = "unsupported"
     CONTRADICTED = "contradicted"
     UNCERTAIN = "uncertain"
+    UNRESPONSIVE = "unresponsive"
 
 
 #: Reason codes the model may return (and adapter defaults when the model omits one).
@@ -94,6 +100,11 @@ REASON_MODEL_REFUSED = "MODEL_REFUSED"
 REASON_MALFORMED_JSON = "MALFORMED_JSON"
 REASON_UNKNOWN_VERDICT = "UNKNOWN_VERDICT"
 REASON_UPSTREAM_429_EXHAUSTED = "UPSTREAM_429_EXHAUSTED"
+REASON_VERIFIER_UNRESPONSIVE = "VERIFIER_UNRESPONSIVE"
+
+#: Reason codes from the deterministic support check (a SUPPORTED verdict was downgraded).
+REASON_SPAN_NOT_VERIFIED = "SPAN_NOT_VERIFIED"
+REASON_VISION_ONLY_SUPPORT = "VISION_ONLY_SUPPORT"
 
 
 _DEFAULT_REASON: Mapping[Verdict, str] = {
@@ -102,6 +113,7 @@ _DEFAULT_REASON: Mapping[Verdict, str] = {
     Verdict.UNSUPPORTED: REASON_NO_EVIDENCE,
     Verdict.CONTRADICTED: REASON_CONTRADICTION_FOUND,
     Verdict.UNCERTAIN: REASON_VERIFIER_OUTAGE,
+    Verdict.UNRESPONSIVE: REASON_VERIFIER_UNRESPONSIVE,
 }
 
 
@@ -130,11 +142,17 @@ class CanonicalEvidence(BaseModel):
 
 
 class SupportSpan(BaseModel):
-    """Verbatim text span within an evidence passage substantiating a claim."""
+    """Verbatim text span within an evidence passage substantiating a claim.
+
+    ``quote`` is the verbatim text the verifier cited; ``start``/``end`` are
+    offsets into the ORIGINAL evidence content, computed server-side from the quote
+    (never trusted from the model).
+    """
 
     evidence_id: str
     start: int = 0
     end: int = 0
+    quote: str = ""
 
 
 class ClaimVerdict(BaseModel):
@@ -278,6 +296,105 @@ def _uncertain_verdict(
     )
 
 
+_MIN_QUOTE_CHARS = 10
+
+
+def _normalise_ws(text: str) -> tuple[str, list[int]]:
+    """Collapse whitespace runs to one space; return the text and a char -> original index map."""
+    out: list[str] = []
+    idx: list[int] = []
+    prev_space = True  # drops leading whitespace
+    for i, ch in enumerate(text):
+        if ch.isspace():
+            if not prev_space:
+                out.append(" ")
+                idx.append(i)
+            prev_space = True
+        else:
+            out.append(ch)
+            idx.append(i)
+            prev_space = False
+    if out and out[-1] == " ":
+        out.pop()
+        idx.pop()
+    return "".join(out), idx
+
+
+def locate_quote(content: str, quote: str) -> tuple[int, int] | None:
+    """Return ``(start, end)`` in the original *content* if *quote* is an exact
+    (whitespace-normalised, case-sensitive) substring of it, else ``None``.
+
+    Quotes shorter than ``min(10, len(normalised content))`` chars are rejected so a
+    hallucinated one-word "quote" cannot match by accident.
+    # ponytail: no Unicode (NFC) folding; a model that re-composes accents is downgraded.
+    """
+    nquote = " ".join(quote.split())
+    ncontent, idx = _normalise_ws(content)
+    if not nquote or len(nquote) < min(_MIN_QUOTE_CHARS, len(ncontent)):
+        return None
+    pos = ncontent.find(nquote)
+    if pos < 0:
+        return None
+    return idx[pos], idx[pos + len(nquote) - 1] + 1
+
+
+def _downgraded(verdict: ClaimVerdict, new: Verdict, reason: str) -> ClaimVerdict:
+    return verdict.model_copy(
+        update={"verdict": new, "reason_code": reason, "support_spans": []}
+    )
+
+
+def enforce_support(
+    verdict: ClaimVerdict,
+    evidence: Sequence[CanonicalEvidence],
+    *,
+    require_quotes: bool = False,
+) -> ClaimVerdict:
+    """Deterministically re-check a verifier's verdict against the ORIGINAL evidence.
+
+    The model's output is untrusted (the evidence it read may have carried an
+    injection), so a ``SUPPORTED`` verdict stands only if:
+
+    * every cited span names a known evidence id and, when it carries a ``quote``,
+      the quote is an exact (whitespace-normalised) substring of that evidence
+      (offsets are then recomputed from the original text; spans without a quote
+      are bounds-checked, or rejected when ``require_quotes``);
+    * at least one span exists when ``require_quotes``;
+    * the support is not vision-only (model-generated text never verifies alone).
+
+    Failures downgrade to ``UNSUPPORTED`` (``SPAN_NOT_VERIFIED``) or ``UNCERTAIN``
+    (``VISION_ONLY_SUPPORT``). Invalid spans are always pruned from the result.
+    """
+    by_id = {e.evidence_id: e for e in evidence}
+    good: list[SupportSpan] = []
+    bad = 0
+    for span in verdict.support_spans:
+        ev = by_id.get(span.evidence_id)
+        if ev is None:
+            bad += 1
+        elif span.quote:
+            loc = locate_quote(ev.content, span.quote)
+            if loc is None:
+                bad += 1
+            else:
+                good.append(span.model_copy(update={"start": loc[0], "end": loc[1]}))
+        elif require_quotes or not 0 <= span.start <= span.end <= len(ev.content):
+            bad += 1
+        else:
+            good.append(span)
+
+    out = verdict.model_copy(update={"support_spans": good})
+    if verdict.verdict != Verdict.SUPPORTED:
+        return out
+    if bad or (require_quotes and not good):
+        return _downgraded(verdict, Verdict.UNSUPPORTED, REASON_SPAN_NOT_VERIFIED)
+    text_ids = {e.evidence_id for e in evidence if e.extraction != VISION_EXTRACTION}
+    cited_ids = {s.evidence_id for s in good} or set(by_id)
+    if not cited_ids & text_ids:
+        return _downgraded(verdict, Verdict.UNCERTAIN, REASON_VISION_ONLY_SUPPORT)
+    return out
+
+
 def default_reason(verdict: Verdict) -> str:
     """Return the default reason code for a verdict."""
     return _DEFAULT_REASON.get(verdict, "UNKNOWN")
@@ -353,6 +470,8 @@ async def verify_semantic_claims(
                     verdict = await _bounded_recheck(
                         verifier, claim.text, evidence, verdict
                     )
+                # Deterministic safety net: never trust a SUPPORTED the evidence can't back.
+                verdict = enforce_support(verdict, evidence)
 
         if verdict.verdict == Verdict.CONTRADICTED:
             all_contradictions.extend(verdict.contradictions)
@@ -464,9 +583,9 @@ async def evaluate_publication_gate(
             if missing:
                 lifecycle_ok = False
                 reasons.append(f"DOCUMENT_MUTATED_OR_DELETED_DURING_VERIFICATION: {missing}")
-        except Exception as exc:
+        except Exception:
             lifecycle_ok = False
-            reasons.append(f"LIFECYCLE_RECHECK_ERROR: {exc}")
+            reasons.append("LIFECYCLE_RECHECK_ERROR: chunk lookup failed during lifecycle revalidation")
 
     # Decision synthesis (Fail-closed)
     if not stage11_ok or not lifecycle_ok:
@@ -476,6 +595,9 @@ async def evaluate_publication_gate(
         status = PublicationStatus.ABSTAIN
         can_publish = False
     elif any(cv.verdict == Verdict.UNCERTAIN for cv in semantic_report.claim_verdicts):
+        status = PublicationStatus.NEEDS_REVIEW
+        can_publish = False
+    elif any(cv.verdict == Verdict.UNRESPONSIVE for cv in semantic_report.claim_verdicts):
         status = PublicationStatus.NEEDS_REVIEW
         can_publish = False
     elif any(cv.verdict == Verdict.UNSUPPORTED for cv in semantic_report.claim_verdicts):

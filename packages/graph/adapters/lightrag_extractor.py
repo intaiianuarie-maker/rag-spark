@@ -192,6 +192,7 @@ class LLMBasedGraphExtractor(GraphExtractor):
                     # Malformed/unparsable/unverified output: record the error
                     # (with workspace+chunk provenance) and skip the chunk.
                     errors.append(exc)
+                    failed_chunk_ids.append(chunk.chunk_id)
                     continue
                 except Exception as exc:  # provider/network — never per-chunk fatal
                     errors.append(
@@ -202,6 +203,7 @@ class LLMBasedGraphExtractor(GraphExtractor):
                             chunk_id=chunk.chunk_id,
                         )
                     )
+                    failed_chunk_ids.append(chunk.chunk_id)
                     continue
                 # Only fully-verified chunks count as extracted provenance.
                 ok_chunk_ids.append(chunk.chunk_id)

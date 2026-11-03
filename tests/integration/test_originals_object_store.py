@@ -48,12 +48,12 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import os
-import socket
 import uuid
 from collections.abc import Iterator
 
 import pytest
 import sqlalchemy as sa
+from service_probe import postgres_open, redis_open
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
@@ -73,15 +73,9 @@ DATABASE_URL = os.environ.get(
 PAYLOAD = b"T-V1-039 originals\r\n\x00\x01\x02 high bytes: \xe2\xe3\xcf\xd3 \xff\xfe\n"
 
 
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
 def _one(sql: str, params: dict | None = None) -> sa.Row | None:
+    if not postgres_open():
+        pytest.skip("postgres not reachable; run `make up`")
     engine = sa.create_engine(DATABASE_URL)
     try:
         with engine.connect() as connection:
@@ -91,6 +85,8 @@ def _one(sql: str, params: dict | None = None) -> sa.Row | None:
 
 
 def _rows(sql: str, params: dict | None = None) -> list[sa.Row]:
+    if not postgres_open():
+        pytest.skip("postgres not reachable; run `make up`")
     engine = sa.create_engine(DATABASE_URL)
     try:
         with engine.connect() as connection:
@@ -107,7 +103,7 @@ def queue_prefix() -> Iterator[str]:
     try:
         import redis
 
-        client = redis.Redis(host="127.0.0.1", port=6379)
+        client = redis.Redis.from_url(os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0"))
         keys = list(client.scan_iter(match=f"ingest:{prefix}*"))
         if keys:
             client.delete(*keys)
@@ -119,7 +115,7 @@ def queue_prefix() -> Iterator[str]:
 
 @pytest.fixture(scope="module")
 def client(queue_prefix: str):
-    if not (_port_open(5432) and _port_open(6379)):
+    if not (postgres_open() and redis_open()):
         pytest.skip("postgres/redis not reachable; run `make up`")
     apply_object_store_env()  # loud-skip when SeaweedFS is down
 

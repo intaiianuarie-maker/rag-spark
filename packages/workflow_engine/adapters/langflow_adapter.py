@@ -466,7 +466,7 @@ _LANGFLOW_TYPE_PREFIX = "langflow.io."
 VETTED_MODELS: frozenset[str] = frozenset({
     "google/gemma-4-26b-a4b-it:free",
     "google/gemma-4-26b-a4b-it",
-    "gpt-4o-mini",
+    "google/gemma-4-26b-a4b-it:free",
     "gpt-4o",
     "gpt-4.1-mini",
     "gpt-4.1",

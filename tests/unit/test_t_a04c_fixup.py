@@ -19,7 +19,7 @@ def test_runs_bad_path_refuses() -> None:
 
 
 def test_runs_restart_read() -> None:
-    with tempfile.TemporaryDirectory() as d:
+    with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as d:
         db = os.path.join(d, "runs.db")
         os.environ["WORKFLOW_RUNS_DB"] = db
         os.environ["WORKFLOW_APPROVALS_DB"] = os.path.join(d, "approvals.db")

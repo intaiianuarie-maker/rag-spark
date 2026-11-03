@@ -28,10 +28,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-import socket
 import uuid
 
 import pytest
+from service_probe import redis_open
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
@@ -39,22 +39,14 @@ os.environ.setdefault("MIGRATIONS_ON_BOOT", "false")
 
 pytestmark = pytest.mark.integration
 
-REDIS_URL = "redis://127.0.0.1:6379/0"
+REDIS_URL = os.environ.get("REDIS_URL", "redis://127.0.0.1:6379/0")
 TTL_ENV = "INGEST_WORKER_HEARTBEAT_TTL_SECONDS"
-
-
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
 
 
 @pytest.fixture
 def live_redis(monkeypatch: pytest.MonkeyPatch):
     """A unique queue prefix so the shared broker's real worker is untouched."""
-    if not _port_open(6379):
+    if not redis_open():
         pytest.skip("redis not reachable; run `make up`")
     monkeypatch.setenv("INGEST_QUEUE_PREFIX", f"t056-{uuid.uuid4().hex[:12]}:")
     return REDIS_URL

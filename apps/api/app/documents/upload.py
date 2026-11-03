@@ -12,14 +12,15 @@ from __future__ import annotations
 import codecs
 import hashlib
 import logging
+import os
 import uuid
 from datetime import UTC, datetime
 
 from core.auth import Principal
 from core.errors import ReasonCode, error_detail
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from ingestion.adapters.registry import parser_for_mime
 from ingestion.dedup import find_document_by_filename, latest_job_for_version, latest_version
-from ingestion.normalize import MAX_DOCUMENT_BYTES
 from ingestion.persistence import (
     Document,
     DocumentVersion,
@@ -76,35 +77,33 @@ def _http_error(exc: ApiError) -> HTTPException:
     )
 
 
-def _too_large() -> HTTPException:
-    return HTTPException(
-        status_code=status.HTTP_413_CONTENT_TOO_LARGE,
-        detail={
-            "error": "DOCUMENT_TOO_LARGE",
-            "message": "File exceeds the maximum allowed size.",
-        },
-    )
+# Filename-extension fallback for uploads that arrive with no (or a generic)
+# Content-Type. Only types the parser registry already serves are guessed.
+_EXT_MIME = {
+    ".pdf": "application/pdf",
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".html": "text/html",
+    ".htm": "text/html",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+}
+
+
+def _resolve_mime(content_type: str | None, filename: str | None) -> str | None:
+    """Declared type (parameters stripped), else a supported extension guess, else None."""
+    declared = (content_type or "").split(";")[0].strip().lower()
+    if declared and declared != "application/octet-stream":
+        return declared
+    guess = _EXT_MIME.get(os.path.splitext(filename or "")[1].lower())
+    return guess if guess and parser_for_mime(guess) else None
 
 
 def _clamp(value: str | None, limit: int = 512) -> str | None:
     if value is None:
         return None
     return value[:limit]
-
-
-async def _read_limited(upload: UploadFile, limit: int) -> bytes:
-    """Stream-read at most ``limit`` bytes; reject 413 as soon as it is exceeded."""
-    chunks: list[bytes] = []
-    total = 0
-    while True:
-        chunk = await upload.read(1024 * 1024)
-        if not chunk:
-            break
-        total += len(chunk)
-        if total > limit:
-            raise _too_large()
-        chunks.append(chunk)
-    return b"".join(chunks)
 
 
 async def _enqueue_or_fail(session: AsyncSession, job: IngestionJob) -> None:
@@ -133,7 +132,6 @@ async def _enqueue_or_fail(session: AsyncSession, job: IngestionJob) -> None:
     summary="Upload a document and queue an ingestion job",
 )
 async def upload_document(
-    request: Request,
     workspace_id: uuid.UUID,
     file: UploadFile = File(...),
     charset: str | None = Form(default=None),
@@ -146,11 +144,6 @@ async def upload_document(
     except ApiError as exc:
         raise _http_error(exc) from exc
 
-    # Advisory Content-Length fence (avoid reading a body we already know is big).
-    content_length = request.headers.get("content-length")
-    if content_length and content_length.isdigit() and int(content_length) > MAX_DOCUMENT_BYTES:
-        raise _too_large()
-
     if charset:
         try:
             codecs.lookup(charset)
@@ -160,17 +153,22 @@ async def upload_document(
                 detail={"error": "INVALID_CHARSET", "message": "Unknown source charset."},
             ) from exc
 
-    # Stream-read with the fence applied during the read (Starlette 1.7 has no
-    # UploadFile.size), so an oversized body never fully materializes.
-    data = await _read_limited(file, MAX_DOCUMENT_BYTES)
+    data = await file.read()
     if not data:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail={"error": "EMPTY_DOCUMENT", "message": "Uploaded file is empty."},
         )
 
-    checksum = hashlib.sha256(data).hexdigest()
     filename = _clamp(file.filename)
+    mime_type = _resolve_mime(file.content_type, filename)
+    if mime_type is None:
+        raise HTTPException(
+            status_code=status.HTTP_415_UNSUPPORTED_MEDIA_TYPE,
+            detail=error_detail(ReasonCode.UNSUPPORTED_MIME_TYPE),
+        )
+
+    checksum = hashlib.sha256(data).hexdigest()
     existing = await find_document_by_filename(session, workspace_id, filename)
 
     if existing is not None:
@@ -191,6 +189,9 @@ async def upload_document(
             if latest_job is None or latest_job.status != JobStatus.READY.value:
                 # Previous attempt failed (or never ran): re-parse the same version
                 # rather than reporting a dishonest `ready` with zero chunks.
+                # Refresh the mime: a poisoned (e.g. untyped) first upload must
+                # not be reused as-is.
+                latest.mime_type = mime_type
                 job = IngestionJob(
                     workspace_id=workspace_id,
                     document_id=existing.id,
@@ -233,7 +234,7 @@ async def upload_document(
             workspace_id=workspace_id,
             title=_clamp(title) or filename,
             source_filename=filename,
-            mime_type=file.content_type,
+            mime_type=mime_type,
         )
         session.add(document)
         await session.flush()
@@ -279,7 +280,7 @@ async def upload_document(
         version_number=version_number,
         checksum=checksum,
         size_bytes=len(data),
-        mime_type=file.content_type,
+        mime_type=mime_type,
         charset=charset,
         storage_key=storage_key,
     )

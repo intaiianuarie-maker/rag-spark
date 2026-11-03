@@ -141,7 +141,7 @@ def _context(run_id: str, *, revision: str = "rev1", principal_id: str = USER_1)
         workspace_id=WS_ID_1,
         principal_id=principal_id,
         authz_policy_revision=revision,
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tool_calls=5, max_tokens=100000),
         deadline=datetime.now(UTC) + timedelta(seconds=30),
         allowed_tools=["publish"],

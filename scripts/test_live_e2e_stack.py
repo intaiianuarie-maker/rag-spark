@@ -48,7 +48,7 @@ def main():
         print("[6] Testing Ask endpoint via OpenRouter cloud...")
         r = client.post(
             f"/v1/workspaces/{ws_id}/ask",
-            json={"query": "What permissions are configured?", "model": "openai/gpt-4o-mini"},
+            json={"query": "What permissions are configured?", "model": "google/gemma-4-26b-a4b-it:free"},
             headers=auth_headers,
         )
         print(f"Ask response status: {r.status_code}")

@@ -23,7 +23,7 @@ import {
 import { streamQuestion, type FeedbackPayload } from "./stream";
 
 const MODEL_OPTIONS = [
-  { id: "gpt-4o-mini", label: "gpt-4o-mini" },
+  { id: "google/gemma-4-26b-a4b-it:free", label: "google/gemma-4-26b-a4b-it:free" },
   { id: "gpt-4o", label: "gpt-4o" },
 ];
 
@@ -44,7 +44,7 @@ export default function AskPage() {
     messages: [],
   });
   const [selectedSource, setSelectedSource] = useState<MessageCitation | null>(null);
-  const [selectedModel, setSelectedModel] = useState("gpt-4o-mini");
+  const [selectedModel, setSelectedModel] = useState("google/gemma-4-26b-a4b-it:free");
   /**
    * Streaming state scoped to the TURN that produced it (M5-001a REV-2
    * Finding 2). A global `streamingContent` string let a workspace switch

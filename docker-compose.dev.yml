@@ -1,0 +1,25 @@
+# Contributor mode: bind-mounts the source and reloads the api on change.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
+#
+# Not for a normal install: it runs whatever is on your disk. The default
+# docker-compose.yml builds self-contained images instead.
+services:
+  api:
+    volumes:
+      - ./apps/api:/app/apps/api
+      - ./packages:/app/packages
+    # uvicorn --reload watches only the working directory (apps/api) unless told
+    # otherwise, so edits under packages/ would be silently ignored.
+    command:
+      [
+        "uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000",
+        "--reload", "--reload-dir", "/app/apps/api", "--reload-dir", "/app/packages",
+      ]
+
+  worker:
+    # ponytail: no reload watcher in the worker image; after editing apps/worker or
+    # packages/ run `docker compose -f docker-compose.yml -f docker-compose.dev.yml restart worker`.
+    volumes:
+      - ./apps/worker:/app/apps/worker
+      - ./packages:/app/packages

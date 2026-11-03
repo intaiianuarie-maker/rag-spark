@@ -659,10 +659,13 @@ async def run_workflow(
 
     try:
         try:
-            plan = WorkflowCompiler.compile(draft.revision)
+            # Same manifest /drafts/validate and /approve use, so what validates also runs.
+            plan = WorkflowCompiler.compile(draft.revision, manifest=PRODUCTION_CAPABILITY_MANIFEST)
         except Exception as exc:
-            # Invalid definition: refuse as HTTP 422 with a safe, no-raw-text message.
-            safe = "invalid workflow definition"
+            # Invalid definition: 422. The compiler's own ValueError carries the validator
+            # summary (node ids, types, capability names; no config values), the same text
+            # /drafts/validate returns. Anything else stays generic.
+            safe = str(exc) if isinstance(exc, ValueError) else "invalid workflow definition"
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail={"error": "invalid_definition", "message": safe},

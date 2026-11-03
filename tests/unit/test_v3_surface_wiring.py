@@ -60,8 +60,8 @@ def _setup_stores():
             max_tool_calls=20,
             max_cost_usd=1.0,
             allowed_tools=("calculator", "knowledge_search", "knowledge_read"),
-            allowed_models=("gpt-4o-mini", "gemini-flash"),
-            default_model="gpt-4o-mini",
+            allowed_models=("google/gemma-4-26b-a4b-it:free", "gemini-flash"),
+            default_model="google/gemma-4-26b-a4b-it:free",
         ),
     )
     yield
@@ -129,7 +129,7 @@ def test_status_response_includes_real_output_budget_usage_sources():
         workspace_id=WS_ID,
         principal_id=USER_ID,
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=budget,
         deadline=datetime.now(UTC) + timedelta(minutes=5),
         allowed_tools=["calculator"],
@@ -227,7 +227,7 @@ def test_approval_and_cancel_transitions():
         workspace_id=WS_ID,
         principal_id=USER_ID,
         authz_policy_revision="rev1",
-        model_policy=ModelPolicy(allowed_models=["gpt-4o-mini"], default_model="gpt-4o-mini"),
+        model_policy=ModelPolicy(allowed_models=["google/gemma-4-26b-a4b-it:free"], default_model="google/gemma-4-26b-a4b-it:free"),
         budget=RunBudget(max_steps=5, max_tokens=10000, max_tool_calls=5),
         deadline=datetime.now(UTC) + timedelta(minutes=5),
         allowed_tools=["calculator"],

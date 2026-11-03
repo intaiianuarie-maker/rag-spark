@@ -105,6 +105,9 @@ class FakeVectorStore:
         FakeVectorStore.calls.append((collection, query_filter))
 
     async def delete_if_exists(self, *, collection, query_filter) -> int:
+        if collection != "knowledge_multimodal":
+            FakeVectorStore.calls.append((collection, query_filter))
+            return 0
         if FakeVectorStore.mm_error is not None:
             raise FakeVectorStore.mm_error
         FakeVectorStore.mm_calls.append((collection, query_filter))
@@ -453,3 +456,23 @@ async def test_delete_if_exists_propagates_real_qdrant_errors() -> None:
             await _real_store(client).delete_if_exists(
                 collection="knowledge_multimodal", query_filter=_doc_filter()
             )
+
+
+async def test_purge_before_any_ingest_missing_text_collection_is_not_a_failure(
+    monkeypatch: pytest.MonkeyPatch, purgers, store
+) -> None:
+    """Deleting a document before the text collection exists must not report qdrant=False."""
+    from retrieval.adapters.qdrant_store import QdrantVectorStore
+
+    client = _FakeQdrantClient(exists=False, delete_error=RuntimeError("Collection not found"))
+
+    def _factory(*args, **kwargs):
+        return QdrantVectorStore(client=client, collection="knowledge")  # type: ignore[arg-type]
+
+    monkeypatch.setattr("retrieval.adapters.pg_fts.PostgresLexicalStore", FakeLexicalStore)
+    monkeypatch.setattr("retrieval.adapters.qdrant_store.QdrantVectorStore", _factory)
+    monkeypatch.setattr("ingestion.dedup.vector_collection", lambda: "knowledge")
+    workspace_id, document_id = uuid.uuid4(), uuid.uuid4()
+    report = await _purge(_session(workspace_id, [], []), workspace_id, document_id)
+    assert report["qdrant"] is True
+    assert client.deleted == []

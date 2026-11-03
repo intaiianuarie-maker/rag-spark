@@ -31,7 +31,7 @@ import os
 import re
 import uuid
 from collections.abc import AsyncIterator
-from typing import Any
+from typing import Annotated, Any
 
 from answer.engine import AnswerEngine
 from answer.factory import build_answer_engine
@@ -41,18 +41,22 @@ from core.errors import ReasonCode, canonical_code, error_detail, spec_for
 from core.logging import request_id_ctx
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from fastapi.responses import StreamingResponse
+from graph.factory import graph_mode
 from models.adapters.litellm_provider import LLMProviderError
 from models.router_config import (
     LocalOnlyUnavailable,
     WorkspaceModelConfig,
     load_workspace_config,
+    load_workspace_config_from_store,
     provider_identity,
     route_decision,
 )
 from pydantic import BaseModel, Field
 from retrieval.interfaces import RetrievalMode
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.ask.stream import streaming_response
+from app.auth.db import get_session
 from app.authz import Action, ApiError, Resource, require
 from app.authz.principal import get_principal
 
@@ -65,6 +69,24 @@ class AskRequest(BaseModel):
     query: str = Field(min_length=1)
     model: str | None = None
     mode: RetrievalMode = RetrievalMode.HYBRID
+    #: Same filter as search: only chunks/documents in this language. None = no filter.
+    language: str | None = None
+
+
+def resolve_retrieval_mode(body: AskRequest | AskStreamRequest) -> RetrievalMode:
+    """The retrieval mode one Ask request runs with.
+
+    An explicit ``mode`` is honoured as sent. The *default* ``hybrid`` used to
+    skip the graph leg even with ``GRAPH_MODE=rule|llm`` (the orchestrator
+    only runs it for ``hybrid_graph``/``graph``), so a populated graph never
+    contributed. Any GRAPH_MODE other than ``off`` — including a typo the
+    factory refuses — asks for ``hybrid_graph`` so the trace reports the leg
+    honestly (completed / failed / not_configured), never a silent not_run.
+    Read per request, not at import, so a restarted env is always current.
+    """
+    if "mode" in body.model_fields_set or body.mode is not RetrievalMode.HYBRID:
+        return body.mode
+    return RetrievalMode.HYBRID if graph_mode() == "off" else RetrievalMode.HYBRID_GRAPH
 
 
 def _http_error(exc: ApiError) -> HTTPException:
@@ -126,7 +148,12 @@ def classify_query(query: str) -> str:
     return "simple"
 
 
-def load_model_config(workspace_id: str, *, override_model: str | None) -> WorkspaceModelConfig:
+def load_model_config(
+    workspace_id: str,
+    *,
+    override_model: str | None,
+    workspace: WorkspaceModelConfig | None = None,
+) -> WorkspaceModelConfig:
     """Authoritative model policy for ONE Ask request (T-V1-028).
 
     Builds the three precedence tiers and hands them to
@@ -134,12 +161,12 @@ def load_model_config(workspace_id: str, *, override_model: str | None) -> Works
     their order (LOCKED: veto > permitted override > workspace rules > operator
     default):
 
-    1. **workspace** — per-workspace ``routing_rules`` loaded from the
-       authoritative ``WORKSPACE_MODEL_CONFIG`` store via
-       :func:`models.router_config.load_workspace_config`. When the store has no
-       entry for this workspace the tier is empty rather than fake; whatever the
-       loader returns is passed through untouched and the ordering stays
-       policy-owned.
+    1. **workspace** — the per-workspace config the handler loaded from the
+       model-configs store (:func:`models.router_config.load_workspace_config_from_store`,
+       B7). When the caller passes none, the env fallback
+       (:func:`models.router_config.load_workspace_config`) is used. When the store
+       has no entry the tier is empty rather than fake; whatever the loader returns
+       is passed through untouched and the ordering stays policy-owned.
     2. **permitted override** — ``body.model`` supplied by the caller.
     3. **operator default** — ``ANSWER_MODEL`` when the operator configured it,
        else ``None`` so the policy module's own fallback applies. This file
@@ -150,7 +177,8 @@ def load_model_config(workspace_id: str, *, override_model: str | None) -> Works
     ``override_model`` is layered here (not in the store) because it is a
     per-request caller input; the store only ever supplies the workspace tier.
     """
-    workspace = load_workspace_config(workspace_id)
+    if workspace is None:
+        workspace = load_workspace_config(workspace_id)
     return WorkspaceModelConfig(
         workspace_id=workspace_id,
         override_model=override_model,
@@ -178,7 +206,11 @@ def selection_reason(config: WorkspaceModelConfig, query_class: str, model: str)
 
 
 def resolve_model(
-    workspace_id: str, *, query_class: str, override_model: str | None
+    workspace_id: str,
+    *,
+    query_class: str,
+    override_model: str | None,
+    workspace: WorkspaceModelConfig | None = None,
 ) -> tuple[str, str]:
     """Resolve the model for one Ask request: ``(model, selection_reason)``.
 
@@ -187,7 +219,9 @@ def resolve_model(
     router — or logging a reason that disagrees with the pick — is structurally
     impossible rather than merely discouraged.
     """
-    config = load_model_config(workspace_id, override_model=override_model)
+    config = load_model_config(
+        workspace_id, override_model=override_model, workspace=workspace
+    )
     return route_decision(query_class, config)
 
 
@@ -200,6 +234,7 @@ async def ask(
     workspace_id: uuid.UUID,
     body: AskRequest,
     principal: Principal = Depends(get_principal),
+    session: Annotated[AsyncSession | None, Depends(get_session)] = None,
 ) -> Answer:
     try:
         require(principal, Action.DOCUMENT_READ, Resource(workspace_id=str(workspace_id)))
@@ -216,9 +251,13 @@ async def ask(
     # carries identifiers + provider + reason only — never the query text (no
     # prompt content), never credentials.
     query_class = classify_query(body.query)
+    workspace = await load_workspace_config_from_store(session, str(workspace_id))
     try:
         resolved_model, reason = resolve_model(
-            str(workspace_id), query_class=query_class, override_model=body.model
+            str(workspace_id),
+            query_class=query_class,
+            override_model=body.model,
+            workspace=workspace,
         )
     except LocalOnlyUnavailable as exc:
         # T-V1-029: local-only means local or EXPLICIT unavailable. No local
@@ -248,10 +287,7 @@ async def ask(
     )
 
     # T-A01b: carry the workspace egress policy into retrieval/embedding.
-    _workspace_config = load_workspace_config(str(workspace_id))
-    _egress_sensitive = (
-        _workspace_config.sensitive if _workspace_config is not None else False
-    )
+    _egress_sensitive = workspace.sensitive if workspace is not None else False
     engine: AnswerEngine = build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)
     if not _egress_sensitive and getattr(engine, "semantic_verifier", None) is None:
         try:
@@ -277,7 +313,8 @@ async def ask(
         answer = await engine.answer(
             query=body.query,
             acl_scope=ACLScope(user_id=principal.user_id, workspace_ids=[str(workspace_id)]),
-            mode=body.mode,
+            mode=resolve_retrieval_mode(body),
+            language=body.language,
         )
     except LLMProviderError as exc:
         # T-V1-026: same tracking ID the engine's log line carries, so the
@@ -323,6 +360,7 @@ class AskStreamRequest(BaseModel):
     query: str = Field(min_length=1)
     model: str | None = None
     mode: RetrievalMode = RetrievalMode.HYBRID
+    language: str | None = None
 
 
 @router.post(
@@ -335,6 +373,7 @@ async def ask_stream(
     body: AskStreamRequest,
     request: Request,
     principal: Principal = Depends(get_principal),
+    session: Annotated[AsyncSession | None, Depends(get_session)] = None,
 ) -> StreamingResponse:
     """Stream a grounded answer as SSE events.
 
@@ -362,9 +401,13 @@ async def ask_stream(
         )
 
     # Re-use the same model selection path as POST /ask (T-V1-038).
+    workspace = await load_workspace_config_from_store(session, str(workspace_id))
     try:
         resolved_model, reason = resolve_model(
-            str(workspace_id), query_class=classify_query(body.query), override_model=body.model
+            str(workspace_id),
+            query_class=classify_query(body.query),
+            override_model=body.model,
+            workspace=workspace,
         )
     except LocalOnlyUnavailable as exc:
         payload = _sse_error_payload(
@@ -390,10 +433,7 @@ async def ask_stream(
     )
 
     # T-A01b: carry the workspace egress policy into retrieval/embedding.
-    _workspace_config = load_workspace_config(str(workspace_id))
-    _egress_sensitive = (
-        _workspace_config.sensitive if _workspace_config is not None else False
-    )
+    _egress_sensitive = workspace.sensitive if workspace is not None else False
     engine: AnswerEngine = build_answer_engine(model=resolved_model, sensitive=_egress_sensitive)
     if not _egress_sensitive and getattr(engine, "semantic_verifier", None) is None:
         try:
@@ -420,7 +460,8 @@ async def ask_stream(
         acl_scope=ACLScope(
             user_id=principal.user_id, workspace_ids=[str(workspace_id)]
         ),
-        mode=body.mode,
+        mode=resolve_retrieval_mode(body),
+        language=body.language,
     )
 
     return streaming_response(request, engine_stream=engine_stream)

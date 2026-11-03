@@ -160,7 +160,7 @@ class TestCheckWorkspaceModelBudget:
     def test_non_gemma_model_raises(self) -> None:
         """Non-Gemma model is rejected with PolicyViolationError."""
         with pytest.raises(PolicyViolationError) as exc_info:
-            check_workspace_model_budget(WS_ID, "gpt-4o-mini")
+            check_workspace_model_budget(WS_ID, "unlisted/arbitrary-paid-model")
 
         assert exc_info.value.field == "model"
         assert "not in the approved Gemma routes" in str(exc_info.value)
@@ -357,7 +357,7 @@ class TestStormPlannerGemmaRoute:
         """Non-Gemma paid models are BLOCKED, never substituted."""
         planner = StormPlanner(
             llm=_FakeStormLLM(),
-            model_name="gpt-4o-mini",
+            model_name="unlisted/arbitrary-paid-model",
         )
         with pytest.raises(PlanError) as exc_info:
             planner._check_gateway_policy()

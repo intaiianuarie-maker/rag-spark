@@ -90,7 +90,7 @@ def test_route_honors_answer_model_preferred(monkeypatch):
 
     # The route wiring must read ANSWER_MODEL as preferred; replicate the
     # construction the endpoint performs.
-    preferred = os.environ.get("ANSWER_MODEL", "gpt-4o-mini")
+    preferred = os.environ.get("ANSWER_MODEL", "google/gemma-4-26b-a4b-it:free")
     config = WorkspaceModelConfig(workspace_id="ws-1", preferred_model=preferred)
     assert route(classify_query("What is the budget?"), config) == "my-custom-model"
     assert router_mod.classify_query("What is the budget?") == "simple"
@@ -234,7 +234,9 @@ def test_ask_workspace_rules_seam_selects_and_is_labeled(monkeypatch):
         RoutingRule(RoutingDimension.COST, "medium", priority=2),
     )
 
-    def _with_rules(workspace_id: str, *, override_model: str | None) -> WorkspaceModelConfig:
+    def _with_rules(
+        workspace_id: str, *, override_model: str | None, workspace=None
+    ) -> WorkspaceModelConfig:
         return WorkspaceModelConfig(
             workspace_id=workspace_id,
             preferred_model="preferred-model",
@@ -260,7 +262,9 @@ def test_ask_policy_precedence_keeps_override_above_rules(monkeypatch):
     """
     rules = (RoutingRule(RoutingDimension.CAPABILITY, "chat", priority=1),)
 
-    def _with_rules(workspace_id: str, *, override_model: str | None) -> WorkspaceModelConfig:
+    def _with_rules(
+        workspace_id: str, *, override_model: str | None, workspace=None
+    ) -> WorkspaceModelConfig:
         return WorkspaceModelConfig(
             workspace_id=workspace_id,
             preferred_model="preferred-model",
@@ -315,7 +319,7 @@ def test_ask_handler_path_has_no_hardcoded_model():
     import app.ask.router as router_mod
 
     source = Path(router_mod.__file__).read_text(encoding="utf-8")
-    assert "gpt-4o-mini" not in source  # no model literal anywhere in the call site
+    assert "google/gemma-4-26b-a4b-it:free" not in source  # no model literal anywhere in the call site
     assert "DEFAULT_ANSWER_MODEL" not in source  # handler does not import a default
     # Every model selection on the handler path goes through the ONE policy
     # resolver. TASK-M4-001b added the streaming endpoint, so the call-site

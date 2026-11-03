@@ -1188,6 +1188,13 @@ class QdrantVectorStore(VectorStore):
         except Exception as e:
             raise VectorStoreError(f"delete failed for {collection}: {e}") from e
 
+    async def collection_exists(self, collection: str) -> bool:
+        """Read-only existence probe for optional collections (multimodal leg)."""
+        try:
+            return bool(await self._client.collection_exists(collection))
+        except Exception as e:
+            raise VectorStoreError(f"collection_exists failed for {collection}: {e}") from e
+
     async def delete_if_exists(self, *, collection: str, query_filter: SearchFilter) -> int:
         """``delete`` by filter, but a collection that does not exist is a no-op (0).
 

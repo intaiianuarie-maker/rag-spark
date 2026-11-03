@@ -54,9 +54,9 @@ from __future__ import annotations
 import json
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import StrEnum
-from typing import Literal
+from typing import Any, Literal
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +112,10 @@ DEFAULT_ROUTING_RULES: tuple[RoutingRule, ...] = (
 
 # M7-001a capability/cost metadata registry (module default).
 MODEL_REGISTRY: dict[str, ModelProfile] = {
-    "gpt-4o-mini": ModelProfile(
-        name="gpt-4o-mini",
+    # Cheap chat model for "simple" queries (took gpt-4o-mini's slot). "reasoning"
+    # is deliberately absent so complex queries keep routing to o3-mini.
+    "google/gemma-4-26b-a4b-it:free": ModelProfile(
+        name="google/gemma-4-26b-a4b-it:free",
         capabilities=("chat", "multilingual"),
         cost="low",
         local=False,
@@ -182,7 +184,7 @@ REQUIRED_CAPABILITY: dict[str, str] = {
 
 COST_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2}
 
-FALLBACK_MODEL = "gpt-4o-mini"
+FALLBACK_MODEL = "google/gemma-4-26b-a4b-it:free"
 
 #: T-V1-028 LOCKED precedence order, highest tier first. This tuple is the
 #: single authoritative statement of precedence; :func:`route` implements it
@@ -326,35 +328,8 @@ def provider_identity(model: str) -> str:
     return PROVIDER_LITELLM
 
 
-def load_workspace_config(workspace_id: str) -> WorkspaceModelConfig | None:
-    """Load the authoritative per-workspace model config (T-V1-028).
-
-    Reads the ``WORKSPACE_MODEL_CONFIG`` env var (a JSON object keyed by
-    workspace_id) and returns the entry for `workspace_id`, or ``None`` when the
-    var is unset, unparseable, or has no entry for this workspace. The returned
-    config supplies the workspace tier (``routing_rules``) and the local-only
-    policy flag (``sensitive`` — T-V1-029; a workspace opts in with
-    ``"sensitive": true`` and is then served local-or-explicitly-unavailable);
-    the override and operator-default tiers are layered by :func:`route` at
-    request time. Malformed per-workspace entries degrade to ``None`` (no
-    crash, no fabricated rules); ``sensitive`` must be the JSON boolean
-    ``true`` — a string or missing value is not an opt-in.
-    """
-    raw = os.environ.get(WORKSPACE_MODEL_CONFIG_ENV, "").strip()
-    if not raw:
-        return None
-    try:
-        data = json.loads(raw)
-    except ValueError:
-        logger.warning("workspace_model_config_unparseable", extra={"workspace_id": workspace_id})
-        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
-    if not isinstance(data, dict):
-        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
-    entry = data.get(workspace_id)
-    if entry is None:
-        return None
-    if not isinstance(entry, dict):
-        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
+def _entry_to_config(workspace_id: str, entry: dict[str, Any]) -> WorkspaceModelConfig:
+    """Parse a workspace config entry (from DB row or env var) into a config."""
     rules: list[RoutingRule] = []
     for raw_rule in entry.get("routing_rules", []) or []:
         if not isinstance(raw_rule, dict):
@@ -374,6 +349,92 @@ def load_workspace_config(workspace_id: str) -> WorkspaceModelConfig | None:
         routing_rules=tuple(rules),
         sensitive=entry.get("sensitive") is True,
     )
+
+
+def load_workspace_config(workspace_id: str) -> WorkspaceModelConfig | None:
+    """Load the per-workspace model config from the ``WORKSPACE_MODEL_CONFIG`` env var.
+
+    Synchronous and env-only. It is the fallback of
+    :func:`load_workspace_config_from_store`, and the loader for callers that have
+    no request session. The var is a JSON object keyed by workspace_id; this returns
+    the entry for `workspace_id`, or ``None`` when the var is unset, unparseable, or
+    has no entry for this workspace. The returned config supplies the workspace tier
+    (``routing_rules``) and the local-only policy flag (``sensitive`` — T-V1-029; a
+    workspace opts in with ``"sensitive": true`` and is then served
+    local-or-explicitly-unavailable); the override and operator-default tiers are
+    layered by :func:`route` at request time. Malformed per-workspace entries degrade
+    to ``None`` (no crash, no fabricated rules); ``sensitive`` must be the JSON
+    boolean ``true`` — a string or missing value is not an opt-in.
+    """
+    raw = os.environ.get(WORKSPACE_MODEL_CONFIG_ENV, "").strip()
+    if not raw:
+        return None
+    try:
+        data = json.loads(raw)
+    except ValueError:
+        logger.warning("workspace_model_config_unparseable", extra={"workspace_id": workspace_id})
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
+    if not isinstance(data, dict):
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
+    entry = data.get(workspace_id)
+    if entry is None:
+        return None
+    if not isinstance(entry, dict):
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
+    return _entry_to_config(workspace_id, entry)
+
+
+async def load_workspace_config_from_store(
+    session: Any, workspace_id: str
+) -> WorkspaceModelConfig | None:
+    """Authoritative per-workspace model config for the ask path (B7, T-V1-029).
+
+    Reads the workspace's ``model_configs`` rows through the request's async session.
+    The egress decision fails closed:
+
+    * The DB read fails (unreachable, misconfigured). The workspace may be sensitive
+      and cannot be told apart from a plain one, so it is treated as sensitive: the
+      policy serves the explicitly allowed local model or refuses. No cloud call.
+    * No row for the workspace (the normal state): the env fallback applies, as in
+      :func:`load_workspace_config`. Such a workspace is unchanged.
+    * Rows present: ``sensitive`` is true when any row says so, and the rules come
+      from the oldest row. A sensitive env entry also keeps the workspace sensitive,
+      so the env var can only tighten the stored config.
+    * ``session`` None (no request session, e.g. a direct call): env only.
+    """
+    env_cfg = load_workspace_config(workspace_id)
+    if session is None:
+        return env_cfg
+    try:
+        from sqlalchemy import text
+
+        rows = (
+            await session.execute(
+                text(
+                    "SELECT routing_rules, sensitive FROM model_configs "
+                    "WHERE workspace_id = :wid ORDER BY created_at, id"
+                ),
+                {"wid": workspace_id},
+            )
+        ).mappings().all()
+    except Exception as exc:
+        logger.warning(
+            "workspace_model_config_store_unavailable",
+            extra={"workspace_id": workspace_id, "error_type": type(exc).__name__},
+        )
+        return WorkspaceModelConfig(workspace_id=workspace_id, sensitive=True)
+    if not rows:
+        return env_cfg
+    cfg = _entry_to_config(
+        workspace_id,
+        {
+            "routing_rules": rows[0]["routing_rules"] or [],
+            "sensitive": any(bool(row["sensitive"]) for row in rows),
+        },
+    )
+    if env_cfg is not None and env_cfg.sensitive:
+        return replace(cfg, sensitive=True)
+    return cfg
 
 
 def _rule_matches(rule: RoutingRule, profile: ModelProfile) -> bool:

@@ -126,7 +126,14 @@ class AgentLifecycleWorker:
             )
 
             # Inspect resulting state
-            from agents.runtime import _PERSISTED_STATES
+            from agents.runtime import _PERSISTED_STATES, _PERSISTED_USAGES
+
+            # Output/usage must outlive this process: the API reads them from the store.
+            self.run_store.save_result(
+                run_id,
+                getattr(agent_run, "final_output", None),
+                _PERSISTED_USAGES.get(run_id),
+            )
 
             persisted_state = _PERSISTED_STATES.get(run_id)
             current_status = (
@@ -177,9 +184,7 @@ class AgentLifecycleWorker:
                 agent_run.status == AgentRunStatus.COMPLETED
                 or current_status == RunStatus.COMPLETED
             ):
-                record.final_output = getattr(agent_run, "final_output", None)
-                record.update_status(RunStatus.COMPLETED)
-                self.run_store.update_run(record)
+                self.run_store.update_status(run_id, RunStatus.COMPLETED)
                 await self.queue.ack(claim)
                 return run_id
 
@@ -220,6 +225,12 @@ class AgentLifecycleWorker:
             raise
         except Exception as exc:
             logger.exception("worker_run_failed", extra={"run_id": run_id, "error": str(exc)})
+            try:
+                from agents.runtime import _PERSISTED_USAGES
+
+                self.run_store.save_result(run_id, None, _PERSISTED_USAGES.get(run_id))
+            except Exception:
+                logger.exception("worker_save_result_failed", extra={"run_id": run_id})
             self.run_store.update_status(
                 run_id,
                 RunStatus.FAILED,

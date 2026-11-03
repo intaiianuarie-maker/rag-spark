@@ -68,7 +68,6 @@ ALLOWED=(
     "google/gemma-4-26b-a4b-it"            # admitted GENERATION/AGENT/GRAPH/WORKFLOW route
     "google/gemma-4-26b-a4b-it:free"       # admitted free tier of the same route
     "nvidia/llama-nemotron-rerank-vl-1b-v2:free"  # admitted RERANK route (NVIDIA, US)
-    "gpt-4o-mini"                         # LiteLLM gateway default / router fallback (OpenAI, US)
 )
 
 # Model names / patterns that are flagged (China origin / not approved).
@@ -287,16 +286,16 @@ expect_exit() {
 
 # name|expected exit|source extension|file content
 SELFTEST_MATRIX=(
-    'approved quoted|0||DEFAULT_MODEL = "gpt-4o-mini"'
+    'approved quoted|0||DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"'
     'unknown quoted|1||DEFAULT_MODEL = "unlisted/police-probe"'
-    'unknown second quoted pin|1||DEFAULT_MODEL = "gpt-4o-mini"
+    'unknown second quoted pin|1||DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 EMBEDDING_MODEL = "unlisted/police-probe"'
     'approved bare|0||EMBEDDING_MODEL=google/gemini-embedding-2'
     'unknown bare|1||EMBEDDING_MODEL=unlisted/police-probe'
     'unknown bare spaced|1||EMBEDDING_MODEL = unlisted/police-probe'
     'unknown bare space after equals|1||EMBEDDING_MODEL= unlisted/police-probe'
     'unknown bare space before equals|1||EMBEDDING_MODEL =unlisted/police-probe'
-    'unknown second bare spaced pin|1||DEFAULT_MODEL=gpt-4o-mini
+    'unknown second bare spaced pin|1||DEFAULT_MODEL=google/gemma-4-26b-a4b-it:free
 EMBEDDING_MODEL = unlisted/police-probe'
     'approved bare spaced|0||EMBEDDING_MODEL = google/gemini-embedding-2'
     'empty python literal|1|.py|DEFAULT_MODEL = ""'
@@ -304,26 +303,26 @@ EMBEDDING_MODEL = unlisted/police-probe'
     'empty bare env|1||EMBEDDING_MODEL='
     'whitespace only value|1||EMBEDDING_MODEL="   "'
     'annotated python unknown|1|.py|DEFAULT_MODEL: str = "unlisted/police-probe"'
-    'annotated python approved|0|.py|DEFAULT_MODEL: str = "gpt-4o-mini"'
+    'annotated python approved|0|.py|DEFAULT_MODEL: str = "google/gemma-4-26b-a4b-it:free"'
     'exported env unknown|1||export EMBEDDING_MODEL=unlisted/police-probe'
     'export keyword with tab|1||export	EMBEDDING_MODEL=unlisted/police-probe'
     'env allowed prefix plus suffix|1||EMBEDDING_MODEL=google/gemini-embedding-2+unlisted'
     'env hash suffix|1||EMBEDDING_MODEL=google/gemini-embedding-2#unlisted'
     'raw python literal|1|.py|DEFAULT_MODEL = r"unlisted/police-probe"'
     'parenthesised python literal|1|.py|DEFAULT_MODEL = ("unlisted/police-probe")'
-    'adjacent python literals|1|.py|DEFAULT_MODEL = "gpt-4o-mini" "-unlisted"'
-    'adjacent python literals approved (one value)|0|.py|DEFAULT_MODEL = "gpt-4o-" "mini"'
+    'adjacent python literals|1|.py|DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free" "-unlisted"'
+    'adjacent python literals approved (one value)|0|.py|DEFAULT_MODEL = "google/gemma-4-26b-a4b-it" ":free"'
     'triple quoted python literal|1|.py|DEFAULT_MODEL = """unlisted/police-probe"""'
     'rejected vendor|1||DEFAULT_MODEL = "moonshot/police-probe"'
     'export env approved|0||export EMBEDDING_MODEL=google/gemini-embedding-2'
     'dynamic python RHS with approved fallback|0|.py|import os
-DEFAULT_MODEL = "gpt-4o-mini"
+DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"
 EMBEDDING_MODEL = os.environ.get("EMBEDDING_MODEL", DEFAULT_MODEL)'
     'duplicate first unlisted fails|1||EMBEDDING_MODEL = "unlisted/police-probe"
-EMBEDDING_MODEL = "gpt-4o-mini"'
-    'duplicate middle before approved fails|1||EMBEDDING_MODEL = "gpt-4o-mini"
+EMBEDDING_MODEL = "google/gemma-4-26b-a4b-it:free"'
+    'duplicate middle before approved fails|1||EMBEDDING_MODEL = "google/gemma-4-26b-a4b-it:free"
 EMBEDDING_MODEL = "unlisted/police-probe"
-EMBEDDING_MODEL = "gpt-4o-mini"'
+EMBEDDING_MODEL = "google/gemma-4-26b-a4b-it:free"'
     'malformed env|1||EMBEDDING_MODEL="unlisted/police-probe'
 )
 
@@ -406,10 +405,10 @@ PY
     # Byte-level controls: the COMPLETE value (incl. control chars) is
     # validated in-process; a newline / NUL cannot truncate to an approved
     # prefix or forge a second allow-listed record.
-    printf 'DEFAULT_MODEL = "gpt-4o-mini\\n"\n' >"$tmp/byte-newline.py"
-    printf 'DEFAULT_MODEL = "gpt-4o-mini\\x00"\n' >"$tmp/byte-nul.py"
-    printf 'DEFAULT_MODEL = "gpt-4o-mini\\nEMBEDDING_MODEL=gpt-4o-mini"\n' >"$tmp/byte-forgery.py"
-    printf 'DEFAULT_MODEL = "gpt-4o-mini\\t"\n' >"$tmp/byte-tab.py"
+    printf 'DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free\\n"\n' >"$tmp/byte-newline.py"
+    printf 'DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free\\x00"\n' >"$tmp/byte-nul.py"
+    printf 'DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free\\nEMBEDDING_MODEL=google/gemma-4-26b-a4b-it:free"\n' >"$tmp/byte-forgery.py"
+    printf 'DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free\\t"\n' >"$tmp/byte-tab.py"
     expect_exit 1 "byte: trailing newline in value rejected" "$tmp/byte-newline.py" || failed=1
     expect_exit 1 "byte: NUL in value rejected" "$tmp/byte-nul.py" || failed=1
     expect_exit 1 "byte: record forgery by newline rejected" "$tmp/byte-forgery.py" || failed=1
@@ -439,7 +438,7 @@ PY
     local stubbin
     stubbin=$(mktemp -d)
     ln -sf /usr/bin/false "$stubbin/python3"
-    printf 'DEFAULT_MODEL = "gpt-4o-mini"\n' >"$tmp/stub-approved.py"
+    printf 'DEFAULT_MODEL = "google/gemma-4-26b-a4b-it:free"\n' >"$tmp/stub-approved.py"
     ( PATH="$stubbin:$PATH" "$SCRIPT_PATH" "$tmp/stub-approved.py" ) >/dev/null 2>&1
     local stubrc=$?
     if [ "$stubrc" -ne 1 ]; then

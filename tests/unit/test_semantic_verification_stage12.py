@@ -395,16 +395,18 @@ def test_parse_response_contradicted_with_spans() -> None:
     assert parsed["contradictions"] == ["evidence says 30 dollars", "not 20"]
 
 
-def test_parse_response_strips_surrounding_prose() -> None:
-    from answer.adapters.gemma_semantic_verifier import _parse_response
+def test_parse_response_rejects_surrounding_prose() -> None:
+    # Was: strips surrounding prose. Strict parsing now needs the whole reply to be one
+    # JSON object (an injected preamble/epilogue must not be silently skipped).
+    from answer.adapters.gemma_semantic_verifier import _MalformedJSONError, _parse_response
 
     raw = (
         'Some preamble\n'
         '{"verdict": "unsupported", "reason": "NO_EVIDENCE"}\n'
         'Trailing text.'
     )
-    parsed = _parse_response(raw, [_evidence()])
-    assert parsed["verdict"] == Verdict.UNSUPPORTED
+    with pytest.raises(_MalformedJSONError):
+        _parse_response(raw, [_evidence()])
 
 
 def test_parse_response_no_json_raises_malformed() -> None:
@@ -445,12 +447,13 @@ def test_parse_response_missing_reason_uses_default() -> None:
     assert parsed["reason_code"] == "SUPPORTED"
 
 
-def test_parse_response_normalises_contradictions() -> None:
-    from answer.adapters.gemma_semantic_verifier import _parse_response
+def test_parse_response_rejects_non_list_contradictions() -> None:
+    # Was: normalised a bare string to []. Strict parsing now fails closed.
+    from answer.adapters.gemma_semantic_verifier import _MalformedJSONError, _parse_response
 
     raw = '{"verdict": "contradicted", "contradictions": "single string"}'
-    parsed = _parse_response(raw, [_evidence()])
-    assert parsed["contradictions"] == []
+    with pytest.raises(_MalformedJSONError):
+        _parse_response(raw, [_evidence()])
 
 
 def test_fail_closed_builds_uncertain_verdict() -> None:
@@ -492,8 +495,12 @@ class _FakeProvider(LLMProvider):
 async def test_gemma_verifier_supported() -> None:
     from answer.adapters.gemma_semantic_verifier import GemmaSemanticVerifier
 
+    # Added a verbatim quote: a bare "supported" is now downgraded (no checkable span).
     provider = _FakeProvider(
-        return_text='{"verdict": "supported", "reason": "SUPPORTED"}'
+        return_text=(
+            '{"verdict": "supported", "reason": "SUPPORTED", '
+            '"support_spans": [{"evidence_id": "ch-1", "quote": "launch budget is 20 dollars"}]}'
+        )
     )
     verifier = GemmaSemanticVerifier(provider)
 

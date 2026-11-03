@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import time
 import traceback
 import uuid
@@ -248,6 +249,40 @@ def set_checkpoint_store(store) -> None:
     _CHECKPOINT_STORE = store
 
 
+_CKPT_MARK: dict[str, tuple[RunStatus, int]] = {}  # run_id -> (status, n_steps) last checkpointed
+_STEPS_FLUSHED: dict[str, int] = {}  # run_id -> agent_run.steps already written to the store
+
+
+def _flush_steps(run_id: str, agent_run: AgentRun) -> None:
+    """Append not-yet-persisted steps to the durable step store (best effort, never raises).
+
+    Called as each step finishes, so history survives a process dying between steps.
+    """
+    try:
+        adapter = _get_checkpoint_store()
+        save = getattr(adapter, "save_step", None)
+        if save is None:
+            return
+        done = _STEPS_FLUSHED.get(run_id, 0)
+        for step in agent_run.steps[done:]:
+            save(run_id, step)
+            done += 1
+            _STEPS_FLUSHED[run_id] = done
+    except Exception:
+        traceback.print_exc()  # step persistence must not break the run
+
+
+def _finalize_run(run_id: str, state: RunState, usage: Usage, context: RunContext, agent_run: AgentRun) -> AgentRun:  # noqa: E501
+    """Single terminal exit: persist remaining steps and checkpoint unless already done."""
+    _flush_steps(run_id, agent_run)
+    if _CKPT_MARK.get(run_id) != (state.status, len(agent_run.steps)):
+        _maybe_checkpoint(run_id, state, usage, context, agent_run)
+    # Terminal: a resume re-seeds both from the run's steps, so don't keep them forever.
+    _CKPT_MARK.pop(run_id, None)
+    _STEPS_FLUSHED.pop(run_id, None)
+    return agent_run
+
+
 def _maybe_checkpoint(run_id: str, state: RunState, usage: Usage, context: RunContext, agent_run: AgentRun | None = None) -> None:  # noqa: E501
     # Only persist transitions worth resuming from: WAITING and terminal
     if state.status not in (
@@ -266,7 +301,10 @@ def _maybe_checkpoint(run_id: str, state: RunState, usage: Usage, context: RunCo
         # Collect approvals and waiting for this run
         approvals = {k: v for k, v in _APPROVALS.items() if k[0] == run_id}
         waiting = _WAITING.get(run_id)
+        if agent_run is not None:
+            _flush_steps(run_id, agent_run)
         adapter.save_run_checkpoint(run_id, state, usage, context, approvals, waiting, agent_run)
+        _CKPT_MARK[run_id] = (state.status, len(agent_run.steps) if agent_run is not None else 0)
     except Exception:
         pass  # checkpoint write must not break the run
 
@@ -316,6 +354,127 @@ class ParsedAction:
     error_code: AgentErrorCode | None = None
 
 
+_NATIVE_OPEN = "<|tool_call>"
+_NATIVE_QUOTE = '<|"|>'  # Gemma's string delimiter inside native tool calls
+_NATIVE_MAX_DEPTH = 8
+
+
+class _NativeSyntaxError(ValueError):
+    pass
+
+
+def _native_skip_ws(t: str, i: int) -> int:
+    while i < len(t) and t[i].isspace():
+        i += 1
+    return i
+
+
+def _native_string(t: str, i: int) -> tuple[str, int]:
+    """String at ``i``: ``<|"|>raw<|"|>`` or a normal JSON ``"..."`` string."""
+    if t.startswith(_NATIVE_QUOTE, i):
+        start = i + len(_NATIVE_QUOTE)
+        end = t.find(_NATIVE_QUOTE, start)
+        if end == -1:
+            raise _NativeSyntaxError("unterminated string")
+        return t[start:end], end + len(_NATIVE_QUOTE)
+    try:
+        val, end = json.JSONDecoder().raw_decode(t, i)
+    except ValueError as exc:
+        raise _NativeSyntaxError("bad quoted string") from exc
+    return val, end
+
+
+def _native_value(t: str, i: int, depth: int):
+    """One value of Gemma's pseudo-JSON (bare keys, ``<|"|>`` strings). Linear, depth-capped."""
+    if depth > _NATIVE_MAX_DEPTH:
+        raise _NativeSyntaxError("nesting too deep")
+    i = _native_skip_ws(t, i)
+    if i >= len(t):
+        raise _NativeSyntaxError("unexpected end of arguments")
+    ch = t[i]
+    if t.startswith(_NATIVE_QUOTE, i) or ch == '"':
+        return _native_string(t, i)
+    if ch in "{[":
+        close = "}" if ch == "{" else "]"
+        items: list = []
+        obj: dict = {}
+        i += 1
+        while True:
+            i = _native_skip_ws(t, i)
+            if i >= len(t):
+                raise _NativeSyntaxError("unterminated container")
+            if t[i] == close:
+                return (obj if ch == "{" else items), i + 1
+            if ch == "{":
+                if t.startswith(_NATIVE_QUOTE, i) or t[i] == '"':
+                    key, i = _native_string(t, i)
+                else:
+                    j = i
+                    while j < len(t) and (t[j].isalnum() or t[j] in "_-"):
+                        j += 1
+                    key, i = t[i:j], j
+                    if not key:
+                        raise _NativeSyntaxError("missing argument name")
+                i = _native_skip_ws(t, i)
+                if i >= len(t) or t[i] != ":":
+                    raise _NativeSyntaxError("expected ':' after argument name")
+                val, i = _native_value(t, i + 1, depth + 1)
+                obj[key] = val
+            else:
+                val, i = _native_value(t, i, depth + 1)
+                items.append(val)
+            i = _native_skip_ws(t, i)
+            if i < len(t) and t[i] == ",":
+                i += 1
+            elif i >= len(t) or t[i] != close:
+                raise _NativeSyntaxError("expected ',' or closing bracket")
+    j = i
+    while j < len(t) and not t[j].isspace() and t[j] not in ",}]":
+        j += 1
+    tok = t[i:j]
+    if tok in ("true", "false", "null"):
+        return {"true": True, "false": False, "null": None}[tok], j
+    try:
+        val = json.loads(tok)  # JSON scalars only: rejects 1_000, 0x10, +5, Infinity, nan
+    except ValueError:
+        val = None
+    if isinstance(val, (int, float)) and not isinstance(val, bool) and math.isfinite(val):
+        return val, j
+    raise _NativeSyntaxError("unrecognised value")
+
+
+def _parse_native_call(text: str, idx: int) -> ParsedAction:
+    """Gemma's native ``<|tool_call>call:NAME{k:<|"|>v<|"|>}<tool_call|>`` -> same
+    ``tool_call`` data as ``Action:``/``Action Input:``; dispatch validates it identically
+    (allow-list, reserved keys, strict schema). Syntax only: no new capability."""
+
+    def bad(msg: str) -> ParsedAction:
+        return ParsedAction(
+            kind="invalid",
+            error=f"malformed native tool call: {msg}",
+            error_code=AgentErrorCode.SCHEMA_INVALID,
+        )
+
+    i = _native_skip_ws(text, idx + len(_NATIVE_OPEN))
+    if not text.startswith("call:", i):
+        return bad("expected 'call:<tool_name>'")
+    i = _native_skip_ws(text, i + len("call:"))
+    j = i
+    while j < len(text) and (text[j].isalnum() or text[j] in "_-"):
+        j += 1
+    name = text[i:j]
+    if not name:
+        return bad("missing tool name")
+    i = _native_skip_ws(text, j)
+    if i >= len(text) or text[i] != "{":
+        return bad("arguments must be an object in braces")
+    try:
+        args, _ = _native_value(text, i, 0)
+    except _NativeSyntaxError as exc:
+        return bad(str(exc))
+    return ParsedAction(kind="tool_call", tool_name=name, raw_input=json.dumps(args))
+
+
 def _parse_action_sync(text: str, allowed_tools: set[str] | None = None) -> ParsedAction:
     """Bounded, regex-free parse of model output.
 
@@ -336,6 +495,15 @@ def _parse_action_sync(text: str, allowed_tools: set[str] | None = None) -> Pars
     input_marker = "Action Input:"
     final_idx = text.find(final_marker)
     action_idx = text.find(action_marker)
+    native_idx = text.find(_NATIVE_OPEN)
+    # A native tag counts only when it precedes any Final Answer: document text echoed inside
+    # an answer must never become a tool call.
+    if (
+        native_idx != -1
+        and (action_idx == -1 or native_idx < action_idx)
+        and (final_idx == -1 or native_idx < final_idx)
+    ):
+        return _parse_native_call(text, native_idx)
 
     # Final answer only if no action present (prose alone is never evidence).
     if final_idx != -1 and action_idx == -1:
@@ -811,6 +979,8 @@ class AgentRuntime:
                 created_at=datetime.now(UTC).isoformat(),
             )
         policy = ToolPolicy(allowed_tools=list(context.allowed_tools))
+        _STEPS_FLUSHED[context.run_id] = len(agent_run.steps)
+        _CKPT_MARK.pop(context.run_id, None)
         _PERSISTED_RUNS[context.run_id] = agent_run
         _PERSISTED_STATES[context.run_id] = state
         _PERSISTED_USAGES[context.run_id] = usage
@@ -874,7 +1044,7 @@ class AgentRuntime:
                     _PERSISTED_RUNS[context.run_id] = agent_run
                     # Return early — no further LLM/tool calls, no dispatches
                     agent_run.finished_at = datetime.now(UTC).isoformat()
-                    return agent_run
+                    return _finalize_run(context.run_id, state, usage, context, agent_run)
                 # Also check that the waiting principal matches current principal (cross-principal replay)  # noqa: E501
                 if w_principal != context.principal_id:
                     agent_run.steps.append(
@@ -899,7 +1069,7 @@ class AgentRuntime:
                     _PERSISTED_STATES[context.run_id] = state
                     _PERSISTED_RUNS[context.run_id] = agent_run
                     agent_run.finished_at = datetime.now(UTC).isoformat()
-                    return agent_run
+                    return _finalize_run(context.run_id, state, usage, context, agent_run)
                 # Approved and policy/ACL re-check passed — clear waiting and dispatch the waiting tool directly  # noqa: E501
                 # Remove waiting entry and transition back to RUNNING
                 _WAITING.pop(context.run_id, None)
@@ -931,7 +1101,7 @@ class AgentRuntime:
                     agent_run.error = state.error_detail
                     _PERSISTED_STATES[context.run_id] = state
                     agent_run.finished_at = datetime.now(UTC).isoformat()
-                    return agent_run
+                    return _finalize_run(context.run_id, state, usage, context, agent_run)
                 if not can_reserve_tool_call(usage, context.budget):
                     state.transition_to(
                         RunStatus.LIMIT_EXCEEDED,
@@ -942,7 +1112,7 @@ class AgentRuntime:
                     agent_run.error = state.error_detail
                     _PERSISTED_STATES[context.run_id] = state
                     agent_run.finished_at = datetime.now(UTC).isoformat()
-                    return agent_run
+                    return _finalize_run(context.run_id, state, usage, context, agent_run)
                 _waiting_tool_obj = self.registry.get(w_tool)
                 _waiting_tool_cost = getattr(_waiting_tool_obj, "cost_usd", 0.0) or 0.0
                 if not can_reserve_tool_spend(usage, context.budget, _waiting_tool_cost):
@@ -964,7 +1134,7 @@ class AgentRuntime:
                     agent_run.error = state.error_detail
                     _PERSISTED_STATES[context.run_id] = state
                     agent_run.finished_at = datetime.now(UTC).isoformat()
-                    return agent_run
+                    return _finalize_run(context.run_id, state, usage, context, agent_run)
                 # Resolve retry policy for the waiting tool
                 _tool_for_retry = _waiting_tool_obj
                 _retry_policy = (
@@ -1068,7 +1238,7 @@ class AgentRuntime:
                     continue
                 if RunState.is_terminal(state.status):
                     agent_run.finished_at = datetime.now(UTC).isoformat()
-                    return agent_run
+                    return _finalize_run(context.run_id, state, usage, context, agent_run)
                 # After handling the waiting tool, continue to normal LLM loop
                 # Fall through to for loop
 
@@ -1372,6 +1542,7 @@ class AgentRuntime:
                     )
                     if error_code is not None:
                         agent_run.error = f"{error_code.value}: {output.get('error', '')}"
+                    _flush_steps(context.run_id, agent_run)
 
                     # T-V3-007: if cancel was requested mid-tool, stop — no further dispatches.
                     if state.is_cancelled():
@@ -1487,10 +1658,15 @@ class AgentRuntime:
                 )
             )
             agent_run.error = f"{blocked_code.value}: {blocked_error}"
+            _flush_steps(context.run_id, agent_run)
             history.append(
                 ChatMessage(
                     role=MessageRole.USER,
-                    content=f"Observation: {{'error': {blocked_error!r}, 'error_code': {blocked_code.value!r}}}",  # noqa: E501
+                    content=(
+                        f"Observation: {{'error': {blocked_error!r}, "
+                        f"'error_code': {blocked_code.value!r}}}\n"
+                        + self._format_reminder(policy)
+                    ),
                 )
             )
             continue
@@ -1505,7 +1681,28 @@ class AgentRuntime:
                 agent_run.error = state.error_detail
 
         agent_run.finished_at = datetime.now(UTC).isoformat()
-        return agent_run
+        # Every exit (completed, max-steps, deadline, provider failure, cancel, ...) lands
+        # here: steps + terminal checkpoint are written before the caller sees the run.
+        return _finalize_run(context.run_id, state, usage, context, agent_run)
+
+    def _format_reminder(self, policy: ToolPolicy) -> str:
+        """Retry feedback for an unparseable reply: the exact format, with a real example."""
+        tools = [t for t in self.registry.list_tools() if policy.allows(t.name)]
+        example = ""
+        if tools:
+            t = tools[0]
+            req = t.input_schema.get("required") or list(t.input_schema.get("properties", {}))[:1]
+            args = json.dumps({k: "..." for k in req})
+            example = f"Example:\nAction: {t.name}\nAction Input: {args}\n"
+        names = ", ".join(t.name for t in tools) or "(none)"
+        return (
+            "Reply again using EXACTLY one of these two formats, plain text, no tags such as "
+            "<|tool_call> and no code fences.\n"
+            "Tool call:\nThought: <reasoning>\nAction: <tool_name>\n"
+            "Action Input: <json object, double-quoted keys and strings>\n"
+            "Final answer:\nThought: <reasoning>\nFinal Answer: <response>\n"
+            f"Allowed tools: {names}.\n{example}"
+        )
 
     def _build_system_prompt_from(self, instructions: str, allowed: list[str]) -> str:
         tools = [t for t in self.registry.list_tools() if t.name in allowed]
@@ -1523,6 +1720,7 @@ class AgentRuntime:
             "When you have the final answer, format your output strictly as:\n"
             "Thought: <your reasoning>\n"
             "Final Answer: <your complete response>\n"
+            "Do not use <|tool_call> or other native function-call tags.\n"
         )
 
     def _build_system_prompt(self, config: AgentConfig) -> str:

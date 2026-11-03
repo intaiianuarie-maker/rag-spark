@@ -13,7 +13,7 @@ No `import langgraph` — the adapter is the seam, not the engine.
 
 from __future__ import annotations
 
-from ..interfaces import RunContext, RunState, StepEvent, StepStatus, Usage
+from ..interfaces import AgentStep, RunContext, RunState, StepEvent, StepStatus, Usage
 from ..step_store import StepStore
 
 
@@ -132,6 +132,61 @@ class StepStoreCheckpointAdapter:
         )
         # Delegate to the single authority: StepStore.append
         return self._store.append(run_id, event)
+
+    def save_step(self, run_id: str, step: AgentStep) -> StepEvent:
+        """Append one agent step as a durable event (``step:`` prefix, never a checkpoint).
+
+        Written as each step finishes, so a process that dies between steps leaves its
+        history readable by any other process. Redaction/bounds/monotonic sequence come
+        from ``StepStore.append``; ``load_run_checkpoint`` ignores these events.
+        """
+        import json
+        from datetime import UTC, datetime
+
+        from ..interfaces import AgentErrorCode, AgentStepType
+
+        out = step.tool_output if isinstance(step.tool_output, dict) else {}
+        code = None
+        if step.type is AgentStepType.ERROR:
+            try:
+                code = AgentErrorCode(str(out.get("error_code")))
+            except ValueError:
+                code = AgentErrorCode.SCHEMA_INVALID
+        blocked = {
+            AgentErrorCode.SCHEMA_INVALID,
+            AgentErrorCode.TOOL_NOT_ALLOWED,
+            AgentErrorCode.TOOL_NOT_FOUND,
+            AgentErrorCode.TOOL_SCHEMA_INVALID,
+        }
+        status = (
+            StepStatus.SUCCEEDED
+            if code is None
+            else StepStatus.BLOCKED if code in blocked else StepStatus.FAILED
+        )
+        label = step.tool_name or "none"
+        detail = f" {out['error']}" if code is not None and out.get("error") else ""
+        seq = max((e.sequence for e in self._store.list(run_id)), default=0) + 1
+        return self._store.append(
+            run_id,
+            StepEvent(
+                sequence=seq,
+                step_id=f"step-{step.step_number}",
+                attempt_id=f"att-{run_id}-{step.step_number}",
+                action_summary=f"step:{step.type.value} tool:{label} {status.value}{detail}",
+                tool_name=step.tool_name,
+                tool_input_ref=(
+                    json.dumps(step.tool_input, default=str) if step.tool_input else None
+                ),
+                tool_output_ref=(
+                    json.dumps(step.tool_output, default=str)
+                    if step.tool_output is not None
+                    else None
+                ),
+                status=status,
+                error_code=code,
+                timestamp=step.timestamp or datetime.now(UTC).isoformat(),
+            ),
+        )
 
     def load_run_checkpoint(self, run_id: str) -> dict | None:
         """Load the latest run checkpoint for `run_id` — reconstruct state."""

@@ -476,8 +476,105 @@ def test_run_workflow_invalid_definition_returns_422():
     assert "traceback" not in resp.text.lower()
 
 
-def test_run_workflow_runtime_failure_returns_coded_error():
+def _capability_gated_definition(wid: str, capability: str) -> dict[str, Any]:
+    return {
+        "id": wid,
+        "workspace_id": WS_ALLOWED,
+        "name": "Capability gated",
+        "description": "x",
+        "nodes": [
+            {
+                "id": "trigger-1",
+                "type": "trigger",
+                "name": "Start",
+                "output_ports": [{"name": "output", "type": "dict"}],
+            },
+            {
+                "id": "llm-1",
+                "type": "llm",
+                "name": "LLM",
+                "config": {"model": "google/gemma-4-26b-a4b-it"},
+                "required_capabilities": [capability],
+                "input_ports": [{"name": "input", "type": "any"}],
+                "output_ports": [{"name": "output", "type": "any"}],
+            },
+            {
+                "id": "output-1",
+                "type": "output",
+                "name": "End",
+                "input_ports": [{"name": "input", "type": "any"}],
+            },
+        ],
+        "edges": [
+            {
+                "id": "e1",
+                "source_node_id": "trigger-1",
+                "source_port": "output",
+                "target_node_id": "llm-1",
+                "target_port": "input",
+            },
+            {
+                "id": "e2",
+                "source_node_id": "llm-1",
+                "source_port": "output",
+                "target_node_id": "output-1",
+                "target_port": "input",
+            },
+        ],
+    }
+
+
+def test_run_accepts_production_capability_that_validate_accepts(monkeypatch):
+    """A node requiring a production capability validates, so run must not 422 on it."""
+
+    def _no_provider(**_kw):
+        raise RuntimeError("no provider in test")
+
+    monkeypatch.setattr("models.adapters.litellm_provider.create_llm_provider", _no_provider)
+    client = _make_client()
+    wid = "wf-cap-llm-" + uuid.uuid4().hex[:6]
+    body = _capability_gated_definition(wid, "llm")
+    assert client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=body).status_code == 200
+    val = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/validate", json={"workflow_id": wid})
+    assert val.json()["valid"] is True
+
+    resp = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}}
+    )
+    assert resp.status_code == 200, resp.text
+    # Reached execution: the node fails on the forced missing provider, not on capability.
+    final = _await_terminal(client, wid, resp.json()["run"]["id"])
+    assert final["error"].startswith("node 'llm-1' failed: LLM node")
+
+
+def test_run_refuses_unknown_capability_with_validator_message():
+    client = _make_client()
+    wid = "wf-cap-bad-" + uuid.uuid4().hex[:6]
+    body = _capability_gated_definition(wid, "teleport")
+    assert client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts", json=body).status_code == 200
+    val = client.post(f"/v1/workspaces/{WS_ALLOWED}/drafts/validate", json={"workflow_id": wid})
+    assert val.json()["valid"] is False
+
+    resp = client.post(
+        f"/v1/workspaces/{WS_ALLOWED}/workflows/{wid}/run", json={"revision": 1, "inputs": {}}
+    )
+    assert resp.status_code == 422
+    detail = resp.json()["detail"]
+    assert detail["error"] == "invalid_definition"
+    assert "UNSUPPORTED_CAPABILITY" in detail["message"]
+    assert "teleport" in detail["message"]
+    assert "traceback" not in resp.text.lower()
+
+
+def test_run_workflow_runtime_failure_returns_coded_error(monkeypatch):
     import uuid
+
+    # The model must pass the admission check; the failure under test is the
+    # missing provider, forced here so a dev machine with keys set cannot call out.
+    def _no_provider(**_kw):
+        raise RuntimeError("no provider in test")
+
+    monkeypatch.setattr("models.adapters.litellm_provider.create_llm_provider", _no_provider)
 
     from app.authz.principal import get_principal
     from app.main import app
@@ -507,7 +604,7 @@ def test_run_workflow_runtime_failure_returns_coded_error():
                 "id": "llm-1",
                 "type": "llm",
                 "name": "LLM",
-                "config": {"model": "x"},
+                "config": {"model": "google/gemma-4-26b-a4b-it"},
                 "input_ports": [{"name": "input", "type": "any"}],
                 "output_ports": [{"name": "output", "type": "any"}],
             },

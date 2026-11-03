@@ -49,8 +49,6 @@ class _Gateway:
         monkeypatch.setattr(
             pdfium_render, "render_pdf_page", lambda _c, _p, dpi=150: (b"png", 612.0, 792.0, 1, 1)
         )
-        monkeypatch.setattr(ip, "VISION_MAX_PAGES", 5)
-        monkeypatch.setattr(ip, "VISION_IMAGE_BUDGET_BYTES", 10_000)
         monkeypatch.setenv("OPENROUTER_API_KEY", OR_KEY)
         monkeypatch.delenv("LITELLM_API_KEY", raising=False)
         monkeypatch.delenv("LITELLM_URL", raising=False)

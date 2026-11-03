@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import os
-import socket
 import uuid
 
 import pytest
+from service_probe import postgres_open, redis_open
 
 os.environ.setdefault("AUTH_JWT_SECRET", "test-secret-not-for-production-0123456789")
 os.environ.setdefault("APP_ENV", "test")
@@ -20,17 +20,9 @@ ROSTER_FIELDS = {"user_id", "email", "role", "status"}
 INVITATION_FIELDS = {"workspace_id", "workspace_name", "role", "invited_at"}
 
 
-def _port_open(port: int) -> bool:
-    try:
-        with socket.create_connection(("127.0.0.1", port), timeout=1.0):
-            return True
-    except OSError:
-        return False
-
-
 @pytest.fixture(scope="module")
 def client():
-    if not (_port_open(5432) and _port_open(6379)):
+    if not (postgres_open() and redis_open()):
         pytest.skip("postgres/redis not reachable; run `make up`")
 
     from app.db import run_migrations

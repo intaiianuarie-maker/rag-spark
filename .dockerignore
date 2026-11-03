@@ -1,0 +1,20 @@
+# Build context is the repo root for the api, worker and rerank images. Allowlist
+# only what their Dockerfiles COPY, so .env, .git, tests, data and local venvs
+# can never end up inside an image layer.
+*
+!apps/api
+!apps/worker
+!apps/rerank
+!packages
+
+**/.env
+**/.env.*
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/.venv
+**/venv
+**/node_modules
+**/*.sqlite3

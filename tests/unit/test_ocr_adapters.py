@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import io
 import os
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -34,7 +36,38 @@ from ingestion.ocr import (
 )
 
 FIXTURE_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "formats"
-FONT_PATH = "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"
+FONT_CANDIDATES = (
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+    "C:/Windows/Fonts/arial.ttf",
+)
+FONT_PATH = next((p for p in FONT_CANDIDATES if Path(p).exists()), FONT_CANDIDATES[0])
+
+# End-to-end OCR needs a TTF font (DejaVu on Linux, Arial on Windows) and the tesseract CLI with the
+# ron/por/eng packs (installed in apps/worker/Dockerfile and the CI backend job). The packs are read
+# with `tesseract --list-langs`, which honours TESSDATA_PREFIX the same way the adapter does.
+def _tesseract_langs() -> set[str]:
+    if shutil.which("tesseract") is None:
+        return set()
+    listed = subprocess.run(
+        ["tesseract", "--list-langs"], capture_output=True, text=True, check=False
+    )
+    lines = (listed.stdout + listed.stderr).splitlines()[1:]  # first line is the header
+    return {line.strip() for line in lines if line.strip()}
+
+
+_TESSERACT_LANGS = _tesseract_langs()
+_missing = [
+    what
+    for what, ok in (
+        (f"font {FONT_PATH}", Path(FONT_PATH).exists()),
+        ("tesseract binary", shutil.which("tesseract") is not None),
+        ("tesseract packs ron/por/eng", {"ron", "por", "eng"} <= _TESSERACT_LANGS),
+    )
+    if not ok
+]
+needs_ocr_env = pytest.mark.skipif(
+    bool(_missing), reason="OCR environment missing: " + ", ".join(_missing)
+)
 
 
 def _make_scanned_pdf(images: list[Image.Image]) -> bytes:
@@ -130,6 +163,7 @@ def test_parse_tsv_words_and_build_line_elements() -> None:
     assert elements[1].metadata["extraction"]["confidence"] == 92.0
 
 
+@needs_ocr_env
 def test_tesseract_ocr_romanian_portuguese_english() -> None:
     """End-to-end OCR test on real rendered Romanian, Portuguese, and English diacritics."""
     img = Image.new("RGB", (1600, 600), color=(255, 255, 255))
@@ -192,6 +226,7 @@ def test_classify_pdf_pages() -> None:
     assert class_mixed[2] == PageClassification.OCR_REQUIRED
 
 
+@needs_ocr_env
 @pytest.mark.asyncio
 async def test_process_pdf_with_ocr_synthetic() -> None:
     """Verify conditional OCR processing, page routing, and report generation."""
@@ -257,3 +292,44 @@ async def test_process_pdf_with_ocr_empty_scan_reports_failed_pages() -> None:
     assert report.ocr_pages == []
     assert report.fully_lost is True
 
+
+@needs_ocr_env
+@pytest.mark.asyncio
+async def test_two_column_bilingual_scan_reads_left_column_first() -> None:
+    """Real Tesseract on an A4 RO | EN two-column scan: every RO line comes before every EN line."""
+    font = ImageFont.truetype(FONT_PATH, 40)
+    img = Image.new("RGB", (2480, 3508), color=(255, 255, 255))  # A4 at 300 DPI
+    draw = ImageDraw.Draw(img)
+    ro_lines = (
+        "Plata se face în termen de treizeci de zile.",
+        "Factura include taxa pentru servicii.",
+        "Contractul intră în vigoare la semnare.",
+        "Documentul este valabil pentru un an.",
+        "Rapoartele se trimit lunar către birou.",
+    )
+    en_lines = (
+        "Payment is due within thirty days.",
+        "The invoice includes tax for services.",
+        "The contract takes effect on signature.",
+        "The document is valid for one year.",
+        "Reports are sent monthly to the office.",
+    )
+    for i, line in enumerate(ro_lines):
+        draw.text((150, 300 + 120 * i), line, font=font, fill=(0, 0, 0))
+    for i, line in enumerate(en_lines):
+        draw.text((1400, 300 + 120 * i), line, font=font, fill=(0, 0, 0))
+
+    buf = io.BytesIO()
+    img.save(buf, format="PDF", resolution=300.0)  # 300 DPI page size keeps the render A4
+    elements, report = await process_pdf_with_ocr(buf.getvalue(), languages="ron+eng")
+    texts = [el.text for el in elements]
+
+    def first(marker: str) -> int:
+        matches = [i for i, text in enumerate(texts) if marker in text]
+        assert matches, f"{marker!r} not recognised in {texts}"
+        return matches[0]
+
+    assert report.failed_pages == []
+    ro_markers = ("Plata", "Factura", "Contractul", "Documentul", "Rapoartele")
+    en_markers = ("Payment", "invoice", "contract takes", "document is", "Reports")
+    assert max(first(m) for m in ro_markers) < min(first(m) for m in en_markers), texts

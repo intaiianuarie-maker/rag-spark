@@ -1,5 +1,6 @@
 """Covering tests for G5 corpus pin and span mapping - T-V2-010."""
 import json
+import os
 import pathlib
 
 import pytest
@@ -78,6 +79,11 @@ def test_authenticity_census():
     assert census["authentic"] == census["total"] == 407
     assert census["bands"][">0.95"] == 407
 
+@pytest.mark.skipif(
+    not os.environ.get("G5_LIVE_QDRANT_CHECK"),
+    reason="pins a point count of one operator's live Qdrant index; set G5_LIVE_QDRANT_CHECK=1 "
+    "to run it against http://localhost:6333",
+)
 def test_live_stability():
     # Live knowledge should be unchanged (scratch only)
     import json

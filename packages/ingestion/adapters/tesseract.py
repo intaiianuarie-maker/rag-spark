@@ -205,6 +205,8 @@ def ocr_page_image(
     env = dict(os.environ)
     env["OMP_THREAD_LIMIT"] = DEFAULT_OMP_THREAD_LIMIT
 
+    # -c instead of the "tsv" config file: that file is looked up under TESSDATA_PREFIX/configs.
+    # When it is missing, Tesseract silently prints plain text, which parses to zero words.
     cmd = [
         "tesseract",
         "stdin",
@@ -215,7 +217,8 @@ def ocr_page_image(
         "1",
         "--psm",
         str(psm),
-        "tsv",
+        "-c",
+        "tessedit_create_tsv=1",
     ]
 
     try:

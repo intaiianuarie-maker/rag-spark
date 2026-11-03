@@ -281,7 +281,7 @@ class ProductionNodeExecutor:
 
         # --- Split the generated output into payload + uncovered prose ---
         # (T-RV19-01, POLICE F1)
-        payload, residual = self._split_output_payload(output)
+        payload, residual = self._split_output_payload(output, reference_ids)
         answer_text = ""
         claims: list[_Claim] = []
         if payload is not None:
@@ -451,7 +451,9 @@ class ProductionNodeExecutor:
         }
 
     @staticmethod
-    def _split_output_payload(output: str) -> tuple[dict[str, Any] | None, str]:
+    def _split_output_payload(
+        output: str, known_ids: list[str] | None = None
+    ) -> tuple[dict[str, Any] | None, str]:
         """Split the generated output into a JSON payload and uncovered prose.
 
         Returns ``(payload, residual)``:
@@ -509,7 +511,7 @@ class ProductionNodeExecutor:
         block = candidate[start : end + 1]
         residual = (candidate[:start] + candidate[end + 1 :]).replace("`", " ").strip()
         try:
-            parsed = parse_model_output(block)
+            parsed = parse_model_output(block, known_ids=known_ids)
         except ValueError:
             return None, ""
         return parsed, residual
