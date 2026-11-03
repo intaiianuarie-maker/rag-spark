@@ -13,7 +13,6 @@ Self-hosted knowledge platform. Upload documents, search them (dense and keyword
 ```bash
 git clone https://github.com/intaiianuarie-maker/rag-spark.git
 cd rag-spark
-git checkout cleanup/portable-install
 cp .env.example .env
 ```
 
